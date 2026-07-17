@@ -64,6 +64,10 @@ export interface ClaimResolutionJobInput {
   readonly leaseMs?: number;
 }
 
+export interface ClaimResolutionJobByIdInput extends ClaimResolutionJobInput {
+  readonly id: string;
+}
+
 export interface RenewResolutionJobLeaseInput extends ClaimResolutionJobInput {
   readonly id: string;
 }
@@ -135,6 +139,11 @@ export class ResolutionJobStore {
     return runWithOrgScope(this.pool, input.orgId, (client) => this.claimNextOnClient(client, input));
   }
 
+  /** Lease this exact queued/retryable job for a synchronous callable command. */
+  public async claimById(input: ClaimResolutionJobByIdInput): Promise<ResolutionJob | undefined> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => this.claimByIdOnClient(client, input));
+  }
+
   public async claimNextOnClient(
     client: QueryClient,
     input: ClaimResolutionJobInput,
@@ -158,6 +167,31 @@ export class ResolutionJobStore {
         WHERE job.org_id = candidate.org_id AND job.id = candidate.id
        RETURNING ${JOB_COLUMNS}`,
       [input.orgId, input.leaseOwner, leaseDuration(input.leaseMs)],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : decodeLeasedJob(row);
+  }
+
+  public async claimByIdOnClient(
+    client: QueryClient,
+    input: ClaimResolutionJobByIdInput,
+  ): Promise<ResolutionJob | undefined> {
+    const result = await client.query<RawResolutionJobRow>(
+      `WITH candidate AS (
+         SELECT org_id, id
+           FROM resolution_jobs
+          WHERE org_id = $1 AND id = $2 AND state IN ('queued', 'retryable')
+          FOR UPDATE SKIP LOCKED
+       )
+       UPDATE resolution_jobs AS job
+          SET state = 'running',
+              lease_owner = $3,
+              lease_expiry = now() + ($4::bigint * interval '1 millisecond'),
+              attempt = job.attempt + 1
+         FROM candidate
+        WHERE job.org_id = candidate.org_id AND job.id = candidate.id
+       RETURNING ${JOB_COLUMNS}`,
+      [input.orgId, input.id, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     const row = result.rows[0];
     return row === undefined ? undefined : decodeLeasedJob(row);

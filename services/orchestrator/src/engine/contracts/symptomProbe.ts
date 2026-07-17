@@ -39,6 +39,11 @@ export interface SymptomBaselineInput {
   readonly verificationRunId: string;
 }
 
+/** A stage-owned assertion target for running a locked symptom contract. */
+export interface SymptomVerificationInput extends SymptomBaselineInput {
+  readonly expectedObservation: SymptomObservation;
+}
+
 export interface SymptomEvidenceRef {
   readonly id: string;
   readonly digest: Digest;
@@ -56,6 +61,21 @@ export interface SymptomBaselineResult {
   readonly observedHash: Digest;
   readonly outcome: SymptomAssertionOutcome;
   readonly baselineOutcome: SymptomBaselineOutcome;
+  readonly timingMs: number;
+  readonly evidence: readonly SymptomEvidenceRef[];
+  readonly assertionId: string;
+}
+
+/** Evidence and assertion materialized by the shared SP·5 probe path. */
+export interface SymptomVerificationResult {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly issueLoopId: string;
+  readonly contractId: string;
+  readonly verificationRunId: string;
+  readonly expectedHash: Digest;
+  readonly observedHash: Digest;
+  readonly outcome: SymptomAssertionOutcome;
   readonly timingMs: number;
   readonly evidence: readonly SymptomEvidenceRef[];
   readonly assertionId: string;

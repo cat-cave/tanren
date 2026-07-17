@@ -62,7 +62,7 @@ export const behaviorVerificationRunsReference = pgTable(
     ),
     check(
       "behavior_verification_runs_resolution_classification_check",
-      sql`${table.classification} IS NULL OR ${table.classification} IN ('product_failure','infra_failure','stale_contract','inconclusive')`,
+      sql`${table.classification} IS NULL OR ${table.classification} IN ('product_resolved','product_failure','infra_failure','stale_contract','inconclusive')`,
     ),
   ],
 );

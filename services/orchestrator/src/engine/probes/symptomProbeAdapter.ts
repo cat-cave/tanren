@@ -10,6 +10,8 @@ import {
   type SymptomBaselineResult,
   type SymptomProbeDriver,
   type SymptomProbeEvidence,
+  type SymptomVerificationInput,
+  type SymptomVerificationResult,
 } from "../contracts/symptomProbe.js";
 import type { AppendEventInput, EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
@@ -61,6 +63,7 @@ export class SymptomProbeAdapter {
     const baselineOutcome =
       outcome === "inconclusive" ? "inconclusive" : outcome === "passed" ? "reproduced" : "not_reproduced";
     const evidence = await this.captureEvidence(input, execution.observedObservation, execution.evidence);
+    // This frozen BH-5 sequence must remain started → observed → assertion.
     await this.emitBaselineObserved(
       input,
       contract.issueLoopId,
@@ -92,6 +95,58 @@ export class SymptomProbeAdapter {
       observedHash,
       outcome,
       baselineOutcome,
+      timingMs,
+      evidence,
+      assertionId: assertion.id,
+    };
+  }
+
+  /**
+   * Execute the SP·5 probe against a caller-supplied assertion target.
+   *
+   * Baseline reproduction passes the original failing observation; production
+   * verification passes the corrected observation. Stages own their frozen
+   * lifecycle events, while this shared path owns observations, CAS evidence,
+   * and `symptom.assertion.recorded`.
+   */
+  public async runVerification(input: SymptomVerificationInput): Promise<SymptomVerificationResult> {
+    const contract = parseSymptomContract(input.contract);
+    const execution = await this.driver.execute({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      contract,
+      verificationRunId: input.verificationRunId,
+    });
+    const expectedHash = symptomObservationHash(input.expectedObservation);
+    const observedHash = symptomObservationHash(execution.observedObservation);
+    const timingMs = nonnegativeTiming(execution.timingMs);
+    const outcome =
+      execution.outcome === "inconclusive" ? "inconclusive" : expectedHash === observedHash ? "passed" : "failed";
+    const evidence = await this.captureEvidence(input, execution.observedObservation, execution.evidence);
+    const assertion = await this.evidence.recordAssertion({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      issueLoopId: contract.issueLoopId,
+      verificationRunId: input.verificationRunId,
+      expectedHash,
+      observedHash,
+      outcome,
+      timingMs,
+      sampleData: {
+        expectedObservation: input.expectedObservation,
+        observedObservation: execution.observedObservation,
+        evidenceArtifactIds: evidence.map((item) => item.id),
+      },
+    });
+    return {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      issueLoopId: contract.issueLoopId,
+      contractId: input.contractId,
+      verificationRunId: input.verificationRunId,
+      expectedHash,
+      observedHash,
+      outcome,
       timingMs,
       evidence,
       assertionId: assertion.id,

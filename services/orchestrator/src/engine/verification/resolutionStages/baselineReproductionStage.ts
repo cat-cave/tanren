@@ -59,12 +59,25 @@ export interface BaselineReproductionStageDependencies {
   readonly verificationRunId?: () => string;
 }
 
-interface BaselineClassification {
-  readonly outcome: ResolutionStageResult["outcome"];
-  readonly classification: ResolutionStageResult["classification"];
-  readonly status: BehaviorVerificationRunStatus;
-  readonly loopState?: "awaiting_reproduction" | "reproduced";
-}
+type BaselineClassification =
+  | {
+      readonly outcome: "passed";
+      readonly classification: "product_failure";
+      readonly status: "completed";
+      readonly loopState: "reproduced";
+    }
+  | {
+      readonly outcome: "failed";
+      readonly classification: "stale_contract";
+      readonly status: "completed";
+      readonly loopState?: undefined;
+    }
+  | {
+      readonly outcome: "inconclusive";
+      readonly classification: "infra_failure";
+      readonly status: "failed";
+      readonly loopState: "awaiting_reproduction";
+    };
 
 /**
  * Replays an immutable symptom contract against the currently live release.
@@ -167,8 +180,7 @@ export class BaselineReproductionStage implements ResolutionStage {
       state: "awaiting_reproduction",
     });
     return {
-      outcome: failure.outcome,
-      classification: failure.classification,
+      ...failure,
       proofGrade: contract.proofPolicy,
       verificationRunId,
       assertionIds: [],
@@ -198,8 +210,7 @@ export class BaselineReproductionStage implements ResolutionStage {
       });
     }
     return {
-      outcome: classification.outcome,
-      classification: classification.classification,
+      ...classification,
       proofGrade: contract.proofPolicy,
       verificationRunId: baseline.verificationRunId,
       assertionIds: [baseline.assertionId],

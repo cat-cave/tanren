@@ -491,6 +491,13 @@
       "when": 1784310667869,
       "tag": "0071_resolution_jobs_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1784383200000,
+      "tag": "0072_resolution_product_resolved",
+      "breakpoints": true
     }
   ]
 }

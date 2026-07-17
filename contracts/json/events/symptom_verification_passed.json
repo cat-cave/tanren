@@ -9,12 +9,7 @@
       "type": "array"
     },
     "classification": {
-      "enum": [
-        "product_failure",
-        "infra_failure",
-        "stale_contract",
-        "inconclusive"
-      ],
+      "const": "product_resolved",
       "type": "string"
     },
     "evidenceRefs": {
