@@ -200,6 +200,7 @@ describeDb("IntegrationStateWriter — tenant-scoped control-plane lifecycle wri
     expect(rows.rows).toEqual([
       { id: "reconciliation_data_plane", status: "succeeded", claim_owner: null },
       { id: "reconciliation_fixed", status: "fixed_point", claim_owner: null },
+      { id: "reconciliation_lost_claim", status: "pending", claim_owner: null },
       { id: "reconciliation_retry", status: "retry_scheduled", claim_owner: null },
       { id: "reconciliation_unknown", status: "state_unknown", claim_owner: null },
     ]);
