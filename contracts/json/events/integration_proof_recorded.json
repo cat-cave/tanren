@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "memberKey": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "nodeId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "proofReuseKey": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "passed",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "nodeId",
+    "memberKey",
+    "proofReuseKey",
+    "verdict"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.proof.recorded"
+}

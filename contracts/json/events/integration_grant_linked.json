@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "connectionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "environment": {
+      "enum": [
+        "test",
+        "preview",
+        "production"
+      ],
+      "type": "string"
+    },
+    "grantId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "plane": {
+      "enum": [
+        "control",
+        "product"
+      ],
+      "type": "string"
+    },
+    "providerKind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "grantId",
+    "connectionId",
+    "providerKind",
+    "plane",
+    "environment"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.grant.linked"
+}

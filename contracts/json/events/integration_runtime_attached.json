@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "deploymentId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "environment": {
+      "enum": [
+        "test",
+        "preview",
+        "production"
+      ],
+      "type": "string"
+    },
+    "generation": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "keys": {
+      "items": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "bindingId",
+    "environment",
+    "generation",
+    "deploymentId",
+    "keys"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.runtime.attached"
+}

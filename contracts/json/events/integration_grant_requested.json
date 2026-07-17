@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capabilities": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 128,
+      "type": "array"
+    },
+    "environment": {
+      "enum": [
+        "test",
+        "preview",
+        "production"
+      ],
+      "type": "string"
+    },
+    "operations": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "plane": {
+      "enum": [
+        "control",
+        "product"
+      ],
+      "type": "string"
+    },
+    "providerKind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "requirementId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "scopes": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "requirementId",
+    "providerKind",
+    "plane",
+    "environment",
+    "capabilities",
+    "operations",
+    "scopes"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.grant.requested"
+}

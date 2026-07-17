@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "matrixKey": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "shardId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "shardId",
+    "matrixKey"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.shard.started"
+}

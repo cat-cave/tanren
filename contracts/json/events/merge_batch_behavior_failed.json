@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "groupId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "failed_product",
+        "failed_verification_contract",
+        "failed_visual",
+        "inconclusive_infrastructure",
+        "inconclusive_external",
+        "cancelled_superseded"
+      ],
+      "type": "string"
+    },
+    "verdictId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "groupId",
+    "behaviorRevisionId",
+    "verdictId",
+    "outcome"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.batch.behavior_failed"
+}

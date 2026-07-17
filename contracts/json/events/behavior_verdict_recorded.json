@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "executedAssertionCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "flakeState": {
+      "enum": [
+        "stable",
+        "suspected",
+        "confirmed",
+        "quarantined_fragment"
+      ],
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "failed_product",
+        "failed_verification_contract",
+        "failed_visual",
+        "inconclusive_infrastructure",
+        "inconclusive_external",
+        "cancelled_superseded"
+      ],
+      "type": "string"
+    },
+    "verdictId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "verdictId",
+    "outcome",
+    "executedAssertionCount",
+    "flakeState"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.verdict.recorded"
+}

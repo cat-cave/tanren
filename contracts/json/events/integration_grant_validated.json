@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "grantId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "providerKind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "scopes": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "grantId",
+    "providerKind",
+    "scopes"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.grant.validated"
+}

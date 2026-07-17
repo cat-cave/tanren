@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "integrationNodeId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "passedVerdictCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "requiredVerdictCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "integrationNodeId",
+    "requiredVerdictCount",
+    "passedVerdictCount"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.verification.completed"
+}
