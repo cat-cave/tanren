@@ -130,20 +130,25 @@ const supersedeSchema = z.object({
   orgId: z.string().min(1),
 });
 
-const insertTaskSchema = z.object({
-  taskId: z.string().min(1),
-  runId: z.string().min(1),
-  orgId: z.string().min(1),
-  kind: z.string().min(1),
-  title: z.string().min(1),
-  status: z.string().min(1),
-  agentKind: z.string().min(1),
-  cli: z.string().min(1),
-  model: z.string().nullable(),
-  parentTaskId: z.string().min(1).optional(),
-  setStartedAt: z.boolean(),
-  attempt: z.number().int().optional(),
-});
+const insertTaskSchema = z
+  .object({
+    taskId: z.string().min(1),
+    runId: z.string().min(1).optional(),
+    issueLoopId: z.string().min(1).optional(),
+    orgId: z.string().min(1),
+    kind: z.string().min(1),
+    title: z.string().min(1),
+    status: z.string().min(1),
+    agentKind: z.string().min(1),
+    cli: z.string().min(1),
+    model: z.string().nullable(),
+    parentTaskId: z.string().min(1).optional(),
+    setStartedAt: z.boolean(),
+    attempt: z.number().int().optional(),
+  })
+  .refine((value) => (value.runId === undefined) !== (value.issueLoopId === undefined), {
+    message: "exactly one of runId and issueLoopId is required",
+  });
 
 const updateTaskSchema = z.object({
   taskId: z.string().min(1),

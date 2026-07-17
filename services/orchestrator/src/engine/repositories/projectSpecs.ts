@@ -38,6 +38,7 @@ export interface ProjectSpecRow {
   source_finding_ids: unknown;
   origin_triage_task_id: string | null;
   origin_run_id: string | null;
+  origin_issue_loop_id?: string | null;
 }
 
 // The exact column list the spec list/detail routes use (now 12 columns with the
@@ -45,7 +46,7 @@ export interface ProjectSpecRow {
 // tenancy).
 const SELECT_SPEC_COLUMNS =
   "spec_id, project_id, title, description, acceptance_criteria, depends_on, status, priority, " +
-  "parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id";
+  "parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id, origin_issue_loop_id";
 
 /**
  * The pre-rendered dynamic PATCH payload. The route inspects the parsed body,

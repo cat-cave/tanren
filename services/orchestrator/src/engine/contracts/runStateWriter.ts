@@ -271,7 +271,9 @@ export interface UpdateTaskWithEventOutcome {
 /** The shape of a `tasks` INSERT the workflow drives (subtask / CI / review / merge). */
 export interface InsertTaskInput {
   taskId: string;
-  runId: string;
+  /** Exactly one of runId and issueLoopId is required by the database CHECK. */
+  runId?: string;
+  issueLoopId?: string;
   orgId?: string;
   kind: string;
   title: string;

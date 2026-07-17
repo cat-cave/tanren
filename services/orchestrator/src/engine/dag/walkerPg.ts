@@ -87,6 +87,7 @@ interface SpecDagRow {
   source_finding_ids: unknown;
   origin_triage_task_id: string | null;
   origin_run_id: string | null;
+  origin_issue_loop_id?: string | null;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -109,6 +110,9 @@ function hydrateTriageProvenance(row: SpecDagRow): DagSpecNode["triageProvenance
     sourceFindingIds: asStringArray(row.source_finding_ids),
     originTriageTaskId: row.origin_triage_task_id ?? "",
     originRunId: row.origin_run_id ?? "",
+    ...(row.origin_issue_loop_id === null || row.origin_issue_loop_id === undefined
+      ? {}
+      : { originIssueLoopId: row.origin_issue_loop_id }),
   };
 }
 
@@ -153,7 +157,7 @@ export class PgDagReadModel implements DagReadModel {
       // trail even though the columns had persisted since PR #755.
       const result = await client.query<SpecDagRow>(
         `SELECT spec_id, status, depends_on, priority,
-                parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id,
+                parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id, origin_issue_loop_id,
                 row_number() OVER (ORDER BY created_at ASC, spec_id ASC) AS rn
            FROM specs
           WHERE project_id = $1`,
