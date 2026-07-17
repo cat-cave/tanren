@@ -888,7 +888,7 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
 # TANREN_RLS_DB_TEST=1 harness; the migration-order test manages its own
 # ephemeral database + cleanup (same pattern as the lifecycle RLS proof).
 smoke-rls-integration-lifecycle:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts services/orchestrator/tests/integrationStateWriter.rls.integration.test.ts
 
 # RV-4: behavior-coverage affected-selection live proofs — the 0044 composite
 # (org_id, project_id) project-lineage FK rejection + the production
