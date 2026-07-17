@@ -4,10 +4,10 @@
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
+import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
-import { parseDigest } from "../src/engine/contracts/cas.js";
+import type { Digest } from "../src/engine/contracts/cas.js";
 import type { SymptomVerificationResult } from "../src/engine/contracts/symptomProbe.js";
 import type { SymptomContractV1 } from "../src/engine/contracts/symptomContract.js";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
@@ -15,6 +15,7 @@ import { buildResolutionAuthority } from "../src/engine/governance/resolutionAut
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import { ProductionSymptomStage } from "../src/engine/verification/resolutionStages/productionSymptomStage.js";
+import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
 
 const describeDb = process.env["TANREN_RLS_DB_TEST"] === "1" ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
@@ -26,6 +27,19 @@ const NODE_ID = "inode_resolution_authority";
 const ENVIRONMENT_ID = "venv_resolution_authority";
 const RELEASE_ID = "release_resolution_authority";
 const MERGE_SHA = "a".repeat(40);
+const OTHER_ORG_ID = "org_resolution_authority_other";
+
+type RetryRouteEnv = {
+  Variables: {
+    actor?: {
+      userId: string;
+      orgId: string | null;
+      projectId: string | null;
+      scopes: "org:admin"[];
+      source: "session";
+    };
+  };
+};
 
 function digest(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -77,6 +91,11 @@ async function seed(
     `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
      VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [ORG_ID],
+  );
+  await owner.query(
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
+    [OTHER_ORG_ID],
   );
   await owner.query(
     `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
@@ -225,7 +244,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     await closeServer(server);
   }, 30_000);
 
-  async function walk(id: string, stage: ResolutionStage = new ProductionSymptomStage({ pool: app })): Promise<void> {
+  async function walk(id: string, stage = new ProductionSymptomStage({ pool: app })): Promise<void> {
     const jobs = new ResolutionJobStore(app);
     await jobs.enqueue({
       orgId: ORG_ID,
@@ -247,6 +266,33 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     await walker.tick();
   }
 
+  async function retryVerification(id: string): Promise<Response> {
+    const router = new Hono<RetryRouteEnv>();
+    router.use("*", async (c, next) => {
+      c.set("actor", {
+        userId: "user_resolution_admin",
+        orgId: ORG_ID,
+        projectId: null,
+        scopes: ["org:admin"],
+        source: "session",
+      });
+      await next();
+    });
+    router.route(
+      "/v1/orgs",
+      createProductionVerificationRoutes({
+        pool: app,
+        jobId: () => id,
+        executionLeaseOwner: () => `retry-${id}`,
+      }),
+    );
+    return router.request(`/v1/orgs/${ORG_ID}/projects/${PROJECT_ID}/issue-loops/${LOOP_ID}/retry-verification`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contractId, releaseInstanceId: RELEASE_ID, idempotencyKey: id }),
+    });
+  }
+
   it("uses tanren_app without superuser or RLS-bypass privileges", async () => {
     const identity = await app.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
       "SELECT current_user, r.rolsuper, r.rolbypassrls FROM pg_roles AS r WHERE r.rolname = current_user",
@@ -266,7 +312,11 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     const rows = await runWithOrgScope(app, ORG_ID, async (client) => {
       const [decisions, events, loop] = await Promise.all([
         client.query(
-          "SELECT resolution_job_id, decision, input_snapshot_hash FROM resolution_decisions WHERE org_id = $1 ORDER BY resolution_job_id",
+          `SELECT resolution_job_id, decision, decision_reasons, authority_version, contract_id,
+                  release_instance_id, verification_run_id, input_snapshot_hash
+             FROM resolution_decisions
+            WHERE org_id = $1
+            ORDER BY resolution_job_id`,
           [ORG_ID],
         ),
         client.query("SELECT event_type FROM events WHERE org_id = $1 AND event_type LIKE 'resolution.%' ORDER BY id", [
@@ -280,17 +330,63 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       {
         resolution_job_id: "rjob_authority_cosmetic",
         decision: "blocked",
+        decision_reasons: ["production symptom verification did not pass"],
+        authority_version: "tanren-resolution-authority.v1",
+        contract_id: contractId,
+        release_instance_id: RELEASE_ID,
+        verification_run_id: expect.any(String),
         input_snapshot_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
       },
       {
         resolution_job_id: "rjob_authority_real_fix",
         decision: "authorized",
+        decision_reasons: [],
+        authority_version: "tanren-resolution-authority.v1",
+        contract_id: contractId,
+        release_instance_id: RELEASE_ID,
+        verification_run_id: expect.any(String),
         input_snapshot_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
       },
     ]);
     expect(rows.events).toEqual([{ event_type: "resolution.blocked" }, { event_type: "resolution.authorized" }]);
     expect(rows.loop).toEqual({ state: "verified_source_sync_pending" });
     expect(artifactDigest).toMatch(/^sha256:/u);
+  });
+
+  it("records cosmetic and real operator retries through the same authority ledger", async () => {
+    cosmeticFix = true;
+    const cosmetic = await retryVerification("rjob_authority_retry_cosmetic");
+    cosmeticFix = false;
+    const real = await retryVerification("rjob_authority_retry_real");
+
+    expect(cosmetic.status).toBe(200);
+    expect(real.status).toBe(200);
+    const rows = await runWithOrgScope(app, ORG_ID, (client) =>
+      client.query(
+        `SELECT resolution_job_id, decision, authority_version, contract_id, release_instance_id, verification_run_id
+           FROM resolution_decisions
+          WHERE resolution_job_id IN ('rjob_authority_retry_cosmetic', 'rjob_authority_retry_real')
+          ORDER BY resolution_job_id`,
+      ),
+    );
+    expect(rows.rows).toEqual([
+      {
+        resolution_job_id: "rjob_authority_retry_cosmetic",
+        decision: "blocked",
+        authority_version: "tanren-resolution-authority.v1",
+        contract_id: contractId,
+        release_instance_id: RELEASE_ID,
+        verification_run_id: expect.any(String),
+      },
+      {
+        resolution_job_id: "rjob_authority_retry_real",
+        decision: "authorized",
+        authority_version: "tanren-resolution-authority.v1",
+        contract_id: contractId,
+        release_instance_id: RELEASE_ID,
+        verification_run_id: expect.any(String),
+      },
+    ]);
   });
 
   it("records needs_attention for an inconclusive production probe, never authorization", async () => {
@@ -304,8 +400,8 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
             issueLoopId: LOOP_ID,
             contractId: input.contractId,
             verificationRunId: input.verificationRunId,
-            expectedHash: parseDigest(digest("expected")),
-            observedHash: parseDigest(digest("inconclusive")),
+            expectedHash: digest("expected") as Digest,
+            observedHash: digest("inconclusive") as Digest,
             outcome: "inconclusive",
             timingMs: 0,
             evidence: [],
@@ -334,5 +430,12 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
         client.query("DELETE FROM resolution_decisions WHERE org_id = $1", [ORG_ID]),
       ),
     ).rejects.toThrow(/immutable/u);
+  });
+
+  it("does not expose one org's resolution decisions to another org", async () => {
+    const invisible = await runWithOrgScope(app, OTHER_ORG_ID, (client) =>
+      client.query("SELECT id FROM resolution_decisions WHERE org_id = $1", [ORG_ID]),
+    );
+    expect(invisible.rows).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, foreignKey, index, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { check, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 import { issueLoops } from "./schemaIssueLoops.js";
@@ -19,6 +19,11 @@ export const resolutionDecisions = pgTable(
     resolutionJobId: text("resolution_job_id").notNull(),
     issueLoopId: text("issue_loop_id").notNull(),
     decision: text("decision").notNull(),
+    decisionReasons: jsonb("decision_reasons").$type<string[]>().notNull(),
+    authorityVersion: text("authority_version").notNull(),
+    contractId: text("contract_id").notNull(),
+    releaseInstanceId: text("release_instance_id"),
+    verificationRunId: text("verification_run_id"),
     inputSnapshotHash: text("input_snapshot_hash").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

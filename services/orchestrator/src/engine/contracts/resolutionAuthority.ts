@@ -4,6 +4,7 @@
 
 export const RESOLUTION_DECISIONS = ["authorized", "blocked", "needs_attention", "waived"] as const;
 export type ResolutionDecision = (typeof RESOLUTION_DECISIONS)[number];
+export const RESOLUTION_AUTHORITY_VERSION = "tanren-resolution-authority.v1";
 
 export const RESOLUTION_PROOF_GRADES = ["active_causal", "active_plus_soak", "observational", "attested"] as const;
 export type ResolutionProofGrade = (typeof RESOLUTION_PROOF_GRADES)[number];
@@ -14,7 +15,8 @@ export type ResolutionEvidenceRun = {
   readonly mergeSha: string;
 };
 
-export type ResolutionProductionEvidence = ResolutionEvidenceRun & {
+export type ResolutionProductionEvidence = Omit<ResolutionEvidenceRun, "verificationRunId"> & {
+  readonly verificationRunId: string | null;
   readonly outcome: "passed" | "failed" | "inconclusive";
   readonly classification: "product_resolved" | "product_failure" | "infra_failure" | "inconclusive" | "unknown";
   readonly assertionOutcomes: ReadonlyArray<{
@@ -34,13 +36,17 @@ export type ResolutionEvidenceSnapshot = {
   readonly projectId: string;
   readonly resolutionJobId: string;
   readonly issueLoopId: string;
-  readonly contract: { readonly hash: string | null; readonly sourceRevision: string | null };
+  readonly contract: { readonly id: string; readonly hash: string | null; readonly sourceRevision: string | null };
   readonly baseline: ResolutionEvidenceRun | null;
   readonly counterfactual: ResolutionEvidenceRun | null;
   readonly soak: ResolutionEvidenceRun | null;
   readonly merge: { readonly authorityAuditId: string | null; readonly sha: string | null };
   /** The exact release binding that production verification must match. */
-  readonly deployment: { readonly artifactDigest: string | null; readonly mergeSha: string | null };
+  readonly deployment: {
+    readonly releaseInstanceId: string | null;
+    readonly artifactDigest: string | null;
+    readonly mergeSha: string | null;
+  };
   readonly production: ResolutionProductionEvidence;
   readonly proofGrade: ResolutionProofGrade | "unknown";
   readonly resolutionPolicy: ResolutionProofGrade | "unknown";

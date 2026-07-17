@@ -179,6 +179,11 @@ export interface ResolutionDecisionRecord {
   resolution_job_id: string;
   issue_loop_id: string;
   decision: string;
+  decision_reasons: string[];
+  authority_version: string;
+  contract_id: string;
+  release_instance_id: string | null;
+  verification_run_id: string | null;
   input_snapshot_hash: string;
   created_at: Date;
 }

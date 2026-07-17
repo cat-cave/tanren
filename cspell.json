@@ -402,6 +402,7 @@
     "pollable",
     "pooler",
     "punit",
+    "rdec",
     "postprocessors",
     "powerset",
     "precheck",

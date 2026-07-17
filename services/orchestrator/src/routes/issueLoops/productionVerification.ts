@@ -9,10 +9,13 @@ import type {
   ResolutionStageKind,
   ResolutionStageResult,
 } from "../../engine/contracts/resolutionStage.js";
+import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
+import { authorizeProductionResolution } from "../../engine/dag/productionResolutionAuthorization.js";
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
 import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
+import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
 import { createResolutionStageRegistry } from "../../engine/verification/resolutionStages/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
@@ -32,6 +35,8 @@ export interface ProductionVerificationRoutesOptions {
   readonly contracts?: Pick<SymptomContractStore, "get">;
   readonly enqueue?: Pick<ResolutionJobStore, "enqueue">;
   readonly jobs?: Pick<ResolutionJobStore, "claimById" | "verifyActiveLease" | "complete" | "release">;
+  /** Required for the production decision; the default is the live authority. */
+  readonly authority?: Pick<ResolutionAuthority, "authorize">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -66,6 +71,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const contracts = options.contracts ?? new SymptomContractStore(options.pool);
   const enqueue = options.enqueue ?? new ResolutionJobStore(options.pool);
   const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
+  const authority = options.authority ?? buildResolutionAuthority(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -129,6 +135,15 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
     let verdict: ResolutionStageResult;
     try {
       verdict = await stage.run(job, { source: "operator_retry" });
+    } catch (error) {
+      await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
+      throw error;
+    }
+    try {
+      // Keep the direct operator retry on the walker’s sole-decision path. The
+      // stage has written immutable production evidence, but this lease must not
+      // become completed until the authority records its decision and event.
+      await authorizeProductionResolution(authority, job);
     } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;

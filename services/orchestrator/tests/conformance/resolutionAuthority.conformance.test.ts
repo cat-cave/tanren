@@ -16,12 +16,12 @@ function snapshot(): ResolutionEvidenceSnapshot {
     projectId: "project_a",
     resolutionJobId: "rjob_a",
     issueLoopId: "iloop_a",
-    contract: { hash: "sha256:" + "b".repeat(64), sourceRevision: "revision_a" },
+    contract: { id: "contract_a", hash: "sha256:" + "b".repeat(64), sourceRevision: "revision_a" },
     baseline: run,
     counterfactual: run,
     soak: null,
     merge: { authorityAuditId: "audit_a", sha: run.mergeSha },
-    deployment: { artifactDigest: run.artifactDigest, mergeSha: run.mergeSha },
+    deployment: { releaseInstanceId: "release_a", artifactDigest: run.artifactDigest, mergeSha: run.mergeSha },
     production: {
       ...run,
       outcome: "passed",
@@ -58,7 +58,20 @@ class ResolutionAuthorityMemoryPool {
       return { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("INSERT INTO resolution_decisions")) {
-      const [orgId, projectId, id, resolutionJobId, issueLoopId, decision, inputSnapshotHash] = params;
+      const [
+        orgId,
+        projectId,
+        id,
+        resolutionJobId,
+        issueLoopId,
+        decision,
+        decisionReasons,
+        authorityVersion,
+        contractId,
+        releaseInstanceId,
+        verificationRunId,
+        inputSnapshotHash,
+      ] = params;
       if (this.decisions.some((row) => row["org_id"] === orgId && row["id"] === id)) return { rows: [], rowCount: 0 };
       this.decisions.push({
         org_id: orgId,
@@ -67,6 +80,11 @@ class ResolutionAuthorityMemoryPool {
         resolution_job_id: resolutionJobId,
         issue_loop_id: issueLoopId,
         decision,
+        decision_reasons: JSON.parse(String(decisionReasons)),
+        authority_version: authorityVersion,
+        contract_id: contractId,
+        release_instance_id: releaseInstanceId,
+        verification_run_id: verificationRunId,
         input_snapshot_hash: inputSnapshotHash,
       });
       return { rows: [{ id }], rowCount: 1 };
@@ -93,18 +111,39 @@ describe("ResolutionAuthority decision SQL conformance", () => {
     const store = new PgResolutionAuthorityDecisionStore(pool as never);
 
     await expect(
-      store.record({ snapshot: evidence, decision: "authorized", inputSnapshotHash: hash }),
+      store.record({
+        snapshot: evidence,
+        decision: "authorized",
+        decisionReasons: [],
+        authorityVersion: "tanren-resolution-authority.v1",
+        inputSnapshotHash: hash,
+      }),
     ).resolves.toMatchObject({
       created: true,
       id: expect.stringContaining("rdec_"),
     });
     await expect(
-      store.record({ snapshot: evidence, decision: "authorized", inputSnapshotHash: hash }),
+      store.record({
+        snapshot: evidence,
+        decision: "authorized",
+        decisionReasons: [],
+        authorityVersion: "tanren-resolution-authority.v1",
+        inputSnapshotHash: hash,
+      }),
     ).resolves.toMatchObject({
       created: false,
     });
     expect(pool.decisions).toEqual([
-      expect.objectContaining({ decision: "authorized", input_snapshot_hash: hash, resolution_job_id: "rjob_a" }),
+      expect.objectContaining({
+        decision: "authorized",
+        decision_reasons: [],
+        authority_version: "tanren-resolution-authority.v1",
+        contract_id: "contract_a",
+        release_instance_id: "release_a",
+        verification_run_id: "vrun",
+        input_snapshot_hash: hash,
+        resolution_job_id: "rjob_a",
+      }),
     ]);
     expect(pool.loopState).toBe("verified_source_sync_pending");
     expect(pool.events).toEqual([expect.objectContaining({ event_type: "resolution.authorized" })]);

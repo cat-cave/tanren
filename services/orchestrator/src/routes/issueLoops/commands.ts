@@ -30,7 +30,7 @@ type RouteContext = Context<ActorContextEnv>;
 
 export interface IssueLoopCommandRoutesOptions {
   readonly pool: pg.Pool;
-  readonly jobs?: Pick<ResolutionJobStore, "enqueue" | "pauseLoop" | "resumeLoop">;
+  readonly jobs?: Pick<ResolutionJobStore, "enqueue" | "pauseLoop" | "resumeLoop" | "belongsToIssueLoop">;
   readonly contracts?: Pick<SymptomContractStore, "get">;
   /** The authenticated admin-only waiver is the only public authority action. */
   readonly authority?: Pick<ResolutionAuthority, "waive">;
@@ -105,6 +105,13 @@ export function createIssueLoopCommandRoutes(options: IssueLoopCommandRoutesOpti
     if (isResponse(scope)) return scope;
     const parsed = waiveSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_resolution_waiver", issues: parsed.error.issues }, 400);
+    const belongsToLoop = await jobs.belongsToIssueLoop({
+      orgId: scope.orgId,
+      projectId: scope.projectId,
+      issueLoopId: scope.loopId,
+      id: parsed.data.resolutionJobId,
+    });
+    if (!belongsToLoop) return c.json({ error: "resolution_job_not_found" }, 404);
     const decision = await authority.waive({
       orgId: scope.orgId,
       resolutionJobId: parsed.data.resolutionJobId,

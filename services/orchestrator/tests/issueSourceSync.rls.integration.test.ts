@@ -4,11 +4,16 @@ import { Pool } from "pg";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { IssueLoopStore } from "../src/engine/repositories/issueLoops.js";
 import { SourceSyncOutboxStore } from "../src/engine/repositories/sourceSyncOutbox.js";
+import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import {
   GithubIssueSourceAdapter,
   ingestGithubWebhookObservation,
 } from "../src/engine/forge/githubIssueSourceAdapter.js";
-import { ManualIssueSourceAdapter, enqueueResolutionSync } from "../src/engine/forge/issueSourceAdapter.js";
+import {
+  ManualIssueSourceAdapter,
+  ResolutionAuthorityRequiredError,
+  enqueueResolutionSync,
+} from "../src/engine/forge/issueSourceAdapter.js";
 import { WebhookEventStore } from "../src/engine/repositories/webhookEvents.js";
 import { intakeAutoRouteDeps, processWebhookEvent } from "../src/engine/forge/intake/index.js";
 import type { CandidateTriage, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
@@ -162,6 +167,54 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     return { ...persisted, processed };
   }
 
+  async function recordAuthorizedDecision(issueLoopId: string): Promise<void> {
+    const contract = await new SymptomContractStore(appPool).create({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      contract: {
+        version: 1,
+        issueLoopId,
+        target: { url: "https://source-sync.example/symptom" },
+        expectedFailingObservation: { status: 200, body: { status: "still_broken" } },
+        expectedCorrectedObservation: { status: 200, body: { status: "fixed" } },
+        proofPolicy: "active_causal",
+        sourceRevision: `source-sync-${issueLoopId}`,
+        baselineRequired: true,
+      },
+    });
+    const jobId = `rjob_source_sync_${issueLoopId}`;
+    await runWithOrgScope(appPool, ORG_A, async (client) => {
+      await client.query(
+        `INSERT INTO resolution_jobs
+           (org_id, project_id, id, issue_loop_id, contract_id, stage, state, idempotency_key, attempt)
+         VALUES ($1, $2, $3, $4, $5, 'production', 'completed', $3, 1)`,
+        [ORG_A, PROJECT_A, jobId, issueLoopId, contract.id],
+      );
+      await client.query(
+        `INSERT INTO resolution_decisions
+           (org_id, project_id, id, resolution_job_id, issue_loop_id, decision, decision_reasons,
+            authority_version, contract_id, release_instance_id, verification_run_id, input_snapshot_hash)
+         VALUES ($1, $2, $3, $4, $5, 'authorized', '[]'::jsonb, $6, $7, NULL, NULL, $8)`,
+        [
+          ORG_A,
+          PROJECT_A,
+          `rdec_source_sync_${issueLoopId}`,
+          jobId,
+          issueLoopId,
+          "tanren-resolution-authority.v1",
+          contract.id,
+          `sha256:${"a".repeat(64)}`,
+        ],
+      );
+      await client.query(
+        `UPDATE issue_loops
+            SET state = 'verified_source_sync_pending', row_version = row_version + 1, updated_at = now()
+          WHERE org_id = $1 AND project_id = $2 AND id = $3`,
+        [ORG_A, PROJECT_A, issueLoopId],
+      );
+    });
+  }
+
   it("records GitHub webhook findings through the bh-3 processor and emits frozen loop events", async () => {
     const received = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
     expect(received).toMatchObject({ inserted: true, processed: true });
@@ -215,6 +268,16 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     const loopId = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#42")!.id;
+    await expect(
+      enqueueResolutionSync(appPool, {
+        orgId: ORG_A,
+        projectId: PROJECT_A,
+        issueLoopId: loopId,
+        sourceId: SOURCE_A,
+        externalKey: "gh-cat-cave/fixture#42",
+      }),
+    ).rejects.toBeInstanceOf(ResolutionAuthorityRequiredError);
+    await recordAuthorizedDecision(loopId);
     const pending = await enqueueResolutionSync(appPool, {
       orgId: ORG_A,
       projectId: PROJECT_A,
@@ -237,6 +300,7 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     const siblingLoop = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#43")!;
+    await recordAuthorizedDecision(siblingLoop.id);
     const siblingPending = await enqueueResolutionSync(appPool, {
       orgId: ORG_A,
       projectId: PROJECT_A,

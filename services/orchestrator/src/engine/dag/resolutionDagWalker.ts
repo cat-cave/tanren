@@ -2,6 +2,7 @@ import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../con
 import type { ResolutionAuthority } from "../contracts/resolutionAuthority.js";
 import { DEFAULT_RESOLUTION_JOB_LEASE_MS, type ResolutionJobStore } from "../repositories/resolutionJobs.js";
 import { createLogger } from "../observability/logger.js";
+import { authorizeProductionResolution } from "./productionResolutionAuthorization.js";
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
 
 const log = createLogger("resolution-dag-walker");
@@ -157,13 +158,7 @@ export class ResolutionDagWalker {
       // run + assertions before it returns. Its product_resolved result is still
       // only evidence: the separate ResolutionAuthority is the sole component
       // allowed to declare an internal resolution / source-closure eligibility.
-      if (job.stage === "production") {
-        const authority = this.deps.authority;
-        if (authority === undefined) {
-          throw new Error("production resolution work has no ResolutionAuthority — fail closed");
-        }
-        await authority.authorize({ orgId: job.orgId, resolutionJobId: job.id });
-      }
+      await authorizeProductionResolution(this.deps.authority, job);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {

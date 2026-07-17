@@ -20,12 +20,16 @@ function evidence(overrides: Partial<ResolutionEvidenceSnapshot> = {}): Resoluti
     projectId: "project_resolution",
     resolutionJobId: "rjob_resolution",
     issueLoopId: "iloop_resolution",
-    contract: { hash: digest("contract"), sourceRevision: "source-revision" },
+    contract: { id: "contract_resolution", hash: digest("contract"), sourceRevision: "source-revision" },
     baseline: { ...run, verificationRunId: "vrun_baseline" },
     counterfactual: { ...run, verificationRunId: "vrun_counterfactual" },
     soak: null,
     merge: { authorityAuditId: "audit_merge", sha: run.mergeSha },
-    deployment: { artifactDigest: run.artifactDigest, mergeSha: run.mergeSha },
+    deployment: {
+      releaseInstanceId: "release_resolution",
+      artifactDigest: run.artifactDigest,
+      mergeSha: run.mergeSha,
+    },
     production: {
       ...run,
       outcome: "passed",
@@ -41,7 +45,10 @@ function evidence(overrides: Partial<ResolutionEvidenceSnapshot> = {}): Resoluti
 describe("ResolutionAuthority — fail-closed evidence truth table", () => {
   it("authorizes only a complete real-fix snapshot and hashes it deterministically", () => {
     const first = evidence();
-    const reordered = { ...first, contract: { sourceRevision: "source-revision", hash: digest("contract") } };
+    const reordered = {
+      ...first,
+      contract: { sourceRevision: "source-revision", id: "contract_resolution", hash: digest("contract") },
+    };
     expect(decideResolution(first)).toEqual({ decision: "authorized", reasons: [] });
     expect(resolutionSnapshotHash(first)).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(resolutionSnapshotHash(reordered)).toBe(resolutionSnapshotHash(first));
@@ -100,6 +107,11 @@ describe("ResolutionAuthority — fail-closed evidence truth table", () => {
       }),
     ).resolves.toMatchObject({ decision: "waived" });
     expect(recorded).toHaveLength(2);
-    expect(recorded[1]).toMatchObject({ decision: "waived", snapshot: { waiver: { operatorId: "operator_a" } } });
+    expect(recorded[1]).toMatchObject({
+      decision: "waived",
+      authorityVersion: "tanren-resolution-authority.v1",
+      decisionReasons: ["operator waiver recorded"],
+      snapshot: { waiver: { operatorId: "operator_a" } },
+    });
   });
 });

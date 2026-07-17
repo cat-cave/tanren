@@ -10,6 +10,7 @@ import type {
   ResolutionEvidenceSnapshot,
   ResolutionProofGrade,
 } from "../contracts/resolutionAuthority.js";
+import { RESOLUTION_AUTHORITY_VERSION } from "../contracts/resolutionAuthority.js";
 import { PgEventStore } from "../eventStore.js";
 
 export interface ResolutionAuthorityEvidenceSource {
@@ -20,6 +21,8 @@ export interface ResolutionAuthorityDecisionStore {
   record(input: {
     readonly snapshot: ResolutionEvidenceSnapshot;
     readonly decision: ResolutionDecision;
+    readonly decisionReasons: readonly string[];
+    readonly authorityVersion: string;
     readonly inputSnapshotHash: string;
   }): Promise<{ readonly id: string; readonly created: boolean }>;
 }
@@ -138,7 +141,13 @@ export class ResolutionAuthority implements ResolutionAuthorityContract {
   private async decide(snapshot: ResolutionEvidenceSnapshot): Promise<ResolutionAuthorization> {
     const { decision, reasons } = decideResolution(snapshot);
     const inputSnapshotHash = resolutionSnapshotHash(snapshot);
-    const recorded = await this.decisions.record({ snapshot, decision, inputSnapshotHash });
+    const recorded = await this.decisions.record({
+      snapshot,
+      decision,
+      decisionReasons: reasons,
+      authorityVersion: RESOLUTION_AUTHORITY_VERSION,
+      inputSnapshotHash,
+    });
     return { ...recorded, decision, inputSnapshotHash, reasons };
   }
 }
@@ -171,17 +180,22 @@ export class PgResolutionAuthorityEvidenceSource implements ResolutionAuthorityE
         projectId: requiredText(row["project_id"], "project_id"),
         resolutionJobId: input.resolutionJobId,
         issueLoopId: requiredText(row["issue_loop_id"], "issue_loop_id"),
-        contract: { hash: textOrNull(row["contract_hash"]), sourceRevision: textOrNull(row["source_revision"]) },
+        contract: {
+          id: requiredText(row["contract_id"], "contract_id"),
+          hash: textOrNull(row["contract_hash"]),
+          sourceRevision: textOrNull(row["source_revision"]),
+        },
         baseline: evidenceRun(row, "baseline"),
         counterfactual: evidenceRun(row, "counterfactual"),
         soak: evidenceRun(row, "soak"),
         merge: { authorityAuditId: textOrNull(row["authority_audit_id"]), sha: textOrNull(row["authority_merge_sha"]) },
         deployment: {
+          releaseInstanceId: textOrNull(row["release_instance_id"]),
           artifactDigest: textOrNull(row["release_artifact_digest"]),
           mergeSha: textOrNull(row["release_merge_sha"]),
         },
         production: {
-          verificationRunId: productionRunId ?? "missing-production-verification",
+          verificationRunId: productionRunId,
           artifactDigest: textOrNull(row["production_artifact_digest"]) ?? "missing-artifact-digest",
           mergeSha: textOrNull(row["production_merge_sha"]) ?? "missing-merge-sha",
           outcome: productionOutcome(textOrNull(row["production_classification"])),
@@ -200,6 +214,8 @@ export class PgResolutionAuthorityEvidenceSource implements ResolutionAuthorityE
 
 const EVIDENCE_SQL = `
   SELECT job.project_id,
+         job.contract_id,
+         job.release_instance_id,
          job.issue_loop_id,
          contract.canonical_hash AS contract_hash,
          contract.source_revision,
@@ -332,14 +348,17 @@ export class PgResolutionAuthorityDecisionStore implements ResolutionAuthorityDe
   public async record(input: {
     snapshot: ResolutionEvidenceSnapshot;
     decision: ResolutionDecision;
+    decisionReasons: readonly string[];
+    authorityVersion: string;
     inputSnapshotHash: string;
   }): Promise<{ id: string; created: boolean }> {
     const id = `rdec_${input.inputSnapshotHash.slice("sha256:".length)}`;
     return runWithOrgScope(this.pool, input.snapshot.orgId, async (client) => {
       const inserted = await client.query<{ id: unknown }>(
         `INSERT INTO resolution_decisions
-           (org_id, project_id, id, resolution_job_id, issue_loop_id, decision, input_snapshot_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (org_id, project_id, id, resolution_job_id, issue_loop_id, decision, decision_reasons,
+            authority_version, contract_id, release_instance_id, verification_run_id, input_snapshot_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
          ON CONFLICT (org_id, id) DO NOTHING
          RETURNING id`,
         [
@@ -349,6 +368,11 @@ export class PgResolutionAuthorityDecisionStore implements ResolutionAuthorityDe
           input.snapshot.resolutionJobId,
           input.snapshot.issueLoopId,
           input.decision,
+          JSON.stringify(input.decisionReasons),
+          input.authorityVersion,
+          input.snapshot.contract.id,
+          input.snapshot.deployment.releaseInstanceId,
+          input.snapshot.production.verificationRunId,
           input.inputSnapshotHash,
         ],
       );
