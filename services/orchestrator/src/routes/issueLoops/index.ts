@@ -15,7 +15,7 @@ import { runWithOrgScope } from "@tanren/db";
 import { Hono, type Context } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import { IssueLoopStore } from "../../engine/repositories/issueLoops.js";
+import { IssueLoopNotFoundError, IssueLoopStore } from "../../engine/repositories/issueLoops.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
@@ -69,11 +69,18 @@ export function createIssueLoopRoutes(options: IssueLoopRoutesOptions) {
     const scope = authorize(c);
     if (isResponse(scope)) return scope;
     const loopId = requireParam(c, "loopId");
-    const loop = await runWithOrgScope(options.pool, scope.orgId, (client) =>
-      IssueLoopStore.get(client, scope.orgId, scope.projectId, loopId),
-    );
-    if (loop === undefined) return c.json({ error: "issue_loop_not_found" }, 404);
-    return c.json({ version: "v1" as const, ...scope, issueLoop: loop });
+    try {
+      const loop = await runWithOrgScope(options.pool, scope.orgId, (client) =>
+        IssueLoopStore.get(client, scope.orgId, scope.projectId, loopId),
+      );
+      if (loop === undefined) throw new IssueLoopNotFoundError(loopId);
+      return c.json({ version: "v1" as const, ...scope, issueLoop: loop });
+    } catch (error) {
+      if (error instanceof IssueLoopNotFoundError) {
+        return c.json({ error: "issue_loop_not_found", message: error.message }, 404);
+      }
+      throw error;
+    }
   });
 
   app.get("/:orgId/projects/:projectId/issue-loops/:loopId/findings", async (c) => {
