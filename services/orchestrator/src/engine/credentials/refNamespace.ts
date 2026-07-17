@@ -150,3 +150,38 @@ export function canonicalOrgGithubCredentialRef(args: {
     throw new CredentialRefOwnershipError(args.kind, { cause: error });
   }
 }
+
+/**
+ * Canonicalize an LLM routing credential coordinate under an authenticated org.
+ *
+ * Unlike GitHub, a routing entry can name any LLM provider slug, so its caller
+ * supplies a complete ref rather than a bare credential name. Requiring the
+ * exact `credential/<slug>/org/<orgId>/<name>` coordinate prevents a project
+ * config from naming another org's LLM bundle or API key. The supplied ref is
+ * deliberately omitted from the typed error so a hostile cross-tenant value is
+ * never echoed back to its caller.
+ */
+export function canonicalOrgLlmCredentialRef(args: { orgId: string; supplied: string }): string {
+  try {
+    if (!SEGMENT.test(args.orgId)) {
+      throw new Error("credential owner id is not a safe ref segment");
+    }
+    const segments = args.supplied.trim().split("/");
+    const [prefix, slug, scope, ownerId, name] = segments;
+    if (
+      segments.length !== 5 ||
+      prefix !== "credential" ||
+      slug === undefined ||
+      scope !== "org" ||
+      ownerId !== args.orgId ||
+      name === undefined ||
+      !SEGMENT.test(slug) ||
+      !SEGMENT.test(name)
+    ) {
+      throw new Error("credential ref does not belong to the authenticated owner");
+    }
+    return `credential/${slug}/org/${args.orgId}/${name}`;
+  } catch (error) {
+    throw new CredentialRefOwnershipError("opaque", { cause: error });
+  }
+}

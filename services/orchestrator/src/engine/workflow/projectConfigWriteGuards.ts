@@ -1,5 +1,5 @@
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
-import { bindProjectGithubCredentialRefs } from "../config/projectConfig.js";
+import { bindProjectGithubCredentialRefs, bindProjectLlmCredentialRefs } from "../config/projectConfig.js";
 
 const projectConfigWriteProofBrand = Symbol("projectConfigWriteProof");
 
@@ -127,6 +127,9 @@ export function checkFullProjectConfigPatch(
   try {
     config = bindProjectConfigOwner(migrateProjectConfig(rawConfig), orgId);
   } catch (error) {
+    if (error instanceof ProjectConfigWriteRejectedError) {
+      return { ok: false, response: error.response };
+    }
     return { ok: false, response: { error: "invalid_project_config", message: messageOf(error) } };
   }
 
@@ -146,25 +149,54 @@ export function checkFullProjectConfigPatch(
 }
 
 function bindProjectConfigOwner(config: ProjectConfigV1, orgId: string | undefined): ProjectConfigV1 {
-  if (config.credentials?.githubCredentialRef === undefined) {
+  const llmAuthRefFields = projectLlmAuthRefFields(config);
+  if (config.credentials?.githubCredentialRef === undefined && llmAuthRefFields.length === 0) {
     return config;
   }
   if (orgId === undefined || orgId.trim() === "") {
     throw new ProjectConfigWriteRejectedError({
       error: "invalid_project_config",
-      message: "a project GitHub credential requires an authenticated organization owner",
-      fields: ["credentials.githubCredentialRef"],
+      message: "a project credential requires an authenticated organization owner",
+      fields: [
+        ...(config.credentials?.githubCredentialRef === undefined ? [] : ["credentials.githubCredentialRef"]),
+        ...llmAuthRefFields,
+      ],
     });
   }
+  let bound = config;
+  if (config.credentials?.githubCredentialRef !== undefined) {
+    try {
+      bound = bindProjectGithubCredentialRefs(bound, orgId);
+    } catch {
+      throw new ProjectConfigWriteRejectedError({
+        error: "invalid_project_config",
+        message: "project GitHub credential does not belong to the project organization",
+        fields: ["credentials.githubCredentialRef"],
+      });
+    }
+  }
   try {
-    return bindProjectGithubCredentialRefs(config, orgId);
+    return bindProjectLlmCredentialRefs(bound, orgId);
   } catch {
     throw new ProjectConfigWriteRejectedError({
       error: "invalid_project_config",
-      message: "project GitHub credential does not belong to the project organization",
-      fields: ["credentials.githubCredentialRef"],
+      message: "project LLM credential does not belong to the project organization",
+      fields: llmAuthRefFields,
     });
   }
+}
+
+function projectLlmAuthRefFields(config: ProjectConfigV1): string[] {
+  const fields: string[] = [];
+  if (config.credentials?.defaultLlm !== undefined) {
+    fields.push("credentials.defaultLlm.authRef");
+  }
+  for (const [role, route] of Object.entries(config.routing)) {
+    for (const [index] of route.chain.entries()) {
+      fields.push(`routing.${role}.chain[${index}].authRef`);
+    }
+  }
+  return fields;
 }
 
 function reservedAutonomyCreateFields(config: ProjectConfigV1, raw: Record<string, unknown>): string[] {

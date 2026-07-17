@@ -19,6 +19,7 @@ import {
   buildRunCredentialScoping,
   collectRotatingCredentialRefPaths,
   collectRunCredentialRefPaths,
+  RunCredentialRefOwnershipError,
   resolveScopedRunCredentials,
   resolveScopedRunTokenTtlSeconds,
 } from "../src/engine/workflow/plannerRunScopedCreds.js";
@@ -241,6 +242,23 @@ describe("collectRunCredentialRefPaths", () => {
     expect(refs).toContain("credential/github_app/org/org-acme/default");
     // The empty sentinel itself is never a path.
     expect(refs).not.toContain("");
+  });
+
+  it("rejects a foreign-org routing authRef before it can widen the Vault policy", () => {
+    const ctx = context();
+    ctx.orgId = "org-acme";
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
+    ctx.githubCredentialRef = GH_REF;
+    ctx.routing = {
+      plan: { chain: [{ cli: "codex", model: "m", authRef: "credential/codex/org/org-victim/default" }] },
+      write: { chain: [] },
+      check: { chain: [] },
+      audit: { chain: [] },
+      demo: { chain: [] },
+      forge: { chain: [] },
+    };
+
+    expect(() => collectRunCredentialRefPaths(ctx)).toThrow(RunCredentialRefOwnershipError);
   });
 });
 

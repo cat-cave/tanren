@@ -27,7 +27,7 @@ import {
 } from "./shared.js";
 import { InsightThresholdsConfig } from "../insights/thresholds.js";
 import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
-import { canonicalOrgGithubCredentialRef } from "../credentials/refNamespace.js";
+import { canonicalOrgGithubCredentialRef, canonicalOrgLlmCredentialRef } from "../credentials/refNamespace.js";
 
 // Top-level versioned Zod schema for project-level config. Persisted as a
 // JSONB column on `projects.config`. Most fields are partial overrides on
@@ -58,6 +58,31 @@ export function bindProjectGithubCredentialRefs(config: ProjectConfigV1, orgId: 
     credentials: {
       ...config.credentials,
       githubCredentialRef: canonicalOrgGithubCredentialRef({ orgId, supplied, kind: "github_token" }),
+    },
+  };
+}
+
+/** Rebind every project LLM auth ref to the project's authenticated org. */
+export function bindProjectLlmCredentialRefs(config: ProjectConfigV1, orgId: string): ProjectConfigV1 {
+  const bind = <T extends { authRef: string }>(entry: T): T => ({
+    ...entry,
+    authRef: canonicalOrgLlmCredentialRef({ orgId, supplied: entry.authRef }),
+  });
+  const credentials =
+    config.credentials?.defaultLlm === undefined
+      ? config.credentials
+      : { ...config.credentials, defaultLlm: bind(config.credentials.defaultLlm) };
+
+  return {
+    ...config,
+    ...(credentials === undefined ? {} : { credentials }),
+    routing: {
+      plan: { ...config.routing.plan, chain: config.routing.plan.chain.map(bind) },
+      write: { ...config.routing.write, chain: config.routing.write.chain.map(bind) },
+      check: { ...config.routing.check, chain: config.routing.check.chain.map(bind) },
+      audit: { ...config.routing.audit, chain: config.routing.audit.chain.map(bind) },
+      demo: { ...config.routing.demo, chain: config.routing.demo.chain.map(bind) },
+      forge: { ...config.routing.forge, chain: config.routing.forge.chain.map(bind) },
     },
   };
 }
