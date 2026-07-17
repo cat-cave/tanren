@@ -1,6 +1,7 @@
+// cspell:ignore vassert vartifact
 import { describe, expect, it } from "vitest";
 import { AllowAllPeerVerifier, DenyAllPeerVerifier } from "../src/engine/contracts/mtlsChannel.js";
-import type { ResolutionJob } from "../src/engine/contracts/resolutionStage.js";
+import type { ResolutionJob, ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
 import type { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { createInternalResolutionJobRoutes } from "../src/routes/internal/resolutionJobs.js";
 
@@ -73,5 +74,46 @@ describe("internal resolution-job endpoints", () => {
     expect(heartbeat.status).toBe(200);
     expect(await heartbeat.json()).toEqual({ renewed: true });
     expect(calls).toEqual(["claim", "heartbeat"]);
+  });
+
+  it("runs a claimed baseline job through the mTLS-only reproduction surface", async () => {
+    const calls: Array<{ receivedJob: ResolutionJob; context: unknown }> = [];
+    const baselineStage: ResolutionStage = {
+      kind: "baseline",
+      async run(receivedJob, context) {
+        calls.push({ receivedJob, context });
+        return {
+          outcome: "passed",
+          classification: "product_failure",
+          proofGrade: "active_causal",
+          verificationRunId: "vrun_baseline",
+          assertionIds: ["vassert_baseline"],
+          evidenceRefs: ["vartifact_baseline"],
+        };
+      },
+    };
+    const app = createInternalResolutionJobRoutes({
+      pool: {} as never,
+      verifier: new AllowAllPeerVerifier(),
+      baselineStage,
+    });
+
+    const response = await trustedRequest(app, "/internal/resolution-jobs/rjob_1/reproduce", {
+      job,
+      context: { verificationRunId: "vrun_baseline" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      result: {
+        outcome: "passed",
+        classification: "product_failure",
+        proofGrade: "active_causal",
+        verificationRunId: "vrun_baseline",
+        assertionIds: ["vassert_baseline"],
+        evidenceRefs: ["vartifact_baseline"],
+      },
+    });
+    expect(calls).toEqual([{ receivedJob: job, context: { verificationRunId: "vrun_baseline" } }]);
   });
 });
