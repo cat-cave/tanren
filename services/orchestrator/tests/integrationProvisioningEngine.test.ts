@@ -25,7 +25,6 @@ import {
 } from "../src/engine/integrations/provisioningEngine.js";
 import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
-
 const ORG = "org_int_1";
 const PROJECT = "proj_int_1";
 const ACTOR = { kind: "operator", id: "user_a" } as const;
@@ -362,10 +361,18 @@ describe("provisionCapability — greenfield enable sentry", () => {
     // The event carries refs only — never the DSN value.
     expect(events.events).toHaveLength(1);
     const ev = events.events[0]!;
-    expect(ev.eventType).toBe("integration.provisioned");
+    expect(ev.eventType).toBe("integration.resource.provisioned");
     expect(ev.projectId).toBe(PROJECT);
     expect(JSON.stringify(ev.payload)).not.toContain(stored!.value);
-    expect((ev.payload as { secretRefNames: string[] }).secretRefNames).toEqual([dsnRef]);
+    expect(ev.payload).toEqual({
+      requirementId: `provisioning:${PROJECT}:errors`,
+      providerKind: "sentry",
+      externalResourceId: "acme-web",
+      ownership: "created",
+    });
+    expect(events.events.every((event) => !event.eventType.startsWith("integration.requirement."))).toBe(true);
+    expect(events.events.every((event) => !event.eventType.startsWith("integration.binding."))).toBe(true);
+    expect(events.events.every((event) => !event.eventType.startsWith("capability."))).toBe(true);
   });
 
   it("re-reads after a config CAS loss and preserves the concurrent governance write", async () => {
@@ -488,5 +495,6 @@ describe("provisionCapability — typed inbox kind boundary", () => {
       }),
     ).rejects.toThrow(/Invalid option/u);
     expect(state.inboxSources).toHaveLength(0);
+    expect(events.events).toHaveLength(0);
   });
 });
