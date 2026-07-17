@@ -50,6 +50,18 @@ class FakeNotifyListener {
   }
 }
 
+/** Inserts an event after subscribe starts but before it resolves / LISTEN is live. */
+class CommitDuringSubscribeListener extends FakeNotifyListener {
+  constructor(private readonly beforeSubscribeResolves: () => void) {
+    super();
+  }
+
+  async subscribe(channel: string, handler: (payload: string) => void): Promise<() => void> {
+    this.beforeSubscribeResolves();
+    return super.subscribe(channel, handler);
+  }
+}
+
 class CapturingChannel implements NotificationChannel {
   readonly kind: ChannelKind;
   readonly wired = true;
@@ -64,8 +76,8 @@ class CapturingChannel implements NotificationChannel {
 
 /**
  * A fake pool whose `connect()` returns a client that answers the BEGIN/COMMIT
- * the system scope opens and the single `SELECT ... FROM events WHERE id` the
- * subscriber issues, returning the seeded event row keyed by id.
+ * the system scope opens and the ordered `SELECT ... FROM events WHERE id >`
+ * catch-up scan the subscriber issues, returning the seeded event rows.
  */
 function fakeEventsPool(rows: Map<string, Record<string, unknown>>): pg.Pool {
   const client = {
@@ -73,8 +85,12 @@ function fakeEventsPool(rows: Map<string, Record<string, unknown>>): pg.Pool {
     async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: unknown[] }> {
       const trimmed = sql.trim();
       if (trimmed.startsWith("SELECT") && trimmed.includes("FROM events")) {
-        const row = rows.get(String(params[0]));
-        return { rows: row === undefined ? [] : [row] };
+        const after = BigInt(String(params[0] ?? "0"));
+        const visible = [...rows.entries()]
+          .filter(([id]) => BigInt(id) > after)
+          .sort(([left], [right]) => (BigInt(left) < BigInt(right) ? -1 : 1))
+          .map(([id, row]) => ({ id, ...row }));
+        return { rows: visible };
       }
       // BEGIN / COMMIT / ROLLBACK / SET LOCAL.
       return { rows: [] };
@@ -110,6 +126,62 @@ function buildDispatcher(client: NotificationMemoryClient, channel: Notification
 }
 
 describe("NotificationSubscriber", () => {
+  it("replays an event committed before the initial LISTEN resolves", async () => {
+    const dbClient = new NotificationMemoryClient();
+    await NotificationTargetStore.create(dbClient, {
+      id: "target_slack",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "slack",
+      destination: "credential/slack-webhook",
+      label: "ops slack",
+      enabled: true,
+      weekendMute: false,
+    });
+    await NotificationRouteStore.create(dbClient, {
+      id: "r_slack",
+      targetId: "target_slack",
+      eventName: "dag.spec.needs_attention",
+      enabled: true,
+      minSeverity: "warn",
+    });
+    const events = new Map<string, Record<string, unknown>>();
+    const listener = new CommitDuringSubscribeListener(() => {
+      // No NOTIFY is fired for this row: it represents the exact boot window
+      // in which Postgres discards a commit because LISTEN is not live yet.
+      events.set("43", {
+        event_type: "dag.spec.needs_attention",
+        payload: {
+          source: "strand",
+          specId: "spec_1",
+          reason: "persistent_failure",
+          terminalRuns: [],
+          attempts: 3,
+          message: "the autonomous self-heal could not make progress; a decision is needed",
+        },
+        org_id: "org_1",
+        run_id: null,
+        spec_id: "spec_1",
+        project_id: "project_1",
+        user_id: null,
+      });
+    });
+    const slack = new CapturingChannel("slack");
+    const sub = new NotificationSubscriber({
+      pool: fakeEventsPool(events),
+      notifyListener: listener as never,
+      dispatcher: buildDispatcher(dbClient, slack),
+    });
+
+    await sub.start();
+    await flush();
+
+    expect(slack.calls).toHaveLength(1);
+    expect(slack.calls[0]?.payload.eventName).toBe("dag.spec.needs_attention");
+    await sub.stop();
+  });
+
   it("an appended dag.spec.needs_attention reaches a configured channel via the registry", async () => {
     // Configure an org slack route for the escalation event (the matrix match).
     const dbClient = new NotificationMemoryClient();

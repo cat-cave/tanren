@@ -3,8 +3,14 @@
 // `tanren_notify` bus — fired at the event-append seam (PgEventStore) for EVERY
 // appended event, carrying only the event's bigserial id. On each wake it
 // re-reads that single event row under the system scope (the payload is just an
-// id, so the wake leaks no tenant data), decodes it to a typed event + its
+// id, so the wake leaks no tenant data), replays every event after its
+// in-memory dispatch watermark, decodes each one to a typed event + its
 // org/run/spec/project context, and hands it to the NotificationDispatcher.
+//
+// Postgres NOTIFY is only a wake, not a durable queue: a commit during the
+// boot / reconnect gap is never delivered to a listener that was not LISTENing
+// at that instant. The replay on every successful subscribe, plus the long
+// safety-net cadence below, makes that gap at-least-once rather than silent.
 //
 // Why a dedicated channel rather than reusing `tanren_run`: the highest-signal
 // escalation — `dag.spec.needs_attention` (a conflict/strand parked for a human)
@@ -39,6 +45,7 @@ const log = createLogger("notifications");
 
 /** The event row the subscriber re-reads by id to rebuild a typed event + its context. */
 interface NotificationEventRow {
+  id: string;
   event_type: string;
   payload: unknown;
   org_id: string | null;
@@ -47,6 +54,11 @@ interface NotificationEventRow {
   project_id: string | null;
   user_id: string | null;
 }
+
+// Like the run-worker's 20s claim backstop, this is a cadence rather than a
+// deadline: LISTEN is the low-latency wake path and this scan repairs a missed
+// wake (including a PG failover reconnect gap) within a bounded interval.
+const CATCH_UP_INTERVAL_MS = 20_000;
 
 export interface NotificationSubscriberDeps {
   pool: pg.Pool;
@@ -57,19 +69,28 @@ export interface NotificationSubscriberDeps {
 }
 
 /**
- * The running subscriber handle: on every `tanren_notify` wake it reads the
- * appended event row and dispatches it. `stop()` unsubscribes (idempotent).
- * Each wake is independent (one event id per notify), so there is no per-key
- * coalescing — every appended event is dispatched exactly once.
+ * The running subscriber handle: every wake, successful (re)subscribe, and
+ * safety-net cadence replays the event tail after its dispatch watermark.
+ * `stop()` unsubscribes (idempotent). Replay is intentionally at-least-once;
+ * the dispatch ledger is the idempotency boundary.
  */
 export class NotificationSubscriber {
   private reconnectHandle: SubscribeWithReconnectHandle | undefined;
+  private catchUpTimer: ReturnType<typeof setInterval> | undefined;
+  private catchUpInFlight: Promise<void> | undefined;
+  private catchUpRequested = false;
+  // This process-local watermark is advanced only after the event row has been
+  // handed to the dispatcher. Starting at zero deliberately lets the first
+  // successful LISTEN replay rows committed before that LISTEN resolved; the
+  // notification ledger / channels tolerate at-least-once delivery.
+  private lastDispatchedEventId = "0";
   private stopped = false;
 
   constructor(private readonly deps: NotificationSubscriberDeps) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
+    this.startCatchUpPoll();
     this.subscribeToNotifyBus();
   }
 
@@ -87,12 +108,15 @@ export class NotificationSubscriber {
       channel: NOTIFICATION_CHANNEL,
       logger: log,
       handler: (payload) => {
-        // Fire-and-forget: a dispatch failure is logged, never thrown into the
-        // notify pump (and the dispatcher itself never throws on a channel error).
-        void this.onEventAppended(payload).catch((error: unknown) => {
-          log.error("dispatch failed", { eventId: payload }, error);
-        });
+        // A wake has no durable ordering guarantee across a reconnect. Replay
+        // from the watermark instead of reading only this one payload id.
+        this.requestCatchUp("notify", payload);
       },
+      // `subscribeWithReconnect` calls this after EVERY successful LISTEN,
+      // including a re-subscribe following a PG connection error. That closes
+      // the otherwise-lost interval between the old client dropping and the
+      // replacement client becoming live.
+      onSubscribed: () => this.requestCatchUp("subscribe"),
     });
     if (this.stopped) {
       // stop() raced the wiring: drain the helper in the background — the
@@ -113,16 +137,60 @@ export class NotificationSubscriber {
    */
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.catchUpTimer !== undefined) {
+      clearInterval(this.catchUpTimer);
+      this.catchUpTimer = undefined;
+    }
     const drain = this.reconnectHandle?.stop();
     this.reconnectHandle = undefined;
     if (drain !== undefined) await drain;
   }
 
-  /** Handle one `tanren_notify` wake: read the event row by id and dispatch it. */
-  private async onEventAppended(eventId: string): Promise<void> {
-    if (eventId === "") return;
-    const row = await this.readEvent(eventId);
-    if (row === undefined) return;
+  /** Start the interval-based missed-NOTIFY backstop. */
+  private startCatchUpPoll(): void {
+    if (this.catchUpTimer !== undefined) return;
+    this.catchUpTimer = setInterval(() => this.requestCatchUp("safety-net"), CATCH_UP_INTERVAL_MS);
+    this.catchUpTimer.unref?.();
+  }
+
+  /**
+   * Coalesce concurrent wake / subscribe / poll requests. A request that lands
+   * while the scan is reading is latched, so the running pass immediately scans
+   * once more rather than leaving a just-committed row to the next cadence.
+   */
+  private requestCatchUp(source: "notify" | "subscribe" | "safety-net", eventId?: string): void {
+    if (this.stopped || eventId === "") return;
+    if (this.catchUpInFlight !== undefined) {
+      this.catchUpRequested = true;
+      return;
+    }
+    const catchUp = this.catchUp();
+    this.catchUpInFlight = catchUp;
+    void catchUp.then(
+      () => {
+        if (this.catchUpInFlight === catchUp) this.catchUpInFlight = undefined;
+      },
+      (error: unknown) => {
+        if (this.catchUpInFlight === catchUp) this.catchUpInFlight = undefined;
+        log.error("notification catch-up failed", { source, eventId }, error);
+      },
+    );
+  }
+
+  /** Replay all durable event rows after the last successfully dispatched id. */
+  private async catchUp(): Promise<void> {
+    do {
+      this.catchUpRequested = false;
+      const rows = await this.readEventsAfter(this.lastDispatchedEventId);
+      for (const row of rows) {
+        await this.dispatchEvent(row);
+        this.lastDispatchedEventId = row.id;
+      }
+    } while (this.catchUpRequested && !this.stopped);
+  }
+
+  /** Decode and dispatch a single event row while retaining the ordered watermark. */
+  private async dispatchEvent(row: NotificationEventRow): Promise<void> {
     let event: TypedEvent;
     try {
       event = decodeEvent({ event_type: row.event_type, payload: row.payload });
@@ -130,7 +198,7 @@ export class NotificationSubscriber {
       // An unknown/unparseable event type is a defensive guard only — every
       // producer writes through the validated PgEventStore — but never let it
       // block delivery of the rest. Log and move on.
-      log.error("could not decode appended event", { eventId, eventType: row.event_type }, error);
+      log.error("could not decode appended event", { eventId: row.id, eventType: row.event_type }, error);
       return;
     }
     const context: EventContext = {
@@ -152,20 +220,21 @@ export class NotificationSubscriber {
   }
 
   /**
-   * Read the appended event row by id. The system scope is cross-org because the
-   * wake carries no org, so this is a bare id lookup; the dispatcher re-applies the
-   * event org scope when it loads the matrix.
+   * Read the durable event tail under the system scope. The wake itself carries
+   * no org (and may have been missed), so this cross-org scan is keyed only by
+   * the monotonic event id; the dispatcher re-applies each event's org scope.
    */
-  private async readEvent(eventId: string): Promise<NotificationEventRow | undefined> {
+  private async readEventsAfter(eventId: string): Promise<NotificationEventRow[]> {
     const readPool = getSystemPool() ?? this.deps.pool;
     return runWithSystemScope(readPool, async (client) => {
       const result = await client.query<NotificationEventRow>(
-        `SELECT event_type, payload, org_id, run_id, spec_id, project_id, user_id
+        `SELECT id::text AS id, event_type, payload, org_id, run_id, spec_id, project_id, user_id
            FROM events
-          WHERE id = $1::bigint`,
+          WHERE id > $1::bigint
+          ORDER BY id ASC`,
         [eventId],
       );
-      return result.rows[0];
+      return result.rows;
     });
   }
 }
