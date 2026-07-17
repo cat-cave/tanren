@@ -170,6 +170,7 @@ export interface RunPlannerLoopInput {
   runStateWriter: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
+  onAllocationProgress?: () => void;
   secrets: SecretStore;
   // Dimension D — the per-run credential-scoping seam ({@link applyScopedRunCredentials}).
   credentialScoping?: RunCredentialScoping;
@@ -285,6 +286,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // REQUIRED non-empty string (hydration enforces the tenant-scope invariant),
     // so there is no null/undefined branch here.
     orgId: context.orgId,
+    ...(input.onAllocationProgress === undefined ? {} : { onProgress: input.onAllocationProgress }),
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 

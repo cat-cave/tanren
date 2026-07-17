@@ -35,10 +35,11 @@ type TaskLifecycleClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** The non-finalize `UPDATE runs` (the `running` transition). */
 export async function applySetRunStatus(client: QueryClient, input: SetRunStatusInput): Promise<void> {
+  const statusGuard = " WHERE run_id = $1 AND status = ANY($3::text[])";
   const sql = input.setStartedAt
-    ? "UPDATE runs SET status = $2, started_at = now() WHERE run_id = $1"
-    : "UPDATE runs SET status = $2 WHERE run_id = $1";
-  await client.query(sql, [input.runId, input.status]);
+    ? `UPDATE runs SET status = $2, started_at = now()${statusGuard}`
+    : `UPDATE runs SET status = $2${statusGuard}`;
+  await client.query(sql, [input.runId, input.status, input.fromStatuses]);
 }
 
 /** The `UPDATE runs SET pr_url` after the draft PR is opened. */

@@ -54,6 +54,12 @@ export interface AllocationRequest {
   runnerImage: string;
   identitySecretRef: string;
   /**
+   * Report a genuine allocation sign-of-life. Provisioning allocators call this
+   * after each readiness observation returns, so a cloud run that is still
+   * converging keeps its claimed-job progress marker advancing.
+   */
+  onProgress?: () => void;
+  /**
    * The org the run belongs to. Threaded end-to-end so a backend that persists
    * a `runners` row (a tenant table) writes it under the org's RLS scope rather
    * than off-RLS via a BYPASSRLS role. Optional on the contract so scaffolded /

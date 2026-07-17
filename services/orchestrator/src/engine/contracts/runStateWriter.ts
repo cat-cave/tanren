@@ -68,7 +68,6 @@ export interface FinalizeRunResult {
  * {@link RunStateWriter.append} (the worker sets it with `runWithJobOrgId`).
  */
 
-/** The non-finalize `UPDATE runs` the workflow drives (the `running` transition). */
 export interface SetRunStatusInput {
   runId: string;
   /** The owning run's org, so the UPDATE is org-scoped server-side (or in-process). */
@@ -77,9 +76,10 @@ export interface SetRunStatusInput {
   status: string;
   /** When true, also set `started_at = now()` (the `running` transition does). */
   setStartedAt: boolean;
+  /** The only states this transition may replace; terminal runs must stay terminal. */
+  fromStatuses: string[];
 }
 
-/** The `UPDATE runs SET pr_url` the draft-PR stage drives. */
 export interface SetRunPrUrlInput {
   runId: string;
   orgId: string;

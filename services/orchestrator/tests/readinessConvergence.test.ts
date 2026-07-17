@@ -94,8 +94,8 @@ describe("pollUntilReady", () => {
       onProbe: (info) => observedProbes.push(info.probe),
     });
     expect(ready.ip).toBe("203.0.113.99");
-    // 60 advancing probes were recorded (the ready hit ends the loop before recording).
-    expect(observedProbes.at(-1)).toBe(60);
+    // Every returned readiness observation is recorded, including the ready hit.
+    expect(observedProbes.at(-1)).toBe(61);
   });
 
   it("throws LOUD PersistentProvisioningOutageError on a STUCK identical signature past the saturation gate", async () => {
@@ -142,8 +142,8 @@ describe("pollUntilReady", () => {
         onProbe: (info) => probes.push(info.probe),
       }),
     ).rejects.toBeInstanceOf(ProvisioningTerminalStateError);
-    // No `advancing` signatures were ever recorded — the terminal arm short-circuited.
-    expect(probes).toEqual([]);
+    // The returned terminal observation is still a real readiness sign-of-life.
+    expect(probes).toEqual([1]);
   });
 
   it("fires unknown_state IMMEDIATELY (fail-closed ratchet, never silently advancing)", async () => {
@@ -224,8 +224,9 @@ describe("pollUntilReady", () => {
         onProbe: (info) => seen.push(info),
       },
     );
-    expect(seen.map((s) => s.probe)).toEqual([1, 2, 3]);
-    expect(seen.every((s) => s.signature === "pending|no-ip")).toBe(true);
+    expect(seen.map((s) => s.probe)).toEqual([1, 2, 3, 4]);
+    expect(seen.slice(0, 3).every((s) => s.signature === "pending|no-ip")).toBe(true);
+    expect(seen.at(-1)?.signature).toBe("running|ip");
   });
 
   it("uses the per-allocator signature() function (not the raw observation) for the convergence read", async () => {

@@ -292,6 +292,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         allocator: deps.allocator,
         // The PROGRESS-instrumented substrate (every SSH boundary ticks the job-progress signal).
         ssh,
+        onAllocationProgress: () => progressSignal.tick(),
         secrets: deps.secrets,
         // Dimension D: thread the credential-scoping seam so the workflow
         // de-privileges the run's credential reads behind a per-run child token.
