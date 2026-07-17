@@ -1,3 +1,4 @@
+// cspell:ignore rederive
 // MQ-2 consumer vocabulary over the unchanged SP-4 MergeAuthorityV2. These seven
 // primary kinds describe what the merge queue may do with one exact persisted batch
 // node; they are not a second LandDecision and confer no host-land capability.
@@ -132,7 +133,24 @@ export interface BatchAuthorityEvaluator {
     readonly entries: ReadonlyArray<MergeQueueEntry>;
     readonly binding: BatchAuthorityBinding;
   }): Promise<MultiMemberAuthorityEvaluation>;
+  /**
+   * Production-only atomic land seam. Test/read-only evaluators omit it and keep
+   * their existing decision-only behavior; a live multi-member pass never falls
+   * back to sequential per-member lands when this is present.
+   */
+  landAuthorizedGroup?(input: {
+    readonly projectId: string;
+    readonly entries: ReadonlyArray<MergeQueueEntry>;
+    readonly binding: BatchAuthorityBinding;
+    readonly evaluation: AuthorizedSubsetEvaluation;
+  }): Promise<LandGroupLandOutcome>;
 }
+
+/** The only outcomes of the group land handoff after an exact authorization. */
+export type LandGroupLandOutcome =
+  | { readonly kind: "landed"; readonly mainSha: string }
+  | { readonly kind: "rederive" }
+  | { readonly kind: "reconcile_pending" };
 
 /** Artifact identity for the exact materialized head/tree, never a member branch. */
 export function batchArtifactDigest(binding: BatchAuthorityBinding): Digest {

@@ -14,7 +14,7 @@ import type {
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { buildAuthorityLandStore, type LandFinalizeContext } from "./mergeAuthorityLandFinalizer.js";
-import { MergeAuthorityV2Impl, subjectsEqual } from "./mergeAuthorityV2Impl.js";
+import { MergeAuthorityV2Impl, subjectsEqual, type AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
 import {
   loadCurrentQuarantineVersion,
   loadPersistedBatchDecisionSignals,
@@ -32,7 +32,8 @@ export function buildPgExactBatchAuthority(input: {
   readonly intoMain: string;
   readonly context: LandFinalizeContext;
   readonly runStateWriter: RunStateWriter;
-}): Pick<MergeAuthorityV2, "authorizeLand"> {
+  readonly landStore?: AuthorityLandStore;
+}): MergeAuthorityV2 {
   return new MergeAuthorityV2Impl(
     input.host,
     new PgExactBatchBindingRevalidator({
@@ -47,7 +48,7 @@ export function buildPgExactBatchAuthority(input: {
       readDecisionSignals: () =>
         loadPersistedBatchDecisionSignals(input.pool, input.orgId, input.context.projectId, input.binding),
     }),
-    buildAuthorityLandStore(input.pool, input.context, input.runStateWriter),
+    input.landStore ?? buildAuthorityLandStore(input.pool, input.context, input.runStateWriter),
   );
 }
 

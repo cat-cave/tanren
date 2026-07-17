@@ -35,6 +35,12 @@ export async function driveMultiMemberPass(input: {
 }): Promise<CoordinateResult> {
   const embark = await authorizeMultiMemberEmbark(input);
   if (embark.kind === "hold") return embark.result;
+  if (
+    embark.evaluation?.kind === "authorized_subset" &&
+    input.deps.authorityEvaluator.landAuthorizedGroup !== undefined
+  ) {
+    return landAuthorizedGroup(input, embark.evaluation);
+  }
   if (embark.evaluation?.kind !== "member_failure") {
     await input.emitPassed(embark.entries, input.integrationBranch);
   }
@@ -50,6 +56,62 @@ export async function driveMultiMemberPass(input: {
   return embark.dequeuedSpecId === undefined || result.dequeuedSpecId !== undefined
     ? result
     : { ...result, dequeuedSpecId: embark.dequeuedSpecId };
+}
+
+/**
+ * Claim every member before landing the exact integrated tree. On a CAS race all
+ * claims are released and the next event-driven pass re-derives the batch; there
+ * is intentionally no fixed retry cap because a changed main SHA is progress.
+ */
+async function landAuthorizedGroup(
+  input: Parameters<typeof driveMultiMemberPass>[0],
+  evaluation: Extract<MultiMemberAuthorityEvaluation, { kind: "authorized_subset" }>,
+): Promise<CoordinateResult> {
+  const claimed: MergeQueueEntry[] = [];
+  for (const entry of input.batch) {
+    if (!(await input.deps.queue.claim(entry.queueId))) {
+      await releaseClaims(input.deps, claimed);
+      return holdResult(input, "serialized");
+    }
+    claimed.push(entry);
+    await input.deps.queue.renewClaim?.(entry.queueId);
+    await input.deps.events.emitAdvanced({ projectId: input.projectId, entry, queueDepth: input.queueDepth });
+  }
+  const landed = await input.deps.authorityEvaluator.landAuthorizedGroup!({
+    projectId: input.projectId,
+    entries: input.batch,
+    binding: requiredBinding(input.binding),
+    evaluation,
+  });
+  if (landed.kind !== "landed") {
+    await releaseClaims(input.deps, claimed);
+    return holdResult(input, "merge_retry", AUTHORITY_RETRY_AFTER_MS);
+  }
+  for (const entry of claimed) await input.deps.queue.markMerged(entry.queueId);
+  await input.emitPassed(input.batch, input.integrationBranch);
+  return { projectId: input.projectId, queueDepth: input.queueDepth, mergedSpecId: input.batch.at(-1)?.specId };
+}
+
+function requiredBinding(binding: BatchAuthorityBinding | undefined): BatchAuthorityBinding {
+  if (binding === undefined) throw new Error("authorized multi-member land has no exact binding");
+  return binding;
+}
+
+async function releaseClaims(deps: BatchSettleDeps, entries: ReadonlyArray<MergeQueueEntry>): Promise<void> {
+  for (const entry of entries) await deps.queue.releaseClaim(entry.queueId);
+}
+
+function holdResult(
+  input: Pick<Parameters<typeof driveMultiMemberPass>[0], "projectId" | "queueDepth">,
+  holdReason: NonNullable<CoordinateResult["holdReason"]>,
+  retryAfterMs?: number,
+): CoordinateResult {
+  return {
+    projectId: input.projectId,
+    queueDepth: input.queueDepth,
+    holdReason,
+    ...(retryAfterMs !== undefined && { retryAfterMs }),
+  };
 }
 
 /** Evaluate a multi-member pass and settle attributed failures before any merge drive. */

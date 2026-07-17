@@ -130,7 +130,7 @@ function finalizeLandInputFrom(
  * `persistDecisionRows` (step 1) inserts, so the in-16 delivery-outbox FK resolves the
  * decision row that authorized this exact land.
  */
-function authorityDecisionIdFor(auth: LandAuthorization): string {
+export function authorityDecisionIdFor(auth: LandAuthorization): string {
   return `decision-${auth.subject.id}-${auth.envelope.headSha}`;
 }
 

@@ -67,7 +67,9 @@ export class SubjectEqualityRevalidator implements LandBindingRevalidator {
  * into a silent inconsistency.
  */
 export interface AuthorityLandStore {
-  persistAuthorizedDecision(input: { authorization: LandAuthorization }): Promise<{ effectIntentId: string }>;
+  persistAuthorizedDecision(input: {
+    authorization: LandAuthorization;
+  }): Promise<{ effectIntentId: string; completed?: { mainSha: string; auditId: string } }>;
   recordLandReceipt(input: {
     authorization: LandAuthorization;
     effectIntentId: string;
@@ -201,7 +203,11 @@ export class MergeAuthorityV2Impl implements MergeAuthorityV2 {
     }
 
     // Step 1: persist the immutable decision + the idempotent effect intent.
-    const { effectIntentId } = await this.store.persistAuthorizedDecision({ authorization: auth });
+    const persisted = await this.store.persistAuthorizedDecision({ authorization: auth });
+    if (persisted.completed !== undefined) {
+      return { kind: "landed", mainSha: persisted.completed.mainSha, auditId: persisted.completed.auditId };
+    }
+    const { effectIntentId } = persisted;
 
     // Step 2: the external idempotent CAS land, keyed on the effect intent so a retry of
     // this step is a no-op once main already advanced to the authorized head.
