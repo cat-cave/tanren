@@ -327,6 +327,14 @@ export interface FinalizeLandInput {
   integration: "direct_merge" | "native_queue";
   /** The host sha `main` advanced to (recorded as `mergeSha` on `merge.completed`). */
   mergeSha: string;
+  /**
+   * The authorizing `authority_decisions.id` this land recorded (in-16): the
+   * transactional delivery-run outbox row inserted in the SAME land transaction is
+   * FK-bound to it, so there is no "merged but nobody scheduled delivery" gap. The
+   * land store derives it deterministically from the authorization (`decision-<subject>-<headSha>`),
+   * matching the decision row persisted before the external land.
+   */
+  authorityDecisionId: string;
   /** The policy version + initiating/approving actors stamped onto `merge.completed`. */
   auditEnvelope: AuditEnvelope;
 }

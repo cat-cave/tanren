@@ -804,7 +804,7 @@ smoke-budget-gate:
 # failure reconciles to merge_state_unknown; a changes_requested review → needs_attention).
 # Provisions an ephemeral DB + migrates it; gated behind the same TANREN_RLS_DB_TEST switch.
 smoke-merge-authority:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts services/orchestrator/tests/mergeAuthorityLandFinalizer.test.ts
 
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same

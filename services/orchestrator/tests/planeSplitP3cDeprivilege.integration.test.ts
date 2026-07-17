@@ -80,6 +80,13 @@ const PROJECT = `proj_${ORG}`;
 const SPEC = `spec_${ORG}`;
 const RUN = `run_${ORG}`;
 const TASK = `task_${ORG}`;
+// in-16: the authorizing decision the land finalize records its delivery-outbox row
+// against. This test drives `applyFinalizeLand` directly (not the full authority
+// protocol), so the FK'd decision row must be seeded; the id mirrors the finalizer's
+// deterministic `decision-<subject.id>-<headSha>` convention.
+const NODE = `node_${ORG}`;
+const HEAD_SHA = "a".repeat(40);
+const DECISION = `decision-${NODE}-${HEAD_SHA}`;
 
 // Run `body` inside an org-scoped transaction on the given role's pool, mirroring
 // the worker's `runWithOrgScope` (SET LOCAL app.current_org_id). So a rejected
@@ -145,6 +152,15 @@ describeDb("plane-split P3c — the de-privileged run/spec/task lifecycle writes
       `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
        VALUES ($1, $2, $3, 'plan', 'plan', 'queued', 'answerer', 'fake', 'm')`,
       [TASK, RUN, ORG],
+    );
+    // in-16: seed the authority_decisions row the land's delivery-outbox row FK's to, so
+    // the finalize in (h) commits (its INSERT INTO delivery_runs resolves the decision).
+    await ownerPool.query(
+      `INSERT INTO authority_decisions
+         (org_id, project_id, id, integration_node_id, subject_kind, head_sha, expected_main_sha,
+          artifact_digest, proof_root, member_set_hash, policy_version, decision)
+       VALUES ($1, $2, $3, $4, 'integration_node', $5, $6, $7, $8, 'mk', 'pv', 'authorized')`,
+      [ORG, PROJECT, DECISION, NODE, HEAD_SHA, "b".repeat(40), `sha256:${"a".repeat(64)}`, `sha256:${"b".repeat(64)}`],
     );
   }, 60_000);
 
@@ -336,6 +352,7 @@ describeDb("plane-split P3c — the de-privileged run/spec/task lifecycle writes
         prNumber: 1,
         integration: "native_queue",
         mergeSha: "c".repeat(40),
+        authorityDecisionId: DECISION,
         auditEnvelope: { policyVersion: 1 },
       }),
     );
