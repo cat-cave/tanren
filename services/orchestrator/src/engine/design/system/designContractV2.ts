@@ -32,7 +32,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { DesignDimension, normalizeDesignContract } from "../designContract.js";
-import type { DesignContractV1 } from "../designContract.js";
 
 export const DESIGN_CONTRACT_V2_VERSION = 2 as const;
 
@@ -178,7 +177,7 @@ export function normalizeDesignContractV2(parsed: DesignContractV2): DesignContr
  * either a typed V1 or an unknown blob (re-parsed through V1 first, so a
  * malformed V1 throws its own V1 error before reaching here).
  */
-export function migrateDesignContractV1ToV2(value: DesignContractV1 | unknown): DesignContractV2 {
+export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
   const v1 = normalizeDesignContract(value);
   return normalizeDesignContractV2({
     version: DESIGN_CONTRACT_V2_VERSION,
