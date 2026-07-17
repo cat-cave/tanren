@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { registeredStages, ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
-import type { ResolutionJob } from "../src/engine/contracts/resolutionStage.js";
+import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
+import type { ResolutionJob, ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
 import type { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 
 const job: ResolutionJob = {
@@ -14,22 +14,31 @@ const job: ResolutionJob = {
   leaseOwner: "walker_a",
   leaseExpiry: "2026-01-01T00:01:00.000Z",
   idempotencyKey: "iloop_a:baseline",
-  attempt: 2,
+  attempt: 1,
 };
 
-describe("ResolutionDagWalker skeleton", () => {
-  it("recovers an expired lease, heartbeats it, and releases it without running a stage", async () => {
+describe("ResolutionDagWalker", () => {
+  it("fences, runs, and completes a claimed registered stage", async () => {
     const calls: string[] = [];
     const store = {
       async recoverExpiredLeases() {
         calls.push("recover");
-        return [job];
+        return [];
       },
       async claimNext() {
         calls.push("claim");
+        return job;
+      },
+      async verifyActiveLease() {
+        calls.push("verify");
+        return job;
       },
       async heartbeat() {
         calls.push("heartbeat");
+        return true;
+      },
+      async complete() {
+        calls.push("complete");
         return true;
       },
       async release() {
@@ -37,10 +46,75 @@ describe("ResolutionDagWalker skeleton", () => {
         return true;
       },
     } as unknown as ResolutionJobStore;
-    const walker = new ResolutionDagWalker({ store, orgIds: async () => ["org_a"], leaseOwner: "walker_a" });
+    const stage: ResolutionStage = {
+      kind: "baseline",
+      async run(received) {
+        calls.push(`run:${received.id}`);
+        return {
+          outcome: "passed",
+          classification: "product_failure",
+          proofGrade: "active_causal",
+          verificationRunId: "vrun_1",
+          assertionIds: [],
+          evidenceRefs: [],
+        };
+      },
+    };
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => ["org_a"],
+      stages: new Map([["baseline", stage]]),
+      leaseOwner: "walker_a",
+    });
 
-    await expect(walker.tick()).resolves.toEqual([{ orgId: "org_a", recoveredJobIds: ["rjob_1"], claimedJobIds: [] }]);
-    expect(calls).toEqual(["recover", "heartbeat", "release"]);
-    expect(registeredStages).toHaveLength(0);
+    await expect(walker.tick()).resolves.toEqual([{ orgId: "org_a", recoveredJobIds: [], claimedJobIds: ["rjob_1"] }]);
+    expect(calls).toEqual(["recover", "claim", "verify", "run:rjob_1", "complete"]);
+  });
+
+  it("returns an inconclusive registered stage to retryable under the same lease", async () => {
+    const released: unknown[] = [];
+    const store = {
+      async recoverExpiredLeases() {
+        return [];
+      },
+      async claimNext() {
+        return job;
+      },
+      async verifyActiveLease() {
+        return job;
+      },
+      async heartbeat() {
+        return true;
+      },
+      async release(input: unknown) {
+        released.push(input);
+        return true;
+      },
+      async complete() {
+        throw new Error("inconclusive stages must not complete");
+      },
+    } as unknown as ResolutionJobStore;
+    const stage: ResolutionStage = {
+      kind: "baseline",
+      async run() {
+        return {
+          outcome: "inconclusive",
+          classification: "infra_failure",
+          proofGrade: "active_causal",
+          verificationRunId: "vrun_1",
+          assertionIds: [],
+          evidenceRefs: [],
+        };
+      },
+    };
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => ["org_a"],
+      stages: new Map([["baseline", stage]]),
+      leaseOwner: "walker_a",
+    });
+
+    await walker.tick();
+    expect(released).toEqual([expect.objectContaining({ id: job.id, state: "retryable" })]);
   });
 });

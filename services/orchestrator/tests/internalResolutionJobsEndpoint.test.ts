@@ -76,7 +76,7 @@ describe("internal resolution-job endpoints", () => {
     expect(calls).toEqual(["claim", "heartbeat"]);
   });
 
-  it("runs a claimed baseline job through the mTLS-only reproduction surface", async () => {
+  it("runs only the database-fenced baseline job through the mTLS-only reproduction surface", async () => {
     const calls: Array<{ receivedJob: ResolutionJob; context: unknown }> = [];
     const baselineStage: ResolutionStage = {
       kind: "baseline",
@@ -96,10 +96,22 @@ describe("internal resolution-job endpoints", () => {
       pool: {} as never,
       verifier: new AllowAllPeerVerifier(),
       baselineStage,
+      store: {
+        async verifyActiveLease() {
+          return job;
+        },
+        async complete() {
+          return true;
+        },
+        async release() {
+          return true;
+        },
+      } as unknown as ResolutionJobStore,
     });
 
     const response = await trustedRequest(app, "/internal/resolution-jobs/rjob_1/reproduce", {
-      job,
+      orgId: job.orgId,
+      leaseOwner: job.leaseOwner,
       context: { verificationRunId: "vrun_baseline" },
     });
 
@@ -115,5 +127,29 @@ describe("internal resolution-job endpoints", () => {
       },
     });
     expect(calls).toEqual([{ receivedJob: job, context: { verificationRunId: "vrun_baseline" } }]);
+  });
+
+  it("refuses a stale or caller-invented reproduction job before running the stage", async () => {
+    const app = createInternalResolutionJobRoutes({
+      pool: {} as never,
+      verifier: new AllowAllPeerVerifier(),
+      store: {
+        async verifyActiveLease() {},
+      } as unknown as ResolutionJobStore,
+      baselineStage: {
+        kind: "baseline",
+        async run() {
+          throw new Error("a stale lease must not invoke the stage");
+        },
+      },
+    });
+
+    const response = await trustedRequest(app, "/internal/resolution-jobs/rjob_1/reproduce", {
+      orgId: job.orgId,
+      leaseOwner: "expired_worker",
+    });
+
+    expect(response.status).toBe(423);
+    await expect(response.json()).resolves.toEqual({ error: "resolution_job_lease_not_active" });
   });
 });

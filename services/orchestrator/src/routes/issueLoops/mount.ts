@@ -3,6 +3,7 @@ import type pg from "pg";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createSpecRoutes } from "../specs/index.js";
 import { createIssueLoopRoutes } from "./index.js";
+import { createIssueLoopCommandRoutes } from "./commands.js";
 import { createProductionVerificationRoutes } from "./productionVerification.js";
 
 /**
@@ -25,6 +26,7 @@ import { createProductionVerificationRoutes } from "./productionVerification.js"
 export function mountProjectWorkSurfaces(app: Hono<ActorContextEnv>, scopedPool: pg.Pool): void {
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createIssueLoopRoutes({ pool: scopedPool }));
+  app.route("/v1/orgs", createIssueLoopCommandRoutes({ pool: scopedPool }));
   // This command is deliberately on the documented public v1 path. It leases
   // and executes the registered locked production stage synchronously.
   app.route("/v1/orgs", createProductionVerificationRoutes({ pool: scopedPool }));

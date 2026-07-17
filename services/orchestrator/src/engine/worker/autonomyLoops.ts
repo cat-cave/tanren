@@ -14,7 +14,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
+import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/build.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
@@ -29,7 +29,6 @@ import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
-import type { CiInsightsLoop } from "./ciInsightsLoop.js";
 import type { NotificationSubscriber } from "../notifications/subscriber.js";
 
 const log = createLogger("run-worker");
@@ -60,6 +59,8 @@ export interface AutonomyLoopsDeps {
 
 export interface AutonomyLoops {
   dagWalker: DagWalkerSubscriber;
+  /** Durable self-healing stage dispatcher; periodic scan backs up notifications. */
+  resolutionDagWalker: ReturnType<typeof buildResolutionDagWalker>;
   /** the native merge queue coordinator subscriber. */
   mergeCoordinator: MergeCoordinatorSubscriber;
   /** tempering.md dim A: the post-merge-failure → auto-issue watcher subscriber. */
@@ -77,7 +78,7 @@ export interface AutonomyLoops {
    * quarantine detection on a cadence (NOT on the dashboard GET), so the merge
    * gate's quarantine read has fresh quarantines without an operator opening a page.
    */
-  ciInsights: CiInsightsLoop;
+  ciInsights: ReturnType<typeof buildCiInsightsLoop>;
   /**
    * task #82 — window-pause auto-resume: the sign-of-life prober that finds
    * runs in the new non-terminal `paused` status (a `window_exhausted` writer
@@ -137,6 +138,9 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     runStateWriter: deps.runStateWriter,
   });
   log.info("DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)");
+  const resolutionDagWalker = buildResolutionDagWalker(deps.pool);
+  resolutionDagWalker.start();
+  log.info("ResolutionDagWalker started (durable self-healing stage dispatch)");
   // the native intelligent merge queue. It reacts on the SAME run-activity bus
   // — a ready `native_queue` run entering the queue, and a merge completing — and
   // merges ONE entry at a time in DAG order (ancestor before dependent), driving the
@@ -274,6 +278,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // loop (any in-flight `PgNotifyListener.subscribe(…)` resolves/throws
     // BEFORE the promise settles) — await them so a subsequent restart or
     // teardown never races a still-in-flight subscribe from the prior lifetime.
+    resolutionDagWalker.stop();
     await Promise.all([dagWalker.stop(), mergeCoordinator.stop(), postMerge.stop(), notifications.stop()]);
     intake.stop();
     ciInsights.stop();
@@ -285,6 +290,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   };
   return {
     dagWalker,
+    resolutionDagWalker,
     mergeCoordinator,
     postMerge,
     notifications,

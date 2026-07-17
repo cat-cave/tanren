@@ -36,7 +36,7 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
     ]);
     const claimed = [first, second].filter((job) => job !== undefined);
     expect(claimed).toHaveLength(1);
-    expect(claimed[0]).toMatchObject({ id: "rjob_a", state: "running", leaseOwner: "worker-a", attempt: 2 });
+    expect(claimed[0]).toMatchObject({ id: "rjob_a", state: "running", leaseOwner: "worker-a", attempt: 1 });
     expect(claimed[0]?.leaseExpiry).toBe("2026-01-01T00:00:30.000Z");
 
     await expect(
@@ -49,7 +49,7 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
       leaseOwner: "recovery-worker",
       leaseMs: 30_000,
     });
-    expect(recovered).toMatchObject([{ id: "rjob_a", leaseOwner: "recovery-worker", attempt: 3 }]);
+    expect(recovered).toMatchObject([{ id: "rjob_a", leaseOwner: "recovery-worker", attempt: 1 }]);
     await expect(
       store.recoverExpiredLeasesOnClient(orgA as never, {
         orgId: ORG_A,
@@ -65,5 +65,39 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
     await expect(
       store.claimNextOnClient(orgB as never, { orgId: ORG_A, leaseOwner: "foreign-worker" }),
     ).resolves.toBeUndefined();
+  });
+
+  it("shares active-lease predicates between the production SQL and conformance fake", async () => {
+    const db = new MemoryDb();
+    let observedAt = NOW;
+    const store = new ResolutionJobStore({} as never);
+    const client = new ResolutionJobScopedClient(db, ORG_A, () => observedAt);
+    const input = {
+      orgId: ORG_A,
+      projectId: "project_resolution_a",
+      id: "rjob_fenced",
+      issueLoopId: "iloop_a",
+      contractId: "contract_a",
+      stage: "baseline" as const,
+      idempotencyKey: "issue:iloop_a:fenced",
+    };
+    await store.enqueueOnClient(client as never, input);
+    await store.claimNextOnClient(client as never, { orgId: ORG_A, leaseOwner: "worker-a", leaseMs: 30_000 });
+    observedAt = new Date("2026-01-01T00:00:31.000Z");
+
+    await expect(
+      store.verifyActiveLeaseOnClient(client as never, {
+        orgId: ORG_A,
+        id: input.id,
+        leaseOwner: "worker-a",
+        leaseMs: 30_000,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.completeOnClient(client as never, { orgId: ORG_A, id: input.id, leaseOwner: "worker-a" }),
+    ).resolves.toBe(false);
+    await expect(
+      store.releaseOnClient(client as never, { orgId: ORG_A, id: input.id, leaseOwner: "worker-a" }),
+    ).resolves.toBe(false);
   });
 });

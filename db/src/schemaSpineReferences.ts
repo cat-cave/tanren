@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, pgTable, text } from "drizzle-orm/pg-core";
+import { check, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 // Reference-only declarations for spine tables created by migrations 0034-0039.
 // They are deliberately not exported from schema.ts, so drizzle-kit does not try
@@ -64,6 +64,7 @@ export const behaviorVerificationRunsReference = pgTable(
       "behavior_verification_runs_resolution_classification_check",
       sql`${table.classification} IS NULL OR ${table.classification} IN ('product_resolved','product_failure','infra_failure','stale_contract','inconclusive')`,
     ),
+    uniqueIndex("behavior_verification_runs_resolution_job_stage_unique").on(table.resolutionJobId, table.stage),
   ],
 );
 
