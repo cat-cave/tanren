@@ -127,6 +127,21 @@ export default defineConfig({
       "**/dist/**",
       "fixtures/**",
       ".claude/**",
+      // `.codex/worktrees/**` are the Codex parallel-orchestration worktrees
+      // (see docs/playbooks/parallel-orchestration.md + CLAUDE.md): full
+      // checkouts of the repo, one per in-flight unit of work. Like `.claude/**`
+      // above, vitest would otherwise DISCOVER every *.test.ts inside them and
+      // run those duplicate copies. Because CLI positional args are treated as
+      // substring FILTERS (not exact paths), even a targeted recipe like
+      // `just smoke-plane-split-p3b` — which names
+      // `services/orchestrator/tests/…` files — matches the same-suffixed
+      // worktree copies too, so N+1 copies of the same REAL-Postgres integration
+      // test run concurrently against the one cluster and collide on shared
+      // rows / advisory locks / the throwaway-DB namespace. That cross-copy
+      // pollution is the intermittent-failure source for the run-list projection
+      // decode and the plane-split recovery suites. Excluding the worktree tree
+      // restores single-tree discovery (the worktrees run their OWN vitest).
+      ".codex/worktrees/**",
       // direnv's `use flake` integration mirrors the source tree under
       // `.direnv/flake-inputs/<hash>-source/` as part of evaluating the flake
       // input. Without this exclude, vitest discovers every *.test.ts inside
