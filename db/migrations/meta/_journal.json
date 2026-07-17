@@ -428,6 +428,13 @@
       "when": 1784291827579,
       "tag": "0062_wave5_event_vocab",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1784295682588,
+      "tag": "0063_governance_binding_activation",
+      "breakpoints": true
     }
   ]
 }

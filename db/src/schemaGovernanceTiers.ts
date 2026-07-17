@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -56,6 +57,7 @@ export const policyBindings = pgTable(
     id: text("id").notNull(),
     tierId: text("tier_id").notNull(),
     effectivePolicyHash: text("effective_policy_hash").notNull(),
+    isActive: boolean("is_active").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -73,6 +75,9 @@ export const policyBindings = pgTable(
     index("policy_bindings_org_id").on(table.orgId),
     index("policy_bindings_org_project").on(table.orgId, table.projectId),
     uniqueIndex("policy_bindings_org_project_tier_unique").on(table.orgId, table.projectId, table.tierId),
+    uniqueIndex("policy_bindings_one_active_per_project")
+      .on(table.orgId, table.projectId)
+      .where(sql`${table.isActive}`),
     check("policy_bindings_effective_policy_hash_check", sql`${table.effectivePolicyHash} ~ ${digestPattern}`),
     integrationOrgIsolationPolicy(table.orgId),
   ],

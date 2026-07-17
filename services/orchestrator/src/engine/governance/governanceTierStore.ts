@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { QueryClient } from "../data/orgScopedDb.js";
 import { PgEventStore } from "../eventStore.js";
+import { recordEffectivePolicySnapshot } from "./effectivePolicySnapshotStore.js";
 import { compilePolicy, type CompiledPolicy } from "./policyCompiler.js";
 import { PolicyAstSchema, type PolicyAst } from "./policyAst.js";
+import { createPolicyRevision, findPolicyRevisionByHash, type PolicyRevision } from "./policyRevisionStore.js";
 import { GovernanceTierPresetSchema, governanceTierPreset, type GovernanceTierPreset } from "./tierPresets.js";
 
 const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
@@ -27,6 +29,7 @@ const BindingRowSchema = z
     project_id: z.string().min(1),
     tier_id: z.string().min(1),
     effective_policy_hash: DigestSchema,
+    is_active: z.boolean(),
     created_at: z.string(),
   })
   .strict();
@@ -47,6 +50,7 @@ export interface PolicyBinding {
   readonly projectId: string;
   readonly tierId: string;
   readonly effectivePolicyHash: string;
+  readonly isActive: boolean;
   readonly createdAt: string;
 }
 
@@ -61,6 +65,7 @@ export interface BindGovernanceTierInput {
   readonly orgId: string;
   readonly projectId: string;
   readonly tierId: string;
+  readonly createdBy?: string;
 }
 
 export class GovernanceTierNotFoundError extends Error {
@@ -98,6 +103,7 @@ function decodeBinding(input: unknown): PolicyBinding {
     projectId: row.project_id,
     tierId: row.tier_id,
     effectivePolicyHash: row.effective_policy_hash,
+    isActive: row.is_active,
     createdAt: row.created_at,
   };
 }
@@ -194,13 +200,44 @@ async function existingBinding(
   tierId: string,
 ): Promise<PolicyBinding | undefined> {
   const result = await client.query(
-    `SELECT id, project_id, tier_id, effective_policy_hash, created_at::text
+    `SELECT id, project_id, tier_id, effective_policy_hash, is_active, created_at::text
        FROM policy_bindings
       WHERE org_id = $1 AND project_id = $2 AND tier_id = $3`,
     [orgId, projectId, tierId],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : decodeBinding(row);
+}
+
+async function activeBinding(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<PolicyBinding | undefined> {
+  const result = await client.query(
+    `SELECT id, project_id, tier_id, effective_policy_hash, is_active, created_at::text
+       FROM policy_bindings
+      WHERE org_id = $1 AND project_id = $2 AND is_active
+      LIMIT 1`,
+    [orgId, projectId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? undefined : decodeBinding(row);
+}
+
+async function bindingRevision(
+  client: QueryClient,
+  input: BindGovernanceTierInput,
+  tier: GovernanceTier,
+): Promise<PolicyRevision> {
+  const existing = await findPolicyRevisionByHash(client, input.orgId, input.projectId, tier.canonicalHash);
+  if (existing !== undefined) return existing;
+  return createPolicyRevision(client, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    sourceDocument: tier.tierJson,
+    createdBy: input.createdBy ?? "system:governance-binding",
+  });
 }
 
 async function enforceRepositoryVisibility(
@@ -219,54 +256,111 @@ async function enforceRepositoryVisibility(
 }
 
 /**
- * A binding is the immutable activation receipt for a tier on its project.
- * Repeating the request keeps the visibility projection enforced but never
- * creates a second binding or activation event.
+ * A binding retains the immutable policy identity for a tier; its explicit
+ * active flag selects the one policy currently governing a project. Repeating
+ * an activation for the already-active tier is idempotent, but re-promoting a
+ * superseded tier is a new activation and must supersede the current binding.
  */
 export async function bindGovernanceTier(
   client: QueryClient,
   input: BindGovernanceTierInput,
-): Promise<{ readonly tier: GovernanceTier; readonly binding: PolicyBinding }> {
+): Promise<{ readonly tier: GovernanceTier; readonly binding: PolicyBinding; readonly policyRevisionId: string }> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`governance-binding:${input.projectId}`]);
   const tier = await getTier(client, input.orgId, input.projectId, input.tierId);
   const compiled = compileStoredTier(tier);
+  const revision = await bindingRevision(client, input, tier);
+  if (revision.policyHash !== compiled.policyHash) throw new GovernanceTierIntegrityError(tier.id);
   const visibility = repositoryVisibility(compiled, tier.id);
   const existing = await existingBinding(client, input.orgId, input.projectId, tier.id);
-  if (existing !== undefined) {
-    if (existing.effectivePolicyHash !== compiled.policyHash) throw new GovernanceTierIntegrityError(tier.id);
+  if (existing !== undefined && existing.effectivePolicyHash !== compiled.policyHash) {
+    throw new GovernanceTierIntegrityError(tier.id);
+  }
+  const prior = await activeBinding(client, input.orgId, input.projectId);
+  if (prior !== undefined && existing?.id === prior.id) {
     await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
-    return { tier, binding: existing };
+    return { tier, binding: existing, policyRevisionId: revision.id };
   }
 
-  const id = `policy_binding_${randomUUID()}`;
-  const inserted = await client.query(
-    `INSERT INTO policy_bindings (org_id, project_id, id, tier_id, effective_policy_hash)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (org_id, project_id, tier_id) DO NOTHING
-     RETURNING id, project_id, tier_id, effective_policy_hash, created_at::text`,
-    [input.orgId, input.projectId, id, tier.id, compiled.policyHash],
-  );
-  const row = inserted.rows[0];
-  if (row === undefined) {
-    const concurrent = await existingBinding(client, input.orgId, input.projectId, tier.id);
-    if (concurrent === undefined || concurrent.effectivePolicyHash !== compiled.policyHash) {
+  if (prior !== undefined) {
+    const superseded = await client.query(
+      `UPDATE policy_bindings
+          SET is_active = false
+        WHERE org_id = $1 AND project_id = $2 AND id = $3 AND is_active
+        RETURNING id`,
+      [input.orgId, input.projectId, prior.id],
+    );
+    if (superseded.rowCount !== 1) {
       throw new GovernanceTierIntegrityError(tier.id);
     }
-    await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
-    return { tier, binding: concurrent };
   }
+
+  if (existing !== undefined) {
+    const reactivated = await client.query(
+      `UPDATE policy_bindings
+          SET is_active = true
+        WHERE org_id = $1 AND project_id = $2 AND id = $3 AND NOT is_active
+        RETURNING id, project_id, tier_id, effective_policy_hash, is_active, created_at::text`,
+      [input.orgId, input.projectId, existing.id],
+    );
+    const row = reactivated.rows[0];
+    if (row === undefined) throw new GovernanceTierIntegrityError(tier.id);
+    return activateBinding(client, input, tier, decodeBinding(row), revision.id, prior, visibility);
+  }
+  const inserted = await client.query(
+    `INSERT INTO policy_bindings (org_id, project_id, id, tier_id, effective_policy_hash, is_active)
+     VALUES ($1, $2, $3, $4, $5, true)
+     RETURNING id, project_id, tier_id, effective_policy_hash, is_active, created_at::text`,
+    [input.orgId, input.projectId, `policy_binding_${randomUUID()}`, tier.id, compiled.policyHash],
+  );
+  const row = inserted.rows[0];
+  if (row === undefined) throw new GovernanceTierIntegrityError(tier.id);
   const binding = decodeBinding(row);
+  if (!binding.isActive) throw new GovernanceTierIntegrityError(tier.id);
+  return activateBinding(client, input, tier, binding, revision.id, prior, visibility);
+}
+
+async function activateBinding(
+  client: QueryClient,
+  input: BindGovernanceTierInput,
+  tier: GovernanceTier,
+  binding: PolicyBinding,
+  policyRevisionId: string,
+  prior: PolicyBinding | undefined,
+  visibility: "public" | "private",
+): Promise<{ readonly tier: GovernanceTier; readonly binding: PolicyBinding; readonly policyRevisionId: string }> {
   await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
   await new PgEventStore(client).append({
     orgId: input.orgId,
     projectId: input.projectId,
-    eventType: "governance.tier.activated",
+    eventType: "governance.binding.activated",
     payload: {
       projectId: tier.projectId,
+      bindingId: binding.id,
       tierId: tier.id,
-      tierName: tier.tierName,
-      policyBindingId: binding.id,
+      policyRevisionId,
       effectivePolicyHash: binding.effectivePolicyHash,
     },
   });
-  return { tier, binding };
+  await recordEffectivePolicySnapshot(client, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    bindingId: binding.id,
+    subjectKind: "activation",
+    subjectId: binding.id,
+    createdBy: input.createdBy ?? "system:governance-binding",
+  });
+  if (prior !== undefined) {
+    await new PgEventStore(client).append({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      eventType: "governance.binding.superseded",
+      payload: {
+        projectId: input.projectId,
+        bindingId: prior.id,
+        supersededByBindingId: binding.id,
+        tierId: prior.tierId,
+      },
+    });
+  }
+  return { tier, binding, policyRevisionId };
 }

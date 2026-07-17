@@ -76,6 +76,7 @@ async function activateTier(c: Context<ActorContextEnv>, pool: pg.Pool): Promise
         orgId: authorized.orgId,
         projectId: authorized.projectId,
         tierId,
+        createdBy: authorized.actor.userId,
       }),
     );
     return c.json(activated, 201);
