@@ -103,7 +103,7 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
   // boundary timing record. The adapter's core logic is untouched.
   switch (entry.cli) {
     case "codex":
-      return timedWriterAdapter(createCodexWriter(base));
+      return timedWriterAdapter(createCodexWriter({ ...base, model: entry.model }));
     case "claude":
       return timedWriterAdapter(createClaudeWriter({ ...base, model: entry.model }));
     case "opencode":
@@ -147,7 +147,7 @@ export function buildAnswererAdapter<TOutput>(
   }
   switch (entry.cli) {
     case "codex":
-      return timedAnswererAdapter(createCodexAnswerer<TOutput>(base), role);
+      return timedAnswererAdapter(createCodexAnswerer<TOutput>({ ...base, model: entry.model }), role);
     case "claude":
       return timedAnswererAdapter(createClaudeAnswerer<TOutput>({ ...base, model: entry.model }), role);
     default:

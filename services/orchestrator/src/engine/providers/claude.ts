@@ -388,19 +388,29 @@ function stripJsonFences(text: string): string {
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/mu.exec(text.trim());
   return fence?.[1] ?? text;
 }
-
-// detectUsageLimit recognizes the events the Claude CLI emits on a usage-limit
-// rejection. Matched on the stable "usage limit" phrase so a minor wording
-// change in the error envelope still surfaces it.
+// detectUsageLimit recognizes subscription-window rejections by stable usage,
+// rate-limit, and OpenRouter billing wording rather than the event type.
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
-  const candidates: unknown[] = [event["message"], event["result"], event["error"]];
+  const candidates: unknown[] = [
+    event["message"],
+    event["result"],
+    event["error"],
+    event["status"],
+    event["statusCode"],
+    event["code"],
+  ];
   const errorField = event["error"];
   if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
-    candidates.push((errorField as Record<string, unknown>)["message"]);
+    const error = errorField as Record<string, unknown>;
+    candidates.push(error["message"], error["status"], error["statusCode"], error["code"]);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit/iu.test(candidate)) {
-      return { message: candidate };
+    if (
+      (typeof candidate === "number" && (candidate === 402 || candidate === 429)) ||
+      (typeof candidate === "string" &&
+        /usage limit|rate limit|insufficient credits|quota|\b(?:402|429)\b/iu.test(candidate))
+    ) {
+      return { message: String(candidate) };
     }
   }
   return undefined;

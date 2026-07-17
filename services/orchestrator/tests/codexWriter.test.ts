@@ -333,21 +333,22 @@ describe("Codex writer adapter", () => {
     expect(telemetry.usageLimit?.message).toContain("May 30th");
   });
 
-  it("returns window_exhausted (not crashed) when the account hits its usage limit", async () => {
-    const usageLimitStdout = [
-      '{"type":"thread.started","thread_id":"t1"}',
-      '{"type":"turn.started"}',
-      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}',
-    ].join("\n");
-    // exitCode 0 here proves the distinction is driven by the parsed signal,
-    // not the process exit code: codex can exit 0 yet still report the limit.
+  it.each([
+    ["usage-limit", '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit."}}'],
+    ["429", '{"type":"turn.failed","error":{"status":429,"message":"Too Many Requests"}}'],
+    [
+      "OpenRouter 402 insufficient-credits",
+      '{"type":"turn.failed","error":{"code":402,"message":"Insufficient credits"}}',
+    ],
+  ])("returns window_exhausted (not crashed) for a %s rejection", async (_kind, stdout) => {
+    // A nonzero exit proves the parsed signal wins over the generic crash path.
     const result = await runWithCodexResult({
-      exitCode: 0,
-      stdout: usageLimitStdout,
+      exitCode: 1,
+      stdout,
       stderr: "",
     });
     expect(result.exitReason).toBe("window_exhausted");
-    expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
+    expect(result.telemetry?.usageLimit).toBeDefined();
   });
 
   // The cumulative-diff fix: when a run base sha is threaded, the writer diffs
