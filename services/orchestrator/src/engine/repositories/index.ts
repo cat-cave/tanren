@@ -94,6 +94,8 @@ export {
   type WebhookEvent,
   type WebhookEventStatus,
   type PersistWebhookEventInput,
+  type PersistWebhookEventResult,
+  type WebhookClaimInput,
 } from "./webhookEvents.js";
 // The product-entity stores live under engine/entities (their CRUD routes import
 // them by name); the data-access seam aggregates them from here so callers can

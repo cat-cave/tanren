@@ -66,6 +66,8 @@ export interface IntakePollerDeps {
   autoRoute: AutoRouteDeps;
   // Clock seam (tests drive due-ness deterministically).
   now?: () => number;
+  // Stable identity for this poller instance's webhook claims.
+  workerId?: string;
 }
 
 // The connector kinds the poller can serve. `isPollableSource` probes this WITHOUT
@@ -281,6 +283,7 @@ export class IntakePoller {
       pool: this.deps.pool,
       answererFactory: this.deps.answererFactory,
       autoRoute: this.deps.autoRoute,
+      ...(this.deps.workerId === undefined ? {} : { workerId: this.deps.workerId }),
     };
   }
 
