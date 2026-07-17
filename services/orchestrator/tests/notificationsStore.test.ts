@@ -204,7 +204,7 @@ describe("NotificationDispatchLog", () => {
     expect(insert.params[3]).toBe(1);
     expect(insert.params[4]).toBe(sentAt);
     expect(insert.params[5]).toBe("org_1");
-    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+    expect(client.dispatches[0]?.org_id).toBe("org_1");
   });
 
   it("rejects dispatch log writes without an org id", async () => {

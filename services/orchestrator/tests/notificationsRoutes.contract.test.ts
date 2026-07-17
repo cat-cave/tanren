@@ -312,7 +312,7 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     pool.dispatches.push(
       {
         id: 1,
-        tenant_id: "org_acme",
+        org_id: "org_acme",
         channel: "ntfy",
         status: "sent",
         attempts: 1,
@@ -328,7 +328,7 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
       },
       {
         id: 2,
-        tenant_id: "org_other",
+        org_id: "org_other",
         channel: "ntfy",
         status: "sent",
         attempts: 1,
@@ -343,7 +343,7 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
       },
       {
         id: 3,
-        tenant_id: "org_other",
+        org_id: "org_other",
         channel: "ntfy",
         status: "sent",
         attempts: 1,
@@ -354,21 +354,6 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
           targetId: "notif_target_acme",
           severity: "fail",
           title: "Mismatched tenant must stay hidden",
-        },
-      },
-      {
-        id: 4,
-        tenant_id: null,
-        channel: "ntfy",
-        status: "sent",
-        attempts: 1,
-        enqueued_at: pool.now,
-        sent_at: pool.now,
-        payload: {
-          eventName: "run.failed",
-          targetId: "notif_target_acme",
-          severity: "fail",
-          title: "Legacy unstamped run failed",
         },
       },
     );
@@ -385,16 +370,12 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
         payload?: unknown;
       }>;
     };
-    expect(body.deliveries.map((delivery) => delivery.id)).toEqual([4, 1]);
+    // Only org_acme's own row (id 1) is visible: the two org_other rows — including
+    // the mismatched-tenant row whose targetId points at an acme target — stay
+    // hidden. `notifications.org_id` is NOT NULL (0045), so there is no legacy
+    // unstamped (tenant_id NULL) row resolved via the target join anymore.
+    expect(body.deliveries.map((delivery) => delivery.id)).toEqual([1]);
     expect(body.deliveries[0]).toMatchObject({
-      eventName: "run.failed",
-      target: {
-        label: "acme alerts",
-        channelKind: "ntfy",
-      },
-      title: "Legacy unstamped run failed",
-    });
-    expect(body.deliveries[1]).toMatchObject({
       eventName: "run.failed",
       target: {
         label: "acme alerts",
@@ -402,9 +383,9 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
       },
       title: "Run failed",
     });
-    expect(body.deliveries[1]?.target.destination).toBeUndefined();
-    expect(body.deliveries[1]?.token).toBeUndefined();
-    expect(body.deliveries[1]?.payload).toBeUndefined();
+    expect(body.deliveries[0]?.target.destination).toBeUndefined();
+    expect(body.deliveries[0]?.token).toBeUndefined();
+    expect(body.deliveries[0]?.payload).toBeUndefined();
   });
 
   it("rejects invalid delivery status filters", async () => {

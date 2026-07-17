@@ -65,7 +65,7 @@ describe("NotificationDispatcher default route", () => {
     expect(ntfy.calls[0]?.target.destination).toBe("tanren-escalations");
     expect(ntfy.calls[0]?.payload.severity).toBe("fail");
     expect(client.dispatches[0]?.status).toBe("sent");
-    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+    expect(client.dispatches[0]?.org_id).toBe("org_1");
     const logPayload = client.dispatches[0]?.payload as { layering?: string } | undefined;
     expect(logPayload?.layering).toBe("default_route");
   });
@@ -150,7 +150,7 @@ describe("NotificationDispatcher default route", () => {
     expect(client.dispatches).toHaveLength(1);
     expect(client.dispatches[0]?.status).toBe("undelivered_no_route");
     expect(client.dispatches[0]?.channel).toBe("no_route");
-    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+    expect(client.dispatches[0]?.org_id).toBe("org_1");
     const noRoutePayload = client.dispatches[0]?.payload as {
       eventName: string;
       severity: string;
@@ -277,7 +277,7 @@ describe("NotificationDispatcher default route", () => {
     expect(client.dispatches).toHaveLength(1);
     expect(client.dispatches[0]?.status).toBe("undelivered_no_route");
     expect(client.dispatches[0]?.channel).toBe("no_route");
-    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+    expect(client.dispatches[0]?.org_id).toBe("org_1");
   });
 
   it("does NOT route a routine low-severity event via the default (no spam)", async () => {
