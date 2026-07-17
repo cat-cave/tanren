@@ -19,11 +19,12 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
+import type { MtlsPeerVerifier } from "./engine/contracts/mtlsChannel.js";
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
 import { createInternalFixtureLeaseRoutes } from "./routes/internal/fixtureLeases.js";
 import { createInternalResolutionJobRoutes } from "./routes/internal/resolutionJobs.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
-import { BaselineReproductionStage } from "./engine/verification/resolutionStages/index.js";
+import { BaselineReproductionStage, type BaselineProbe } from "./engine/verification/resolutionStages/index.js";
 import { parsedEnv } from "./envSchema.js";
 import { createLogger } from "./engine/observability/logger.js";
 
@@ -43,13 +44,21 @@ export function internalMtlsCertPathsFromEnv(): MtlsCertPaths | undefined {
   return { certPath, keyPath, caPath };
 }
 
+export interface InternalAppDependencies {
+  readonly pool: pg.Pool;
+  /** Test seam; production always uses the node mTLS verifier. */
+  readonly verifier?: MtlsPeerVerifier;
+  /** Test seam for the live BaselineReproductionStage's SP-5 probe call. */
+  readonly baselineProbe?: BaselineProbe;
+}
+
 /** Build the internal control-plane Hono app (the `/internal/*` surface). */
-export function buildInternalApp(deps: { pool: pg.Pool }): Hono {
+export function buildInternalApp(deps: InternalAppDependencies): Hono {
   const app = new Hono();
   // The Node verifier reads the TLS-validated client cert off the inbound
   // socket; the mTLS server below already rejected an untrusted cert at the
   // handshake, so this is defense-in-depth + the peer-identity surface.
-  const verifier = new NodeMtlsPeerVerifier();
+  const verifier = deps.verifier ?? new NodeMtlsPeerVerifier();
   app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier }));
   app.route("/", createInternalFixtureLeaseRoutes({ pool: deps.pool, verifier }));
   app.route(
@@ -57,7 +66,10 @@ export function buildInternalApp(deps: { pool: pg.Pool }): Hono {
     createInternalResolutionJobRoutes({
       pool: deps.pool,
       verifier,
-      baselineStage: new BaselineReproductionStage({ pool: deps.pool }),
+      baselineStage: new BaselineReproductionStage({
+        pool: deps.pool,
+        ...(deps.baselineProbe === undefined ? {} : { probe: deps.baselineProbe }),
+      }),
     }),
   );
   // The run-state WRITE endpoints (append-event / record-cost /

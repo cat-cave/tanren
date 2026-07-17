@@ -235,6 +235,16 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
     await admin.end();
   }, 30_000);
 
+  it("connects as the restricted tanren_app non-superuser role", async () => {
+    const identity = await app.query<{ current_user: string; rolsuper: boolean }>(
+      `SELECT current_user, r.rolsuper
+         FROM pg_roles AS r
+        WHERE r.rolname = current_user`,
+    );
+    expect(identity.rows[0]?.current_user).toBe(APP_USER);
+    expect(identity.rows[0]?.rolsuper).toBe(false);
+  });
+
   it("records baseline evidence/assertions, emits frozen events, and isolates orgs", async () => {
     const createdA = await contracts.create({
       orgId: ORG_A,

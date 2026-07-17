@@ -13,7 +13,7 @@ import {
   type WriteBehaviorVerificationRunStageInput,
 } from "../behaviorVerificationRunStage.js";
 
-type BaselineProbe = Pick<SymptomProbeAdapter, "runBaseline">;
+export type BaselineProbe = Pick<SymptomProbeAdapter, "runBaseline">;
 type ContractReader = Pick<SymptomContractStore, "get">;
 
 export interface BaselineReproductionContext {
@@ -35,7 +35,7 @@ export interface BaselineRuntimeContextResolver {
   }): Promise<BaselineReproductionContext>;
 }
 
-interface FinalizeVerificationRunInput {
+export interface FinalizeVerificationRunInput {
   readonly orgId: string;
   readonly verificationRunId: string;
   readonly resolutionJobId: string;
@@ -124,44 +124,56 @@ export class BaselineReproductionStage implements ResolutionStage {
       ...(runtime.integrationNodeId === undefined ? {} : { integrationNodeId: runtime.integrationNodeId }),
     });
 
+    let baseline: SymptomBaselineResult;
     try {
-      const baseline = await this.probe.runBaseline({
+      baseline = await this.probe.runBaseline({
         orgId: job.orgId,
         projectId: job.projectId,
         contractId: contract.id,
         contract: contract.contract,
         verificationRunId,
       });
-      return await this.complete(job, contract, baseline);
     } catch {
-      const failure: BaselineClassification = {
-        outcome: "inconclusive",
-        classification: "infra_failure",
-        status: "failed",
-        loopState: "awaiting_reproduction",
-      };
-      await this.finalizeVerificationRun({
-        orgId: job.orgId,
-        verificationRunId,
-        resolutionJobId: job.id,
-        classification: failure.classification,
-        status: failure.status,
-      });
-      await this.transitionIssueLoop({
-        orgId: job.orgId,
-        projectId: job.projectId,
-        issueLoopId: job.issueLoopId,
-        state: "awaiting_reproduction",
-      });
-      return {
-        outcome: failure.outcome,
-        classification: failure.classification,
-        proofGrade: contract.proofPolicy,
-        verificationRunId,
-        assertionIds: [],
-        evidenceRefs: [],
-      };
+      return this.recordProbeFailure(job, contract, verificationRunId);
     }
+    // Deliberately outside the probe catch: after a determined baseline outcome,
+    // a finalize/transition failure must surface rather than reclassifying a real
+    // product failure as infrastructure noise.
+    return this.complete(job, contract, baseline);
+  }
+
+  private async recordProbeFailure(
+    job: ResolutionJob,
+    contract: SymptomContractRow,
+    verificationRunId: string,
+  ): Promise<ResolutionStageResult> {
+    const failure: BaselineClassification = {
+      outcome: "inconclusive",
+      classification: "infra_failure",
+      status: "failed",
+      loopState: "awaiting_reproduction",
+    };
+    await this.finalizeVerificationRun({
+      orgId: job.orgId,
+      verificationRunId,
+      resolutionJobId: job.id,
+      classification: failure.classification,
+      status: failure.status,
+    });
+    await this.transitionIssueLoop({
+      orgId: job.orgId,
+      projectId: job.projectId,
+      issueLoopId: job.issueLoopId,
+      state: "awaiting_reproduction",
+    });
+    return {
+      outcome: failure.outcome,
+      classification: failure.classification,
+      proofGrade: contract.proofPolicy,
+      verificationRunId,
+      assertionIds: [],
+      evidenceRefs: [],
+    };
   }
 
   private async complete(
@@ -213,20 +225,8 @@ export class BaselineReproductionStage implements ResolutionStage {
   }
 
   private async finalizeRunOnPool(input: FinalizeVerificationRunInput): Promise<void> {
-    await runWithOrgScope(this.dependencies.pool, input.orgId, async (client) => {
-      const updated = await client.query(
-        `UPDATE behavior_verification_runs
-            SET classification = $3,
-                status = $4
-          WHERE org_id = $1
-            AND id = $2
-            AND stage = 'baseline'
-            AND resolution_job_id = $5`,
-        [input.orgId, input.verificationRunId, input.classification, input.status, input.resolutionJobId],
-      );
-      if (updated.rowCount !== 1)
-        throw new Error(`baseline verification run ${input.verificationRunId} was not finalized`);
-    });
+    const rowCount = await finalizeBaselineVerificationRun(this.dependencies.pool, input);
+    if (rowCount !== 1) throw new Error(`baseline verification run ${input.verificationRunId} was not finalized`);
   }
 
   private async transitionLoopOnPool(input: {
@@ -245,6 +245,31 @@ export class BaselineReproductionStage implements ResolutionStage {
       if (transitioned === undefined) throw new Error(`baseline issue loop ${input.issueLoopId} was not found`);
     });
   }
+}
+
+/**
+ * Update exactly the baseline verification row owned by this resolution job.
+ *
+ * Returning the row count keeps the production predicate directly testable by
+ * both the SQL conformance fake and the restricted-role Postgres suite.
+ */
+export async function finalizeBaselineVerificationRun(
+  pool: pg.Pool,
+  input: FinalizeVerificationRunInput,
+): Promise<number> {
+  return runWithOrgScope(pool, input.orgId, async (client) => {
+    const updated = await client.query(
+      `UPDATE behavior_verification_runs
+          SET classification = $3,
+              status = $4
+        WHERE org_id = $1
+          AND id = $2
+          AND stage = 'baseline'
+          AND resolution_job_id = $5`,
+      [input.orgId, input.verificationRunId, input.classification, input.status, input.resolutionJobId],
+    );
+    return updated.rowCount ?? 0;
+  });
 }
 
 function classifyBaseline(baseline: SymptomBaselineResult): BaselineClassification {

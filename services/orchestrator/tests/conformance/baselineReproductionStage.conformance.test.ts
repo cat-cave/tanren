@@ -1,9 +1,15 @@
 // cspell:ignore scontract vassert vartifact
 import { describe, expect, it } from "vitest";
+import { AllowAllPeerVerifier } from "../../src/engine/contracts/mtlsChannel.js";
 import type { ResolutionJob, ResolutionStageResult } from "../../src/engine/contracts/resolutionStage.js";
 import type { SymptomBaselineResult } from "../../src/engine/contracts/symptomProbe.js";
+import { symptomContractHash, type SymptomContractV1 } from "../../src/engine/contracts/symptomContract.js";
 import type { SymptomContractRow } from "../../src/engine/repositories/symptomContracts.js";
-import { BaselineReproductionStage } from "../../src/engine/verification/resolutionStages/baselineReproductionStage.js";
+import { buildInternalApp } from "../../src/internalServer.js";
+import {
+  BaselineReproductionStage,
+  finalizeBaselineVerificationRun,
+} from "../../src/engine/verification/resolutionStages/baselineReproductionStage.js";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
@@ -21,6 +27,17 @@ const job: ResolutionJob = {
   attempt: 2,
 };
 
+const lockedContract: SymptomContractV1 = {
+  version: 1,
+  issueLoopId: job.issueLoopId,
+  target: { url: "https://example.invalid/reproduce" },
+  expectedFailingObservation: { status: 500 },
+  expectedCorrectedObservation: { status: 200 },
+  proofPolicy: "active_causal",
+  sourceRevision: "revision_baseline",
+  baselineRequired: true,
+};
+
 function contract(): SymptomContractRow {
   return {
     orgId: job.orgId,
@@ -28,17 +45,8 @@ function contract(): SymptomContractRow {
     id: job.contractId,
     issueLoopId: job.issueLoopId,
     schemaVersion: 1,
-    contract: {
-      version: 1,
-      issueLoopId: job.issueLoopId,
-      target: { url: "https://example.invalid/reproduce" },
-      expectedFailingObservation: { status: 500 },
-      expectedCorrectedObservation: { status: 200 },
-      proofPolicy: "active_causal",
-      sourceRevision: "revision_baseline",
-      baselineRequired: true,
-    },
-    canonicalHash: DIGEST,
+    contract: lockedContract,
+    canonicalHash: symptomContractHash(lockedContract),
     proofPolicy: "active_causal",
     target: { url: "https://example.invalid/reproduce" },
     sourceRevision: "revision_baseline",
@@ -166,6 +174,32 @@ class BaselineStageSqlMemoryPool {
       this.verificationRuns.push({ id, stage, resolutionJobId, classification, status });
       return { rows: [{ id }], rowCount: 1 };
     }
+    if (sql.includes("FROM symptom_contracts")) {
+      const [orgId, contractId] = params as readonly [string, string];
+      const row = contract();
+      if (orgId !== row.orgId || contractId !== row.id) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            org_id: row.orgId,
+            project_id: row.projectId,
+            id: row.id,
+            issue_loop_id: row.issueLoopId,
+            schema_version: row.schemaVersion,
+            contract_json: row.contract,
+            canonical_hash: row.canonicalHash,
+            proof_policy: row.proofPolicy,
+            target: row.target,
+            source_revision: row.sourceRevision,
+            author_task_id: row.authorTaskId,
+            state: row.state,
+            baseline_required: row.baselineRequired,
+            created_at: row.createdAt,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     if (sql.startsWith("UPDATE behavior_verification_runs")) {
       const [orgId, id, classification, status, resolutionJobId] = params as readonly [
         string,
@@ -175,7 +209,9 @@ class BaselineStageSqlMemoryPool {
         string,
       ];
       if (orgId !== job.orgId) return { rows: [], rowCount: 0 };
-      const row = this.verificationRuns.find((run) => run.id === id && run.resolutionJobId === resolutionJobId);
+      const row = this.verificationRuns.find(
+        (run) => run.id === id && run.stage === "baseline" && run.resolutionJobId === resolutionJobId,
+      );
       if (row === undefined) return { rows: [], rowCount: 0 };
       row.classification = classification;
       row.status = status;
@@ -214,6 +250,41 @@ describe("BaselineReproductionStage conformance", () => {
     expect(harness.loopStates).toEqual(["awaiting_reproduction"]);
   });
 
+  it("surfaces a product-failure finalization error without reclassifying it as infrastructure", async () => {
+    const finalizationError = new Error("finalize unavailable");
+    const finalizations: string[] = [];
+    const loopStates: string[] = [];
+    const stage = new BaselineReproductionStage({
+      pool: {} as never,
+      contracts: { get: async () => contract() },
+      contextResolver: {
+        resolve: async () => ({
+          verificationRunId: "vrun_baseline",
+          environmentId: "venv_baseline",
+          preparedHeadSha: "a".repeat(40),
+          jjTreeId: "tree_baseline",
+          planSetHash: DIGEST,
+          runtimeBehaviorContextHash: DIGEST,
+          artifactDigest: DIGEST,
+          policy: { proofPolicy: "active_causal" },
+        }),
+      },
+      writeVerificationRun: async (input) => input.id,
+      probe: { runBaseline: async () => baseline("reproduced") },
+      finalizeVerificationRun: async (input) => {
+        finalizations.push(input.classification);
+        throw finalizationError;
+      },
+      transitionIssueLoop: async (input) => {
+        loopStates.push(input.state);
+      },
+    });
+
+    await expect(stage.run(job, {})).rejects.toThrow(finalizationError);
+    expect(finalizations).toEqual(["product_failure"]);
+    expect(loopStates).toEqual([]);
+  });
+
   it("uses the shared run writer and finalizes its classification through the SQL conformance fake", async () => {
     const pool = new BaselineStageSqlMemoryPool();
     const stage = new BaselineReproductionStage({
@@ -246,6 +317,101 @@ describe("BaselineReproductionStage conformance", () => {
         stage: "baseline",
         resolutionJobId: job.id,
         classification: "product_failure",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("matches zero fake rows when the stage or resolution job predicate is wrong", async () => {
+    const pool = new BaselineStageSqlMemoryPool();
+    pool.verificationRuns.push(
+      {
+        id: "vrun_wrong_stage",
+        stage: "production",
+        resolutionJobId: job.id,
+        classification: "inconclusive",
+        status: "running",
+      },
+      {
+        id: "vrun_wrong_job",
+        stage: "baseline",
+        resolutionJobId: "rjob_someone_else",
+        classification: "inconclusive",
+        status: "running",
+      },
+    );
+
+    await expect(
+      finalizeBaselineVerificationRun(pool as never, {
+        orgId: job.orgId,
+        verificationRunId: "vrun_wrong_stage",
+        resolutionJobId: job.id,
+        classification: "product_failure",
+        status: "completed",
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      finalizeBaselineVerificationRun(pool as never, {
+        orgId: job.orgId,
+        verificationRunId: "vrun_wrong_job",
+        resolutionJobId: job.id,
+        classification: "product_failure",
+        status: "completed",
+      }),
+    ).resolves.toBe(0);
+    expect(pool.verificationRuns.map(({ classification, status }) => ({ classification, status }))).toEqual([
+      { classification: "inconclusive", status: "running" },
+      { classification: "inconclusive", status: "running" },
+    ]);
+  });
+
+  it("runs /reproduce through buildInternalApp's real BaselineReproductionStage", async () => {
+    const pool = new BaselineStageSqlMemoryPool();
+    const probeCalls: string[] = [];
+    const app = buildInternalApp({
+      pool: pool as never,
+      verifier: new AllowAllPeerVerifier(),
+      baselineProbe: {
+        runBaseline: async (input) => {
+          probeCalls.push(input.verificationRunId);
+          return { ...baseline("not_reproduced"), verificationRunId: input.verificationRunId };
+        },
+      },
+    });
+
+    const response = await app.request(
+      `/internal/resolution-jobs/${job.id}/reproduce`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          job,
+          context: {
+            verificationRunId: "vrun_composition",
+            environmentId: "venv_baseline",
+            preparedHeadSha: "a".repeat(40),
+            jjTreeId: "tree_baseline",
+            planSetHash: DIGEST,
+            runtimeBehaviorContextHash: DIGEST,
+            artifactDigest: DIGEST,
+            policy: { proofPolicy: "active_causal" },
+          },
+        }),
+      },
+      { incoming: { socket: {} } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      result: { outcome: "failed", classification: "stale_contract", verificationRunId: "vrun_composition" },
+    });
+    expect(probeCalls).toEqual(["vrun_composition"]);
+    expect(pool.verificationRuns).toEqual([
+      {
+        id: "vrun_composition",
+        stage: "baseline",
+        resolutionJobId: job.id,
+        classification: "stale_contract",
         status: "completed",
       },
     ]);
