@@ -39,7 +39,7 @@ function inboxSourceRow(source: InboxSourceRec, includeProjectValidity = false) 
     config: source.config,
     enabled: source.enabled,
     auto_route: source.auto_route,
-    state: "active",
+    state: source.state,
     attention_code: null,
     attention_message: null,
     attention_observed_at: null,
@@ -324,6 +324,7 @@ export class ForgeRecoveryScopedClient {
         config: JSON.parse(config),
         enabled,
         auto_route: autoRoute,
+        state: "active",
         created_at: NOW,
       };
       this.db.inboxSources.push(rec);
@@ -349,7 +350,7 @@ export class ForgeRecoveryScopedClient {
       const rows = [
         ...new Set(
           visible()
-            .filter((s) => s.enabled === "true")
+            .filter((s) => s.enabled === "true" && s.state === "active")
             .map((s) => s.org_id),
         ),
       ].map((org_id) => ({ org_id }));

@@ -155,6 +155,31 @@ export function webhookEventSql(
       string | null,
       string | null,
     ];
+    // Match the INSERT ... SELECT gate exactly: a caller may persist only through
+    // its own, enabled, active source, and a project-bound source must still point
+    // at a project in the same org. A failed INSERT deliberately returns no row so
+    // the store can perform its duplicate-delivery lookup before throwing lineage.
+    const source = db.inboxSources.find((s) => s.id === sourceId && s.org_id === ownOrgId && s.org_id === orgId);
+    const sourceIsValid =
+      source !== undefined &&
+      source.enabled === "true" &&
+      source.state === "active" &&
+      (source.project_id === null ||
+        db.projects.some((p) => p.project_id === source.project_id && p.org_id === source.org_id));
+    if (!sourceIsValid) return { rows: [], rowCount: 0 };
+
+    // The production partial unique index applies only to non-null delivery IDs.
+    // `ON CONFLICT DO NOTHING` returns no row; persistWithOutcome then SELECTs the
+    // existing delivery below.
+    if (
+      deliveryId !== null &&
+      db.webhookEvents.some(
+        (e) =>
+          e.org_id === ownOrgId && e.source_id === sourceId && e.provider === provider && e.delivery_id === deliveryId,
+      )
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
     const rec: WebhookEventRec = {
       id,
       source_id: sourceId,
@@ -178,6 +203,18 @@ export function webhookEventSql(
     return { rows: [webhookEventCols(rec)], rowCount: 1 };
   }
   if (
+    /^SELECT .* FROM webhook_events WHERE org_id = \$1 AND source_id = \$2 AND provider = \$3 AND delivery_id = \$4 LIMIT 1$/u.test(
+      sql,
+    )
+  ) {
+    const [eventOrgId, sourceId, provider, deliveryId] = params as [string, string, string, string];
+    const event = visible().find(
+      (e) =>
+        e.org_id === eventOrgId && e.source_id === sourceId && e.provider === provider && e.delivery_id === deliveryId,
+    );
+    return event === undefined ? { rows: [], rowCount: 0 } : { rows: [webhookEventCols(event)], rowCount: 1 };
+  }
+  if (
     /^SELECT .* FROM webhook_events WHERE status IN \('received','failed'\)( AND \(claim_owner IS NULL OR claim_expires_at <= now\(\)\))? ORDER BY created_at ASC LIMIT \$1$/u.test(
       sql,
     )
@@ -198,23 +235,54 @@ export function webhookEventSql(
       .map((e) => webhookEventCols(e));
     return { rows, rowCount: rows.length };
   }
+  if (sql.startsWith("UPDATE webhook_events SET claim_owner = $2,")) {
+    const [id, workerId, leaseMs] = params as [string, string, number];
+    const event = visible().find(
+      (e) =>
+        e.id === id &&
+        ["received", "failed"].includes(e.status) &&
+        (e.claim_owner === null ||
+          (e.claim_expires_at !== null && new Date(e.claim_expires_at).getTime() <= Date.now())),
+    );
+    if (event === undefined) return { rows: [], rowCount: 0 };
+    event.claim_owner = workerId;
+    event.claim_expires_at = new Date(Date.now() + leaseMs).toISOString();
+    return { rows: [webhookEventCols(event)], rowCount: 1 };
+  }
   if (sql.startsWith("UPDATE webhook_events SET status = 'processed'")) {
-    const e = visible().find((x) => x.id === params[0]);
+    const [id, workerId] = params as [string, string | null];
+    const e = visible().find(
+      (x) =>
+        x.id === id && ["received", "failed"].includes(x.status) && (workerId === null || x.claim_owner === workerId),
+    );
     if (e !== undefined) {
       e.status = "processed";
       e.last_error = null;
+      e.claim_owner = null;
+      e.claim_expires_at = null;
+    }
+    return { rows: [], rowCount: e ? 1 : 0 };
+  }
+  if (sql.startsWith("UPDATE webhook_events SET claim_owner = NULL, claim_expires_at = NULL")) {
+    const [id, workerId] = params as [string, string];
+    const e = visible().find((x) => x.id === id && x.claim_owner === workerId);
+    if (e !== undefined) {
+      e.claim_owner = null;
+      e.claim_expires_at = null;
     }
     return { rows: [], rowCount: e ? 1 : 0 };
   }
   if (sql.startsWith("UPDATE webhook_events SET attempts = attempts + 1")) {
     // Mirror the store: status is set by the failure's NATURE (the `poison` boolean),
     // NOT a count — transient stays `failed` (re-driven UNBOUNDED), poison dead-letters.
-    const [id, error, poison] = params as [string, string, boolean];
-    const e = visible().find((x) => x.id === id);
+    const [id, error, poison, workerId] = params as [string, string, boolean, string | null];
+    const e = visible().find((x) => x.id === id && (workerId === null || x.claim_owner === workerId));
     if (e === undefined) return { rows: [], rowCount: 0 };
     e.attempts += 1;
     e.last_error = error;
     e.status = poison ? "dead_lettered" : "failed";
+    e.claim_owner = null;
+    e.claim_expires_at = null;
     return { rows: [{ status: e.status }], rowCount: 1 };
   }
   return undefined;
