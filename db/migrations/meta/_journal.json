@@ -414,6 +414,20 @@
       "when": 1784283506207,
       "tag": "0060_wave4_event_vocab",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1784291789742,
+      "tag": "0061_governance_effective_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1784291827579,
+      "tag": "0062_wave5_event_vocab",
+      "breakpoints": true
     }
   ]
 }

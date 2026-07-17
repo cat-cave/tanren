@@ -106,6 +106,7 @@ import {
   ReviewRequestedPayload,
   w0EventRegistry,
   wave4EventRegistry,
+  wave5EventRegistry,
 } from "./schemas/integrations.js";
 import {
   MergeBatchBisectingPayload,
@@ -183,14 +184,14 @@ import {
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
-// Single source of truth mapping event names → typed Zod payload schemas. To add: (1) Zod schema under
-// events/schemas/, (2) wire here, (3) sensitivity tags in sensitivityRules.ts, (4) regenerate the CHECK.
+// Single source of truth mapping event names to typed Zod payload schemas.
 export const EventRegistry = {
   ...w0EventRegistry,
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
   ...designSystemVocabularyRegistry,
   ...wave4EventRegistry,
+  ...wave5EventRegistry,
   ...eventVocabularyMiscRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,

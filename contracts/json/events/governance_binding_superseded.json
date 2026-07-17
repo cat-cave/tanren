@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "supersededByBindingId": {
+      "type": "string"
+    },
+    "tierId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "bindingId",
+    "supersededByBindingId",
+    "tierId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.governance.binding.superseded"
+}

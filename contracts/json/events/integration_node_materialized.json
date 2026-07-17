@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseSha": {
+      "type": "string"
+    },
+    "headSha": {
+      "type": "string"
+    },
+    "integrationNodeId": {
+      "type": "string"
+    },
+    "memberKey": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "treeHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "integrationNodeId",
+    "memberKey",
+    "baseSha",
+    "headSha",
+    "treeHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.node.materialized"
+}

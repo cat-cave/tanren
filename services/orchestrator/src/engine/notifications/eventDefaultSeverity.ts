@@ -376,6 +376,16 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "governance.tier.created": "info",
   "governance.tier.activated": "info",
 
+  // Mission-complete WAVE-5 shared vocabulary (mq-11/gv-9/ds-2/in-4).
+  "governance.binding.activated": "info",
+  "governance.effective_policy.recorded": "info",
+  "governance.binding.superseded": "info",
+  "integration.node.materialized": "info",
+  "integration.node.materialization_failed": "warn",
+  "design.artifact.published": "info",
+  "design.catalog.built": "info",
+  "design.export.produced": "info",
+
   // Mission-complete WAVE-2 governance policy-revision vocabulary (gv-7). The
   // immutable revision lifecycle (draft persisted, deterministically compiled,
   // activated) is routine durable governance fact → `info`. A proof invalidation
