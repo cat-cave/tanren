@@ -4,8 +4,14 @@ import { Pool } from "pg";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { IssueLoopStore } from "../src/engine/repositories/issueLoops.js";
 import { SourceSyncOutboxStore } from "../src/engine/repositories/sourceSyncOutbox.js";
-import { GithubIssueSourceAdapter } from "../src/engine/forge/githubIssueSourceAdapter.js";
+import {
+  GithubIssueSourceAdapter,
+  ingestGithubWebhookObservation,
+} from "../src/engine/forge/githubIssueSourceAdapter.js";
 import { ManualIssueSourceAdapter, enqueueResolutionSync } from "../src/engine/forge/issueSourceAdapter.js";
+import { WebhookEventStore } from "../src/engine/repositories/webhookEvents.js";
+import { intakeAutoRouteDeps, processWebhookEvent } from "../src/engine/forge/intake/index.js";
+import type { CandidateTriage, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -50,6 +56,21 @@ const issue = (number: number, action: string, updatedAt: string) => ({
   repository: { owner: { login: "cat-cave" }, name: "fixture" },
 });
 
+const triage: TriageAnswerer = {
+  async triage(): Promise<CandidateTriage> {
+    return {
+      dedupe: "new issue",
+      match: "issue loop",
+      placement: "inbox",
+      verdict: "needs_call",
+      duplicateOfSpecId: null,
+      discoveryVariant: "bug",
+      routableSpec: null,
+      entityAnchor: null,
+    };
+  },
+};
+
 describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -64,7 +85,7 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
     await migrate(ownerPool);
     appPool = new Pool({ connectionString: appUrl(ADMIN_URL, database) });
-    setSystemPool(undefined);
+    setSystemPool(ownerPool);
     await ownerPool.query(
       `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
        VALUES ($1, 'oidc', $1, $1, $1, $2::jsonb),
@@ -97,20 +118,6 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       secrets,
       githubHttp,
       defaultStaticRef: TOKEN_REF,
-      connector: {
-        kind: "issues",
-        async fetch(source) {
-          return [
-            {
-              externalId: "gh-cat-cave/fixture#43",
-              title: "Issue 43",
-              body: "polled",
-              severity: "info",
-              projectId: source.projectId,
-            },
-          ];
-        },
-      },
     });
     manual = new ManualIssueSourceAdapter();
   }, 60_000);
@@ -125,22 +132,40 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     );
     await adminPool.query(`DROP DATABASE IF EXISTS ${database}`);
     await adminPool.end();
+    setSystemPool(undefined);
   }, 30_000);
 
-  it("records GitHub webhook and poll findings, manual findings, and the frozen finding event", async () => {
-    const received = await github.receiveWebhook({
-      orgId: ORG_A,
-      sourceId: SOURCE_A,
-      deliveryId: "delivery-41",
-      payload: issue(41, "opened", "2026-07-17T12:00:00Z"),
-    });
+  async function receiveGithubWebhook(payload: unknown, deliveryId: string) {
+    const persisted = await runWithOrgScope(appPool, ORG_A, (client) =>
+      WebhookEventStore.persistWithOutcome(client, {
+        sourceId: SOURCE_A,
+        orgId: ORG_A,
+        eventType: "issues",
+        provider: "github",
+        deliveryId,
+        payload,
+      }),
+    );
+    const processed =
+      persisted.inserted &&
+      (await processWebhookEvent(
+        {
+          pool: appPool,
+          answererFactory: () => triage,
+          autoRoute: intakeAutoRouteDeps(),
+          recordIssueObservation: async (source, event) => {
+            await ingestGithubWebhookObservation(appPool, source, event);
+          },
+        },
+        persisted.event,
+      ));
+    return { ...persisted, processed };
+  }
+
+  it("records GitHub webhook findings through the bh-3 processor, manual findings, and the frozen finding event", async () => {
+    const received = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
     expect(received).toMatchObject({ inserted: true, processed: true });
-    const duplicate = await github.receiveWebhook({
-      orgId: ORG_A,
-      sourceId: SOURCE_A,
-      deliveryId: "delivery-41",
-      payload: issue(41, "opened", "2026-07-17T12:00:00Z"),
-    });
+    const duplicate = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
     expect(duplicate).toMatchObject({ inserted: false, processed: false });
     const source = (
       await runWithOrgScope(appPool, ORG_A, (client) =>
@@ -165,22 +190,6 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       return result.rows;
     });
     expect(eventTypes.map((event) => event.event_type)).toEqual(["source.finding.recorded"]);
-    const polled = await github.poll({
-      id: SOURCE_A,
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      kind: "issues",
-      name: "github",
-      detail: "",
-      enabled: true,
-      autoRoute: false,
-      state: "active",
-      attention: null,
-      retryNotBefore: null,
-      webhookConfigured: false,
-      config: { owner: "cat-cave", repo: "fixture", labels: [] },
-    });
-    expect(polled.observations).toHaveLength(1);
     const manualResult = await manual.ingest(appPool, {
       orgId: ORG_A,
       sourceId: MANUAL_A,
@@ -196,12 +205,7 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
   });
 
   it("enqueues a resolution, claims/syncs/verifies it, and warns on an external close", async () => {
-    const open = await github.receiveWebhook({
-      orgId: ORG_A,
-      sourceId: SOURCE_A,
-      deliveryId: "delivery-42-open",
-      payload: issue(42, "opened", "2026-07-17T14:00:00Z"),
-    });
+    const open = await receiveGithubWebhook(issue(42, "opened", "2026-07-17T14:00:00Z"), "delivery-42-open");
     const loopId = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#42")!.id;
@@ -222,24 +226,40 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       IssueLoopStore.get(client, ORG_A, PROJECT_A, loopId),
     );
     expect(verified?.state).toBe("verified_closed");
-    const external = await github.receiveWebhook({
+    const siblingOpen = await receiveGithubWebhook(issue(43, "opened", "2026-07-17T14:30:00Z"), "delivery-43-open");
+    expect(siblingOpen.processed).toBe(true);
+    const siblingLoop = (
+      await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
+    ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#43")!;
+    const siblingPending = await enqueueResolutionSync(appPool, {
       orgId: ORG_A,
+      projectId: PROJECT_A,
+      issueLoopId: siblingLoop.id,
       sourceId: SOURCE_A,
-      deliveryId: "delivery-closed-44",
-      payload: issue(44, "closed", "2026-07-17T15:00:00Z"),
+      externalKey: siblingLoop.externalKey,
     });
+    expect(siblingPending.outbox.state).toBe("pending");
+    const external = await receiveGithubWebhook(issue(43, "closed", "2026-07-17T15:00:00Z"), "delivery-closed-43");
     expect(external.processed).toBe(true);
     const externalLoop = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
-    ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#44");
+    ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#43");
     expect(externalLoop?.state).toBe("externally_closed_unverified");
     const externalOutbox = await runWithOrgScope(appPool, ORG_A, (client) =>
-      client.query<{ state: string }>("SELECT state FROM source_sync_outbox WHERE org_id = $1 AND issue_loop_id = $2", [
-        ORG_A,
-        externalLoop!.id,
-      ]),
+      client.query<{ id: string; state: string }>(
+        "SELECT id, state FROM source_sync_outbox WHERE org_id = $1 AND issue_loop_id = $2",
+        [ORG_A, externalLoop!.id],
+      ),
     );
-    expect(externalOutbox.rows).toEqual([{ state: "externally_closed_unverified" }]);
+    expect(externalOutbox.rows).toContainEqual({ id: siblingPending.outbox.id, state: "externally_closed_unverified" });
+    expect(
+      await (
+        await import("../src/engine/forge/sourceSyncWorker.js")
+      ).processSourceSync(
+        { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-sibling" },
+        siblingPending.outbox,
+      ),
+    ).toBeUndefined();
     const eventTypes = await runWithOrgScope(appPool, ORG_A, async (client) => {
       const result = await client.query<{ event_type: string }>(
         "SELECT event_type FROM events WHERE org_id = $1 ORDER BY id",
@@ -254,13 +274,29 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
   });
 
   it("keeps issue loops, findings, outbox rows, and events isolated by org", async () => {
-    const foreign = await github.receiveWebhook({
-      orgId: ORG_B,
-      sourceId: SOURCE_B,
-      deliveryId: "delivery-b",
-      payload: issue(99, "opened", "2026-07-17T16:00:00Z"),
-    });
-    expect(foreign.processed).toBe(true);
+    const persisted = await runWithOrgScope(appPool, ORG_B, (client) =>
+      WebhookEventStore.persistWithOutcome(client, {
+        sourceId: SOURCE_B,
+        orgId: ORG_B,
+        eventType: "issues",
+        provider: "github",
+        deliveryId: "delivery-b",
+        payload: issue(99, "opened", "2026-07-17T16:00:00Z"),
+      }),
+    );
+    expect(
+      await processWebhookEvent(
+        {
+          pool: appPool,
+          answererFactory: () => triage,
+          autoRoute: intakeAutoRouteDeps(),
+          recordIssueObservation: async (source, event) => {
+            await ingestGithubWebhookObservation(appPool, source, event);
+          },
+        },
+        persisted.event,
+      ),
+    ).toBe(true);
     expect(
       await runWithOrgScope(appPool, ORG_B, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A)),
     ).toEqual([]);

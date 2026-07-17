@@ -1,10 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { runWithOrgScope } from "@tanren/db";
+import { createHash } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
-import { WebhookEventStore, type WebhookEvent } from "../repositories/webhookEvents.js";
-import { ActiveGitHubIssuesConfig, InboxStore, createGitHubIssuesConnector, type InboxSource } from "./inbox/index.js";
-import type { SourceConnector } from "./inbox/types.js";
+import { ActiveGitHubIssuesConfig, type InboxSource } from "./inbox/index.js";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -44,25 +41,6 @@ export interface GitHubIssueSourceAdapterDeps {
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
   defaultStaticRef?: string;
-  connector?: SourceConnector;
-}
-
-export interface GithubWebhookInput {
-  orgId: string;
-  sourceId: string;
-  payload: unknown;
-  deliveryId?: string | null;
-}
-
-export interface GithubWebhookResult {
-  event: WebhookEvent;
-  inserted: boolean;
-  processed: boolean;
-}
-
-export interface GithubPollResult {
-  source: InboxSource;
-  observations: IssueSourceIngestResult[];
 }
 
 function labels(issue: z.infer<typeof GithubIssue>["issue"]): string[] {
@@ -148,92 +126,28 @@ function normalizeWebhook(
   };
 }
 
+/**
+ * Record the issue-loop observation from bh-3's already-persisted webhook
+ * delivery. This deliberately does not persist, claim, or sweep a webhook row:
+ * `webhookProcessor` is the one idempotent production intake path for those
+ * responsibilities, and invokes this only after it has claimed the delivery.
+ */
+export async function ingestGithubWebhookObservation(
+  pool: pg.Pool,
+  source: InboxSource,
+  event: { payload: unknown; deliveryId: string | null },
+): Promise<IssueSourceIngestResult | undefined> {
+  const observation = normalizeWebhook(event.payload, source, event.deliveryId);
+  return observation === undefined ? undefined : ingestIssueObservation(pool, observation);
+}
+
 export class GithubIssueSourceAdapter implements IssueSourceAdapter {
   readonly provider = "github";
-  private readonly connector: SourceConnector;
 
-  constructor(private readonly deps: GitHubIssueSourceAdapterDeps) {
-    this.connector =
-      deps.connector ??
-      createGitHubIssuesConnector({
-        secrets: deps.secrets,
-        githubHttp: deps.githubHttp,
-        ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
-        ...(deps.defaultStaticRef === undefined ? {} : { defaultStaticRef: deps.defaultStaticRef }),
-      });
-  }
+  constructor(private readonly deps: GitHubIssueSourceAdapterDeps) {}
 
   ingest(pool: pg.Pool, observation: IssueObservation): Promise<IssueSourceIngestResult> {
     return ingestIssueObservation(pool, observation);
-  }
-
-  async receiveWebhook(input: GithubWebhookInput): Promise<GithubWebhookResult> {
-    const persisted = await runWithOrgScope(this.deps.pool, input.orgId, (client) =>
-      WebhookEventStore.persistWithOutcome(client, {
-        sourceId: input.sourceId,
-        orgId: input.orgId,
-        eventType: "issues",
-        provider: "github",
-        deliveryId: input.deliveryId ?? null,
-        payload: input.payload,
-      }),
-    );
-    const processed = persisted.inserted ? await this.processWebhookEvent(persisted.event) : false;
-    return { event: persisted.event, inserted: persisted.inserted, processed };
-  }
-
-  async processWebhookEvent(event: WebhookEvent): Promise<boolean> {
-    const workerId = `issue-source-${randomUUID()}`;
-    const claimed = await runWithOrgScope(this.deps.pool, event.orgId, (client) =>
-      WebhookEventStore.claim(client, { id: event.id, workerId, leaseMs: 5 * 60_000 }),
-    );
-    if (claimed === undefined) return false;
-    try {
-      const source = await runWithOrgScope(this.deps.pool, event.orgId, (client) =>
-        InboxStore.getSourceForIntake(client, event.sourceId, event.orgId),
-      );
-      if (source === undefined) throw new Error("GitHub webhook source is unavailable");
-      const observation = normalizeWebhook(event.payload, source, event.deliveryId);
-      if (observation !== undefined) await this.ingest(this.deps.pool, observation);
-      await runWithOrgScope(this.deps.pool, event.orgId, (client) =>
-        WebhookEventStore.complete(client, event.id, workerId),
-      );
-      return true;
-    } catch (error) {
-      await runWithOrgScope(this.deps.pool, event.orgId, (client) =>
-        WebhookEventStore.recordFailure(
-          client,
-          event.id,
-          error instanceof Error ? error.message : String(error),
-          false,
-          workerId,
-        ),
-      );
-      return false;
-    }
-  }
-
-  async poll(source: InboxSource): Promise<GithubPollResult> {
-    const items = await this.connector.fetch(source);
-    const observations: IssueSourceIngestResult[] = [];
-    for (const item of items) {
-      observations.push(
-        await this.ingest(this.deps.pool, {
-          orgId: source.orgId,
-          sourceId: source.id,
-          ...(item.projectId === null ? {} : { projectId: item.projectId }),
-          externalKey: item.externalId,
-          providerObjectId: item.externalId,
-          providerRevision: revision(item, null),
-          status: "open",
-          severity: item.severity,
-          title: item.title,
-          body: item.body,
-          context: { provider: "github", mode: "poll" },
-        }),
-      );
-    }
-    return { source, observations };
   }
 
   async sync(input: SourceSyncRequest): Promise<SourceSyncReceipt> {

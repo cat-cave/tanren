@@ -185,13 +185,18 @@ export const SourceSyncOutboxStore = {
     return (result.rowCount ?? 0) === 1;
   },
 
-  async markExternallyClosed(client: QueryClient, id: string): Promise<boolean> {
+  /**
+   * An observed external close supersedes every live close request for the loop.
+   * Clearing an active lease prevents a worker that was already sent from later
+   * satisfying `markVerified` and contradicting the external-close state.
+   */
+  async supersedeCloseSyncsForExternalClose(client: QueryClient, issueLoopId: string): Promise<number> {
     const result = await client.query(
       `UPDATE source_sync_outbox
           SET state = 'externally_closed_unverified', claim_owner = NULL, claim_expires_at = NULL
-        WHERE id = $1 AND state IN ('pending','sent')`,
-      [id],
+        WHERE issue_loop_id = $1 AND operation = 'close' AND state IN ('pending','sent')`,
+      [issueLoopId],
     );
-    return (result.rowCount ?? 0) === 1;
+    return result.rowCount ?? 0;
   },
 } as const;

@@ -42,10 +42,8 @@ export { terminalizeInboxSource, deferInboxSourceRetry, type PermanentSourceFail
 
 export {
   GithubIssueSourceAdapter,
+  ingestGithubWebhookObservation,
   type GitHubIssueSourceAdapterDeps,
-  type GithubWebhookInput,
-  type GithubWebhookResult,
-  type GithubPollResult,
 } from "../githubIssueSourceAdapter.js";
 export {
   ManualIssueSourceAdapter,

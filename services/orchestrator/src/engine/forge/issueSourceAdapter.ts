@@ -164,7 +164,11 @@ async function recordObservation(client: pg.PoolClient, source: InboxSource, inp
       operation: "close",
       payload,
     });
-    await SourceSyncOutboxStore.markExternallyClosed(client, queued.row.id);
+    // A provider-side close is authoritative enough to stop EVERY live close
+    // request for this loop. In particular, an already-sent sibling must not be
+    // able to acquire/retain a lease and later transition the loop to verified.
+    // This stays in the observation transaction with the loop transition.
+    await SourceSyncOutboxStore.supersedeCloseSyncsForExternalClose(client, loop.id);
     const external = await IssueLoopStore.markExternallyClosedUnverified(client, input.orgId, projectId, loop.id);
     observedLoop = external?.loop ?? loop;
     externalClose = { ...queued.row, state: "externally_closed_unverified" };

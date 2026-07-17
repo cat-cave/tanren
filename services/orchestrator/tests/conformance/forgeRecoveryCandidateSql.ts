@@ -262,37 +262,82 @@ export function sourceSyncOutboxSql(
   if (/^SELECT .* FROM source_sync_outbox WHERE state IN \('pending','sent'\)/u.test(sql)) {
     const limit = params[0] as number;
     const rows = visible()
-      .filter((row) => ["pending", "sent"].includes(row.state) && row.claim_owner === null)
+      .filter(
+        (row) =>
+          ["pending", "sent"].includes(row.state) &&
+          (row.claim_owner === null ||
+            (row.claim_expires_at !== null && new Date(row.claim_expires_at).getTime() <= Date.now())),
+      )
       .sort((a, b) => a.seq - b.seq)
       .slice(0, limit)
       .map((row) => sourceSyncOutboxCols(row));
     return { rows, rowCount: rows.length };
   }
   if (sql === "SELECT DISTINCT org_id FROM source_sync_outbox WHERE state IN ('pending','sent')") {
-    return { rows: [...new Set(visible().map((row) => ({ org_id: row.org_id })))], rowCount: visible().length };
+    const rows = [...new Set(visible().map((row) => row.org_id))].map((id) => ({ org_id: id }));
+    return { rows, rowCount: rows.length };
   }
   if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET claim_owner = $2")) {
     const row = visible().find((candidate) => candidate.id === params[0]);
-    if (row !== undefined) row.claim_owner = params[1] as string;
-    return { rows: [], rowCount: row === undefined ? 0 : 1 };
+    const claimable =
+      row !== undefined &&
+      ["pending", "sent"].includes(row.state) &&
+      (row.claim_owner === null ||
+        (row.claim_expires_at !== null && new Date(row.claim_expires_at).getTime() <= Date.now()));
+    if (!claimable || row === undefined) return { rows: [], rowCount: 0 };
+    row.claim_owner = params[1] as string;
+    row.claim_expires_at = new Date(Date.now() + Number(params[2])).toISOString();
+    // This is the real store's RETURNING projection. Returning no row while
+    // rowCount=1 makes `SourceSyncOutboxStore.claim()` report undefined.
+    return { rows: [sourceSyncOutboxCols(row)], rowCount: 1 };
   }
   if (sql.startsWith("UPDATE source_sync_outbox SET state = 'sent'")) {
-    const row = visible().find((candidate) => candidate.id === params[0] && candidate.claim_owner === params[1]);
+    const row = visible().find(
+      (candidate) => candidate.id === params[0] && candidate.state === "pending" && candidate.claim_owner === params[1],
+    );
     if (row !== undefined) row.state = "sent";
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
   if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("state = 'verified'")) {
-    const row = visible().find((candidate) => candidate.id === params[0] && candidate.claim_owner === params[1]);
+    const row = visible().find(
+      (candidate) =>
+        candidate.id === params[0] &&
+        ["pending", "sent"].includes(candidate.state) &&
+        candidate.claim_owner === params[1],
+    );
     if (row !== undefined) {
       row.state = "verified";
       row.claim_owner = null;
+      row.claim_expires_at = null;
     }
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
-  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("state = 'externally_closed_unverified'")) {
-    const row = visible().find((candidate) => candidate.id === params[0]);
-    if (row !== undefined && ["pending", "sent"].includes(row.state)) row.state = "externally_closed_unverified";
+  if (sql.startsWith("UPDATE source_sync_outbox SET claim_owner = NULL")) {
+    const row = visible().find(
+      (candidate) =>
+        candidate.id === params[0] &&
+        ["pending", "sent"].includes(candidate.state) &&
+        candidate.claim_owner === params[1],
+    );
+    if (row !== undefined) {
+      row.claim_owner = null;
+      row.claim_expires_at = null;
+    }
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("WHERE issue_loop_id = $1")) {
+    const rows = visible().filter(
+      (candidate) =>
+        candidate.issue_loop_id === params[0] &&
+        candidate.operation === "close" &&
+        ["pending", "sent"].includes(candidate.state),
+    );
+    for (const row of rows) {
+      row.state = "externally_closed_unverified";
+      row.claim_owner = null;
+      row.claim_expires_at = null;
+    }
+    return { rows: [], rowCount: rows.length };
   }
   return undefined;
 }

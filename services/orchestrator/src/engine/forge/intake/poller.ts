@@ -68,6 +68,8 @@ export interface IntakePollerDeps {
   now?: () => number;
   // Stable identity for this poller instance's webhook claims.
   workerId?: string;
+  /** Companion bh-7 observation recorded by the shared webhook-event sweeper. */
+  recordIssueObservation?: WebhookProcessorDeps["recordIssueObservation"];
 }
 
 // The connector kinds the poller can serve. `isPollableSource` probes this WITHOUT
@@ -284,6 +286,9 @@ export class IntakePoller {
       answererFactory: this.deps.answererFactory,
       autoRoute: this.deps.autoRoute,
       ...(this.deps.workerId === undefined ? {} : { workerId: this.deps.workerId }),
+      ...(this.deps.recordIssueObservation === undefined
+        ? {}
+        : { recordIssueObservation: this.deps.recordIssueObservation }),
     };
   }
 

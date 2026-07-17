@@ -17,6 +17,7 @@ import {
   buildForgeTriageAnswererFactory,
 } from "../providerFactory.js";
 import { AuditSchedulerLoop, createAnswererPassRunner } from "../audits/index.js";
+import { ingestGithubWebhookObservation } from "../githubIssueSourceAdapter.js";
 import { IntakePoller } from "./poller.js";
 import { intakeAutoRouteDeps } from "./systemActor.js";
 
@@ -87,6 +88,12 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
     ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
     answererFactory: triageFactory,
     autoRoute,
+    // Webhook retries are swept by this poller. Reuse the issue observation
+    // recorder that the receiver's shared webhook processor uses, so a failed
+    // first attempt never forks or loses the bh-7 finding path.
+    recordIssueObservation: async (source, event) => {
+      await ingestGithubWebhookObservation(deps.pool, source, event);
+    },
   });
   poller.start();
 
