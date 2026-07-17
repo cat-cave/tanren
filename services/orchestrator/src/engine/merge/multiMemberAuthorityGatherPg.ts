@@ -11,6 +11,7 @@ import { appendMergeSignalClassification } from "./authoritySignalClassification
 import { evaluateMultiMemberAuthority } from "./multiMemberAuthorityEvaluator.js";
 import { buildPgExactBatchAuthority } from "./multiMemberAuthorityPgAuthority.js";
 import { buildMultiMemberCodeHost, type MultiMemberAuthorityHostDeps } from "./multiMemberAuthorityPgHost.js";
+import { landAuthorizedGroupPg } from "./multiMemberLandGroupPg.js";
 import {
   buildMultiMemberEnvelope,
   gatherMultiMemberAuthorityState,
@@ -68,5 +69,14 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
       );
     }
     return result;
+  }
+
+  async landAuthorizedGroup(input: {
+    projectId: string;
+    entries: ReadonlyArray<MergeQueueEntry>;
+    binding: BatchAuthorityBinding;
+    evaluation: Extract<MultiMemberAuthorityEvaluation, { kind: "authorized_subset" }>;
+  }) {
+    return landAuthorizedGroupPg(this.deps, input);
   }
 }

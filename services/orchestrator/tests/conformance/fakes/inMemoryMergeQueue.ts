@@ -14,10 +14,15 @@ import type {
   MergeQueueSnapshot,
   MergeRunner,
 } from "../../../src/engine/contracts/mergeCoordinator.js";
+import type { BatchAuthorityBinding } from "../../../src/engine/contracts/batchMergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
 import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
 import { MERGE_CLAIM_LEASE_MS } from "../../../src/engine/merge/mergeClaimLease.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
+import type {
+  AuthorizedSubsetEvaluation,
+  LandGroupLandOutcome,
+} from "../../../src/engine/merge/multiMemberAuthorityTypes.js";
 
 interface QueueRow {
   queueId: string;
@@ -278,6 +283,28 @@ export class ScriptedMergeRunner implements MergeRunner {
   async driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome> {
     this.drives.push({ runId: input.runId });
     return this.scripted.get(input.runId) ?? { kind: "merged", mergeSha: `sha_${input.runId}` };
+  }
+}
+
+/**
+ * In-memory MQ-5 land seam. The coordinator conformance fixture records the
+ * exact batch handed to the one-CAS group path and never simulates per-run land.
+ */
+export class RecordingLandGroupReconciler {
+  readonly lands: { specIds: string[]; groupId: string; nodeId: string }[] = [];
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async land(input: {
+    readonly entries: ReadonlyArray<MergeQueueEntry>;
+    readonly binding: BatchAuthorityBinding;
+    readonly evaluation: AuthorizedSubsetEvaluation;
+  }): Promise<LandGroupLandOutcome> {
+    this.lands.push({
+      specIds: input.entries.map((entry) => entry.specId),
+      groupId: input.evaluation.groupId,
+      nodeId: input.binding.nodeId,
+    });
+    return { kind: "landed", mainSha: input.evaluation.authorization.envelope.headSha };
   }
 }
 

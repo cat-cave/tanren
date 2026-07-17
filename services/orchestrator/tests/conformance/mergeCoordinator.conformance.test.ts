@@ -5,10 +5,12 @@
 // + idempotency — with no DB or VCS.
 
 import { BatchMergeCoordinator } from "../../src/engine/merge/batchCoordinator.js";
+import { expect, it } from "vitest";
 import type { MergeDriveOutcome } from "../../src/engine/contracts/mergeCoordinator.js";
 import type { SpecPriority } from "../../src/engine/state/spec.js";
 import {
   InMemoryMergeQueueModel,
+  RecordingLandGroupReconciler,
   RecordingMergeQueueEventEmitter,
   RecordingSpecEscalator,
   ScriptedMergeRunner,
@@ -73,4 +75,31 @@ describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
       escalations: escalator.escalations,
     };
   },
+});
+
+it("routes an authorized two-member batch through the synced atomic land-group fake", async () => {
+  const queue = new InMemoryMergeQueueModel();
+  const runner = new ScriptedMergeRunner();
+  const landGroups = new RecordingLandGroupReconciler();
+  const authority = allowExactBatchAuthority();
+  const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: { ...authority, landAuthorizedGroup: (input) => landGroups.land(input) },
+    queue,
+    runner,
+    checker: new InMemoryBatchChecker(),
+    events: new RecordingMergeQueueEventEmitter(),
+    batchEvents: new RecordingBatchMergeEventEmitter(),
+    escalator: new RecordingSpecEscalator(queue),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, new RecordingMergeQueueEventEmitter()),
+    resolveMaxBatchSize: async () => 2,
+  });
+  queue.seed({ runId: "run_group_a", specId: "spec_group_a", dependsOn: [], priority: "P1" });
+  queue.seed({ runId: "run_group_b", specId: "spec_group_b", dependsOn: [], priority: "P1" });
+
+  await expect(coordinator.coordinate("project_conf")).resolves.toMatchObject({ mergedSpecId: "spec_group_b" });
+  expect(landGroups.lands).toHaveLength(1);
+  expect(landGroups.lands[0]?.specIds).toEqual(["spec_group_a", "spec_group_b"]);
+  expect(runner.drives).toEqual([]);
+  expect(queue.statusOf("run_group_a")).toBe("merged");
+  expect(queue.statusOf("run_group_b")).toBe("merged");
 });
