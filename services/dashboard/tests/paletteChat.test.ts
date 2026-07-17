@@ -6,13 +6,18 @@
 // live approve/reject proposal cards instead (write-action approval,
 // covered by forgeProposalClient.test.ts). Unit-tested directly (no DOM).
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  askForge,
   csrfWriteHeaders,
   forgeToolFailureMessage,
   injectFormCsrfFields,
   routeForAction,
 } from "../src/client/paletteChat.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("routeForAction (Forge chat action cards)", () => {
   it("maps read_run to the run route (auto-navigate)", () => {
@@ -139,5 +144,20 @@ describe("forgeToolFailureMessage (palette error surface)", () => {
   it("surfaces HTTP status so operators never see a silent close", () => {
     expect(forgeToolFailureMessage(403)).toBe("Tool failed (403) — try again.");
     expect(forgeToolFailureMessage(0)).toBe("Tool failed — try again.");
+  });
+});
+
+describe("askForge (palette error surface)", () => {
+  it("returns a user-visible failure message for BFF errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ error: "forge_ask_failed" }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = await askForge("org_a", "what is blocked?", {});
+    expect("error" in result ? result.error : "").toContain("Forge ask failed (502): forge_ask_failed");
   });
 });

@@ -9,7 +9,7 @@ import { OrchestratorClient } from "../../api/orchestrator.js";
 import { getProjectDag, ProjectDagUnavailableError } from "../../api/projectDag.js";
 import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
-import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
+import { ProjectDagBody, ProjectDagUnavailableBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
 import { buildProjectViewModel, summarizeRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
@@ -114,7 +114,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       );
     } catch (error) {
       if (!(error instanceof ProjectDagUnavailableError)) throw error;
-      return renderShell(c, ctx, { title: `tanren · ${ctx.project.name} · dag` }, view);
+      return renderShell(
+        c,
+        ctx,
+        { title: `tanren · ${ctx.project.name} · dag` },
+        <ProjectDagUnavailableBody projectId={projectId} projectName={ctx.project.name} model={model} />,
+      );
     }
   });
 

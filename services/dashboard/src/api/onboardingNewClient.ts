@@ -21,6 +21,7 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/round`,
       input,
+      { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -34,6 +35,7 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/derive`,
       input,
+      { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }

@@ -244,6 +244,40 @@ describe("brownfield · DAG seed (step 4)", () => {
     expect(html).toContain("writer hangs on long writes");
     expect(html).toContain("1 from issues");
   });
+
+  it("renders seed-DAG failure as unavailable, not as an idle empty state", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url) && method === "GET")
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (url.endsWith("/seed-dag") && method === "POST")
+        return new Response(JSON.stringify({ error: "seed_dag_unavailable" }), { status: 503 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const res = await app.request("/onboarding/existing", {
+      method: "POST",
+      headers: FORM,
+      body: new URLSearchParams({
+        phase: "seed",
+        step: "4",
+        repoUrl: PROJECT.repoUrl,
+        projectId: PROJECT.projectId,
+        report: REPORT_JSON,
+      }),
+    });
+    const html = await res.text();
+    expect(html).toContain("seed_dag_unavailable");
+    expect(html).toContain("seed the dag ↗");
+    expect(html).not.toContain("Seeded <b>");
+  });
 });
 
 describe("brownfield · governance (step 5)", () => {

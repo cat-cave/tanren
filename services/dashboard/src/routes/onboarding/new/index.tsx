@@ -224,25 +224,10 @@ async function renderDerivedStep(
   );
 }
 
-async function loadDag(c: Context, deps: ShellDeps, orgId: string, projectId: string): Promise<ProjectDag> {
+async function loadDag(c: Context, deps: ShellDeps, orgId: string, projectId: string): Promise<ProjectDag | undefined> {
   try {
     return await getProjectDag(orchestratorClient(c, deps), orgId, projectId);
   } catch {
-    return {
-      nodes: [],
-      edges: [],
-      milestones: [],
-      attention: [],
-      counts: {
-        total: 0,
-        done: 0,
-        live: 0,
-        review: 0,
-        blocked: 0,
-        queued: 0,
-        criticalPath: 0,
-        behaviors: 0,
-      },
-    };
+    return undefined;
   }
 }

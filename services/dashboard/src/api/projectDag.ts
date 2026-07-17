@@ -18,6 +18,13 @@ import type { RunListItem, SpecTriageProvenance } from "./types.js";
 
 export type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag };
 
+export class ProjectDagUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectDagUnavailableError";
+  }
+}
+
 // HALTED-outcome policy set is imported from @tanren/db so the dashboard and the
 // orchestrator's `assertRecoverable` gate read the SAME source-of-truth. The prior
 // private `HALTED` copy here was missing `convergence_stalled` + `window_exhausted`,
@@ -190,31 +197,18 @@ function attentionSub(kind: DagStatus, node: DagNode): string {
 }
 
 /**
- * Fetch + assemble the project DAG. Composes the existing typed orchestrator
- * reads (specs, milestones, runs, behaviors). Degrades to an empty graph when
- * a source is unreachable — the view renders a "fresh DAG" empty state rather
- * than 500-ing.
- */
-export class ProjectDagUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ProjectDagUnavailableError";
-  }
-}
-
-/**
- * Fetch + assemble the project DAG. A failed run-list is loud (not an empty
- * graph that looks like a greenfield project with no runs).
+ * Fetch + assemble the project DAG. A failed spec or run read is loud (not an
+ * empty graph that looks like a greenfield project with no specs/runs).
  */
 export async function getProjectDag(client: OrchestratorClient, orgId: string, projectId: string): Promise<ProjectDag> {
   const [specs, milestones, runs, behaviors] = await Promise.all([
-    client.listSpecs(orgId, projectId),
+    client.listSpecsMaybe(orgId, projectId),
     client.listMilestones(orgId, projectId),
     client.listRunsMaybe(orgId, projectId),
     client.listAllBehaviors(orgId, projectId),
   ]);
-  if (runs === undefined) {
-    throw new ProjectDagUnavailableError("Project DAG unavailable: the run-list read failed.");
+  if (specs === undefined || runs === undefined) {
+    throw new ProjectDagUnavailableError("Project DAG unavailable: required spec or run reads failed.");
   }
 
   // Behaviour linkage is not yet exposed per-spec by the read API, so we leave

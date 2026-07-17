@@ -50,6 +50,10 @@ interface ForgeAskResponse {
   proposals: ForgeProposal[];
 }
 
+export interface ForgeAskFailure {
+  error: string;
+}
+
 const READ_TOOLS = new Set([
   "tanren.read_spec",
   "tanren.read_run",
@@ -150,6 +154,15 @@ const STATUS_LABEL: Record<string, string> = {
   failed: "⚠ failed",
 };
 
+function errorText(status: number, body: unknown, fallback: string): string {
+  if (typeof body === "object" && body !== null) {
+    const rec = body as Record<string, unknown>;
+    const message = rec["message"] ?? rec["error"];
+    if (typeof message === "string" && message !== "") return `${fallback} (${status}): ${message}`;
+  }
+  return status > 0 ? `${fallback} (${status}).` : `${fallback}.`;
+}
+
 export function appendProposals(chat: HTMLElement, orgId: string, proposals: ForgeProposal[]): void {
   const pending = proposals.filter((p) => p.status === "pending");
   if (pending.length === 0) return;
@@ -180,7 +193,8 @@ function buildProposalCard(orgId: string, proposal: ForgeProposal): HTMLElement 
     approve.disabled = true;
     reject.disabled = true;
     void decideProposal(orgId, proposal.id, decision).then((outcome) => {
-      status.textContent = STATUS_LABEL[outcome] ?? outcome;
+      status.textContent = outcome.message ?? STATUS_LABEL[outcome.status] ?? outcome.status;
+      if (outcome.status === "failed") node.classList.add("failed");
       node.classList.add("decided");
     });
   };
@@ -246,7 +260,11 @@ export function forgeToolFailureMessage(status: number): string {
 // POSTs the decision to the dashboard proxy and resolves to the resulting
 // status string for the card. 409 (already decided) and 403 (denied) are
 // surfaced honestly so the operator sees the terminal state, never a re-run.
-async function decideProposal(orgId: string, proposalId: string, decision: "approve" | "reject"): Promise<string> {
+async function decideProposal(
+  orgId: string,
+  proposalId: string,
+  decision: "approve" | "reject",
+): Promise<{ status: string; message?: string }> {
   try {
     const response = await fetch(`/forge/proposals/${decision}`, {
       method: "POST",
@@ -257,13 +275,15 @@ async function decideProposal(orgId: string, proposalId: string, decision: "appr
       proposal?: { status?: string };
       outcome?: string;
       currentStatus?: string;
+      error?: string;
+      message?: string;
     };
-    if (response.ok) return body.proposal?.status ?? (decision === "approve" ? "executed" : "rejected");
-    if (response.status === 409) return body.currentStatus ?? "already decided";
-    if (response.status === 403) return "denied";
-    return "failed";
+    if (response.ok) return { status: body.proposal?.status ?? (decision === "approve" ? "executed" : "rejected") };
+    if (response.status === 409) return { status: body.currentStatus ?? "already decided" };
+    if (response.status === 403) return { status: "denied" };
+    return { status: "failed", message: errorText(response.status, body, "Proposal decision failed") };
   } catch {
-    return "failed";
+    return { status: "failed", message: "Proposal decision failed: network unavailable." };
   }
 }
 
@@ -310,8 +330,8 @@ export async function askForge(
   orgId: string,
   question: string,
   scope: { projectId?: string; threadId?: string },
-): Promise<ForgeAskResponse | undefined> {
-  if (orgId === "") return undefined;
+): Promise<ForgeAskResponse | ForgeAskFailure> {
+  if (orgId === "") return { error: "Forge needs an active org before it can answer." };
   const body: Record<string, unknown> = { orgId, question };
   if (scope["projectId"] !== undefined && scope["projectId"] !== "") body["projectId"] = scope["projectId"];
   if (scope["threadId"] !== undefined) body["threadId"] = scope["threadId"];
@@ -321,9 +341,11 @@ export async function askForge(
       headers: csrfWriteHeaders(),
       body: JSON.stringify(body),
     });
-    if (!response.ok) return undefined;
-    return (await response.json()) as ForgeAskResponse;
+    const json = (await response.json().catch(() => {})) as unknown;
+    if (!response.ok) return { error: errorText(response.status, json, "Forge ask failed") };
+    if (json === undefined) return { error: "Forge ask failed: empty response body." };
+    return json as ForgeAskResponse;
   } catch {
-    return undefined;
+    return { error: "Forge ask failed: network unavailable." };
   }
 }

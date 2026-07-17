@@ -15,14 +15,15 @@ import { CsrfField } from "../../shell/CsrfField.js";
 export interface DerivedDagStepProps {
   projectId: string;
   projectName: string;
-  dag: ProjectDag;
+  dag?: ProjectDag;
   /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
   csrfToken?: string;
 }
 
 export function DerivedDagStep(props: DerivedDagStepProps) {
   const { dag } = props;
-  const ready = dag.nodes.filter((n) => !n.onCriticalPath && n.status === "queued").length;
+  const ready = dag?.nodes.filter((n) => !n.onCriticalPath && n.status === "queued").length ?? 0;
+  const unavailable = dag === undefined;
   return (
     <>
       <DagStyles />
@@ -33,17 +34,22 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
             the engine <em>emerges</em>
           </div>
           <div class="sub">
-            {dag.counts.total} specs across {dag.milestones.length} milestones · each tied to a behavior from step 1.
-            click any node to inspect.
+            {unavailable
+              ? "the project was derived, but the live dag read is unavailable. reload or retry when the orchestrator is reachable."
+              : `${dag.counts.total} specs across ${dag.milestones.length} milestones · each tied to a behavior from step 1. click any node to inspect.`}
           </div>
         </div>
-        <span class="pill ok">
+        <span class={`pill ${unavailable ? "warn" : "ok"}`}>
           <span class="d"></span>derived from interview
         </span>
       </div>
 
       <div class="gf-dag-frame" data-derived-dag>
-        {dag.nodes.length === 0 ? (
+        {unavailable ? (
+          <div class="gf-dag-empty unavailable" data-derived-dag-unavailable>
+            spec DAG unavailable — the orchestrator read failed. This is not an empty project.
+          </div>
+        ) : dag.nodes.length === 0 ? (
           <div class="gf-dag-empty">no specs derived yet — finish the interview to seed the dag.</div>
         ) : (
           <DagCanvas dag={dag} projectId={props.projectId} />
@@ -56,11 +62,12 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
         <input type="hidden" name="phase" value="advance" />
         <div class="gf-foot">
           <span class="hint">
-            ↑ {dag.counts.behaviors} behaviors covered · {dag.counts.criticalPath} on the critical path · {ready} leaf
-            specs ready
+            {unavailable
+              ? "dag read unavailable · arrival is paused until the live graph loads"
+              : `↑ ${dag.counts.behaviors} behaviors covered · ${dag.counts.criticalPath} on the critical path · ${ready} leaf specs ready`}
           </span>
           <span class="spacer">
-            <button type="submit" class="btn primary">
+            <button type="submit" class="btn primary" disabled={unavailable}>
               next · sources &amp; arrival ↗
             </button>
           </span>
