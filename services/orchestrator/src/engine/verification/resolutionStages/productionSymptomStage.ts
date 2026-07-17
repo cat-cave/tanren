@@ -1,7 +1,12 @@
 import { runWithOrgScope } from "@tanren/db";
 import { createHash } from "node:crypto";
 import type pg from "pg";
-import type { ResolutionJob, ResolutionStage, ResolutionStageResult } from "../../contracts/resolutionStage.js";
+import type {
+  ProductionResolutionStageResult,
+  ResolutionJob,
+  ResolutionStage,
+  ResolutionStageResult,
+} from "../../contracts/resolutionStage.js";
 import { symptomContractHash, type SymptomContractV1 } from "../../contracts/symptomContract.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import { HttpSymptomProbe } from "../../probes/httpSymptomProbe.js";
@@ -176,7 +181,11 @@ export class ProductionSymptomStage implements ResolutionStage {
     });
   }
 
-  private async appendFinalEvent(events: EventStore, job: ResolutionJob, result: ResolutionStageResult): Promise<void> {
+  private async appendFinalEvent(
+    events: EventStore,
+    job: ResolutionJob,
+    result: ProductionResolutionStageResult,
+  ): Promise<void> {
     const payload = {
       projectId: job.projectId,
       issueLoopId: job.issueLoopId,
@@ -246,7 +255,7 @@ async function runtimeBinding(
 function resultForProbe(
   contract: SymptomContractRow,
   probe: Awaited<ReturnType<SymptomProbeAdapter["runVerification"]>>,
-): ResolutionStageResult {
+): ProductionResolutionStageResult {
   const shared = {
     proofGrade: contract.proofPolicy,
     verificationRunId: probe.verificationRunId,

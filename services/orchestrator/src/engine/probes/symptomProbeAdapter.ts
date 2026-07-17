@@ -49,24 +49,56 @@ export class SymptomProbeAdapter {
   public async runBaseline(input: SymptomBaselineInput): Promise<SymptomBaselineResult> {
     const contract = parseSymptomContract(input.contract);
     await this.emitBaselineStarted(input, contract.issueLoopId);
-    const result = await this.runVerification({
-      ...input,
+    const execution = await this.driver.execute({
+      orgId: input.orgId,
+      projectId: input.projectId,
       contract,
-      expectedObservation: contract.expectedFailingObservation,
+      verificationRunId: input.verificationRunId,
     });
+    const expectedHash = symptomObservationHash(contract.expectedFailingObservation);
+    const observedHash = symptomObservationHash(execution.observedObservation);
+    const timingMs = nonnegativeTiming(execution.timingMs);
+    const outcome =
+      execution.outcome === "inconclusive" ? "inconclusive" : expectedHash === observedHash ? "passed" : "failed";
     const baselineOutcome =
-      result.outcome === "inconclusive"
-        ? "inconclusive"
-        : result.outcome === "passed"
-          ? "reproduced"
-          : "not_reproduced";
+      outcome === "inconclusive" ? "inconclusive" : outcome === "passed" ? "reproduced" : "not_reproduced";
+    const evidence = await this.captureEvidence(input, execution.observedObservation, execution.evidence);
+    // This frozen BH-5 sequence must remain started → observed → assertion.
     await this.emitBaselineObserved(
       input,
       contract.issueLoopId,
       baselineOutcome,
-      result.evidence.map((item) => item.id),
+      evidence.map((item) => item.id),
     );
-    return { ...result, baselineOutcome };
+    const assertion = await this.evidence.recordAssertion({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      issueLoopId: contract.issueLoopId,
+      verificationRunId: input.verificationRunId,
+      expectedHash,
+      observedHash,
+      outcome,
+      timingMs,
+      sampleData: {
+        expectedObservation: contract.expectedFailingObservation,
+        observedObservation: execution.observedObservation,
+        evidenceArtifactIds: evidence.map((item) => item.id),
+      },
+    });
+    return {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      issueLoopId: contract.issueLoopId,
+      contractId: input.contractId,
+      verificationRunId: input.verificationRunId,
+      expectedHash,
+      observedHash,
+      outcome,
+      baselineOutcome,
+      timingMs,
+      evidence,
+      assertionId: assertion.id,
+    };
   }
 
   /**

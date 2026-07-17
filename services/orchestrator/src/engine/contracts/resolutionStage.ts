@@ -23,13 +23,27 @@ export type ResolutionStage = {
   run(job: ResolutionJob, ctx: unknown): Promise<ResolutionStageResult>;
 };
 
-export type ResolutionStageResult = {
+type ResolutionStageResultCommon = {
   proofGrade: "active_causal" | "active_plus_soak" | "observational" | "attested";
   verificationRunId: string;
   assertionIds: string[];
   evidenceRefs: string[];
-} & (
-  | { outcome: "passed"; classification: "product_resolved" }
-  | { outcome: "failed"; classification: "product_failure" }
-  | { outcome: "inconclusive"; classification: "infra_failure" | "stale_contract" | "inconclusive" }
-);
+};
+
+/** The frozen baseline-reproduction verdicts retain their established meaning. */
+export type BaselineResolutionStageResult = ResolutionStageResultCommon &
+  (
+    | { outcome: "passed"; classification: "product_failure" }
+    | { outcome: "failed"; classification: "stale_contract" }
+    | { outcome: "inconclusive"; classification: "infra_failure" | "inconclusive" }
+  );
+
+/** Production verification is narrower so its terminal event schemas stay exact. */
+export type ProductionResolutionStageResult = ResolutionStageResultCommon &
+  (
+    | { outcome: "passed"; classification: "product_resolved" }
+    | { outcome: "failed"; classification: "product_failure" }
+    | { outcome: "inconclusive"; classification: "infra_failure" | "inconclusive" }
+  );
+
+export type ResolutionStageResult = BaselineResolutionStageResult | ProductionResolutionStageResult;
