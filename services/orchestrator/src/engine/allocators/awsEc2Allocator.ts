@@ -140,7 +140,7 @@ export class AwsEc2Allocator implements Allocator {
 
     let instance: AwsEc2Instance;
     try {
-      instance = await this.waitForRunning(created.instanceId);
+      instance = await this.waitForRunning(created.instanceId, request.onProgress);
     } catch (error) {
       // Best-effort terminate so a stuck instance doesn't leak.
       await this.client.terminateInstance(created.instanceId).catch(() => {});
@@ -241,7 +241,7 @@ export class AwsEc2Allocator implements Allocator {
    * not recognize (`UnknownProvisioningStateError`, fail-closed ratchet). NO
    * wall-clock deadline.
    */
-  private async waitForRunning(instanceId: string): Promise<AwsEc2Instance> {
+  private async waitForRunning(instanceId: string, onProgress?: () => void): Promise<AwsEc2Instance> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     try {
       return await pollUntilReady(() => this.client.describeInstance(instanceId), {
@@ -249,6 +249,7 @@ export class AwsEc2Allocator implements Allocator {
         signature: (instance) => awsEc2InstanceSignature(instance),
         pollIntervalMs,
         sleep: this.sleep,
+        onProbe: () => onProgress?.(),
       });
     } catch (error) {
       throw wrapAwsEc2ProvisioningError(instanceId, error);

@@ -184,8 +184,9 @@ export interface PollUntilReadyOptions<O> {
   /** Override the sleep (tests pass a no-wait sleep so the loop runs instantly). */
   sleep?: (ms: number) => Promise<void>;
   /**
-   * Observe each probe (tests assert the probe sequence; prod can log). Receives
-   * the 1-based probe index and the observed structural signature.
+   * Observe every successful readiness probe (tests assert the sequence; production
+   * callers can report a sign-of-life). Receives the 1-based probe index and the
+   * observed structural signature, including terminal and ready observations.
    */
   onProbe?: (info: { probe: number; signature: string }) => void;
 }
@@ -252,8 +253,14 @@ export async function pollUntilReady<O>(probe: () => Promise<O>, opts: PollUntil
   const sleep = opts.sleep ?? defaultSleep;
   // The oldest→newest structural signatures observed — the convergence history.
   const signatures: string[] = [];
+  let probesObserved = 0;
   for (;;) {
     const observation = await probe();
+    const signature = opts.signature(observation);
+    probesObserved += 1;
+    // A returned provider observation is genuine allocation progress even when
+    // the state remains non-ready; the caller can use it as a lease sign-of-life.
+    opts.onProbe?.({ probe: probesObserved, signature });
     const classification = opts.classify(observation);
     if (classification.kind === "ready") {
       return classification.observation;
@@ -271,9 +278,7 @@ export async function pollUntilReady<O>(probe: () => Promise<O>, opts: PollUntil
       throw new UnknownProvisioningStateError(classification.state);
     }
     // classification.kind === "advancing" — record + check for non-convergence.
-    const signature = opts.signature(observation);
     signatures.push(signature);
-    opts.onProbe?.({ probe: signatures.length, signature });
     if (readinessFixedPointReached(signatures)) {
       throw new PersistentProvisioningOutageError({
         stuckSignature: signature,

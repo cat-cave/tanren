@@ -220,7 +220,7 @@ export class HetznerAllocator implements Allocator {
       });
       serverId = created.id;
 
-      const server = await this.waitForRunning(created.id);
+      const server = await this.waitForRunning(created.id, request.onProgress);
       serverId = server.id;
 
       const ip = server.publicIpv4;
@@ -332,7 +332,7 @@ export class HetznerAllocator implements Allocator {
    * allowlist does not recognize (`UnknownProvisioningStateError`, fail-closed
    * ratchet). NO wall-clock deadline.
    */
-  private async waitForRunning(serverId: number): Promise<HetznerServer> {
+  private async waitForRunning(serverId: number, onProgress?: () => void): Promise<HetznerServer> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     try {
       return await pollUntilReady(() => this.client.getServer(serverId), {
@@ -340,6 +340,7 @@ export class HetznerAllocator implements Allocator {
         signature: (server) => hetznerServerSignature(server),
         pollIntervalMs,
         sleep: this.sleep,
+        onProbe: () => onProgress?.(),
       });
     } catch (error) {
       throw wrapHetznerProvisioningError(serverId, error);

@@ -183,7 +183,7 @@ export class DigitalOceanAllocator implements Allocator {
 
     let droplet = created;
     try {
-      droplet = await this.waitForActive(created.id);
+      droplet = await this.waitForActive(created.id, request.onProgress);
     } catch (error) {
       // Best-effort destroy so a stuck droplet doesn't leak.
       await this.client.deleteDroplet(created.id).catch(() => {});
@@ -286,7 +286,7 @@ export class DigitalOceanAllocator implements Allocator {
    * or a brand-new DO status the allowlist does not recognize
    * (`UnknownProvisioningStateError`, fail-closed ratchet). NO wall-clock deadline.
    */
-  private async waitForActive(dropletId: number): Promise<DigitalOceanDroplet> {
+  private async waitForActive(dropletId: number, onProgress?: () => void): Promise<DigitalOceanDroplet> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     try {
       return await pollUntilReady(() => this.client.getDroplet(dropletId), {
@@ -294,6 +294,7 @@ export class DigitalOceanAllocator implements Allocator {
         signature: (droplet) => digitalOceanDropletSignature(droplet),
         pollIntervalMs,
         sleep: this.sleep,
+        onProbe: () => onProgress?.(),
       });
     } catch (error) {
       // Wrap each convergence-class surface into the per-allocator typed error so

@@ -158,7 +158,7 @@ export class KubernetesAllocator implements Allocator {
         sshKeySecretName: secretName,
         labels,
       });
-      pod = await this.waitForRunning(name);
+      pod = await this.waitForRunning(name, request.onProgress);
     } catch (error) {
       await this.cleanup(name, secretName);
       throw error;
@@ -279,7 +279,7 @@ export class KubernetesAllocator implements Allocator {
    * not recognize (`UnknownProvisioningStateError`, fail-closed ratchet). NO
    * wall-clock deadline.
    */
-  private async waitForRunning(name: string): Promise<KubernetesPod> {
+  private async waitForRunning(name: string, onProgress?: () => void): Promise<KubernetesPod> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     try {
       return await pollUntilReady(() => this.client.getPod(name), {
@@ -287,6 +287,7 @@ export class KubernetesAllocator implements Allocator {
         signature: (pod) => kubernetesPodSignature(pod),
         pollIntervalMs,
         sleep: this.sleep,
+        onProbe: () => onProgress?.(),
       });
     } catch (error) {
       throw wrapKubernetesProvisioningError(name, error);

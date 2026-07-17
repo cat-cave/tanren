@@ -50,6 +50,7 @@ const setRunStatusSchema = z.object({
   orgId: z.string().min(1),
   status: z.string().min(1),
   setStartedAt: z.boolean(),
+  fromStatuses: z.array(z.string().min(1)).min(1),
 });
 
 const setRunPrUrlSchema = z.object({

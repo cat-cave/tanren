@@ -159,8 +159,8 @@ export class GcpAllocator implements Allocator {
 
     let instance: GcpInstance;
     try {
-      await this.waitForOperation(operation);
-      instance = await this.waitForRunning(name);
+      await this.waitForOperation(operation, request.onProgress);
+      instance = await this.waitForRunning(name, request.onProgress);
     } catch (error) {
       // Best-effort delete so a stuck instance doesn't leak.
       await this.client.deleteInstance(name).catch(() => {});
@@ -252,7 +252,7 @@ export class GcpAllocator implements Allocator {
    * the `terminal_error` arm IMMEDIATELY. The first probe uses the operation
    * handle the caller already has; subsequent probes refetch.
    */
-  private async waitForOperation(operation: GcpOperation): Promise<void> {
+  private async waitForOperation(operation: GcpOperation, onProgress?: () => void): Promise<void> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     let isFirst = true;
     try {
@@ -269,6 +269,7 @@ export class GcpAllocator implements Allocator {
           signature: (op) => gcpOperationSignature(op),
           pollIntervalMs,
           sleep: this.sleep,
+          onProbe: () => onProgress?.(),
         },
       );
     } catch (error) {
@@ -284,7 +285,7 @@ export class GcpAllocator implements Allocator {
    * fire IMMEDIATELY; a brand-new GCP status surfaces as `unknown_state`
    * (fail-closed ratchet). NO wall-clock deadline.
    */
-  private async waitForRunning(instanceName: string): Promise<GcpInstance> {
+  private async waitForRunning(instanceName: string, onProgress?: () => void): Promise<GcpInstance> {
     const pollIntervalMs = this.options.pollIntervalMs ?? 3_000;
     try {
       return await pollUntilReady(() => this.client.getInstance(instanceName), {
@@ -292,6 +293,7 @@ export class GcpAllocator implements Allocator {
         signature: (instance) => gcpInstanceSignature(instance),
         pollIntervalMs,
         sleep: this.sleep,
+        onProbe: () => onProgress?.(),
       });
     } catch (error) {
       throw wrapGcpProvisioningError(`instance ${instanceName}`, error);

@@ -87,10 +87,14 @@ export async function markRunRunning(input: RunPlannerLoopInput, context: Planne
       orgId: context.orgId,
       status: "running",
       setStartedAt: true,
+      fromStatuses: ["queued", "running"],
     });
     return;
   }
-  await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
+  await input.pool.query(
+    "UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1 AND status = ANY($2::text[])",
+    [context.runId, ["queued", "running"]],
+  );
 }
 
 /**

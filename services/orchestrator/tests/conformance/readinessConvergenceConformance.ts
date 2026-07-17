@@ -112,6 +112,13 @@ export function describeReadinessConvergence(label: string, harness: ReadinessCo
       expect(expectedAdvancingProbes).toBeGreaterThan(0);
     });
 
+    it("emits allocation progress while readiness probes converge", async () => {
+      const { allocator, request } = harness.buildAdvancing();
+      let progressTicks = 0;
+      await allocator.allocate({ ...request, onProgress: () => (progressTicks += 1) });
+      expect(progressTicks).toBeGreaterThan(0);
+    });
+
     // SCENARIO 2: LOUD PersistentProvisioningOutageError on a STUCK identical
     // signature past the saturation gate. The cloud returned the SAME non-ready
     // observation every poll — the loop surfaces a wedged provisioning loud.

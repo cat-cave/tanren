@@ -8,13 +8,14 @@
 //
 // This module is the PROGRESS axis the heartbeat consults. It is a monotonic in-process
 // COUNTER the worker bumps on every genuine unit of forward motion: every `ssh.run` BOUNDARY
-// (a command issued AND a command resolved — see `instrumentSubstrateProgress`). A working
+// (a command issued AND a command resolved — see `instrumentSubstrateProgress`) and every
+// returned cloud-readiness observation during allocation. A working
 // job is either BETWEEN SSH commands (each boundary bumps) or INSIDE one long SSH command
 // whose ActivityWatchdog probe issues its OWN `ssh.run` every cadence (those probe boundaries
 // bump too) — so a genuinely-working job ALWAYS advances this counter, even during a
-// multi-minute silent codex/gate/clone call. Every stage of a run drives the runner over SSH
-// (clone, bootstrap, gate, the writer/checker codex execs, the merge), so SSH boundaries are a
-// complete forward-motion signal; there is no separate event-append axis to thread.
+// multi-minute silent codex/gate/clone call. The one pre-SSH phase is runner allocation; its
+// readiness observations tick through `AllocationRequest.onProgress`, so a cloud that is still
+// converging is never mistaken for a fixed-point job.
 //
 // A TRULY wedged job advances NOTHING: no SSH boundary fires (the call is stuck on a
 // non-resolving await, or it is a pure JS/DB deadlock outside any watchdog-governed call) and
@@ -36,7 +37,7 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../contract
 export class JobProgressSignal {
   private count = 0;
 
-  /** Record one unit of forward motion (an SSH boundary). */
+  /** Record one unit of forward motion (an SSH boundary or readiness observation). */
   tick(): void {
     this.count += 1;
   }
