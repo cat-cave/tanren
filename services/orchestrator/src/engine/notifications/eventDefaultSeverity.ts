@@ -377,7 +377,6 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "designSystem.candidate.composed": "info",
   "designSystem.artifact.validated": "info",
   "designRender.scenario.recorded": "info",
-  "designOracle.verdict": "info",
   "designSystem.release.published": "info",
   "designSystem.proof.reused": "info",
   "designSystem.regression.bisected": "warn",

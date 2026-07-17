@@ -10,8 +10,10 @@ import { z } from "zod";
 // proof-reuse/bisection) emit these already-frozen names + strict payloads.
 //
 // Names already present in the live EventRegistry — `gate.verdict`,
-// `merge.batch.*`, `deploy.*`, `demo.*` — are REUSED by the design pipeline, not
-// redeclared here; only the genuinely new design names are frozen.
+// `designOracle.verdict`, `merge.batch.*`, `deploy.*`, `demo.*` — are REUSED by
+// the design pipeline, not redeclared here. `designOracle.verdict` is
+// pre-existing; its §7 payload expansion is deferred to ds-4. Only the
+// genuinely new design names are frozen.
 //
 // Payload discipline: payloads carry stable IDs, content digests, counts, and
 // closed-vocab classifications — NO rendered bytes, screenshots, secrets, or
@@ -26,7 +28,6 @@ const Attempt = z.number().int().min(1);
 const Version = z.number().int().min(1);
 const Reason = z.string().min(1).max(200);
 const RenderVerdict = z.enum(["passed", "failed"]);
-const OracleVerdict = z.enum(["passed", "failed"]);
 const PinMode = z.enum(["release", "channel"]);
 
 // ---------------------------------------------------------------------------
@@ -125,7 +126,7 @@ export const DesignSystemArtifactValidatedPayload = z
   .strict();
 
 // ---------------------------------------------------------------------------
-// designRender.scenario.recorded / designOracle.verdict — A4 evidence (ds-4).
+// designRender.scenario.recorded — A4 evidence (ds-4).
 // ---------------------------------------------------------------------------
 
 export const DesignRenderScenarioRecordedPayload = z
@@ -140,17 +141,6 @@ export const DesignRenderScenarioRecordedPayload = z
     viewport: z.string().min(1).max(64),
     screenshotDigest: Sha256Digest,
     verdict: RenderVerdict,
-  })
-  .strict();
-
-export const DesignOracleVerdictPayload = z
-  .object({
-    validationRunId: Id,
-    releaseId: Id,
-    artifactDigest: Sha256Digest,
-    contractDigest: Sha256Digest,
-    verdict: OracleVerdict,
-    evidenceIds: z.array(Id).max(4096),
   })
   .strict();
 
@@ -212,7 +202,6 @@ export const designSystemVocabularyRegistry = {
   "designSystem.candidate.composed": DesignSystemCandidateComposedPayload,
   "designSystem.artifact.validated": DesignSystemArtifactValidatedPayload,
   "designRender.scenario.recorded": DesignRenderScenarioRecordedPayload,
-  "designOracle.verdict": DesignOracleVerdictPayload,
   "designSystem.release.published": DesignSystemReleasePublishedPayload,
   "designSystem.proof.reused": DesignSystemProofReusedPayload,
   "designSystem.regression.bisected": DesignSystemRegressionBisectedPayload,

@@ -140,7 +140,6 @@ INSERT INTO "event_types" ("name", "default_severity") VALUES
   ('designFragment.authoring.failed', 'warn'),
   ('designFragment.authoring.started', 'info'),
   ('designFragment.authoring.succeeded', 'info'),
-  ('designOracle.verdict', 'info'),
   ('designRender.scenario.recorded', 'info'),
   ('designSystem.artifact.validated', 'info'),
   ('designSystem.base.composed', 'info'),

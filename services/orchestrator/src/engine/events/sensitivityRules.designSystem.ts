@@ -68,15 +68,6 @@ export const designSystemSensitivityRules: SensitivityRule[] = [
     "screenshotDigest",
     "verdict",
   ]),
-  ...publicRules("designOracle.verdict", [
-    "validationRunId",
-    "releaseId",
-    "artifactDigest",
-    "contractDigest",
-    "verdict",
-    "evidenceIds",
-    "evidenceIds[]",
-  ]),
   ...publicRules("designSystem.release.published", [
     "releaseId",
     "designSystemId",
