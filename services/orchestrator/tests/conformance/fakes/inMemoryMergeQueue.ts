@@ -23,10 +23,11 @@ import type {
   AuthorizedSubsetEvaluation,
   LandGroupLandOutcome,
 } from "../../../src/engine/merge/multiMemberAuthorityTypes.js";
-import type {
-  IntegrationNodeMaterializationPersistence,
-  MaterializationFailureRecord,
-  MaterializedIntegrationNodeRecord,
+import {
+  digest,
+  type IntegrationNodeMaterializationPersistence,
+  type MaterializationFailureRecord,
+  type MaterializedIntegrationNodeRecord,
 } from "../../../src/engine/merge/integrationNodeMaterializer.js";
 
 export { createInMemoryIntegrationProofUnitStore } from "./inMemoryIntegrationProofUnits.js";
@@ -336,7 +337,7 @@ export function createInMemoryIntegrationNodeMaterializationStore(): Integration
         memberKey: input.memberKey,
         baseSha: input.baseSha,
         headSha: input.headSha,
-        treeHash: input.treeHash,
+        treeHash: digest(input.treeHash),
       });
       return nodeId;
     },
