@@ -6,11 +6,12 @@
 
 import { quoteSshShellArg } from "../ssh/command.js";
 import { codexManagedEnvPath } from "../credentials/codexMaterializer.js";
-import { CODEX_DEFAULT_MODEL, CODEX_REASONING_EFFORT } from "./codexModel.js";
+import { CODEX_REASONING_EFFORT, resolveCodexDirectModel } from "./codexModel.js";
 
 export function buildCodexExecCommand(input: {
   codexHome: string;
   workspace: string;
+  model?: string;
   managed?: boolean;
   nativeApiKeyEnvFile?: string;
 }): string {
@@ -24,7 +25,7 @@ export function buildCodexExecCommand(input: {
     // native-OpenAI) via CLI flags — those paths write no config.toml. The OpenRouter
     // paths (managed OR BYOK key) carry the model in the per-run config.toml instead,
     // so this is empty there (see codexModelFlags).
-    ...codexModelFlags(input.managed),
+    ...codexModelFlags(input.managed, input.model),
     // BYOK bundle / BYOK native-OpenAI: ignore any host-level codex config (no
     // config.toml is written). OpenRouter (managed OR BYOK key): we DELIBERATELY do
     // NOT pass --ignore-user-config so codex reads the per-run CODEX_HOME/config.toml
@@ -41,6 +42,7 @@ export function buildCodexAnswererExecCommand(input: {
   workspace: string;
   schemaPath: string;
   outputPath: string;
+  model?: string;
   managed?: boolean;
   nativeApiKeyEnvFile?: string;
 }): string {
@@ -52,7 +54,7 @@ export function buildCodexAnswererExecCommand(input: {
     "--json",
     // Same model/reasoning pin as the writer — CLI flags on the direct paths, the
     // config.toml on the OpenRouter paths (empty here for managed).
-    ...codexModelFlags(input.managed),
+    ...codexModelFlags(input.managed, input.model),
     ...codexUserConfigFlag(input.managed),
     "--ignore-rules",
     "--skip-git-repo-check",
@@ -97,13 +99,13 @@ function codexUserConfigFlag(managed?: boolean): string[] {
 // true`) carry BOTH in the per-run config.toml the materializer writes — codex reads
 // it because those runs DROP `--ignore-user-config` — so this returns nothing there
 // (a bare `-m gpt-5.6-luna` would be the wrong, non-namespaced id for OpenRouter).
-function codexModelFlags(managed?: boolean): string[] {
+function codexModelFlags(managed?: boolean, model?: string): string[] {
   if (managed === true) {
     return [];
   }
   return [
     "-m",
-    quoteSshShellArg(CODEX_DEFAULT_MODEL),
+    quoteSshShellArg(resolveCodexDirectModel(model)),
     "-c",
     quoteSshShellArg(`model_reasoning_effort="${CODEX_REASONING_EFFORT}"`),
   ];

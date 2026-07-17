@@ -8,7 +8,7 @@ import { validateCodexAuthBundle, validateCodexCredentialRef, validateCredential
 import { resolveRawProviderKey } from "./managedKey.js";
 import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 import { DEFAULT_MANAGED_ENDPOINT } from "../config/managedProvider.js";
-import { CODEX_OPENROUTER_MODEL, CODEX_REASONING_EFFORT } from "../providers/codexModel.js";
+import { CODEX_REASONING_EFFORT, resolveCodexOpenRouterModel } from "../providers/codexModel.js";
 
 export interface MaterializeCodexAuthInput {
   secrets: SecretStore;
@@ -35,6 +35,9 @@ export interface MaterializeCodexAuthInput {
   // `credential/openrouter/` api_key). A BYOK OpenRouter key with no override
   // falls back to DEFAULT_MANAGED_ENDPOINT (OpenRouter's own default base URL).
   endpointBaseUrl?: string;
+  // The routing-chain model. On OpenRouter paths this is written into the
+  // per-run config.toml; direct paths receive it through the exec command.
+  model?: string;
 }
 
 export interface MaterializedCodexAuth {
@@ -180,7 +183,7 @@ async function materializeManagedOpenRouterCodexConfig(
   }
   const apiKey = await resolveRawProviderKey(input.secrets, input.ref);
   const result = await input.ssh.run(input.target, {
-    command: buildManagedCodexMaterializationCommand(codexHome, endpointBaseUrl),
+    command: buildManagedCodexMaterializationCommand(codexHome, endpointBaseUrl, input.model),
     // The secret key is fed on stdin and the command writes it into the chmod-600
     // env file — it is never interpolated into the command string.
     stdin: `export OPENROUTER_API_KEY=${shellSingleQuote(apiKey)}\n`,
@@ -289,10 +292,14 @@ export function buildNativeOpenAiCodexEnvCommand(codexHome: string): string {
 // Builds the managed materialization command: writes config.toml (non-secret,
 // interpolated) and the key env file (secret, on stdin). The config.toml declares
 // the OpenRouter provider per the cookbook; the env file is chmod 600.
-export function buildManagedCodexMaterializationCommand(codexHome: string, endpointBaseUrl: string): string {
+export function buildManagedCodexMaterializationCommand(
+  codexHome: string,
+  endpointBaseUrl: string,
+  model?: string,
+): string {
   const configPath = `${codexHome}/config.toml`;
   const envPath = codexManagedEnvPath(codexHome);
-  const configToml = managedCodexConfigToml(endpointBaseUrl);
+  const configToml = managedCodexConfigToml(endpointBaseUrl, model);
   return [
     "umask 077",
     `mkdir -p ${quoteSshShellArg(codexHome)}`,
@@ -309,9 +316,9 @@ export function buildManagedCodexMaterializationCommand(codexHome: string, endpo
 // + `model_reasoning_effort = "high"` so codex does NOT fall back to its built-in
 // default model. Top-level keys precede the `[model_providers.openrouter]` table
 // header (required TOML ordering).
-export function managedCodexConfigToml(endpointBaseUrl: string): string {
+export function managedCodexConfigToml(endpointBaseUrl: string, model?: string): string {
   return [
-    `model = "${CODEX_OPENROUTER_MODEL}"`,
+    `model = "${resolveCodexOpenRouterModel(model)}"`,
     `model_reasoning_effort = "${CODEX_REASONING_EFFORT}"`,
     `model_provider = "openrouter"`,
     ``,

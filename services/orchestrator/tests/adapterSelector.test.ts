@@ -79,6 +79,21 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
     ).toBe("claude");
   });
 
+  it("threads a chain-selected Codex OpenRouter model into its per-run config", async () => {
+    const ssh = new ScriptedSsh([ok(""), ok("{}\n"), ok(""), ok(""), ok("")]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/openrouter/org/o1/default", value: "sk-or-test" });
+    const writer = buildWriterAdapter(
+      { secrets, ssh, target, runId: "run_selected_model", endpointBaseUrl: "https://openrouter.ai/api/v1" },
+      entry("codex", "openai/gpt-5-codex", "credential/openrouter/org/o1/default"),
+    );
+
+    await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", baseSha: "a".repeat(40) });
+
+    expect(ssh.commands[0]?.command.command).toContain('model = "openai/gpt-5-codex"');
+    expect(ssh.commands[0]?.command.command).not.toContain('model = "openai/gpt-5.6-luna"');
+  });
+
   it("treats opencode as Writer-only — it is not a selectable Answerer", () => {
     expect(SELECTABLE_WRITER_CLIS).toContain("opencode");
     expect(SELECTABLE_ANSWERER_CLIS).not.toContain("opencode");
@@ -193,5 +208,22 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
 class NoopSsh implements CommandSubstrate {
   async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  }
+}
+
+function ok(stdout: string): CommandResult {
+  return { exitCode: 0, stdout, stderr: "" };
+}
+
+class ScriptedSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
+
+  constructor(private readonly results: CommandResult[]) {}
+
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push({ target: sshTarget, command });
+    const result = this.results.shift();
+    if (result === undefined) throw new Error(`unexpected SSH command: ${command.command}`);
+    return result;
   }
 }

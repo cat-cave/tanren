@@ -34,6 +34,8 @@ export interface CodexWriterDependencies {
   target: RunnerHandle;
   credentialRef: string;
   runId: string;
+  // The routing-chain model. It overrides the direct and OpenRouter defaults.
+  model?: string;
   codexHomeBaseDir?: string;
   // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
   // the materializer writes codex's config.toml OpenRouter provider block
@@ -102,6 +104,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         baseDir: dependencies.codexHomeBaseDir,
         managed,
         endpointBaseUrl: dependencies.endpointBaseUrl,
+        model: dependencies.model,
       });
       // The diff/log baseline. In a production run this is the run's BASE sha
       // (the clone point), threaded via opts.baseSha and captured ONCE after the
@@ -117,6 +120,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         command: buildCodexExecCommand({
           codexHome: auth.CODEX_HOME,
           workspace: opts.workspace,
+          model: dependencies.model,
           managed: auth.managed,
           nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
@@ -200,6 +204,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         baseDir: dependencies.codexHomeBaseDir,
         managed,
         endpointBaseUrl: dependencies.endpointBaseUrl,
+        model: dependencies.model,
       });
       // Per-call uniqueness suffix: the schema/output file names derive from the
       // schema NAME, shared across answerers (Checker + Auditor answer the same
@@ -222,6 +227,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             workspace,
             schemaPath,
             outputPath,
+            model: dependencies.model,
             managed: auth.managed,
             nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
           }),
@@ -355,22 +361,25 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
 }
 
 // detectUsageLimit recognizes the Codex JSONL events emitted when the account
-// hits its usage limit:
+// hits a subscription-window limit:
 //   {"type":"error","message":"You've hit your usage limit. ... try again at ..."}
 //   {"type":"turn.failed","error":{"message":"You've hit your usage limit. ..."}}
-// Matched on the stable "usage limit" phrase rather than the event type so a
-// minor CLI wording change in the error envelope still surfaces it.
+// Matched on stable usage, rate-limit, and OpenRouter billing wording rather
+// than the event type so a minor CLI wording change still surfaces it.
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
-  const candidates: unknown[] = [event["message"]];
+  const candidates: unknown[] = [event["message"], event["error"], event["status"], event["statusCode"], event["code"]];
   const errorField = event["error"];
   if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
-    candidates.push((errorField as Record<string, unknown>)["message"]);
-  } else {
-    candidates.push(errorField);
+    const error = errorField as Record<string, unknown>;
+    candidates.push(error["message"], error["status"], error["statusCode"], error["code"]);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit/iu.test(candidate)) {
-      return { message: candidate };
+    if (
+      (typeof candidate === "number" && (candidate === 402 || candidate === 429)) ||
+      (typeof candidate === "string" &&
+        /usage limit|rate limit|insufficient credits|quota|\b(?:402|429)\b/iu.test(candidate))
+    ) {
+      return { message: String(candidate) };
     }
   }
   return undefined;

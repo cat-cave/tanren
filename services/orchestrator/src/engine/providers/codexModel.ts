@@ -22,3 +22,14 @@ export const CODEX_OPENROUTER_MODEL = "openai/gpt-5.6-luna";
 
 // The reasoning effort every codex run uses (config.toml key + `-c` override value).
 export const CODEX_REASONING_EFFORT = "high";
+
+// A routing-chain model overrides the pinned run default. The direct and
+// OpenRouter paths deliberately retain distinct defaults because their model
+// namespaces differ, but an explicitly selected model is passed through as-is.
+export function resolveCodexDirectModel(model?: string): string {
+  return model ?? CODEX_DEFAULT_MODEL;
+}
+
+export function resolveCodexOpenRouterModel(model?: string): string {
+  return model ?? CODEX_OPENROUTER_MODEL;
+}

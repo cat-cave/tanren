@@ -105,15 +105,18 @@ describe("Claude writer adapter", () => {
     expect(crashed.exitReason).toBe("crashed");
   });
 
-  it("returns window_exhausted (not crashed) when the account hits its usage limit", async () => {
-    const usageLimit = '{"type":"result","result":"You have hit your usage limit. Try again at 8 PM."}';
+  it.each([
+    ["usage-limit", '{"type":"result","result":"You have hit your usage limit. Try again at 8 PM."}'],
+    ["429", '{"type":"error","error":{"status":429,"message":"Too Many Requests"}}'],
+    ["OpenRouter 402 insufficient-credits", '{"type":"error","error":{"code":402,"message":"Insufficient credits"}}'],
+  ])("returns window_exhausted (not crashed) for a %s rejection", async (_kind, stdout) => {
     const result = await runWithClaudeResult({
-      exitCode: 0,
-      stdout: `${usageLimit}\n`,
+      exitCode: 1,
+      stdout: `${stdout}\n`,
       stderr: "",
     });
     expect(result.exitReason).toBe("window_exhausted");
-    expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
+    expect(result.telemetry?.usageLimit).toBeDefined();
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {
