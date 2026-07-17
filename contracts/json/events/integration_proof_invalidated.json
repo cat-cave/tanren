@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "policyHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "projectId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "proofUnitDigest": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "policy_changed",
+        "base_shifted"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "reason",
+    "projectId",
+    "proofUnitDigest"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.proof.invalidated"
+}

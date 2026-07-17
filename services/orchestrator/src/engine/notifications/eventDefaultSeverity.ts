@@ -353,6 +353,17 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "post_merge.behavior.failed": "warn",
   "deployment.promoted": "info",
   "deployment.rolled_back": "warn",
+
+  // Mission-complete WAVE-2 governance policy-revision vocabulary (gv-7). The
+  // immutable revision lifecycle (draft persisted, deterministically compiled,
+  // activated) is routine durable governance fact → `info`. A proof invalidation
+  // (a live gate/review proof dropped because policy changed under it or the
+  // stacked base shifted) is operator-actionable — a regate/re-review follows —
+  // so it is `warn` and clears the matrix floor to reach the operator.
+  "governance.policy.created": "info",
+  "governance.policy.compiled": "info",
+  "governance.policy.activated": "info",
+  "integration.proof.invalidated": "warn",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

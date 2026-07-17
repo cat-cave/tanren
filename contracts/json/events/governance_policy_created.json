@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "createdBy": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "parentRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "revisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "revisionNumber": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "revisionId",
+    "projectId",
+    "revisionNumber",
+    "schemaVersion",
+    "createdBy"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.governance.policy.created"
+}

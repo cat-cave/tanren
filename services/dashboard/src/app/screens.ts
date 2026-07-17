@@ -127,6 +127,13 @@ SCREEN_MOUNTS.push(mountOverviewScreen);
 import { mountBehaviorCoverageScreen } from "../routes/behaviorCoverage/index.js";
 SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
 
+// in-3 barrier stub — the project-scoped integration-events viewer surface
+// (`/projects/:projectId/integration-events`). Registered by the WAVE-2 barrier
+// pre-flight so in-3 fills in its read model + body without editing this shared
+// file. Directly callable at its project-scoped URL; no nav row is required.
+import { mountIntegrationEventsScreen } from "../routes/integrationEvents/index.js";
+SCREEN_MOUNTS.push(mountIntegrationEventsScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

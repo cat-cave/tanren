@@ -464,3 +464,4 @@ export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
+export { governancePolicyRevisions } from "./schemaGovernance.js";
