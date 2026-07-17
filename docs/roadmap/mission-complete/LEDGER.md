@@ -7,7 +7,7 @@ counts anywhere else (README, CLAUDE.md) are derived from here. When a node land
 update its row here in the **same PR** that merges it. Node IDs and specs are frozen
 by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _status_.
 
-**Last reconciled:** 2026-07-16 (post #965).
+**Last reconciled:** 2026-07-17 (post #977 — wave-2 landed, wave-3 barrier in CI).
 
 ## Status vocabulary
 
@@ -23,16 +23,16 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Bucket               | Total   | MVP     | ✅ done             | 🟡 in-flight | 🚧 spec-debt   |
 | -------------------- | ------- | ------- | ------------------- | ------------ | -------------- |
-| merge-queue          | 16      | 6       | 2 (mq-1,mq-2)       | 0            | 0              |
+| merge-queue          | 16      | 6       | 3 (mq-1,mq-2,mq-3)  | 0            | 0              |
 | runtime-verification | 26      | 15¹     | 1² (rv-4)           | 0            | 0              |
-| integrations         | 22      | 22      | 3 (in-1,in-2,in-16) | 0            | 0              |
-| back-half            | 35      | 14      | 0                   | 0            | 21 (bh-15..35) |
-| design-system        | 9       | 6       | 0                   | 0            | 0              |
-| governance           | 34      | 15      | 6 (gv-1,2,3,4,5,6)  | 0            | 19 (gv-16..34) |
-| **Total**            | **142** | **~78** | **12**              | **0**        | **40**         |
+| integrations         | 22      | 22      | 4 (in-1,2,3,16)     | 0            | 0              |
+| back-half            | 35      | 14      | 1 (bh-1)            | 0            | 21 (bh-15..35) |
+| design-system        | 9       | 6       | 1 (ds-0)            | 0            | 0              |
+| governance           | 34      | 15      | 7 (gv-1..7)         | 0            | 19 (gv-16..34) |
+| **Total**            | **142** | **~78** | **17**              | **0**        | **40**         |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **12/142 = 8.5%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. Next: in-7 producer + wave-2.
+² Strict completion **17/142 = 12%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. **Wave-2 (2026-07-17):** pre-flight #975 (gov 0047 + wave-2 4-event 0048) → **gv-7** (#977, deterministic policy compiler + append-only revision store), **in-3** (#978, typed integration event emitter + read surface), **mq-3** (#979, ddmin/QuickXPlain safe-subset solver); **bh-1** (#976, IssueLoop aggregate + immutable findings, 0049) and **ds-0** (#981, DesignContractV2 + design foundation, 0050) landed the back-half + design spines. Wave-3 barrier (#983: 0051–0055 + wave-3 event freeze) in CI → unblocks bh-2/bh-3/bh-4/mq-4. Each RLS proof asserts as the non-superuser `tanren_app` role + is wired into a `smoke-rls-*` recipe.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -59,7 +59,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | ----- | ----- | ------- | ------------------------------------------------------------------- | ---------------- |
 | mq-1  | MVP   | ✅ done | v96 regression lock + typed authority reasons (policy ≠ infra)      | SP·4             |
 | mq-2  | MVP   | ✅ done | MergeAuthority-V2 multi-member eval, 7 typed dispositions           | mq-1 · SP·1/3    |
-| mq-3  | MVP   | ⬜ todo | Generalized safe-subset solver (ddmin / QuickXPlain)                | mq-2 · SP·3      |
+| mq-3  | MVP   | ✅ done | Generalized safe-subset solver (ddmin / QuickXPlain) (#979)         | mq-2 · SP·3      |
 | mq-4  | MVP   | ⬜ todo | Member isolation + partition-scoped leases (no project-wide lock)   | mq-2 · SP·1      |
 | mq-5  | MVP   | ⬜ todo | Atomic land-group reconciliation (one CAS, all members)             | mq-2/3 · SP·3/4  |
 | mq-11 | MVP   | ⬜ todo | IntegrationNodeMaterializer behind jj WorkspaceVcsCore              | mq-5 · SP·3/4    |
@@ -111,7 +111,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | ----- | ------- | -------------------------------------------------------------------------------- | ------------------- |
 | in-1  | ✅ done | Integration lifecycle data model + RLS migration (#966)                          | SP·1                |
 | in-2  | ✅ done | Typed lifecycle contracts (IntegrationRequirementV1 …)                           | SP·1                |
-| in-3  | ⬜ todo | Typed integration event vocabulary                                               | in-1 · SP·8         |
+| in-3  | ✅ done | Typed integration event vocabulary + read surface (#978)                         | in-1 · SP·8         |
 | in-4  | ⬜ todo | IntegrationStateWriter (control-plane) + data-plane de-priv                      | in-1/3              |
 | in-5  | ⏸ defer | Requirement compiler from G/W/T + DesignContract                                 | in-2/1 · SP·1       |
 | in-6  | ⬜ todo | Project deriving→active lifecycle + DagWalker gating                             | in-5/1/9/10         |
@@ -136,7 +136,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Node      | Phase | Status       | Purpose                                                                                                                                                                                                                                                                                                                                                       | Deps                  |
 | --------- | ----- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| bh-1      | MVP   | ⬜ todo      | IssueLoop aggregate + immutable source findings                                                                                                                                                                                                                                                                                                               | SP·1/3                |
+| bh-1      | MVP   | ✅ done      | IssueLoop aggregate + immutable source findings (#976)                                                                                                                                                                                                                                                                                                               | SP·1/3                |
 | bh-2      | MVP   | ⬜ todo      | Provenance correction + triage-as-real-task                                                                                                                                                                                                                                                                                                                   | bh-1                  |
 | bh-3      | MVP   | ⬜ todo      | Webhook intake hardening (idempotent, claim-leased)                                                                                                                                                                                                                                                                                                           | bh-1 · SP·3           |
 | bh-4      | MVP   | ⬜ todo      | SymptomContractV1 immutable store + authoring                                                                                                                                                                                                                                                                                                                 | bh-1 · SP·1/2/3       |
@@ -156,7 +156,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Node | Phase | Status  | Purpose                                                                                        | Deps                 |
 | ---- | ----- | ------- | ---------------------------------------------------------------------------------------------- | -------------------- |
-| ds-0 | MVP   | ⬜ todo | Design contracts & schema foundation (DesignContractV2, adapter contracts, RLS, proof keys)    | SP·1..8              |
+| ds-0 | MVP   | ✅ done | Design contracts & schema foundation (DesignContractV2, RLS, proof keys) (#981)               | SP·1..8              |
 | ds-1 | MVP   | ⬜ todo | Executable token core (DTCG resolver, base/plain, DesignVfs, CAS, offline validator)           | ds-0 · SP·3/1        |
 | ds-2 | MVP   | ⬜ todo | Web adapter MVP (shadcn/Radix/Tailwind, catalog, exports, Writer injection)                    | ds-0/1 · SP·2        |
 | ds-3 | MVP   | ⬜ todo | F2D — author missing design fragments (selector, checker/auditor loop, atomic persist/retract) | ds-0/1/2 · SP·2/3/5  |
@@ -176,7 +176,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | gv-4      | MVP   | ✅ done      | Transitive stack retarget safety repair (full ancestor member vector)                                                                                                                                                                                                                                                                                                                     | SP·3/4              |
 | gv-5      | MVP   | ✅ done      | Truthful budget-held event (`readyHeldBack` no longer always zero)                                                                                                                                                                                                                                                                                                                        | SP·3/4              |
 | gv-6      | MVP   | ✅ done      | Notification ledger RLS + route toggle + Slack contract fix                                                                                                                                                                                                                                                                                                                               | SP·3/4              |
-| gv-7      | MVP   | ⬜ todo      | Immutable policy revisions + deterministic compiler (SP·1)                                                                                                                                                                                                                                                                                                                                | gv-3 · SP·1/3       |
+| gv-7      | MVP   | ✅ done      | Immutable policy revisions + deterministic compiler (#977)                                                                                                                                                                                                                                                                                                                                | gv-3 · SP·1/3       |
 | gv-8      | MVP   | ⬜ todo      | Governance tiers + four presets (incl. private/regulated)                                                                                                                                                                                                                                                                                                                                 | gv-7                |
 | gv-9      | MVP   | ⬜ todo      | Policy bindings + effective-policy snapshots (receipt)                                                                                                                                                                                                                                                                                                                                    | gv-7/8 · SP·3       |
 | gv-10     | MVP   | ⬜ todo      | Governance fragment kernel + F2 authoring (shares SP·2)                                                                                                                                                                                                                                                                                                                                   | gv-7 · SP·2/1       |
