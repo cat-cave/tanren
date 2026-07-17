@@ -954,7 +954,21 @@ smoke-rls-governance-tiers:
 smoke-rls-governance-bindings:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/governanceBindings.rls.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-issue-loop smoke-rls-spec-origins smoke-rls-integration-lifecycle smoke-rls-behavior-coverage smoke-rls-merge-queue-authority smoke-integration-vault-cas smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-rls-governance-policy smoke-rls-design-foundation smoke-rls-integration-events smoke-rls-webhook-intake smoke-rls-merge-partitions smoke-rls-governance-bindings smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority smoke-rls-symptom-contracts smoke-rls-symptom-evidence smoke-rls-issue-source smoke-rls-land-groups smoke-rls-governance-tiers
+# WAVE-6 barrier claims the four lane-owned RLS smoke recipe names. Each owning
+# lane replaces only its no-op body once its live conformance proof lands.
+smoke-rls-fixture-leases:
+  echo "wave-6 barrier stub — rv-7 lane replaces body"
+
+smoke-rls-effect-observations:
+  echo "wave-6 barrier stub — rv-8 lane replaces body"
+
+smoke-rls-integration-proof-units:
+  echo "wave-6 barrier stub — mq-6 lane replaces body"
+
+smoke-rls-repo-visibility:
+  echo "wave-6 barrier stub — gv-11 lane replaces body"
+
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-issue-loop smoke-rls-spec-origins smoke-rls-integration-lifecycle smoke-rls-behavior-coverage smoke-rls-merge-queue-authority smoke-integration-vault-cas smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-rls-governance-policy smoke-rls-design-foundation smoke-rls-integration-events smoke-rls-webhook-intake smoke-rls-merge-partitions smoke-rls-governance-bindings smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority smoke-rls-symptom-contracts smoke-rls-symptom-evidence smoke-rls-issue-source smoke-rls-land-groups smoke-rls-governance-tiers smoke-rls-fixture-leases smoke-rls-effect-observations smoke-rls-integration-proof-units smoke-rls-repo-visibility
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

@@ -496,3 +496,4 @@ export {
 export { manualDeployAttestations } from "./schemaDeploy.js";
 export { governancePolicyRevisions } from "./schemaGovernance.js";
 export * from "./schemaEffectivePolicySnapshots.js";
+export * from "./schemaWave6.js";

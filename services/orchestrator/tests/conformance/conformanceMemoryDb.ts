@@ -28,6 +28,7 @@ export interface ProjectRecord {
   config: unknown;
   config_revision: number;
   lifecycle: string;
+  repo_visibility: string | null;
   org_id: string | null;
 }
 
@@ -153,6 +154,94 @@ export interface CostRecord {
   org_id: string;
 }
 
+// Wave-6 barrier column stubs. SQL behavior deliberately stays in the four
+// lane-owned conformance drivers, so this backing store owns shapes only.
+export interface FixtureLeaseRecord {
+  org_id: string;
+  project_id: string;
+  lease_id: string;
+  kind: string;
+  resource_ref: string;
+  correlation_namespace: string;
+  state: string;
+  acquired_at: Date;
+  expires_at: Date | null;
+  cleanup_evidence_hash: string | null;
+}
+
+export interface BehaviorEffectObservationRecord {
+  org_id: string;
+  project_id: string;
+  observation_id: string;
+  trigger_id_hash: string | null;
+  observer: string;
+  provider: string;
+  provider_object_hash: string | null;
+  cursor: string | null;
+  occurrence_count: number;
+  latency_ms: number | null;
+  classification: string;
+  created_at: Date;
+}
+
+export interface EffectObserverWatermarkRecord {
+  org_id: string;
+  project_id: string;
+  observer: string;
+  watermark: string;
+  updated_at: Date;
+}
+
+export interface IntegrationProofUnitRecord {
+  org_id: string;
+  project_id: string;
+  proof_unit_id: string;
+  kind: string;
+  subject_id: string;
+  input_hash: string | null;
+  verdict: string;
+  artifact_hash: string | null;
+  source_node_id: string | null;
+  quarantine_epoch: number;
+  expires_at: Date | null;
+  created_at: Date;
+}
+
+export interface IntegrationProofEdgeRecord {
+  org_id: string;
+  project_id: string;
+  parent_unit_id: string;
+  child_unit_id: string;
+}
+
+export interface IntegrationEvaluationProofRecord {
+  org_id: string;
+  project_id: string;
+  evaluation_id: string;
+  proof_unit_id: string;
+}
+
+export interface RepositoryVisibilityObservationRecord {
+  org_id: string;
+  project_id: string;
+  observation_id: string;
+  observed_visibility: string;
+  forge_ref: string;
+  sha: string;
+  observed_at: Date;
+}
+
+export interface IntegrationNodeRecord {
+  node_id: string;
+  org_id: string;
+  project_id: string;
+  proof_root: string | null;
+  quarantine_epoch: number | null;
+  toolchain_hash: string | null;
+  design_contract_version: string | null;
+  behavior_manifest_hash: string | null;
+}
+
 export interface QueryResult {
   rows: unknown[];
   rowCount: number;
@@ -172,6 +261,14 @@ export class MemoryDb {
   runTasks: RunTaskRecord[] = [];
   events: EventRecord[] = [];
   costRecords: CostRecord[] = [];
+  fixtureLeases: FixtureLeaseRecord[] = [];
+  behaviorEffectObservations: BehaviorEffectObservationRecord[] = [];
+  effectObserverWatermarks: EffectObserverWatermarkRecord[] = [];
+  integrationProofUnits: IntegrationProofUnitRecord[] = [];
+  integrationProofEdges: IntegrationProofEdgeRecord[] = [];
+  integrationEvaluationProofs: IntegrationEvaluationProofRecord[] = [];
+  repositoryVisibilityObservations: RepositoryVisibilityObservationRecord[] = [];
+  integrationNodes: IntegrationNodeRecord[] = [];
 
   seedProject(p: SeedProject): void {
     this.projects.push({
@@ -184,6 +281,7 @@ export class MemoryDb {
       config: p.config,
       config_revision: 1,
       lifecycle: "active",
+      repo_visibility: null,
       org_id: p.orgId,
     });
   }

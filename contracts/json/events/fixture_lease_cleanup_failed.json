@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cleanupEvidenceHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "leaseId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "leaseId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.fixture.lease.cleanup_failed"
+}

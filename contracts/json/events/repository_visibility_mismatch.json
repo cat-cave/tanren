@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "expectedVisibility": {
+      "enum": [
+        "public",
+        "private"
+      ],
+      "type": "string"
+    },
+    "forgeRef": {
+      "type": "string"
+    },
+    "observationId": {
+      "type": "string"
+    },
+    "observedVisibility": {
+      "enum": [
+        "public",
+        "private"
+      ],
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "sha": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "observationId",
+    "expectedVisibility",
+    "observedVisibility",
+    "forgeRef",
+    "sha"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.repository.visibility.mismatch"
+}

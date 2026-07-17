@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "observationId": {
+      "type": "string"
+    },
+    "observer": {
+      "type": "string"
+    },
+    "occurrenceCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "providerObjectHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "triggerIdHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "observationId",
+    "triggerIdHash",
+    "providerObjectHash",
+    "observer",
+    "provider",
+    "occurrenceCount"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.effect.duplicate"
+}

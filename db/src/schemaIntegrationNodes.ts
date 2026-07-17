@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 
 // Wave 2's unified integration-node read model. It remains observe-only; moving
@@ -27,6 +27,11 @@ export const integrationNodes = pgTable(
     affectedFingerprint: text("affected_fingerprint").notNull().default(""),
     headSha: text("head_sha"),
     treeHash: text("tree_hash"),
+    proofRoot: text("proof_root"),
+    quarantineEpoch: integer("quarantine_epoch"),
+    toolchainHash: text("toolchain_hash"),
+    designContractVersion: text("design_contract_version"),
+    behaviorManifestHash: text("behavior_manifest_hash"),
     status: text("status").notNull().default("building"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

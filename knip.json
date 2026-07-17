@@ -32,6 +32,8 @@
     "services/orchestrator/src/engine/contracts/cas.ts",
     "services/orchestrator/src/engine/contracts/behaviorRevision.ts",
     "services/orchestrator/src/engine/contracts/authoringKernel.ts",
+    "services/orchestrator/src/engine/contracts/fixtureLeaseAdapter.ts",
+    "services/orchestrator/src/engine/contracts/sideEffectObserverAdapter.ts",
     "services/orchestrator/src/engine/contracts/mergeAuthority.ts",
     "services/orchestrator/src/engine/contracts/runtimeVerification.ts",
     "services/orchestrator/src/engine/contracts/runtimeVerificationPlan.ts",

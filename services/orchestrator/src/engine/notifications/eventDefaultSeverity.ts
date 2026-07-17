@@ -386,6 +386,22 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "design.catalog.built": "info",
   "design.export.produced": "info",
 
+  // Mission-complete WAVE-6 shared vocabulary (mq-6/rv-7/rv-8/gv-11).
+  "fixture.lease.acquired": "info",
+  "fixture.lease.released": "info",
+  "fixture.lease.expired": "warn",
+  "fixture.lease.cleanup_failed": "warn",
+  "behavior.effect.missing": "warn",
+  "behavior.effect.duplicate": "warn",
+  "observer.watermark.advanced": "info",
+  "observer.inconclusive_external": "warn",
+  "integration.proof_unit.recorded": "info",
+  "integration.proof_unit.reused": "info",
+  "integration.proof_root.composed": "info",
+  "repository.visibility.observed": "info",
+  "repository.visibility.mismatch": "warn",
+  "governance.visibility.enforced": "info",
+
   // Mission-complete WAVE-2 governance policy-revision vocabulary (gv-7). The
   // immutable revision lifecycle (draft persisted, deterministically compiled,
   // activated) is routine durable governance fact → `info`. A proof invalidation

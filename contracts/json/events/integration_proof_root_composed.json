@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "integrationNodeId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "proofRoot": {
+      "type": "string"
+    },
+    "proofUnitIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "projectId",
+    "integrationNodeId",
+    "proofRoot",
+    "proofUnitIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.proof_root.composed"
+}

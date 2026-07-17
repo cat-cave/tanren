@@ -6,7 +6,7 @@ export { governanceVocabularySensitivityRules } from "./sensitivityRules.governa
 export { designSystemSensitivityRules } from "./sensitivityRules.designSystem.js";
 export { wave3VocabularySensitivityRules } from "./sensitivityRules.wave3Vocabulary.js";
 export { wave4VocabularySensitivityRules } from "./sensitivityRules.wave4Vocabulary.js";
-export { wave5VocabularySensitivityRules } from "./sensitivityRules.wave5Vocabulary.js";
+export { wave5And6VocabularySensitivityRules } from "./sensitivityRules.wave5And6Vocabulary.js";
 
 function publicRules(eventName: string, paths: readonly string[]): SensitivityRule[] {
   return paths.map((path) => ({ eventName, path, tag: "public" }));
