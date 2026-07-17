@@ -28,6 +28,18 @@ export {
   type AppendSourceFindingInput,
   type LinkIssueLoopEdgeInput,
 } from "./issueLoops.js";
+export {
+  SymptomContractStore,
+  SymptomContractNotFoundError,
+  SYMPTOM_CONTRACT_STATES,
+  type SymptomContractRow,
+  type SymptomContractState,
+  type SymptomContractFragmentRow,
+  type CreateSymptomContractInput,
+  type MarkValidatedInput,
+  type MarkSupersededInput,
+  type BindSymptomContractFragmentInput,
+} from "./symptomContracts.js";
 // Integration lifecycle foundation: a connection owns authentication identity;
 // explicit grants own plane/environment/capability authority.
 export {
