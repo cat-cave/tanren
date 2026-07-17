@@ -28,11 +28,14 @@ export {
   type WebhookEvent,
   type WebhookEventStatus,
   type PersistWebhookEventInput,
+  type PersistWebhookEventResult,
+  type WebhookClaimInput,
 } from "../../repositories/webhookEvents.js";
 export {
   processWebhookEvent,
   sweepWebhookEvents,
   sweepStuckCandidates,
+  DEFAULT_WEBHOOK_CLAIM_LEASE_MS,
   type WebhookProcessorDeps,
 } from "./webhookProcessor.js";
 export { terminalizeInboxSource, deferInboxSourceRetry, type PermanentSourceFailure } from "./sourceTerminalization.js";

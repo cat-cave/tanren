@@ -159,11 +159,10 @@ export const candidates = pgTable(
 // receiver PERSISTS the verified delivery here and returns 202 FAST (inside
 // GitHub's 10s window); a background processor then does the allocation/triage/
 // routing OUT of band. This makes intake never-silently-lost: a processing
-// failure leaves the row `failed` (with the captured error + an attempt count),
-// and the stuck-candidate sweeper RE-DRIVES `received`/`failed` rows on its
-// interval — idempotently, since the downstream `intakeItem` is keyed on
-// (source, externalId). A row that exhausts its attempt budget is parked
-// `dead_lettered` (a loud, human-visible terminal — never an infinite re-drive).
+// failure leaves the row `failed` (with the captured error + an observability
+// attempt count), and the stuck-candidate sweeper re-drives claimable
+// `received`/`failed` rows on its interval. A processing claim has an expiry so
+// a crashed holder is reclaimable; liveness never depends on an attempt cap.
 export const webhookEvents = pgTable(
   "webhook_events",
   {

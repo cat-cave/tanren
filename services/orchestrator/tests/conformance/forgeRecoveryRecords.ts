@@ -118,6 +118,14 @@ export interface WebhookEventRec {
   status: string;
   attempts: number;
   last_error: string | null;
+  // bh-3 intake-hardening columns (provider + canonical hash + signature metadata).
+  provider: string | null;
+  canonical_payload_hash: string | null;
+  signature_algo: string | null;
+  signature_key_version: string | null;
+  delivery_signed_at: string | null;
+  claim_owner: string | null;
+  claim_expires_at: string | null;
   // Insertion-order proxy for the sweeper's `ORDER BY created_at ASC` read.
   seq: number;
 }
@@ -188,6 +196,13 @@ export function webhookEventCols(e: WebhookEventRec): Record<string, unknown> {
     status: e.status,
     attempts: e.attempts,
     last_error: e.last_error,
+    provider: e.provider,
+    claim_owner: e.claim_owner,
+    claim_expires_at: e.claim_expires_at,
+    canonical_payload_hash: e.canonical_payload_hash,
+    signature_algo: e.signature_algo,
+    signature_key_version: e.signature_key_version,
+    delivery_signed_at: e.delivery_signed_at,
   };
 }
 

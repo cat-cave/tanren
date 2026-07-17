@@ -117,17 +117,23 @@ function stubPool(): StubState {
       return { rows: [{ org_id: source.orgId }], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO webhook_events")) {
-      const [id, sourceId, orgId, eventType, deliveryId, payload] = params as string[];
+      const [id, sourceId, orgId, eventType, deliveryId, provider, payload, canonicalPayloadHash, signatureAlgo] =
+        params as string[];
       webhookEvents.set(id, {
         id,
         source_id: sourceId,
         org_id: orgId,
         event_type: eventType,
         delivery_id: deliveryId,
+        provider,
         payload: JSON.parse(payload),
         status: "received",
         attempts: 0,
         last_error: null,
+        claim_owner: null,
+        claim_expires_at: null,
+        canonical_payload_hash: canonicalPayloadHash,
+        signature_algo: signatureAlgo,
       });
       return { rows: [webhookEvents.get(id)!], rowCount: 1 };
     }
@@ -139,23 +145,41 @@ function stubPool(): StubState {
       const rows = [...webhookEvents.values()].filter((e) => e["status"] === "received" || e["status"] === "failed");
       return { rows, rowCount: rows.length };
     }
+    if (sql.startsWith("UPDATE webhook_events SET claim_owner")) {
+      const [id, workerId] = params as [string, string];
+      const e = webhookEvents.get(id);
+      if (e === undefined || !["received", "failed"].includes(e["status"] as string)) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (e["claim_owner"] !== null && e["claim_owner"] !== undefined) return { rows: [], rowCount: 0 };
+      e["claim_owner"] = workerId;
+      e["claim_expires_at"] = new Date(Date.now() + 60_000);
+      return { rows: [e], rowCount: 1 };
+    }
     if (sql.startsWith("UPDATE webhook_events SET status = 'processed'")) {
       const e = webhookEvents.get(String(params[0]));
-      if (e !== undefined) {
+      const workerId = params[1] as string | null;
+      if (e !== undefined && (workerId === null || e["claim_owner"] === workerId)) {
         e["status"] = "processed";
         e["last_error"] = null;
+        e["claim_owner"] = null;
+        e["claim_expires_at"] = null;
       }
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("UPDATE webhook_events SET attempts = attempts + 1")) {
       // Mirror the store: status is set by the failure's NATURE (the `poison` boolean),
       // NOT a count — transient stays `failed` (re-driven UNBOUNDED), poison dead-letters.
-      const [id, error, poison] = params as [string, string, boolean];
+      const [id, error, poison, workerId] = params as [string, string, boolean, string | null];
       const e = webhookEvents.get(id);
-      if (e === undefined) return { rows: [], rowCount: 0 };
+      if (e === undefined || (workerId !== null && e["claim_owner"] !== workerId)) {
+        return { rows: [], rowCount: 0 };
+      }
       e["attempts"] = (e["attempts"] as number) + 1;
       e["last_error"] = error;
       e["status"] = poison ? "dead_lettered" : "failed";
+      e["claim_owner"] = null;
+      e["claim_expires_at"] = null;
       return { rows: [{ status: e["status"] }], rowCount: 1 };
     }
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) return { rows: [], rowCount: 0 };
