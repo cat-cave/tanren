@@ -3,6 +3,7 @@ import { AuditEnvelope } from "./audit.js";
 
 export { w0EventRegistry } from "./eventVocabularyW0.js";
 export { wave1EventRegistry } from "./wave1Vocabulary.js";
+export { governanceVocabularyRegistry } from "./governanceVocabulary.js";
 export { ReviewApprovedPayload, ReviewChangesRequestedPayload } from "./reviewForgeReceipt.js";
 
 // External integration events: GitHub (branch/PR), the review lifecycle, and the
