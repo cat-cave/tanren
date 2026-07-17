@@ -21,18 +21,18 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## Rollup
 
-| Bucket               | Total   | MVP     | ✅ done        | 🟡 in-flight | 🚧 spec-debt   |
-| -------------------- | ------- | ------- | -------------- | ------------ | -------------- |
-| merge-queue          | 16      | 6       | 2 (mq-1,mq-2)  | 0            | 0              |
-| runtime-verification | 26      | 15¹     | 1² (rv-4)      | 0            | 0              |
-| integrations         | 22      | 22      | 2 (in-1,in-2)  | 0            | 0              |
-| back-half            | 35      | 14      | 0              | 0            | 21 (bh-15..35) |
-| design-system        | 9       | 6       | 0              | 0            | 0              |
-| governance           | 34      | 15      | 4 (gv-1,2,4,5) | 0            | 19 (gv-16..34) |
-| **Total**            | **142** | **~78** | **9**          | **0**        | **40**         |
+| Bucket               | Total   | MVP     | ✅ done             | 🟡 in-flight | 🚧 spec-debt   |
+| -------------------- | ------- | ------- | ------------------- | ------------ | -------------- |
+| merge-queue          | 16      | 6       | 2 (mq-1,mq-2)       | 0            | 0              |
+| runtime-verification | 26      | 15¹     | 1² (rv-4)           | 0            | 0              |
+| integrations         | 22      | 22      | 3 (in-1,in-2,in-16) | 0            | 0              |
+| back-half            | 35      | 14      | 0                   | 0            | 21 (bh-15..35) |
+| design-system        | 9       | 6       | 0                   | 0            | 0              |
+| governance           | 34      | 15      | 6 (gv-1,2,3,4,5,6)  | 0            | 19 (gv-16..34) |
+| **Total**            | **142** | **~78** | **12**              | **0**        | **40**         |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **9/142 = 6.3%**. in-1 (#966), gv-2 (#968), rv-4 (#969), mq-2 (this PR) merged 2026-07-16. The in-7 event substrate is the next frontier item; the first parallel fan-out wave follows.
+² Strict completion **12/142 = 8.5%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. Next: in-7 producer + wave-2.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -97,7 +97,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | rv-17 | MVP   | ⬜ todo        | Flake classification + quarantine governance                      | rv-10/16           |
 | rv-18 | MVP   | ⬜ todo        | Proof-backed demo engine (A2) — no more `/` probe                 | rv-10/19           |
 | rv-19 | MVP   | ⬜ todo        | Post-merge production re-proof + rollback hook                    | rv-5/11/15         |
-| rv-20 | MVP   | ⬜ todo        | `ci_test_results` compatibility projection                        | rv-10              |
+| rv-20 | MVP   | ⏸ deferred     | `ci_test_results` compatibility projection                        | rv-10              |
 | rv-21 | MVP   | 🧱 spine-built | Forge interview + DesignContract synthesis (SP·1)                 | rv-1/13            |
 | rv-22 | MVP   | ⬜ todo        | HTTP surface + read-compat guard                                  | rv-1/2/10/13/14    |
 | rv-23 | MVP   | ⬜ todo        | Dashboard surfaces (Behavior Proof Matrix + 6 more)               | rv-22 · SP·8       |
@@ -113,7 +113,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | in-2  | ✅ done | Typed lifecycle contracts (IntegrationRequirementV1 …)                           | SP·1                |
 | in-3  | ⬜ todo | Typed integration event vocabulary                                               | in-1 · SP·8         |
 | in-4  | ⬜ todo | IntegrationStateWriter (control-plane) + data-plane de-priv                      | in-1/3              |
-| in-5  | ⬜ todo | Requirement compiler from G/W/T + DesignContract                                 | in-2/1 · SP·1       |
+| in-5  | ⏸ defer | Requirement compiler from G/W/T + DesignContract                                 | in-2/1 · SP·1       |
 | in-6  | ⬜ todo | Project deriving→active lifecycle + DagWalker gating                             | in-5/1/9/10         |
 | in-7  | ⬜ todo | Integration fragment phase + F2 authoring (SP·2) — substrate in `in-7-evsub-w1a` | in-2 · SP·2         |
 | in-8  | ⬜ todo | `.tanren/integrations.yml` contract + JSON schema                                | in-7/2              |
@@ -124,7 +124,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | in-13 | ⬜ todo | Slack product binding — relay + direct (fix wrong-plane bug)                     | in-12/14/19         |
 | in-14 | ⬜ todo | BindingMaterializer → project_app_env + scoped Vault                             | in-13/1 · SP·3      |
 | in-15 | ⬜ todo | Immutable binding contract + appEnvHash proof + gate tests                       | in-14/9 · SP·3/5    |
-| in-16 | ⬜ todo | Transactional delivery outbox on authorized land                                 | in-1 · SP·4         |
+| in-16 | ✅ done | Transactional delivery outbox on authorized land                                 | in-1 · SP·4         |
 | in-17 | ⬜ todo | Durable resumable post-merge delivery DAG (bind→deploy) (SP·6)                   | in-16/14/19 · bh    |
 | in-18 | ⬜ todo | Non-clogging merge-queue park/dequeue disposition                                | in-15/9 · mq        |
 | in-19 | ⬜ todo | A3 live trigger/observe + effect probe + negative controls                       | in-17/13 · SP·5     |
@@ -172,10 +172,10 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | --------- | ----- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
 | gv-1      | MVP   | ✅ done      | auditPosture write-guard safety repair (close PATCH authz bypass)                                                                                                                                                                                                                                                                                                                         | SP·3/4              |
 | gv-2      | MVP   | ✅ done      | Strict simulated-review forge publication (real APPROVE/REQUEST_CHANGES) (#968)                                                                                                                                                                                                                                                                                                           | SP·3/4              |
-| gv-3      | MVP   | ⬜ todo      | Real policy/gate hashes (replace schema literal `1` + empty CI hash)                                                                                                                                                                                                                                                                                                                      | SP·3/4              |
+| gv-3      | MVP   | ✅ done      | Real policy/gate hashes (replace schema literal `1` + empty CI hash)                                                                                                                                                                                                                                                                                                                      | SP·3/4              |
 | gv-4      | MVP   | ✅ done      | Transitive stack retarget safety repair (full ancestor member vector)                                                                                                                                                                                                                                                                                                                     | SP·3/4              |
 | gv-5      | MVP   | ✅ done      | Truthful budget-held event (`readyHeldBack` no longer always zero)                                                                                                                                                                                                                                                                                                                        | SP·3/4              |
-| gv-6      | MVP   | ⬜ todo      | Notification ledger RLS + route toggle + Slack contract fix                                                                                                                                                                                                                                                                                                                               | SP·3/4              |
+| gv-6      | MVP   | ✅ done      | Notification ledger RLS + route toggle + Slack contract fix                                                                                                                                                                                                                                                                                                                               | SP·3/4              |
 | gv-7      | MVP   | ⬜ todo      | Immutable policy revisions + deterministic compiler (SP·1)                                                                                                                                                                                                                                                                                                                                | gv-3 · SP·1/3       |
 | gv-8      | MVP   | ⬜ todo      | Governance tiers + four presets (incl. private/regulated)                                                                                                                                                                                                                                                                                                                                 | gv-7                |
 | gv-9      | MVP   | ⬜ todo      | Policy bindings + effective-policy snapshots (receipt)                                                                                                                                                                                                                                                                                                                                    | gv-7/8 · SP·3       |

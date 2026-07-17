@@ -88,7 +88,7 @@ async function upsertNotificationTarget(
   notificationTarget: { kind: string; config: Record<string, unknown> },
 ): Promise<string> {
   const channelKind = ChannelKind.parse(notificationTarget.kind);
-  const destination = notificationTargetDestination(notificationTarget.config);
+  const destination = notificationTargetDestination(channelKind, notificationTarget.config);
   const label = `${notificationTarget.kind} (${request.name ?? request.projectId})`;
   const id = `notif_target_${randomUUID()}`;
   const result = await client.query(
@@ -109,8 +109,28 @@ async function upsertNotificationTarget(
   return z.object({ id: z.string() }).parse(row).id;
 }
 
-function notificationTargetDestination(config: Record<string, unknown>): string {
-  const ref = config["botTokenRef"] ?? config["webhookRef"] ?? config["channelId"] ?? config["destination"];
+function notificationTargetDestination(kind: string, config: Record<string, unknown>): string {
+  if (kind === "slack") {
+    // The runtime Slack channel is an INCOMING-WEBHOOK publisher: its target
+    // `destination` MUST be a webhook credential ref that resolves to an https
+    // webhook URL. A bot-token + channel-id artifact (the chat.postMessage
+    // model) is NOT deliverable by that channel — never persist the bot-token
+    // ref as a webhook destination (that mismatch is what caused an `xoxb-…`
+    // token to be POSTed as a webhook). Fail loud, mirroring the
+    // `provisionCapability` SlackDeliveryAdapterUnavailable guard.
+    const webhookRef = config["webhookRef"] ?? config["destination"];
+    if (typeof webhookRef === "string" && webhookRef.length > 0) {
+      return webhookRef;
+    }
+    throw new Error(
+      "slack notification target has no incoming-webhook credential ref (webhookRef/destination); " +
+        "the bot-token + channel-id model is not deliverable by the incoming-webhook channel",
+    );
+  }
+  // Non-Slack kinds carry a direct destination or credential ref. `botTokenRef`
+  // is intentionally NOT a candidate here — it is Slack-bot-only and must never
+  // become a channel destination.
+  const ref = config["destination"] ?? config["webhookRef"] ?? config["channelId"];
   if (typeof ref !== "string" || ref.length === 0) {
     throw new Error("notification target config carried no destination/channelId/credential ref");
   }

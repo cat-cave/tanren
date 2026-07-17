@@ -156,6 +156,118 @@ describe("NotificationRouteStore", () => {
     expect(joinQuery.sql).toContain("r.min_severity");
   });
 
+  it("toggles enabled via update, org-scoped through the target join", async () => {
+    const client = new NotificationMemoryClient();
+    await NotificationTargetStore.create(client, {
+      id: "t1",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    await NotificationRouteStore.create(client, {
+      id: "r1",
+      targetId: "t1",
+      eventName: "run.failed",
+      enabled: true,
+      minSeverity: "warn",
+    });
+
+    const updated = await NotificationRouteStore.update(client, { id: "r1", orgId: "org_1", enabled: false });
+    expect(updated?.enabled).toBe(false);
+    // Stored as integer 0.
+    expect(client.routes.get("r1")!.enabled).toBe(0);
+
+    // A cross-org update resolves to undefined (no foreign-row mutation).
+    const crossOrg = await NotificationRouteStore.update(client, { id: "r1", orgId: "org_other", enabled: true });
+    expect(crossOrg).toBeUndefined();
+    expect(client.routes.get("r1")!.enabled).toBe(0);
+  });
+
+  it("moves the minSeverity floor via update", async () => {
+    const client = new NotificationMemoryClient();
+    await NotificationTargetStore.create(client, {
+      id: "t1",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    await NotificationRouteStore.create(client, {
+      id: "r1",
+      targetId: "t1",
+      eventName: "run.failed",
+      enabled: true,
+      minSeverity: "info",
+    });
+    const updated = await NotificationRouteStore.update(client, { id: "r1", orgId: "org_1", minSeverity: "fail" });
+    expect(updated?.minSeverity).toBe("fail");
+    expect(updated?.enabled).toBe(true);
+  });
+
+  it("getForOrg returns a route only within its org", async () => {
+    const client = new NotificationMemoryClient();
+    await NotificationTargetStore.create(client, {
+      id: "t1",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    await NotificationRouteStore.create(client, {
+      id: "r1",
+      targetId: "t1",
+      eventName: "run.failed",
+      enabled: true,
+      minSeverity: "info",
+    });
+    expect((await NotificationRouteStore.getForOrg(client, { id: "r1", orgId: "org_1" }))?.id).toBe("r1");
+    expect(await NotificationRouteStore.getForOrg(client, { id: "r1", orgId: "org_other" })).toBeUndefined();
+    expect(await NotificationRouteStore.getForOrg(client, { id: "missing", orgId: "org_1" })).toBeUndefined();
+  });
+
+  it("deletes a route org-scoped, and refuses a cross-org delete", async () => {
+    const client = new NotificationMemoryClient();
+    await NotificationTargetStore.create(client, {
+      id: "t1",
+      orgId: "org_1",
+      scope: "org",
+      userId: null,
+      channelKind: "ntfy",
+      destination: "topic",
+      label: "lbl",
+      enabled: true,
+      weekendMute: false,
+    });
+    await NotificationRouteStore.create(client, {
+      id: "r1",
+      targetId: "t1",
+      eventName: "run.failed",
+      enabled: true,
+      minSeverity: "info",
+    });
+    // Cross-org delete removes nothing.
+    expect(await NotificationRouteStore.delete(client, { id: "r1", orgId: "org_other" })).toBe(false);
+    expect(client.routes.has("r1")).toBe(true);
+    // Same-org delete removes the row.
+    expect(await NotificationRouteStore.delete(client, { id: "r1", orgId: "org_1" })).toBe(true);
+    expect(client.routes.has("r1")).toBe(false);
+    // Deleting a now-missing row is a false, not a throw.
+    expect(await NotificationRouteStore.delete(client, { id: "r1", orgId: "org_1" })).toBe(false);
+  });
+
   it("does not return a route whose event name differs from the query", async () => {
     const client = new NotificationMemoryClient();
     await NotificationTargetStore.create(client, {

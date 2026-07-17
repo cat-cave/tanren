@@ -112,6 +112,48 @@ describe("SlackChannel", () => {
     ).rejects.toThrow(/missing Slack webhook credential ref/u);
   });
 
+  // NEGATIVE CONTROL (gv-6 provisioner ↔ channel contract): a destination that
+  // resolves to a Slack BOT TOKEN (xoxb-…) must be rejected — never POSTed as if
+  // it were an incoming-webhook URL. fetch must NOT be invoked.
+  it("rejects a resolved bot token (xoxb-…) and never POSTs it as a webhook", async () => {
+    let fetchCalls = 0;
+    const spyFetch: typeof fetch = async () => {
+      fetchCalls += 1;
+      return new Response("ok", { status: 200 });
+    };
+    const botTokenSecrets = new MemorySecrets({ "credential/slack/bot": "xoxb-1234567890-abcdef" });
+    const channel = new SlackChannel({ fetch: spyFetch, secrets: botTokenSecrets });
+    await expect(
+      channel.publish(target({ destination: "credential/slack/bot" }), {
+        title: "t",
+        body: "b",
+        severity: "fail",
+        eventName: "run.failed",
+      }),
+    ).rejects.toThrow(/bot\/app token, not an incoming-webhook URL/u);
+    expect(fetchCalls).toBe(0);
+  });
+
+  // A resolved non-URL (or non-https) value is likewise rejected before any POST.
+  it("rejects a resolved non-https destination and never POSTs it", async () => {
+    let fetchCalls = 0;
+    const spyFetch: typeof fetch = async () => {
+      fetchCalls += 1;
+      return new Response("ok", { status: 200 });
+    };
+    const badSecrets = new MemorySecrets({ "credential/slack/bad": "not-a-url" });
+    const channel = new SlackChannel({ fetch: spyFetch, secrets: badSecrets });
+    await expect(
+      channel.publish(target({ destination: "credential/slack/bad" }), {
+        title: "t",
+        body: "b",
+        severity: "fail",
+        eventName: "run.failed",
+      }),
+    ).rejects.toThrow(/not a valid incoming-webhook URL/u);
+    expect(fetchCalls).toBe(0);
+  });
+
   async function capture(payload: Parameters<SlackChannel["publish"]>[1]): Promise<{
     headers: Record<string, string>;
     body: {

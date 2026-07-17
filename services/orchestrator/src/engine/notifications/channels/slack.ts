@@ -1,3 +1,4 @@
+// cspell:ignore xoxb xoxp xoxa xoxr xapp xoxe
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
@@ -59,12 +60,41 @@ export class SlackChannel implements NotificationChannel {
 
   // The destination is ALWAYS a credential ref resolved through the secret
   // store (the webhook URL is never stored in the clear on the target row).
+  // The resolved value MUST be an incoming-webhook URL — a bot/app token
+  // (`xoxb-…`, the chat.postMessage credential model) is rejected loudly rather
+  // than POSTed as if it were a webhook (which would leak Slack's secret to a
+  // non-URL and never deliver).
   private async resolveWebhookUrl(destination: string): Promise<string> {
     const secret = await this.secrets.get(destination);
     if (secret === undefined) {
       throw new Error(`missing Slack webhook credential ref: ${destination}`);
     }
+    assertIncomingWebhookUrl(secret.value);
     return secret.value;
+  }
+}
+
+// Slack bot/user/app/refresh token prefixes. The runtime Slack channel is an
+// INCOMING-WEBHOOK publisher — it POSTs the message body to a webhook URL. A
+// resolved token is a different credential model; POSTing to it is a category
+// error, so it fails closed here (the negative control for the provisioner ↔
+// channel contract: a bot token is never POSTed as a webhook).
+const SLACK_TOKEN_PREFIXES = ["xoxb-", "xoxp-", "xoxa-", "xoxr-", "xapp-", "xoxe-"];
+
+function assertIncomingWebhookUrl(value: string): void {
+  if (SLACK_TOKEN_PREFIXES.some((prefix) => value.startsWith(prefix))) {
+    throw new Error(
+      "resolved Slack destination is a bot/app token, not an incoming-webhook URL — refusing to POST a token as a webhook",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("resolved Slack destination is not a valid incoming-webhook URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`resolved Slack destination must be an https incoming-webhook URL (got ${parsed.protocol})`);
   }
 }
 
