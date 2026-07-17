@@ -960,7 +960,7 @@ smoke-rls-fixture-leases:
   echo "wave-6 barrier stub — rv-7 lane replaces body"
 
 smoke-rls-effect-observations:
-  echo "wave-6 barrier stub — rv-8 lane replaces body"
+  TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/effectObserver.rls.integration.test.ts
 
 smoke-rls-integration-proof-units:
   echo "wave-6 barrier stub — mq-6 lane replaces body"
