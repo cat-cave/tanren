@@ -104,6 +104,11 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     await ownerPool.query("DELETE FROM tasks WHERE run_id = $1", [RUN_ID]);
     await ownerPool.query("DELETE FROM runs WHERE org_id = $1", [ORG_ID]);
     await ownerPool.query("DELETE FROM specs WHERE org_id = $1", [ORG_ID]);
+    // in-16: a landed run now also writes a `delivery_runs` outbox row FK'd (ON DELETE
+    // no action) to `authority_decisions` + `projects`. Delete it (and any bindings that
+    // FK it) BEFORE the authority_decisions / projects deletes below, else those FKs fail.
+    await ownerPool.query("DELETE FROM delivery_run_bindings WHERE org_id = $1", [ORG_ID]);
+    await ownerPool.query("DELETE FROM delivery_runs WHERE org_id = $1", [ORG_ID]);
     // The V2 land writes authority_decisions → effect_intents → land_receipts (all
     // project_id-FK'd, ON DELETE no action per convention); delete them in FK order
     // before the project so the project delete does not hit the authority FK.
