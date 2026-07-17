@@ -125,7 +125,7 @@ class OneJobClaimClient implements JobClaimClient {
   }
 }
 
-const codexCredentialRef = "credential/codex/dev";
+const codexCredentialRef = "credential/codex/org/org_lifecycle_test/dev";
 const ORG = "org_lifecycle_test";
 const githubCredentialRef = "credential/github/org/org_lifecycle_test/dev";
 

@@ -71,7 +71,7 @@ export const target: RunnerHandle = {
   identitySecretRef: "runner/test/identity",
 };
 
-export const codexCredentialRef = "credential/codex/dev";
+export const codexCredentialRef = "credential/codex/org/org_worker_seed/dev";
 export const githubCredentialRef = "credential/github/org/org_worker_seed/dev";
 
 function healthyWindow(): WindowObservation {

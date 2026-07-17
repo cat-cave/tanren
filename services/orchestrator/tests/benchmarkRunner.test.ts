@@ -38,7 +38,7 @@ const provisionWorkflow: BenchmarkProvisionWorkflowDeps = {
       defaultBranch: "main",
       runnerImage: "runner",
       allocator: "local-docker",
-      config: assertProjectCreateConfigAllowed(input.config ?? { version: 1 }, options?.configWriteProof),
+      config: assertProjectCreateConfigAllowed(input.config ?? { version: 1 }, options?.configWriteProof, ORG),
     };
   },
   async createSpec(_pool, input) {
@@ -95,7 +95,7 @@ function frozen(
   overrides: Partial<Pick<FrozenConfig, "governance" | "mergeIntegration">> = {},
 ): FrozenConfig {
   return FrozenConfig.parse({
-    routing: { write: { chain: [{ cli: "codex", model, authRef: "credential/codex/org/x" }] } },
+    routing: { write: { chain: [{ cli: "codex", model, authRef: `credential/codex/org/${ORG}/default` }] } },
     ciTiers: {
       tiers: { fast: [{ name: "lint", run: "pnpm lint" }], slow: [{ name: "test", run: "pnpm test" }] },
       when: { fast: ["per_iteration"], slow: ["pre_audit", "pre_merge"] },

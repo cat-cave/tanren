@@ -76,7 +76,7 @@ export const target: RunnerHandle = {
   identitySecretRef: "runner/test/identity",
 };
 
-export const codexCredentialRef = "credential/codex/dev";
+export const codexCredentialRef = "credential/codex/org/org_hard_tier_seed/dev";
 export const githubCredentialRef = "credential/github/org/org_hard_tier_seed/dev";
 export const identitySecretRef = "runner/test/identity";
 

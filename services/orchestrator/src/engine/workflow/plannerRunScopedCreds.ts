@@ -12,6 +12,7 @@
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { ScopedCredentialAccess, VaultTokenMinter } from "../contracts/vaultTokenMinter.js";
 import { buildScopedCredentialAccess } from "../contracts/vaultTokenMinterImpl.js";
+import { DEFAULT_MANAGED_CREDENTIAL_REF } from "../config/managedProvider.js";
 import {
   buildVaultTokenMinter,
   resolveVaultMountConfig,
@@ -38,6 +39,16 @@ export interface RunCredentialScoping {
   // booted with (`TANREN_MAX_RUN_HOURS`), so a per-boot override can never be lost
   // to a later global-env divergence.
   ttlSeconds: number;
+}
+
+/** A credential ref outside the run's org would widen its Vault child-token policy. */
+export class RunCredentialRefOwnershipError extends Error {
+  readonly retriable = false as const;
+
+  constructor(readonly orgId: string) {
+    super("run credential ref does not belong to the run organization");
+    this.name = "RunCredentialRefOwnershipError";
+  }
 }
 
 /**
@@ -71,19 +82,30 @@ export function buildRunCredentialScoping(env: SecretStoreEnv = process.env): Ru
  * at connect time (a different seam, off the run's credential path), not over the
  * runner with the run's token.
  *
- * Every ref here already embeds the run's org in its path
- * (`credential/<slug>/<scope>/<ownerId>/<name>`), so a run can only ever produce
- * paths for its OWN org's credentials — tenant isolation is structural.
+ * Every BYOK ref here is parsed as `credential/<slug>/org/<orgId>/<name>` before
+ * it reaches Vault, so the scoped policy can only name the run's OWN credentials:
+ * tenant isolation is structural and enforced at this final policy gate. The sole
+ * exception is the fixed managed-provider ref, which is generated internally only
+ * for a managed run and is not tenant-owned.
  */
 export function collectRunCredentialRefPaths(context: PlannerRunContext): string[] {
   const refs = new Set<string>();
+  const add = (supplied: string, allowManagedProvider = false): void => {
+    const ref = supplied.trim();
+    if (ref === "") {
+      return;
+    }
+    if (allowManagedProvider && context.endpointBaseUrl !== undefined && ref === DEFAULT_MANAGED_CREDENTIAL_REF) {
+      refs.add(ref);
+      return;
+    }
+    refs.add(assertRunOrgCredentialRef(ref, context.orgId));
+  };
   const routing = context.routing;
   if (routing !== undefined) {
     for (const role of Object.values(routing)) {
       for (const entry of role.chain) {
-        if (entry.authRef.trim() !== "") {
-          refs.add(entry.authRef.trim());
-        }
+        add(entry.authRef);
       }
     }
   }
@@ -91,23 +113,41 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
   // chains with; include it explicitly so a run whose routing was not threaded
   // still scopes the LLM auth path.
   const defaultLlmAuthRef = context.defaultLlm?.authRef;
-  if (defaultLlmAuthRef !== undefined && defaultLlmAuthRef.trim() !== "") {
-    refs.add(defaultLlmAuthRef.trim());
+  if (defaultLlmAuthRef !== undefined) {
+    add(defaultLlmAuthRef, true);
   }
   // The GitHub credential ref — the clone / PR / review / merge stages read it.
   // A blank ref (public-repo, no static credential, no App) contributes nothing.
-  if (context.githubCredentialRef.trim() !== "") {
-    refs.add(context.githubCredentialRef.trim());
-  }
+  add(context.githubCredentialRef);
   // App-installed org: the static github ref is the empty sentinel, but the run
   // MINTS its installation token by reading the App private-key credential — scope
   // THAT path in, else the scoped token gets 403 on the mint (the clone/push/PR/CI
   // stages all need it). Without the App, this contributes nothing.
   const installationRef = context.installation?.credentialRef;
-  if (installationRef !== undefined && installationRef.trim() !== "") {
-    refs.add(installationRef.trim());
+  if (installationRef !== undefined) {
+    add(installationRef);
   }
   return [...refs].sort();
+}
+
+function assertRunOrgCredentialRef(ref: string, orgId: string): string {
+  const segments = ref.split("/");
+  const [prefix, slug, scope, ownerId, name] = segments;
+  const safeSegment = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+  if (
+    segments.length !== 5 ||
+    prefix !== "credential" ||
+    slug === undefined ||
+    scope !== "org" ||
+    ownerId !== orgId ||
+    name === undefined ||
+    !safeSegment.test(slug) ||
+    !safeSegment.test(ownerId) ||
+    !safeSegment.test(name)
+  ) {
+    throw new RunCredentialRefOwnershipError(orgId);
+  }
+  return ref;
 }
 
 /**
