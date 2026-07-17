@@ -90,7 +90,7 @@ export function isCandidateTestPath(path: string): boolean {
   // Python — pytest + unittest conventions: `test_*.py` OR `*_test.py`, at any
   // depth. `tests/test_foo.py`, `test/test_foo.py`, `pkg/foo_test.py` all count.
   if (path.endsWith(".py")) {
-    const base = path.substring(path.lastIndexOf("/") + 1);
+    const base = path.slice(path.lastIndexOf("/") + 1);
     if (base.startsWith("test_") || base.endsWith("_test.py")) return true;
   }
   // Rust — integration tests under `tests/` (crate root or nested crate).
