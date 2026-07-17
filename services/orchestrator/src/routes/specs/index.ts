@@ -279,6 +279,9 @@ function toSpecContract(row: ProjectSpecRow) {
           sourceFindingIds: parseStringArray(row.source_finding_ids),
           originTriageTaskId: row.origin_triage_task_id ?? "",
           originRunId: row.origin_run_id ?? "",
+          ...(row.origin_issue_loop_id === null || row.origin_issue_loop_id === undefined
+            ? {}
+            : { originIssueLoopId: row.origin_issue_loop_id }),
         };
   return {
     specId: row.spec_id,

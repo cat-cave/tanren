@@ -131,6 +131,8 @@ export interface AnswererCostInput<TOutput> {
   model: string;
   runtimeSeconds: number;
   rawUsage: Record<string, unknown>;
+  /** Override the run scope for a pre-spec IssueLoop triage task. */
+  issueLoopId?: string;
 }
 
 export interface WriterCostInput {
@@ -186,6 +188,7 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
         specId: input.ctx.specId,
         projectId: input.ctx.projectId,
         orgId: input.ctx.orgId,
+        ...(input.issueLoopId === undefined ? {} : { issueLoopId: input.issueLoopId }),
         cli: input.adapter.cli,
         model: input.model,
         authRef: input.adapter.authRef,

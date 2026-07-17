@@ -285,7 +285,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       ref,
       deployed.deploymentId,
     );
-    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+    return { ...identity, deploymentId: deployed.deploymentId, url: deployed.url, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {

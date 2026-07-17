@@ -205,6 +205,7 @@ export async function runSubtaskIteration(ctx: SubtaskIterationContext): Promise
     costCtx,
     adapter: input.adapters.triage,
     runId: input.context.runId,
+    ...(input.context.issueLoopId === undefined ? {} : { issueLoopId: input.context.issueLoopId }),
     workspacePath: input.context.workspacePath,
     plannerTaskId,
     specTitle: input.context.specTitle,
@@ -215,7 +216,9 @@ export async function runSubtaskIteration(ctx: SubtaskIterationContext): Promise
     ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
     appendEvent,
   });
-  const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map((r) => routedToNewSpec(r, triage.triageTaskId));
+  const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map((r, ordinal) =>
+    routedToNewSpec(r, triage.triageTaskId, ordinal, input.context.issueLoopId),
+  );
 
   // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
   if (triage.routing.outcome === "passed") {
@@ -280,7 +283,9 @@ export async function runSubtaskIteration(ctx: SubtaskIterationContext): Promise
   }
   if (convergence.decision === "pass") {
     // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
-    const deferred: NewSpecRequest[] = triage.routing.tasksHere.map((r) => routedToNewSpec(r, triage.triageTaskId));
+    const deferred: NewSpecRequest[] = triage.routing.tasksHere.map((r, ordinal) =>
+      routedToNewSpec(r, triage.triageTaskId, ordinal, input.context.issueLoopId),
+    );
     await markPlannerPassed(planCtx);
     return {
       kind: "terminal",

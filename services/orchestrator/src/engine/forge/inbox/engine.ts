@@ -24,6 +24,7 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { SpecNotFoundError } from "../../workflow/projectSpec.js";
+import type { SpecTriageProvenance } from "../../workflow/projectSpec.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
 import {
   validateEmittedSpecs,
@@ -225,6 +226,8 @@ export interface AutoRouteDeps {
    * is strict (a first-pass failure escalates immediately).
    */
   reviseRoutableSpec?: ReviseSpec;
+  /** Preserve an issue-loop origin when an intake caller already has one. */
+  resolveTriageProvenance?: (candidate: Candidate) => SpecTriageProvenance | undefined;
 }
 
 export interface AutoRouteResult {
@@ -272,6 +275,7 @@ export async function autoRouteCandidate(
   // ONCE with no `dependsOn` (the spec still lands on the backlog; a real human can
   // re-add an edge later). Only a dependency hallucination is recovered this way —
   // any other failure propagates.
+  const triageProvenance = autoRouteDeps.resolveTriageProvenance?.(candidate);
   const accept = (dependsOn: string[]) =>
     acceptProposals(
       {
@@ -299,6 +303,7 @@ export async function autoRouteCandidate(
         placementKind: "slot_after",
         placementLabel: "auto-routed from intake",
         actor: autoRouteDeps.resolveActor(candidate.orgId),
+        ...(triageProvenance === undefined ? {} : { triageProvenance }),
       },
     );
 
@@ -368,6 +373,8 @@ export interface AcceptCandidateInput {
   placementKind: PlacementKind;
   placementLabel: string;
   actor: ActorContext;
+  /** Optional normalized origin supplied by an IssueLoop-aware caller. */
+  triageProvenance?: SpecTriageProvenance;
 }
 
 export class CandidateNotFoundError extends Error {
@@ -406,6 +413,7 @@ export async function acceptCandidate(
       placementKind: input.placementKind,
       placementLabel: input.placementLabel,
       actor: { ...input.actor, orgId: input.orgId },
+      ...(input.triageProvenance === undefined ? {} : { triageProvenance: input.triageProvenance }),
     },
   );
   const specId = accepted[0]?.spec.specId ?? null;

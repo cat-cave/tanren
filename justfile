@@ -926,7 +926,8 @@ smoke-rls-integration-events:
 smoke-rls-symptom-contracts:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/symptomContractStore.rls.integration.test.ts
 
-# release cleanup, and cross-org isolation.
+# BH-3: webhook intake hardening live RLS proof — idempotent redelivery no-op +
+# claim-lease + expired-claim reclaim + cross-org isolation.
 smoke-rls-webhook-intake:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/webhookIntakeHardening.rls.integration.test.ts
 

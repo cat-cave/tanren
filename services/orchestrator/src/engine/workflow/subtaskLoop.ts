@@ -119,6 +119,8 @@ export interface SubtaskLoopInput {
     projectId: string;
     // v68: runs.org_id (NOT NULL); stamped on every loop event + cost record.
     orgId: string;
+    /** IssueLoop lineage for triage tasks and issue-origin fix specs. */
+    issueLoopId?: string;
     workspacePath: string;
     baseSha?: string;
     // WS-D2 (native design subsystem): the rendered design block for the project's HEAD
@@ -191,6 +193,10 @@ export interface NewSpecRequest {
    * materializer still records the parent spec's own routing context.
    */
   originTriageTaskId?: string;
+  /** IssueLoop lineage inherited from the spec being triaged. */
+  originIssueLoopId?: string;
+  /** Stable ordinal within an IssueLoop attempt; assigned by the triage emitter. */
+  originOrdinal?: number;
 }
 
 export type SubtaskLoopOutcome =

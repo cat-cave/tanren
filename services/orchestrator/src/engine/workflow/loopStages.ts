@@ -58,14 +58,12 @@ interface SpecContext {
 
 export interface StageBase {
   pool: LoopQueryClient;
-  /**
-   * REQUIRED (audit finding H3 sweep): the demo-run / design-oracle / triage
-   * / convergence stages' terminal row + event pairs ride the atomic seam
-   * through this writer — no fallback.
-   */
+  /** Required atomic writer for stage terminal row + event pairs. */
   writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   runId: string;
+  /** The source IssueLoop for an issue-origin spec; only triage uses this scope. */
+  issueLoopId?: string;
   workspacePath: string;
   plannerTaskId: string;
   appendEvent: StageAppendEvent;
@@ -262,7 +260,8 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     args.pool,
     {
       taskId: triageTaskId,
-      runId: args.runId,
+      ...(args.issueLoopId === undefined ? { runId: args.runId } : { issueLoopId: args.issueLoopId }),
+      ...(args.issueLoopId === undefined ? {} : { orgId: args.costCtx.orgId }),
       kind: "triage",
       title: "triage findings",
       parentTaskId: args.plannerTaskId,
@@ -331,6 +330,7 @@ async function runTriageStageBody(args: TriageStageInput, triageTaskId: string):
     model: "tanren-triage",
     runtimeSeconds,
     rawUsage: { role: "triage" },
+    ...(args.issueLoopId === undefined ? {} : { issueLoopId: args.issueLoopId }),
   });
   // ATOMIC terminal-row + terminal-event pair (task #39).
   await loopStageTaskDone(args, triageTaskId, "triage");

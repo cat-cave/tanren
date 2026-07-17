@@ -29,7 +29,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { DemoSurface, DeployRef } from "../contracts/deployAdapter.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
-import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
+import { IntegrationConnectionsStore, PgReleaseInstancesRepository } from "../repositories/index.js";
 import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
@@ -273,6 +273,7 @@ export class DemoOnDeployWatcher {
     const adapterKind = adapterKindForProviderKind(verified.provider);
     const adapter = buildDeployAdapter(adapterKind, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
+      releaseInstances: new PgReleaseInstancesRepository(this.deps.pool),
       ...(this.deps.manualAttestations !== undefined && { manualAttestations: this.deps.manualAttestations }),
       // H3 #20/#21: manual_external adapter needs the tenant scope (orgId + projectId)
       // each attestation is recorded under — an unscoped adapter would silently

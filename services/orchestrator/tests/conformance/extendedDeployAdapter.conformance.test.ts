@@ -27,9 +27,10 @@ import {
   scriptedMobileDistribution,
   scriptedPackageRegistry,
   scriptedPulumiRunner,
-} from "./fakes/scriptedDeployDrivers.js";
-import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
+  scriptedDeployTransport,
+} from "./fakes/extendedDeployAdapterFakes.js";
 import { instantVerifyPollPolicy, scriptedUrlProbe } from "./fakes/scriptedUrlProbe.js";
+import { releaseInstancesStub } from "../helpers/releaseInstancesStub.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "never-return-this-token";
@@ -97,6 +98,7 @@ describe("Extended DeployAdapter lifecycle", () => {
       provisioner: { transport, secrets: secrets() },
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
+      releaseInstances: releaseInstancesStub(),
     });
     const metadata = { teamId: "team_1" };
     const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
@@ -169,6 +171,7 @@ describe("Extended DeployAdapter lifecycle", () => {
       provisioner: { transport, secrets: secrets() },
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
+      releaseInstances: releaseInstancesStub(),
     });
     const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
     const deploy = await stageGrant("deploy.vercel", { teamId: "team_1" }, "deploy", {
@@ -189,6 +192,7 @@ describe("Extended DeployAdapter lifecycle", () => {
       provisioner: { transport, secrets: secrets(), allowFlyStaticDeploy: true },
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
+      releaseInstances: releaseInstancesStub(),
     });
     const metadata = { orgSlug: "acme", image: "registry.fly.io/acme-fly:latest" };
     const ref: DeployRef = { provider: "deploy.flyio", appId: "fly_app_1" };

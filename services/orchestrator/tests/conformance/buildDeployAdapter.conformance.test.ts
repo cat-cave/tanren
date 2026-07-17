@@ -17,6 +17,7 @@ import {
 } from "../../src/engine/deploy/manualExternalDeployAdapter.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
+import { releaseInstancesStub } from "../helpers/releaseInstancesStub.js";
 import {
   scriptedPulumiRunner,
   scriptedPackageRegistry,
@@ -33,6 +34,7 @@ describe("buildDeployAdapter (registry/factory)", () => {
       provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
+      releaseInstances: releaseInstancesStub(),
     });
     expect(built.kind).toBe("direct_api");
   });

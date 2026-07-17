@@ -28,6 +28,8 @@ type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface CostRecordContext {
   runId: string;
+  /** Present for a triage cost before a fix spec has a run; mutually exclusive at the row. */
+  issueLoopId?: string;
   taskId: string;
   specId: string;
   projectId: string;
@@ -163,59 +165,55 @@ export class CostRecorder {
     // comparable, forecastable figure. NULL when the model is unpriced. NEVER
     // summed by the budget gate; NEVER written to cost_usd.
     const notionalCostUsd = computeNotionalUsd(source, tokens, this.priceSource);
-    // RLS R2 cohort-2 (cost_records write path): route the INSERT through the
-    // ambient org-scoped client when this recorder was handed the shared pool and
-    // a `runWithOrgScope` scope is open; fall back to the pool when none (inert,
-    // R1-equivalent). Handed a specific client, it is used verbatim. Columns,
-    // values, and the in-statement org_id derivation are unchanged.
-    await resolveWritableClient(this.pool).query(
-      // org_id is the mandatory tenant-isolation key (tanren tenancy hardening).
-      // It is derived in-statement from the parent run so every cost row carries
-      // its org directly rather than via a project_id → projects.org_id hop.
-      `INSERT INTO cost_records
+    // Route through the ambient org-scoped client when a pool is scoped.
+    const issueLoopId = context.issueLoopId;
+    const rawCostSource = JSON.stringify({
+      authRef: context.authRef,
+      runtimeSeconds: context.runtimeSeconds ?? null,
+      billingMode: source.billingMode,
+      costBasis: source.costBasis,
+      provider: source.provider,
+      rawUsage,
+    });
+    const commonParams = [
+      context.cli,
+      source.provider,
+      context.model,
+      tokens.inputTokens,
+      tokens.cachedInputTokens,
+      tokens.cacheCreationTokens,
+      tokens.outputTokens,
+      tokens.reasoningOutputTokens,
+      tokens.totalTokens,
+      costUsd,
+      notionalCostUsd,
+      source.billingMode,
+      source.costBasis,
+      rawCostSource,
+      context.userId ?? null,
+    ];
+    const insert =
+      issueLoopId === undefined
+        ? {
+            sql: `INSERT INTO cost_records
        (task_id, run_id, project_id, org_id, cli, provider, model,
         input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
         cost_usd, notional_cost_usd, billing_mode, cost_basis, cost_source_raw, user_id)
        VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)`,
-      [
-        context.taskId,
-        context.runId,
-        context.projectId,
-        context.cli,
-        source.provider,
-        context.model,
-        tokens.inputTokens,
-        tokens.cachedInputTokens,
-        tokens.cacheCreationTokens,
-        tokens.outputTokens,
-        tokens.reasoningOutputTokens,
-        tokens.totalTokens,
-        costUsd,
-        notionalCostUsd,
-        source.billingMode,
-        source.costBasis,
-        JSON.stringify({
-          authRef: context.authRef,
-          runtimeSeconds: context.runtimeSeconds ?? null,
-          billingMode: source.billingMode,
-          costBasis: source.costBasis,
-          provider: source.provider,
-          rawUsage,
-        }),
-        context.userId ?? null,
-      ],
-    );
+            params: [context.taskId, context.runId, context.projectId, ...commonParams],
+          }
+        : {
+            sql: `INSERT INTO cost_records
+       (task_id, run_id, issue_loop_id, project_id, org_id, cli, provider, model,
+        input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
+        cost_usd, notional_cost_usd, billing_mode, cost_basis, cost_source_raw, user_id)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19)`,
+            params: [context.taskId, issueLoopId, context.projectId, context.orgId, ...commonParams],
+          };
+    await resolveWritableClient(this.pool).query(insert.sql, insert.params);
     // ATOMICITY SEAM (audit RC-4 #1): the spend row above is ALREADY committed and is
     // the AUTHORITATIVE source of truth — the budget gate's `sumSpend` reads
-    // `cost_records.cost_usd` DIRECTLY (row-is-truth), never the event. The
-    // `cost.resolved` event is a derived timeline projection. So a post-row event
-    // append failure must NOT throw (that would surface a "record failed" to the
-    // caller for a spend row that DID commit, and a retry would double-charge);
-    // instead it is surfaced LOUDLY via a structured error log so the committed-row /
-    // missing-event divergence is operator-visible and never silent. A second event
-    // append cannot be the loud signal — the same store just failed — so the log IS
-    // the signal. The invariant: a committed spend row is never lost; a missing event
-    // is loud, never silent.
+    // The committed row is authoritative; the timeline event is best-effort.
     await this.appendCostEventNonFatal(context, {
       eventType: "cost.resolved",
       payload: {

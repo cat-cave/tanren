@@ -58,6 +58,7 @@ export interface DagSpecTriageProvenance {
   sourceFindingIds: string[];
   originTriageTaskId: string;
   originRunId: string;
+  originIssueLoopId?: string;
 }
 
 /** One spec node in the project's DAG, as the walker reasons over it. */

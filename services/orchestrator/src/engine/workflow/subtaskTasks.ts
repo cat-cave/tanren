@@ -29,10 +29,12 @@ export type ChildTaskKind = "write" | "check" | "audit" | "triage" | "convergenc
 
 export interface ChildTaskInsert {
   taskId: string;
-  runId: string;
+  runId?: string;
+  issueLoopId?: string;
+  orgId?: string;
   kind: ChildTaskKind;
   title: string;
-  parentTaskId: string;
+  parentTaskId?: string;
   agentKind: "writer" | "answerer";
   cli: string;
   model: string | null;
@@ -71,13 +73,17 @@ export async function insertChildTask(
   task: ChildTaskInsert,
   writer?: RunStateWriter,
 ): Promise<void> {
+  if ((task.runId === undefined) === (task.issueLoopId === undefined)) {
+    throw new Error("a child task must have exactly one execution scope");
+  }
   if (writer !== undefined) {
     await writer.insertTask({
       taskId: task.taskId,
-      runId: task.runId,
+      ...(task.runId === undefined ? { issueLoopId: task.issueLoopId } : { runId: task.runId }),
+      ...(task.orgId === undefined ? {} : { orgId: task.orgId }),
       kind: task.kind,
       title: task.title,
-      parentTaskId: task.parentTaskId,
+      ...(task.parentTaskId === undefined ? {} : { parentTaskId: task.parentTaskId }),
       status: "running",
       agentKind: task.agentKind,
       cli: task.cli,
@@ -86,10 +92,28 @@ export async function insertChildTask(
     });
     return;
   }
+  if (task.runId !== undefined) {
+    await resolveWritableClient(pool).query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
+       VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, $5, 'running', now(), $6, $7, $8)`,
+      [task.taskId, task.runId, task.kind, task.title, task.parentTaskId ?? null, task.agentKind, task.cli, task.model],
+    );
+    return;
+  }
   await resolveWritableClient(pool).query(
-    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
-     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, $5, 'running', now(), $6, $7, $8)`,
-    [task.taskId, task.runId, task.kind, task.title, task.parentTaskId, task.agentKind, task.cli, task.model],
+    `INSERT INTO tasks (task_id, issue_loop_id, org_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
+     VALUES ($1, $2, COALESCE($3, (SELECT org_id FROM issue_loops WHERE id = $2)), $4, $5, $6, 'running', now(), $7, $8, $9)`,
+    [
+      task.taskId,
+      task.issueLoopId,
+      task.orgId ?? null,
+      task.kind,
+      task.title,
+      task.parentTaskId ?? null,
+      task.agentKind,
+      task.cli,
+      task.model,
+    ],
   );
 }
 
