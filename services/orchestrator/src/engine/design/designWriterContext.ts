@@ -301,9 +301,9 @@ export async function loadDesignContextBlock(input: {
   orgScope: TenantScope;
   projectId: string;
   /**
-   * An explicitly resolved ds-2 web artifact. ds-5 owns project bindings, so
-   * this loader never guesses a system from an org/project; callers thread the
-   * selected release here and the Writer receives it beside the intent contract.
+   * An explicitly resolved ds-2 web artifact. The production run-context loader
+   * resolves the one published release linked to the project's HEAD contract;
+   * ds-5 project bindings will replace that temporary lineage seam directly.
    */
   webDesignSystem?: WebDesignWriterContext;
 }): Promise<string | undefined> {

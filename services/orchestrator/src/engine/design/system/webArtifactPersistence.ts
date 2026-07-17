@@ -49,8 +49,8 @@ export async function persistWebDesignArtifact(input: PersistWebArtifactInput): 
   await runWithOrgScope(input.pool, input.orgId, async (client) => {
     await client.query(
       `INSERT INTO design_artifacts
-         (org_id, id, design_system_id, digest, media_type, manifest_version, object_store_key, byte_size)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (org_id, id, design_system_id, digest, media_type, manifest_version, object_store_key, byte_size, web_writer_context)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
        ON CONFLICT (org_id, id) DO NOTHING`,
       [
         input.orgId,
@@ -61,6 +61,7 @@ export async function persistWebDesignArtifact(input: PersistWebArtifactInput): 
         input.artifact.manifest.manifestVersion,
         artifactObjectStoreKey(artifactDigest),
         input.artifact.manifestBytes.byteLength,
+        JSON.stringify(input.artifact.writerContext),
       ],
     );
     const stored = await client.query<StoredArtifactRow>(

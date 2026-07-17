@@ -113,6 +113,9 @@ export const designArtifacts = pgTable(
     manifestVersion: integer("manifest_version").notNull(),
     objectStoreKey: text("object_store_key").notNull(),
     byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+    // The validated ds-2 Writer projection derived from the immutable artifact.
+    // It lets a run hydrate token/catalog guidance without an object-store read.
+    webWriterContext: jsonb("web_writer_context"),
     encryptionKeyRef: text("encryption_key_ref"),
     retentionClass: text("retention_class").notNull().default("standard"),
     quarantined: boolean("quarantined").notNull().default(false),

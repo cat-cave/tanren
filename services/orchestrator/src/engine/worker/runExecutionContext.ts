@@ -16,6 +16,7 @@ import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { loadDesignContextBlock } from "../design/designWriterContext.js";
+import { resolveProjectWebDesignSystem } from "../design/system/designSystemStore.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import { resolveProjectEnv } from "../environments/index.js";
@@ -211,14 +212,22 @@ export async function loadRunExecutionContext(
     orgRates: creditRatesFromOrgConfig(decoded.org_config),
   });
 
-  // WS-D2 (native design subsystem): load + render the project's HEAD `DesignContract`
-  // into the writer-prompt design block — persona-scoped, behavior-linked, domain-general
-  // (designWriterContext.ts). Today the writer gets ZERO design context; this threads the
-  // durable design artifact straight into Tanren's own implementing agent (the no-handoff
-  // loop). `pool` is the run's ORG-SCOPED client (loadRunContextScoped wraps this in
-  // runWithOrgScope), so the read is RLS-scoped + actor-authorized. ABSENT (undefined) ⇒ the
-  // project has no design contract (a real empty state) ⇒ the writer gets no block — NEVER a
-  // fabricated default. A malformed persisted contract fails LOUDLY in the store's re-parse.
+  // WS-D2 (native design subsystem): resolve the published web projection tied to
+  // the project's HEAD contract, then pass it to the design-context renderer. The
+  // caller owns this selection so the Writer path cannot silently omit a real ds-2
+  // release. Until ds-5 provides explicit project bindings, a second matching
+  // system fails loudly rather than becoming an arbitrary org-wide default.
+  const webDesignSystem = await resolveProjectWebDesignSystem(pool, {
+    orgId: orgScope.orgId,
+    projectId: decoded.project_id,
+  });
+
+  // Load + render the project's HEAD DesignContract into the writer-prompt block
+  // beside the resolved web catalog/tokens — persona-scoped, behavior-linked,
+  // domain-general (designWriterContext.ts). `pool` is the run's ORG-SCOPED client
+  // (loadRunContextScoped wraps this in runWithOrgScope), so every read is RLS-scoped
+  // + actor-authorized. An absent contract/release is a real empty state; a malformed
+  // persisted record fails loudly in its owning store's parser.
   //
   // H2 BLOCKING (unify): the design contract is PROJECT-scoped — there is exactly ONE
   // product-level head per project, shared across every spec type (scaffold specs need
@@ -230,6 +239,7 @@ export async function loadRunExecutionContext(
     client: pool,
     orgScope,
     projectId: decoded.project_id,
+    ...(webDesignSystem !== undefined && { webDesignSystem }),
   });
 
   const context: PlannerRunContext = {
