@@ -94,6 +94,7 @@ import {
   MergeRetargetedPayload,
   MergeSpeculativeHeldPayload,
   IntegrationProvisionedPayload,
+  wave1EventRegistry,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -180,18 +181,13 @@ import {
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
-import { integrationVocabularyRegistry } from "./schemas/integrationVocabulary.js";
-import { runtimeVocabularyRegistry } from "./schemas/runtimeVocabulary.js";
 // Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
 // Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   ...w0EventRegistry,
-  // Mission-complete WAVE-1 event-vocabulary FREEZE. The integration lifecycle
-  // vocabulary (in-3) + the runtime behavior-proof vocabulary (rv-25), frozen in
-  // the barrier pre-flight so consumer nodes emit already-registered names.
-  ...integrationVocabularyRegistry,
-  ...runtimeVocabularyRegistry,
+  // Mission-complete WAVE-1 vocab freeze (in-3 integration + rv-25 runtime).
+  ...wave1EventRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
