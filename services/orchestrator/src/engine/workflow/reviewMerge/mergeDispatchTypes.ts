@@ -53,7 +53,14 @@ export interface MergeAuthorityBundle {
    * (task id + audit envelope it computes).
    */
   landStoreFor: (context: LandFinalizeContext) => AuthorityLandStore;
-  /** The gate-config + policy identity stamped onto the integration node's proof key. */
+  /**
+   * gv-3 — the REAL gate-config + policy identity folded into the authority proof key
+   * (`proofRoot` / mq-eval id) AND stamped onto the durable `authority_decisions` row.
+   * `gateConfigHash` is `hashGateConfig(resolved .tanren/ci.yml)` — the SAME helper the
+   * native-queue path keys on, NEVER `""`; `policyVersion` is the effective-policy content
+   * identity, NOT the former schema-literal `1`. A config OR policy change yields different
+   * values so the authority refuses to reuse a proof produced under a different gate/policy.
+   */
   gateConfigHash: string;
   policyVersion: string;
   /** The native gate's outcome (a not-yet-run / errored / absent gate → blocks). */

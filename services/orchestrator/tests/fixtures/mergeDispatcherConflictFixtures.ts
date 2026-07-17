@@ -150,6 +150,7 @@ export function context(): ReviewMergeRunContext {
     mergeIntegration: "direct_merge",
     governancePosture: "open",
     policyVersion: 1,
+    policyIdentity: "policy-sha256:test-conflict",
     reviewPolicy: "auto",
     tanrenLogins: [],
     platformLogins: [],

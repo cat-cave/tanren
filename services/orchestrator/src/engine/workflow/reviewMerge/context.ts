@@ -3,6 +3,7 @@
 // org App installation). Kept in one place so reviewPolling.ts and
 // mergeDispatch.ts stay focused and under the 500-line cap.
 
+import { createHash } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
 import {
@@ -57,12 +58,29 @@ export interface ReviewMergeRunContext {
   /** external-push governance posture (project config). */
   governancePosture: GovernancePosture;
   /**
-   * AUDIT-EVIDENCE BASELINE: the versioned governance POLICY in effect for this
-   * run's merge decision — the project config version (the revision that defines
-   * its posture / review policy / merge integration). Stamped onto the governing
-   * `merge.completed` event so the audit trail records WHICH policy gated the merge.
+   * AUDIT-EVIDENCE BASELINE: the config SCHEMA version in effect for this run's
+   * merge decision. Stamped onto the governing `merge.completed` / `gate.verdict`
+   * audit envelope (`AuditEnvelope.policyVersion`, a numeric schema-version record).
+   * NOTE (gv-3): this is the config SCHEMA version (a literal `1` today), NOT the
+   * proof-reuse / TOCTOU identity — that is {@link policyIdentity}. The two are kept
+   * distinct: the audit envelope records the schema version; the authority keys its
+   * proof on the effective-policy content hash.
    */
   policyVersion: number;
+  /**
+   * gv-3 — the REAL governance policy identity for this run's merge decision: a
+   * content hash over the EFFECTIVE governance policy (posture / review policy /
+   * audit posture / merge integration / budget). This is the identity stamped into
+   * `authority_decisions.policy_version` and folded into the MergeAuthority proof key
+   * (`proofRoot` / the mq-eval evaluation id), REPLACING the schema-literal `version`
+   * (always `1`) that made policy-sensitive proof reuse + TOCTOU protection illusory.
+   * A posture change (e.g. `auditPosture` balanced→strict, `reviewPolicy` auto→human)
+   * yields a DIFFERENT identity, so a stale proof for a now-changed policy is refused.
+   * An interim real fingerprint pending the full versioned governance revision system
+   * (docs/roadmap/mission-complete/nodes/governance.md); content-addressed, never a
+   * fabricated constant.
+   */
+  policyIdentity: string;
   /**
    * Whether the review stage requires a human verdict before merge (project
    * config). `auto` short-circuits the review poll to an approved verdict;
@@ -191,6 +209,7 @@ export async function loadReviewMergeRunContext(
     mergeIntegration: projectConfig.mergeIntegration,
     governancePosture: projectConfig.governancePosture,
     policyVersion: projectConfig.version,
+    policyIdentity: computeMergePolicyIdentity(projectConfig),
     reviewPolicy: projectConfig.reviewPolicy,
     tanrenLogins: tanrenLoginsFor(projectConfig.governanceTanrenLogins),
     platformLogins: projectConfig.governancePlatformLogins ?? [],
@@ -214,6 +233,40 @@ function resolvedStaticCredentialRef(
     return canonicalOrgGithubCredentialRef({ orgId, supplied: resolvedRef, kind: "github_token" });
   }
   return normalizeStaticGithubRef(config.credentials?.githubCredentialRef);
+}
+
+/**
+ * gv-3 — derive the REAL governance policy identity for a project's merge decision. A
+ * deterministic content hash over the EFFECTIVE governance policy fields the MergeAuthority
+ * + governance path actually gate on (config schema version, governance posture, review
+ * policy, merge integration, the audit posture DORA knob, and the budget envelope). It
+ * REPLACES the schema-literal `config.version` (always `1`) as the proof-reuse / TOCTOU
+ * identity: two projects/postures hash differently, and changing a project's posture yields
+ * a new identity — so the authority never reuses a proof produced under a different policy.
+ *
+ * Content-addressed + honest: this is NOT a fabricated constant and does NOT pretend to be
+ * an immutable governance revision number — it is a fingerprint of the policy in force,
+ * an interim real identity pending the full versioned governance revision system. The
+ * canonical form fixes field ORDER (no key-sort dependence) so the SAME policy always
+ * hashes to the SAME identity.
+ */
+export function computeMergePolicyIdentity(config: ProjectConfigV1): string {
+  const canonical = JSON.stringify([
+    ["schemaVersion", config.version],
+    ["governancePosture", config.governancePosture],
+    ["reviewPolicy", config.reviewPolicy],
+    ["mergeIntegration", config.mergeIntegration],
+    [
+      "auditPosture",
+      {
+        blockReviewAt: config.auditPosture.blockReviewAt,
+        p2p3Handling: config.auditPosture.p2p3Handling,
+        autonomousRemediation: config.auditPosture.autonomousRemediation ?? false,
+      },
+    ],
+    ["budget", config.budget ?? null],
+  ]);
+  return `policy-sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 /**

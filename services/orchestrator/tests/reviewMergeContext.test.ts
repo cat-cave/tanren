@@ -7,11 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  computeMergePolicyIdentity,
   loadReviewMergeRunContext,
   ReviewMergeRunLineageMismatchError,
   ReviewMergeRunNotFoundError,
   type RunStateClient,
 } from "../src/engine/workflow/reviewMerge/context.js";
+import { migrateProjectConfig } from "../src/engine/config/projectConfig.js";
 
 interface RowOverrides {
   config?: unknown;
@@ -116,6 +118,31 @@ describe("loadReviewMergeRunContext credential resolution", () => {
   it("rejects a run whose project owner disagrees before config is resolved", async () => {
     const pool = poolReturning({ projectOrgId: "org_foreign" });
     await expect(loadReviewMergeRunContext(pool, "run_1")).rejects.toBeInstanceOf(ReviewMergeRunLineageMismatchError);
+  });
+});
+
+describe("gv-3 computeMergePolicyIdentity — real policy identity, not the literal `1`", () => {
+  it("threads a real content-hash policy identity onto the context (never the schema-literal `1`)", async () => {
+    const context = await loadReviewMergeRunContext(poolReturning({ config: { version: 1 } }), "run_1");
+    // The audit-envelope schema version is still the literal `1` (a numeric record) …
+    expect(context.policyVersion).toBe(1);
+    // … but the AUTHORITY / proof-key identity is a REAL content hash, not `"1"`.
+    expect(context.policyIdentity).not.toBe("1");
+    expect(context.policyIdentity).toMatch(/^policy-sha256:[0-9a-f]{64}$/u);
+  });
+
+  it("NEGATIVE CONTROL: a different governance posture yields a DIFFERENT identity (reuse refused)", () => {
+    // Two projects that differ ONLY in the auditPosture DORA knob must NOT share a policy
+    // identity — else a strict-posture change would silently reuse a balanced-posture proof.
+    const balanced = migrateProjectConfig({ version: 1 });
+    const strict = migrateProjectConfig({ version: 1, auditPosture: { blockReviewAt: "P3" } });
+    expect(computeMergePolicyIdentity(balanced)).not.toBe(computeMergePolicyIdentity(strict));
+  });
+
+  it("is deterministic — the same policy always hashes to the same identity", () => {
+    const a = migrateProjectConfig({ version: 1, reviewPolicy: "auto" });
+    const b = migrateProjectConfig({ version: 1, reviewPolicy: "auto" });
+    expect(computeMergePolicyIdentity(a)).toBe(computeMergePolicyIdentity(b));
   });
 });
 
