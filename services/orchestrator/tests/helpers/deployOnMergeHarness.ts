@@ -2,11 +2,13 @@ import { getJobOrgId } from "@tanren/db";
 import type pg from "pg";
 import { defaultIntegrationResourceConstraints } from "../../src/engine/contracts/integrationAuthority.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
+import { parseDigest } from "../../src/engine/contracts/cas.js";
 import type { AppendEventInput, EventStore } from "../../src/engine/eventStore.js";
 import type { EventName } from "../../src/engine/events/index.js";
 import { DeployOnMergeWatcher } from "../../src/engine/postMerge/deployOnMerge.js";
 import type { ScriptedDeployTransport } from "../conformance/fakes/scriptedDeployTransport.js";
 import { instantVerifyPollPolicy, scriptedUrlProbe } from "../conformance/fakes/scriptedUrlProbe.js";
+import { DeployOnMergeReleaseInstances } from "./deployOnMergeReleaseInstances.js";
 
 export const RUN_ID = "run_dep";
 export const PROJECT_ID = "project_dep";
@@ -190,7 +192,25 @@ export async function runDeployOnMerge(
   state: DeployOnMergePoolState,
   transport: ScriptedDeployTransport,
   events: RecordingDeployEventStore,
-): Promise<void> {
+): Promise<DeployOnMergeReleaseInstances> {
+  const releaseInstances = new DeployOnMergeReleaseInstances();
+  if (state.alreadyDeployed === true) {
+    // `deploy.triggered` comes only after buildArtifact persisted this row. A resume
+    // fixture must model that prior build rather than verify a deployment out of thin air.
+    await releaseInstances.create({
+      orgId: ORG_ID,
+      projectId: PROJECT_ID,
+      provider: "deploy.vercel",
+      appId: VERCEL_APP_ID,
+      environment: "preview",
+      deploymentId: PRIOR_DEPLOYMENT_ID,
+      sourceRef: MERGE_SHA,
+      artifactDigest: parseDigest(`sha256:${"a".repeat(64)}`),
+      providerChecksum: null,
+      integrationNodeId: RUN_ID,
+      state: "built",
+    });
+  }
   const watcher = new DeployOnMergeWatcher({
     pool: deployOnMergePool(state),
     secrets: deploySecrets(),
@@ -198,6 +218,8 @@ export async function runDeployOnMerge(
     eventStore: events,
     urlProbe: scriptedUrlProbe(),
     verifyPoll: instantVerifyPollPolicy(),
+    releaseInstances,
   });
   await watcher.check(RUN_ID);
+  return releaseInstances;
 }
