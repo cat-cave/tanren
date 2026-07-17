@@ -1,5 +1,5 @@
-import { setTimeout as sleepFor } from "node:timers/promises";
 import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
+import { parseBaseBranch, parsePullRequestHead, repoPath } from "./github/parse.js";
 // Re-export the `/contents` base64 decoder (it lives in the contract module) so the
 // GitHub provider sources every GitHub value-helper from `github.js` — one fewer dep there.
 export { decodeBase64Content } from "../contracts/repoHostErrors.js";
@@ -7,16 +7,17 @@ export { decodeBase64Content } from "../contracts/repoHostErrors.js";
 // HTTP client + the minter from one provider module (the dependency-cap-friendly seam the
 // retired `buildVcsProvider.js` convenience re-export used to provide).
 export { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
-import {
-  appendErrorDetail,
-  buildErrorDetail,
-  GitHubOutageError,
-  headerGetter,
-  isTransientStatus,
-  rateLimitBackoffMs,
-  transientBackoffMs,
-  transientFixedPointReached,
-} from "./githubRetry.js";
+import { appendErrorDetail } from "./githubRetry.js";
+
+export {
+  asPullArray,
+  githubHttpsRemote,
+  parseGitHubPullRequestUrl,
+  parseGitHubRepository,
+  parsePullRequest,
+  repoPath,
+} from "./github/parse.js";
+export { FetchGitHubHttpClient, type FetchGitHubHttpClientOptions } from "./github/httpClient.js";
 
 export interface GitHubRepository {
   owner: string;
@@ -130,136 +131,6 @@ export function withErrorDetail(base: string, response: GitHubHttpResponse): str
 
 export interface GitHubHttpClient {
   request(input: GitHubHttpRequest): Promise<GitHubHttpResponse>;
-}
-
-// The rate-limit + transient-5xx classification/backoff helpers live in githubRetry.ts.
-
-export interface FetchGitHubHttpClientOptions {
-  apiBaseUrl?: string;
-  fetchImpl?: typeof fetch;
-  /** Test seam: sleep used between rate-limit AND transient-5xx retries. */
-  sleep?: (ms: number) => Promise<void>;
-  /** Clock seam (epoch ms) for computing the wait from `X-RateLimit-Reset`. */
-  now?: () => number;
-}
-
-export class FetchGitHubHttpClient implements GitHubHttpClient {
-  private readonly apiBaseUrl: string;
-  private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (ms: number) => Promise<void>;
-  private readonly now: () => number;
-
-  constructor(opts: FetchGitHubHttpClientOptions = {}) {
-    this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
-    this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));
-    this.now = opts.now ?? (() => Date.now());
-  }
-
-  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    let token = input.token;
-    let refreshed = false;
-    // TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): NO fixed retry COUNT.
-    // Transients retry while making progress and surface only at a saturated fixed point.
-    // Rate-limit and gateway signature streams remain independent, so a 503 burst never
-    // denies a later 429 its honored `Retry-After`. The 401 re-mint stays one-shot.
-    const transientSignatures: string[] = [];
-    const rateLimitSignatures: string[] = [];
-    const retryTransient = input.retryTransient !== false;
-    const retryRateLimit = input.retryRateLimit !== false;
-    for (;;) {
-      let response: GitHubHttpResponse;
-      try {
-        response = await this.send(input.path, input.method, token, input.body);
-      } catch (error) {
-        // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is transient
-        // by nature (no HTTP status) — retry on transient indefinitely while it makes progress,
-        // surfacing the underlying throw LOUDLY only when the transport error is non-converging
-        // (a proven, sustained outage). A non-idempotent write (retryTransient=false) never
-        // auto-retries a throw (the request may have applied server-side).
-        if (!retryTransient) {
-          throw error;
-        }
-        transientSignatures.push("transport");
-        if (transientFixedPointReached(transientSignatures)) {
-          throw error;
-        }
-        await this.sleep(transientBackoffMs(transientSignatures.length - 1));
-        continue;
-      }
-      // 401 with a token supplier: re-mint once and retry (behavior).
-      if (response.status === 401 && input.refreshToken !== undefined && !refreshed) {
-        refreshed = true;
-        token = await input.refreshToken();
-        continue;
-      }
-      // Rate limits own an independent convergence stream and precede 403 force-mint.
-      // Durable intake can surface the response; other callers retain bounded backoff.
-      if (response.retryAfterMs !== undefined) {
-        if (!retryRateLimit) return response;
-        rateLimitSignatures.push(`rate-limit-${response.status}`);
-        if (transientFixedPointReached(rateLimitSignatures)) {
-          throw new GitHubOutageError(`rate-limit-${response.status}`, rateLimitSignatures.length - 1);
-        }
-        await this.sleep(response.retryBackoffMs ?? response.retryAfterMs);
-        continue;
-      }
-      // A non-rate-limit 403 may be an expired installation token: force-mint once.
-      if (response.status === 403 && input.refreshToken !== undefined && !refreshed) {
-        refreshed = true;
-        token = await input.refreshToken();
-        continue;
-      }
-      // Transient gateways retry while structurally progressing; non-idempotent writes opt out.
-      if (retryTransient && isTransientStatus(response.status)) {
-        transientSignatures.push(`http-${response.status}`);
-        if (transientFixedPointReached(transientSignatures)) {
-          throw new GitHubOutageError(`http-${response.status}`, transientSignatures.length - 1);
-        }
-        await this.sleep(transientBackoffMs(transientSignatures.length - 1));
-        continue;
-      }
-      return response;
-    }
-  }
-
-  private async send(
-    path: string,
-    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
-    token: string,
-    body: unknown,
-  ): Promise<GitHubHttpResponse> {
-    const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
-      method,
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await response.text();
-    const responseBody = text === "" ? undefined : JSON.parse(text);
-    const getHeader = headerGetter(response.headers);
-    const retryBackoffMs = rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody);
-    const retryAfterHeader = getHeader("retry-after");
-    const retryAfterSeconds =
-      retryAfterHeader === null || retryAfterHeader.trim() === "" ? NaN : Number(retryAfterHeader);
-    const exactRetryAfterMs =
-      (response.status === 403 || response.status === 429) &&
-      Number.isFinite(retryAfterSeconds) &&
-      retryAfterSeconds >= 0
-        ? Math.max(1_000, Math.ceil(retryAfterSeconds * 1_000))
-        : retryBackoffMs;
-    return {
-      status: response.status,
-      body: responseBody,
-      retryAfterMs: exactRetryAfterMs,
-      retryBackoffMs,
-      ...(response.status >= 400 && { errorDetail: buildErrorDetail(response.status, responseBody, getHeader) }),
-    };
-  }
 }
 
 // `GitHubPullRequestService` (find / reuse / rebase the one PR per spec head) lives in
@@ -420,81 +291,4 @@ export class GitHubStatusService {
     }
     return parseRequiredContexts(response.body);
   }
-}
-
-export function parseGitHubRepository(repoUrl: string): GitHubRepository {
-  const httpsMatch = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/u.exec(repoUrl);
-  if (httpsMatch !== null) {
-    return { owner: httpsMatch[1] ?? "", name: httpsMatch[2] ?? "" };
-  }
-  const sshMatch = /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/u.exec(repoUrl);
-  if (sshMatch !== null) {
-    return { owner: sshMatch[1] ?? "", name: sshMatch[2] ?? "" };
-  }
-  throw new Error(`unsupported GitHub repository URL: ${repoUrl}`);
-}
-
-export function parseGitHubPullRequestUrl(prUrl: string): {
-  repo: GitHubRepository;
-  pullNumber: number;
-} {
-  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9][0-9]*)\/?$/u.exec(prUrl);
-  if (match === null) {
-    throw new Error(`unsupported GitHub pull request URL: ${prUrl}`);
-  }
-  return { repo: { owner: match[1] ?? "", name: match[2] ?? "" }, pullNumber: Number(match[3]) };
-}
-
-export function githubHttpsRemote(repo: GitHubRepository): string {
-  return `https://github.com/${repo.owner}/${repo.name}.git`;
-}
-
-export function repoPath(repo: GitHubRepository, suffix: string): string {
-  return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
-}
-
-export function parsePullRequest(value: unknown): GitHubPullRequest {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub PR response was not an object");
-  }
-  const object = value as Record<string, unknown>;
-  if (typeof object["number"] !== "number" || typeof object["html_url"] !== "string") {
-    throw new TypeError("GitHub PR response missing number or html_url");
-  }
-  return {
-    number: object["number"],
-    url: object["html_url"],
-    draft: object["draft"] === true,
-    baseBranch: parseBaseBranch(object["base"]),
-  };
-}
-
-export function asPullArray(value: unknown): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new TypeError("GitHub PR lookup response was not an array");
-  }
-  return value;
-}
-
-function parseBaseBranch(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const ref = (value as Record<string, unknown>)["ref"];
-  return typeof ref === "string" ? ref : undefined;
-}
-
-function parsePullRequestHead(value: unknown): GitHubPullRequestHead {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub PR response was not an object");
-  }
-  const head = (value as Record<string, unknown>)["head"];
-  if (typeof head !== "object" || head === null || Array.isArray(head)) {
-    throw new Error("GitHub PR response missing head");
-  }
-  const object = head as Record<string, unknown>;
-  if (typeof object["sha"] !== "string" || object["sha"] === "") {
-    throw new Error("GitHub PR response missing head sha");
-  }
-  return { sha: object["sha"], ref: typeof object["ref"] === "string" ? object["ref"] : undefined };
 }
