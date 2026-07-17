@@ -13,6 +13,7 @@ import {
   appendDeployFailed,
   appendDeploySkipped,
   deployAuditEnvelope,
+  persistTriggeredRelease,
   type DeployVerifyContext,
   loadValidatedRunEvent,
   type ValidatedRunLineage,
@@ -31,7 +32,7 @@ import {
 import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
-import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
+import { IntegrationConnectionsStore, PgReleaseInstancesRepository, type ReleaseInstancesRepository } from "../repositories/index.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import { createLogger } from "../observability/logger.js";
@@ -108,6 +109,7 @@ export interface DeployOnMergeWatcherDeps {
    * when the builder is not opted in. Ignored by non-Fly providers (Vercel builds its own).
    */
   flyImageBuilder?: FlyImageBuilder;
+  releaseInstances?: ReleaseInstancesRepository;
 }
 
 /**
@@ -284,6 +286,21 @@ export class DeployOnMergeWatcher {
     });
     if (deployGrant === undefined) throw missingDeployGrantError(merged.projectId, target, "deploy");
     const result = await provisioner.deploy(deployGrant, target.appId, { repo: merged.repoSlug, ref: merged.ref });
+    await persistTriggeredRelease(this.verifyCtx, {
+      orgId: target.orgId,
+      projectId: merged.projectId,
+      provider: target.provider,
+      appId: target.appId,
+      deploymentId: result.deploymentId,
+      url: result.url,
+      sourceRef: merged.ref,
+      integrationNodeId: merged.runId,
+      loadResolveGrant: () =>
+        loadDeployOperationGrant(this.deps.pool, merged.projectId, target, "resolve_artifact_identity", {
+          resourceId: target.appId,
+          deploymentId: result.deploymentId,
+        }),
+    });
 
     // Record the deploy — the deploy target + resolved live URL + deployment id, all
     // non-secret. Under the run's org scope so the tenant `events` write is allowed.
@@ -355,6 +372,7 @@ export class DeployOnMergeWatcher {
       secrets: this.deps.secrets,
       ...(this.deps.urlProbe !== undefined && { urlProbe: this.deps.urlProbe }),
       ...(this.deps.verifyPoll !== undefined && { verifyPoll: this.deps.verifyPoll }),
+      ...(this.deps.releaseInstances === undefined ? {} : { releaseInstances: this.deps.releaseInstances }),
     };
   }
 
@@ -451,22 +469,12 @@ export class DeployOnMergeWatcher {
     });
   }
 }
-/**
- * Build the production deploy-on-merge watcher with the default deploy transport —
- * a thin factory so the autonomy-loops boot imports ONE symbol (keeps that file
- * under the max-dependencies cap).
- */
 export function buildDeployOnMergeWatcher(deps: {
   pool: pg.Pool;
   secrets: SecretStore;
   runStateWriter?: RunStateWriter;
-  /**
-   * The merge-reflecting Fly image builder (from `buildFlyImageBuilderFromEnv`). When
-   * present, Fly deploys build the merged commit; absent, a Fly deploy fails loud at
-   * trigger time unless the static-image escape hatch is on. Optional — Vercel-only
-   * installs leave it unset.
-   */
   flyImageBuilder?: FlyImageBuilder;
+  releaseInstances?: ReleaseInstancesRepository;
 }): DeployOnMergeWatcher {
   return new DeployOnMergeWatcher({
     pool: deps.pool,
@@ -474,6 +482,7 @@ export function buildDeployOnMergeWatcher(deps: {
     transport: fetchDeployTransport(),
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     ...(deps.flyImageBuilder !== undefined && { flyImageBuilder: deps.flyImageBuilder }),
+    releaseInstances: deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool),
   });
 }
 // Re-export the demo-on-deploy watcher factory off this same module so the autonomy-loops

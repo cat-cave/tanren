@@ -90,6 +90,23 @@ export { ForgeProposalStore } from "../forge/proposals.js";
 export { InboxStore, type CreateSourceInput } from "./inbox.js";
 export { AuditsStore, type CreateAuditJobInput } from "./audits.js";
 export {
+  ReleaseInstancesStore,
+  PgReleaseInstancesRepository,
+  ReleaseInstanceNotFoundError,
+  InvalidReleaseStateTransitionError,
+  RELEASE_STATES,
+  RELEASE_ENVIRONMENTS,
+  type ReleaseInstancesRepository,
+  type CreateReleaseInstanceInput,
+  type TransitionReleaseInstanceInput,
+  type SupersedePriorLiveInput,
+  type GetReleaseInstanceByDeploymentInput,
+  type PromoteReleaseInput,
+  type RollbackReleaseInput,
+  type TeardownPreviewInput,
+  type MarkLiveReleaseInput,
+} from "./releaseInstances.js";
+export {
   WebhookEventStore,
   type WebhookEvent,
   type WebhookEventStatus,

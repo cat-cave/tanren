@@ -17,6 +17,7 @@ import type { ProjectDeployTarget } from "./deployOnMerge.js";
 import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
+import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
 
 export type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 export { loadValidatedRunEvent, type ValidatedRunLineage } from "./runLineage.js";
@@ -48,6 +49,59 @@ export interface DeployVerifyContext {
   secrets: SecretStore;
   urlProbe?: UrlReachabilityProbe;
   verifyPoll?: VerifyPollPolicy;
+  releaseInstances?: ReleaseInstancesRepository;
+}
+
+export async function persistTriggeredRelease(
+  ctx: DeployVerifyContext,
+  args: {
+    orgId: string;
+    projectId: string;
+    provider: string;
+    appId: string;
+    deploymentId: string;
+    url: string;
+    sourceRef: string;
+    integrationNodeId: string;
+    loadResolveGrant: () => Promise<OrgGrant | undefined>;
+  },
+): Promise<void> {
+  const releases = ctx.releaseInstances;
+  if (releases === undefined) return;
+  const existing = await releases.getByDeployment({
+    orgId: args.orgId,
+    provider: args.provider,
+    appId: args.appId,
+    deploymentId: args.deploymentId,
+  });
+  if (existing !== undefined) return;
+  const grant = await args.loadResolveGrant();
+  if (grant === undefined) {
+    throw new Error(`deployOnMerge: artifact identity grant lost for '${args.provider}' on project '${args.projectId}'`);
+  }
+  const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
+    provisioner: { transport: ctx.transport, secrets: ctx.secrets },
+  });
+  const identity = await adapter.resolveArtifactDigest(
+    grant,
+    { provider: args.provider, appId: args.appId },
+    args.deploymentId,
+  );
+  await releases.create({
+    orgId: args.orgId,
+    projectId: args.projectId,
+    provider: args.provider,
+    appId: args.appId,
+    environment: "production",
+    deploymentId: args.deploymentId,
+    sourceRef: args.sourceRef,
+    artifactDigest: identity.artifactDigest,
+    providerChecksum: identity.providerChecksum,
+    integrationNodeId: args.integrationNodeId,
+    behaviorRevisionIds: [],
+    url: args.url,
+    state: "built",
+  });
 }
 
 /**
@@ -150,6 +204,16 @@ export async function verifyDeploy(
     { provider: args.providerKind, appId: target.appId },
     args.deploymentId,
   );
+  if (ctx.releaseInstances !== undefined) {
+    await ctx.releaseInstances.markLive({
+      orgId: target.orgId,
+      projectId: args.projectId,
+      provider: target.provider,
+      appId: target.appId,
+      deploymentId: args.deploymentId,
+      url: verification.url,
+    });
+  }
   await runWithJobOrgId(target.orgId, async () => {
     await ctx.eventStore.append({
       runId: args.runId,

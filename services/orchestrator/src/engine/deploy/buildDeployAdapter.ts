@@ -61,6 +61,7 @@ import {
 } from "./manualExternalDeployAdapter.js";
 import type { EventStore } from "../eventStore.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
+import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
 
 /**
  * The adapter classes whose implementations exist on disk (with a scripted
@@ -85,6 +86,10 @@ export interface BuildDeployAdapterDeps {
   urlProbe?: UrlReachabilityProbe;
   /** The verify poll cadence (the spacing between polls; defaults to the production cadence). */
   poll?: VerifyPollPolicy;
+  /** Durable release lifecycle persistence for the extended direct-api adapter. */
+  releaseInstances?: ReleaseInstancesRepository;
+  /** Scalar integration-node lineage used when building outside a preview input. */
+  integrationNodeId?: string;
   /**
    * The SecretStore the `manual_external` class resolves refs against. Defaults to
    * the provisioner deps' secrets when omitted (they share one store). Retained as
@@ -144,7 +149,13 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
   }
   switch (kind) {
     case DIRECT_API_ADAPTER_KIND:
-      return new DirectApiDeployAdapter({ provisioner: deps.provisioner, urlProbe, poll });
+      return new DirectApiDeployAdapter({
+        provisioner: deps.provisioner,
+        urlProbe,
+        poll,
+        ...(deps.releaseInstances === undefined ? {} : { releaseInstances: deps.releaseInstances }),
+        ...(deps.integrationNodeId === undefined ? {} : { integrationNodeId: deps.integrationNodeId }),
+      });
     case MANUAL_EXTERNAL_ADAPTER_KIND: {
       if (deps.manualAttestations === undefined) {
         throw new DeployAdapterConfigError(
