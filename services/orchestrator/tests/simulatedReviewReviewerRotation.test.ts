@@ -53,6 +53,7 @@ const context: ReviewMergeRunContext = {
   mergeIntegration: "direct_merge",
   governancePosture: "open",
   policyVersion: 1,
+  policyIdentity: "policy-sha256:test-rotation",
   reviewPolicy: "simulated",
   tanrenLogins: ["writer-bot"],
   platformLogins: [],
