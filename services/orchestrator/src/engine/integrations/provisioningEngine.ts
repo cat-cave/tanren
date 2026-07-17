@@ -1,6 +1,7 @@
 // Capability onboarding resolves one exact, persisted project grant; releases the
 // scoped DB transaction; performs discover/provision/bind; then durably writes the
-// artifact and `integration.provisioned` through EventStore in a fresh short scope.
+// artifact and `integration.resource.provisioned` through EventStore in a fresh
+// short scope.
 // Missing links and ambiguous/stale selections are structured no-effect outcomes.
 //
 // SECRET DISCIPLINE: this engine never reads, returns, or logs a secret value.
@@ -178,6 +179,47 @@ export interface ProvisionedResult {
 
 export type ProvisionOutcome = NotLinkedResult | SelectionRequiredResult | IneligibleResult | ProvisionedResult;
 
+/**
+ * The legacy capability-onboarding request predates the lifecycle requirement
+ * row, but it still has a stable project+capability identity. Keep that
+ * compatibility identity in the frozen resource event without pretending that
+ * the path derived an `integration.requirement.*` event.
+ */
+function provisioningRequirementId(request: ProvisionRequest): string {
+  return `provisioning:${request.projectId}:${request.capability}`;
+}
+
+/**
+ * Resolve the provider resource identity already returned by today's live
+ * provisioners. The artifact contract intentionally has no provider-neutral
+ * resource-id field, so use the concrete fields each current producer owns:
+ * deploy app id, Sentry project slug, or an explicitly bound resource id.
+ * Persisted Tanren surface ids are the final compatibility fallback for an
+ * artifact that only exposes a project surface.
+ */
+function provisionedResourceId(
+  request: ProvisionRequest,
+  artifact: ProvisionedArtifact,
+  persisted: { inboxSourceId?: string; notificationTargetId?: string; deployRef?: string },
+): string {
+  if (request.chosenResourceId !== undefined && request.chosenResourceId !== "") {
+    return request.chosenResourceId;
+  }
+  if (artifact.deployRef?.appId !== undefined && artifact.deployRef.appId !== "") {
+    return artifact.deployRef.appId;
+  }
+  const projectConfig = artifact.projectConfig;
+  for (const key of ["sentryProjectSlug", "slackChannelId", "deployAppId"] as const) {
+    const value = projectConfig?.[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  const persistedId = persisted.inboxSourceId ?? persisted.notificationTargetId ?? persisted.deployRef;
+  if (persistedId !== undefined && persistedId !== "") return persistedId;
+  throw new Error(
+    `integration provisioner '${request.capability}' returned no resource identity for project '${request.projectId}'`,
+  );
+}
+
 function unresolvedAuthorization(
   resolution: Exclude<AuthorizeOperationResult, { status: "eligible" }>,
   request: ProvisionRequest,
@@ -329,21 +371,12 @@ export async function provisionCapability(
     await deps.events.append({
       projectId: request.projectId,
       orgId: request.orgId,
-      eventType: "integration.provisioned",
+      eventType: "integration.resource.provisioned",
       payload: {
-        capability: request.capability,
+        requirementId: provisioningRequirementId(request),
         providerKind,
-        action,
-        mode: request.mode,
-        secretRefNames,
-        surfaces: {
-          ...(persisted.inboxSourceId === undefined ? {} : { inboxSourceId: persisted.inboxSourceId }),
-          ...(persisted.notificationTargetId === undefined
-            ? {}
-            : { notificationTargetId: persisted.notificationTargetId }),
-          projectConfigKeys: persisted.projectConfigKeys,
-          ...(persisted.deployRef === undefined ? {} : { deployRef: persisted.deployRef }),
-        },
+        externalResourceId: provisionedResourceId(request, artifact, persisted),
+        ownership: action === "provision" ? "created" : "adopted",
       },
     });
     return persisted;

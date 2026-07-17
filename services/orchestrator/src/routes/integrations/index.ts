@@ -26,6 +26,7 @@ import type { IntegrationQueryClient } from "../../engine/repositories/integrati
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 import { mountIntegrationAuthorityWrites } from "./authorityWrites.js";
+import { mountIntegrationEventsRead } from "./integrationEventsRead.js";
 
 export interface IntegrationRouteDatabase {
   events: EventStore;
@@ -87,6 +88,8 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
     if (c.var.actor === undefined) return c.json({ error: "authentication_required" }, 401);
     return next();
   });
+
+  mountIntegrationEventsRead(app, database);
 
   app.get("/:orgId/integrations", async (c) => {
     const actor = requireActor(c);
