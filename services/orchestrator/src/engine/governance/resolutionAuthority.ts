@@ -12,6 +12,7 @@ import type {
 } from "../contracts/resolutionAuthority.js";
 import { RESOLUTION_AUTHORITY_VERSION } from "../contracts/resolutionAuthority.js";
 import { PgEventStore } from "../eventStore.js";
+import { SourceSyncOutboxStore } from "../repositories/sourceSyncOutbox.js";
 
 export interface ResolutionAuthorityEvidenceSource {
   snapshot(input: { readonly orgId: string; readonly resolutionJobId: string }): Promise<ResolutionEvidenceSnapshot>;
@@ -383,15 +384,43 @@ export class PgResolutionAuthorityDecisionStore implements ResolutionAuthorityDe
           : input.decision === "needs_attention"
             ? "needs_attention"
             : "remediating";
-      const updated = await client.query(
+      const updated = await client.query<{ source_id: string }>(
         `UPDATE issue_loops
             SET state = $3, row_version = row_version + 1, updated_at = now()
-          WHERE org_id = $1 AND id = $2`,
+          WHERE org_id = $1 AND id = $2
+        RETURNING source_id`,
         [input.snapshot.orgId, input.snapshot.issueLoopId, state],
       );
       if (updated.rowCount !== 1)
         throw new Error(`resolution authority could not transition issue loop ${input.snapshot.issueLoopId}`);
-      await new PgEventStore(client).append({
+      const events = new PgEventStore(client);
+      if (input.decision === "authorized" || input.decision === "waived") {
+        const sourceId = updated.rows[0]?.source_id;
+        if (sourceId === undefined)
+          throw new Error(`resolution authority could not identify source for ${input.snapshot.issueLoopId}`);
+        const queued = await SourceSyncOutboxStore.enqueueWithOutcome(client, {
+          orgId: input.snapshot.orgId,
+          issueLoopId: input.snapshot.issueLoopId,
+          sourceId,
+          operation: "close",
+          payload: { desiredState: "closed" },
+          resolutionDecisionId: id,
+        });
+        if (queued.inserted) {
+          await events.append({
+            orgId: input.snapshot.orgId,
+            projectId: input.snapshot.projectId,
+            eventType: "source_issue.sync.enqueued",
+            payload: {
+              projectId: input.snapshot.projectId,
+              issueLoopId: input.snapshot.issueLoopId,
+              sourceSyncOutboxId: queued.row.id,
+              attempt: 0,
+            },
+          });
+        }
+      }
+      await events.append({
         orgId: input.snapshot.orgId,
         projectId: input.snapshot.projectId,
         eventType: `resolution.${input.decision}`,

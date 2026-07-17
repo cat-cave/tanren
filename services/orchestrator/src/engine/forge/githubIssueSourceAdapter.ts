@@ -10,6 +10,7 @@ import {
   type IssueObservation,
   type IssueSourceAdapter,
   type IssueSourceIngestResult,
+  type SourceSyncReadback,
   type SourceSyncReceipt,
   type SourceSyncRequest,
 } from "./issueSourceAdapter.js";
@@ -33,6 +34,9 @@ const GithubIssue = z
 
 const SyncIssue = z
   .object({ number: z.number().int().positive(), state: z.enum(["open", "closed"]), updated_at: z.string().optional() })
+  .passthrough();
+const SyncComment = z
+  .object({ id: z.number().int().positive(), body: z.string(), updated_at: z.string().optional() })
   .passthrough();
 
 export interface GitHubIssueSourceAdapterDeps {
@@ -151,8 +155,69 @@ export class GithubIssueSourceAdapter implements IssueSourceAdapter {
   }
 
   async sync(input: SourceSyncRequest): Promise<SourceSyncReceipt> {
-    if (input.outbox.operation !== "close")
-      throw new Error(`unsupported GitHub source sync operation: ${input.outbox.operation}`);
+    const { path, resolved } = await this.syncContext(input);
+    if (input.outbox.operation === "comment") {
+      const body = commentBody(input);
+      const response = await this.deps.githubHttp.request({
+        method: "POST",
+        path: `${path}/comments`,
+        token: resolved.token,
+        refreshToken: resolved.refresh,
+        retryTransient: false,
+        body: { body },
+      });
+      if (response.status < 200 || response.status >= 300)
+        throw new Error(`GitHub issue comment failed: HTTP ${response.status}`);
+      const comment = SyncComment.parse(response.body);
+      return { providerRevision: revision(comment, comment.updated_at) };
+    }
+    const state = input.outbox.operation === "close" ? "closed" : "open";
+    const response = await this.deps.githubHttp.request({
+      method: "PATCH",
+      path,
+      token: resolved.token,
+      refreshToken: resolved.refresh,
+      body: { state },
+    });
+    if (response.status < 200 || response.status >= 300)
+      throw new Error(`GitHub issue ${input.outbox.operation} failed: HTTP ${response.status}`);
+    const issue = SyncIssue.parse(response.body);
+    return { providerRevision: revision(issue, issue.updated_at) };
+  }
+
+  async readback(input: SourceSyncRequest): Promise<SourceSyncReadback> {
+    const { path, resolved } = await this.syncContext(input);
+    if (input.outbox.operation === "comment") {
+      const response = await this.deps.githubHttp.request({
+        method: "GET",
+        path: `${path}/comments`,
+        token: resolved.token,
+        refreshToken: resolved.refresh,
+      });
+      if (response.status !== 200) throw new Error(`GitHub issue comment readback failed: HTTP ${response.status}`);
+      const matching = z
+        .array(SyncComment)
+        .parse(response.body)
+        .find((comment) => comment.body === commentBody(input));
+      if (matching === undefined) return { providerRevision: revision(response.body, null), desiredState: "open" };
+      return { providerRevision: revision(matching, matching.updated_at), desiredState: "comment_recorded" };
+    }
+    const response = await this.deps.githubHttp.request({
+      method: "GET",
+      path,
+      token: resolved.token,
+      refreshToken: resolved.refresh,
+    });
+    if (response.status !== 200)
+      throw new Error(`GitHub issue ${input.outbox.operation} readback failed: HTTP ${response.status}`);
+    const issue = SyncIssue.parse(response.body);
+    return { providerRevision: revision(issue, issue.updated_at), desiredState: issue.state };
+  }
+
+  private async syncContext(input: SourceSyncRequest): Promise<{
+    path: string;
+    resolved: Awaited<ReturnType<typeof resolveGithubToken>>;
+  }> {
     if (input.source.kind !== "issues" || input.source.config === null)
       throw new Error("GitHub source config is unavailable");
     const config = ActiveGitHubIssuesConfig.parse(input.source.config);
@@ -162,24 +227,16 @@ export class GithubIssueSourceAdapter implements IssueSourceAdapter {
       ...(this.deps.githubAppMinter === undefined ? {} : { minter: this.deps.githubAppMinter }),
       ...(this.deps.defaultStaticRef === undefined ? {} : { staticRef: this.deps.defaultStaticRef }),
     });
-    const path = repositoryPath(config.owner, config.repo, `/issues/${issueNumber(input.loop.externalKey)}`);
-    const patch = await this.deps.githubHttp.request({
-      method: "PATCH",
-      path,
-      token: resolved.token,
-      refreshToken: resolved.refresh,
-      body: { state: "closed" },
-    });
-    if (patch.status < 200 || patch.status >= 300) throw new Error(`GitHub issue close failed: HTTP ${patch.status}`);
-    const readback = await this.deps.githubHttp.request({
-      method: "GET",
-      path,
-      token: resolved.token,
-      refreshToken: resolved.refresh,
-    });
-    if (readback.status !== 200) throw new Error(`GitHub issue close readback failed: HTTP ${readback.status}`);
-    const issue = SyncIssue.parse(readback.body);
-    if (issue.state !== "closed") throw new Error("GitHub issue close readback did not verify closed state");
-    return { providerRevision: revision(issue, issue.updated_at) };
+    return {
+      path: repositoryPath(config.owner, config.repo, `/issues/${issueNumber(input.loop.externalKey)}`),
+      resolved,
+    };
   }
+}
+
+function commentBody(input: SourceSyncRequest): string {
+  const body = input.outbox.payload["body"];
+  if (typeof body !== "string" || body.length === 0)
+    throw new Error("GitHub comment sync requires a non-empty body payload");
+  return body;
 }

@@ -384,22 +384,58 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
     });
   });
 
-  it("sourceSyncOutbox enqueues, claims once, reclaims an expired lease, and verifies the returned row", async () => {
+  it("sourceSyncOutbox requires an authority decision, records receipt/readback, and verifies the returned row", async () => {
     const d = db();
+    await expect(
+      repos.sourceSyncOutbox.enqueue(clientA(d), {
+        orgId: ORG_A,
+        issueLoopId: "loop_a",
+        sourceId: "src_a",
+        operation: "close",
+        payload: {},
+        resolutionDecisionId: "rdec_rejected",
+      }),
+    ).rejects.toThrow("authorized ResolutionAuthority decision");
     const queued = await repos.sourceSyncOutbox.enqueue(clientA(d), {
       orgId: ORG_A,
       issueLoopId: "loop_a",
       sourceId: "src_a",
       operation: "close",
       payload: {},
+      resolutionDecisionId: "rdec_authorized",
     });
     const claim = (workerId: string) =>
-      repos.sourceSyncOutbox.claim(clientA(d), { id: queued.id, workerId, leaseMs: 60_000 });
+      repos.sourceSyncOutbox.claim(clientA(d), { orgId: ORG_A, id: queued.id, workerId, leaseMs: 60_000 });
     expect(await claim("worker_a")).toMatchObject({ id: queued.id, state: "pending", claimOwner: "worker_a" });
     expect(await claim("worker_b")).toBeUndefined();
     d.sourceSyncOutbox[0]!.claim_expires_at = new Date(0).toISOString();
     expect(await claim("worker_b")).toMatchObject({ id: queued.id, state: "pending", claimOwner: "worker_b" });
-    expect(await repos.sourceSyncOutbox.markVerified(clientA(d), queued.id, "worker_b")).toBe(true);
+    d.sourceSyncOutbox[0]!.claim_expires_at = new Date(0).toISOString();
+    expect(
+      await repos.sourceSyncOutbox.claimNext(clientA(d), { orgId: ORG_A, workerId: "worker_c", leaseMs: 60_000 }),
+    ).toMatchObject({ id: queued.id, claimOwner: "worker_c" });
+    const sent = await repos.sourceSyncOutbox.beginAttempt(clientA(d), {
+      orgId: ORG_A,
+      id: queued.id,
+      workerId: "worker_c",
+    });
+    expect(sent).toMatchObject({ state: "sent", attempt: 1 });
+    expect(
+      await repos.sourceSyncOutbox.recordProviderReceipt(clientA(d), {
+        orgId: ORG_A,
+        id: queued.id,
+        workerId: "worker_c",
+        receipt: { providerRevision: "revision_a" },
+      }),
+    ).toBe(true);
+    expect(
+      await repos.sourceSyncOutbox.markVerified(clientA(d), {
+        orgId: ORG_A,
+        id: queued.id,
+        workerId: "worker_c",
+        readback: { providerRevision: "revision_a", desiredState: "closed" },
+      }),
+    ).toBe(true);
     expect(await repos.sourceSyncOutbox.listRunnable(clientA(d), 10)).toEqual([]);
   });
   describe("audits", () => {

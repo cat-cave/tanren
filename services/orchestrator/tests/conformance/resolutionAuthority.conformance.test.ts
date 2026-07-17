@@ -37,6 +37,7 @@ function snapshot(): ResolutionEvidenceSnapshot {
 class ResolutionAuthorityMemoryPool {
   public readonly decisions: Array<Record<string, unknown>> = [];
   public readonly events: Array<Record<string, unknown>> = [];
+  public readonly sourceSyncOutbox: Array<Record<string, unknown>> = [];
   public loopState = "verifying";
   private eventId = 0;
 
@@ -91,7 +92,47 @@ class ResolutionAuthorityMemoryPool {
     }
     if (sql.startsWith("UPDATE issue_loops")) {
       this.loopState = String(params[2]);
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ source_id: "src_a" }], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT 1 FROM resolution_decisions AS decision")) {
+      const [orgId, decisionId, issueLoopId, sourceId] = params;
+      const authorized = this.decisions.some(
+        (decision) =>
+          decision["org_id"] === orgId &&
+          decision["id"] === decisionId &&
+          decision["issue_loop_id"] === issueLoopId &&
+          sourceId === "src_a" &&
+          (decision["decision"] === "authorized" || decision["decision"] === "waived"),
+      );
+      return authorized ? { rows: [{ "?column?": 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
+    if (sql.startsWith("INSERT INTO source_sync_outbox")) {
+      const [orgId, id, issueLoopId, sourceId, operation, payload, payloadHash, resolutionDecisionId] = params;
+      if (this.sourceSyncOutbox.some((row) => row["org_id"] === orgId && row["id"] === id))
+        return { rows: [], rowCount: 0 };
+      const now = new Date();
+      const row = {
+        org_id: orgId,
+        id,
+        issue_loop_id: issueLoopId,
+        source_id: sourceId,
+        operation,
+        state: "pending",
+        payload: JSON.parse(String(payload)),
+        payload_hash: payloadHash,
+        resolution_decision_id: resolutionDecisionId,
+        attempt: 0,
+        next_attempt_at: now,
+        provider_receipt: null,
+        readback: null,
+        last_error: null,
+        claim_owner: null,
+        claim_expires_at: null,
+        created_at: now,
+        updated_at: now,
+      };
+      this.sourceSyncOutbox.push(row);
+      return { rows: [row], rowCount: 1 };
     }
     // This is the PgEventStore's SQL-shaped fake, not an alternate event writer.
     if (sql.startsWith(`INSERT INTO ${"events"}`)) {
@@ -104,7 +145,7 @@ class ResolutionAuthorityMemoryPool {
 }
 
 describe("ResolutionAuthority decision SQL conformance", () => {
-  it("appends a hashed decision once, transitions only through the authority, and emits its frozen event", async () => {
+  it("appends a hashed decision once, queues source sync, transitions only through the authority, and emits frozen events", async () => {
     const pool = new ResolutionAuthorityMemoryPool();
     const evidence = snapshot();
     const hash = resolutionSnapshotHash(evidence);
@@ -146,6 +187,17 @@ describe("ResolutionAuthority decision SQL conformance", () => {
       }),
     ]);
     expect(pool.loopState).toBe("verified_source_sync_pending");
-    expect(pool.events).toEqual([expect.objectContaining({ event_type: "resolution.authorized" })]);
+    expect(pool.sourceSyncOutbox).toEqual([
+      expect.objectContaining({
+        issue_loop_id: "iloop_a",
+        source_id: "src_a",
+        operation: "close",
+        state: "pending",
+      }),
+    ]);
+    expect(pool.events.map((event) => event["event_type"])).toEqual([
+      "source_issue.sync.enqueued",
+      "resolution.authorized",
+    ]);
   });
 });

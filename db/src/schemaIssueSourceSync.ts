@@ -1,9 +1,10 @@
 import { sql } from "drizzle-orm";
-import { check, foreignKey, index, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { organizations } from "./schemaCore.js";
 import { inboxSources } from "./schemaInbox.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 import { issueLoops } from "./schemaIssueLoops.js";
+import { resolutionDecisions } from "./schemaResolutionDecisions.js";
 
 const digestPattern = sql.raw("'^sha256:[0-9a-f]{64}$'");
 
@@ -20,10 +21,20 @@ export const sourceSyncOutbox = pgTable(
     sourceId: text("source_id").notNull(),
     operation: text("operation").notNull(),
     state: text("state").notNull().default("pending"),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     payloadHash: text("payload_hash").notNull(),
+    resolutionDecisionId: text("resolution_decision_id"),
+    attempt: integer("attempt").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    providerReceipt: jsonb("provider_receipt"),
+    readback: jsonb("readback"),
+    lastError: text("last_error"),
     claimOwner: text("claim_owner"),
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.orgId, table.id] }),
@@ -37,6 +48,11 @@ export const sourceSyncOutbox = pgTable(
       foreignColumns: [inboxSources.orgId, inboxSources.id],
       name: "source_sync_outbox_source_fk",
     }),
+    foreignKey({
+      columns: [table.orgId, table.resolutionDecisionId],
+      foreignColumns: [resolutionDecisions.orgId, resolutionDecisions.id],
+      name: "source_sync_outbox_resolution_decision_fk",
+    }),
     index("source_sync_outbox_org_id").on(table.orgId),
     index("source_sync_outbox_org_loop").on(table.orgId, table.issueLoopId),
     index("source_sync_outbox_org_source_state").on(table.orgId, table.sourceId, table.state),
@@ -48,6 +64,10 @@ export const sourceSyncOutbox = pgTable(
     check(
       "source_sync_outbox_claim_check",
       sql`(${table.claimOwner} IS NULL AND ${table.claimExpiresAt} IS NULL) OR (${table.claimOwner} IS NOT NULL AND ${table.claimExpiresAt} IS NOT NULL)`,
+    ),
+    check(
+      "source_sync_outbox_close_authority_check",
+      sql`${table.operation} <> 'close' OR ${table.resolutionDecisionId} IS NOT NULL`,
     ),
     integrationOrgIsolationPolicy(table.orgId),
   ],

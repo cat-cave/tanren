@@ -137,10 +137,18 @@ export interface SourceSyncOutboxRec {
   source_id: string;
   operation: string;
   state: string;
+  payload: unknown;
   payload_hash: string;
+  resolution_decision_id: string | null;
+  attempt: number;
+  next_attempt_at: Date | string;
+  provider_receipt: unknown;
+  readback: unknown;
+  last_error: string | null;
   claim_owner: string | null;
   claim_expires_at: string | null;
   created_at: Date;
+  updated_at: Date;
   seq: number;
 }
 export interface AuditJobRec {
@@ -229,10 +237,18 @@ export function sourceSyncOutboxCols(e: SourceSyncOutboxRec): Record<string, unk
     source_id: e.source_id,
     operation: e.operation,
     state: e.state,
+    payload: e.payload,
     payload_hash: e.payload_hash,
+    resolution_decision_id: e.resolution_decision_id,
+    attempt: e.attempt,
+    next_attempt_at: e.next_attempt_at,
+    provider_receipt: e.provider_receipt,
+    readback: e.readback,
+    last_error: e.last_error,
     claim_owner: e.claim_owner,
     claim_expires_at: e.claim_expires_at,
     created_at: e.created_at,
+    updated_at: e.updated_at,
   };
 }
 

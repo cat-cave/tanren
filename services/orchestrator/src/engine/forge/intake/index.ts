@@ -47,15 +47,21 @@ export {
 } from "../githubIssueSourceAdapter.js";
 export {
   ManualIssueSourceAdapter,
-  enqueueResolutionSync,
   ingestIssueObservation,
   type IssueSourceAdapter,
   type IssueObservation,
   type IssueSourceIngestResult,
-  type ResolutionTransitionInput,
-  type ResolutionTransitionResult,
+  type SourceSyncReadback,
+  type SourceSyncReceipt,
+  type SourceSyncRequest,
 } from "../issueSourceAdapter.js";
-export { processSourceSync, sweepSourceSync, type SourceSyncWorkerDeps } from "../sourceSyncWorker.js";
+export {
+  processSourceSync,
+  SourceSyncWorker,
+  sweepSourceSync,
+  type SourceSyncWorkerDeps,
+  type SourceSyncWorkerOptions,
+} from "../sourceSyncWorker.js";
 export {
   loadRunnableInboxSource,
   isInboxSourceBoundaryError,
