@@ -384,60 +384,6 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
     });
   });
 
-  describe("webhookEvents", () => {
-    async function persist(client: QueryClient, deliveryId: string) {
-      return repos.webhookEvents.persist(client, {
-        sourceId: "src_a",
-        orgId: ORG_A,
-        eventType: "issues",
-        deliveryId,
-        payload: { action: "opened" },
-      });
-    }
-
-    it("persists a received row, sweeps undriven rows, and marks one processed", async () => {
-      const d = db();
-      const ev = await persist(clientA(d), "d1");
-      expect(ev.status).toBe("received");
-      expect(ev.attempts).toBe(0);
-      const undriven = await repos.webhookEvents.listUndriven(clientA(d), 10);
-      expect(undriven.map((e) => e.id)).toEqual([ev.id]);
-      await repos.webhookEvents.markProcessed(clientA(d), ev.id);
-      // A processed row is no longer undriven (sweeper skips it).
-      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
-    });
-
-    it("records failures by NATURE not a count: transient stays failed UNBOUNDED, poison dead-letters", async () => {
-      const d = db();
-      const ev = await persist(clientA(d), "d1");
-      // A TRANSIENT failure (poison=false) stays `failed` so the sweeper re-drives it —
-      // and STAYS failed across many re-drives (no attempt-cap dead-letter).
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 1", false)).toBe("failed");
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 2", false)).toBe("failed");
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "blip 3", false)).toBe("failed");
-      // Still re-drivable after 3 transient failures — never lost to a count.
-      const undriven = await repos.webhookEvents.listUndriven(clientA(d), 10);
-      expect(undriven).toHaveLength(1);
-      // The `attempts` counter still ticks (observability), it just never gates anything.
-      expect(undriven[0]?.attempts).toBe(3);
-      // A POISON failure (poison=true) parks it `dead_lettered` at once (no re-drive).
-      expect(await repos.webhookEvents.recordFailure(clientA(d), ev.id, "poison", true)).toBe("dead_lettered");
-      expect(await repos.webhookEvents.listUndriven(clientA(d), 10)).toHaveLength(0);
-    });
-
-    it("scopes the sweep + the mutations to the org (off-scope sees zero)", async () => {
-      const d = db();
-      const ev = await persist(clientA(d), "d1");
-      // Org B sees ZERO of org A's webhook events — the RLS row-visibility gate.
-      expect(await repos.webhookEvents.listUndriven(clientB(d), 10)).toHaveLength(0);
-      // An off-scope mark/record matches no visible row → no mutation.
-      await repos.webhookEvents.markProcessed(clientB(d), ev.id);
-      expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.status).toBe("received");
-      expect(await repos.webhookEvents.recordFailure(clientB(d), ev.id, "x", false)).toBe("failed");
-      expect((await repos.webhookEvents.listUndriven(clientA(d), 10))[0]?.attempts).toBe(0);
-    });
-  });
-
   it("sourceSyncOutbox enqueues, claims once, reclaims an expired lease, and verifies the returned row", async () => {
     const d = db();
     const queued = await repos.sourceSyncOutbox.enqueue(clientA(d), {

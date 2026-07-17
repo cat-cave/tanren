@@ -89,6 +89,7 @@ export interface InboxSourceRec {
   config: unknown;
   enabled: string;
   auto_route: string;
+  state: string;
   created_at: Date;
 }
 export interface CandidateRec {
