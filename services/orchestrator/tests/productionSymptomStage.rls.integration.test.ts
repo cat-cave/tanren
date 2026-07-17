@@ -1,8 +1,9 @@
 // cspell:ignore bytea iloop venv vrun
 // BH-10 real-Postgres conformance. All stage writes and reads use the restricted
 // tanren_app role; the owner connection only provisions the isolated database.
-// Unlike optional RLS cohorts, this decisive false-green proof always runs in
-// affected tests as well as the named smoke recipe.
+// Gated on TANREN_RLS_DB_TEST (like every peer *.rls.integration.test), so the
+// decisive false-green proof runs in the `smoke-rls-production-verification`
+// recipe (part of the CI `check` job) rather than the DB-less unit phase.
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -187,7 +188,10 @@ async function queuedProductionJob(
   return job;
 }
 
-describe("BH-10 production symptom stage — RLS false-green conformance", () => {
+const RLS_DB_ENABLED = process.env["TANREN_RLS_DB_TEST"] === "1";
+const describeDb = RLS_DB_ENABLED ? describe : describe.skip;
+
+describeDb("BH-10 production symptom stage — RLS false-green conformance", () => {
   const database = databaseName();
   let owner: Pool;
   let app: Pool;
@@ -229,6 +233,13 @@ describe("BH-10 production symptom stage — RLS false-green conformance", () =>
     await production?.close();
     await decoy?.close();
   }, 30_000);
+
+  it("runs stage reads/writes as the non-superuser tanren_app role", async () => {
+    const identity = await app.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      "SELECT current_user, r.rolsuper, r.rolbypassrls FROM pg_roles AS r WHERE r.rolname = current_user",
+    );
+    expect(identity.rows[0]).toEqual({ current_user: "tanren_app", rolsuper: false, rolbypassrls: false });
+  });
 
   it("keeps generic green checks from masking a broken live-production symptom", async () => {
     const a = await seedTenant(owner, ORG_A, PROJECT_A, production.url);
