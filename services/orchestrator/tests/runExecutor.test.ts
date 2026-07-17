@@ -54,6 +54,30 @@ describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
   });
 
+  it("refuses workflow execution when the live repository-visibility admission blocks", async () => {
+    const { pool, secrets, run } = await setupSeededRun();
+    const jobQueue = new FakeJobQueue();
+    await enqueuePlanJob(jobQueue, run, ORG);
+    let workflowRan = false;
+
+    const result = await executeNextPlanJob({
+      ...deps(pool, secrets, jobQueue, passingGitHub()),
+      repositoryVisibilityAdmission: {
+        admit: async (input) => {
+          expect(input).toEqual({ orgId: ORG, projectId: run.projectId });
+          throw new Error("repository visibility mismatch");
+        },
+      },
+      runWorkflow: async (input) => {
+        workflowRan = true;
+        return fakeWorkflowRunner(passingGitHub())(input);
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "failed", runId: run.runId });
+    expect(workflowRan).toBe(false);
+  });
+
   it("FAILS LOUD (fail-closed) when a claimed plan job carries no org_id — never BYPASSRLS", async () => {
     // Every plan run is a tenant run: `runs.org_id` is NOT NULL and a plan job's
     // org_id is stamped from the run at enqueue, so a claimed plan job ALWAYS carries

@@ -4,8 +4,10 @@
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { PgEventStore } from "../src/engine/eventStore.js";
-import { enforceRepositoryVisibilityOnClient } from "../src/engine/governance/repoVisibility.js";
+import {
+  RepositoryVisibilityAdmissionBlockedError,
+  RepositoryVisibilityRunAdmission,
+} from "../src/engine/governance/repositoryVisibilityAdmission.js";
 import { RepositoryVisibilityObservationsStore } from "../src/engine/repositories/repositoryVisibilityObservations.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -74,29 +76,23 @@ describeDb("repository visibility observations — immutable and tenant-isolated
     await adminPool.end();
   }, 30_000);
 
-  it("records match and mismatch events, rejects mutation, and hides the foreign tenant", async () => {
+  it("automatically admits a matching run and blocks a visibility mismatch as tanren_app", async () => {
     const pool = requiredPool(appPool);
-    const eventStore = new PgEventStore(pool);
-    const match = await runWithOrgScope(pool, ORG_A, (client) =>
-      enforceRepositoryVisibilityOnClient(client, eventStore, {
-        orgId: ORG_A,
-        projectId: PROJECT_A,
-        observedVisibility: "private",
+    expect((await pool.query<{ current_user: string }>("SELECT current_user")).rows[0]?.current_user).toBe(APP_ROLE);
+    let observedVisibility: "public" | "private" = "private";
+    const admission = new RepositoryVisibilityRunAdmission(pool, {
+      readRepositoryVisibility: async () => ({
+        observedVisibility,
         forgeRef: "github:example/private-repo",
-        sha: "match-sha",
+        sha: observedVisibility === "private" ? "match-sha" : "mismatch-sha",
       }),
+    });
+
+    await expect(admission.admit({ orgId: ORG_A, projectId: PROJECT_A })).resolves.toBeUndefined();
+    observedVisibility = "public";
+    await expect(admission.admit({ orgId: ORG_A, projectId: PROJECT_A })).rejects.toBeInstanceOf(
+      RepositoryVisibilityAdmissionBlockedError,
     );
-    const mismatch = await runWithOrgScope(pool, ORG_A, (client) =>
-      enforceRepositoryVisibilityOnClient(client, eventStore, {
-        orgId: ORG_A,
-        projectId: PROJECT_A,
-        observedVisibility: "public",
-        forgeRef: "github:example/private-repo",
-        sha: "mismatch-sha",
-      }),
-    );
-    expect(match.status).toBe("allowed");
-    expect(mismatch.status).toBe("blocked");
 
     const events = await runWithOrgScope(pool, ORG_A, (client) =>
       client.query<{ event_type: string }>(
@@ -119,12 +115,17 @@ describeDb("repository visibility observations — immutable and tenant-isolated
       "repository.visibility.mismatch",
       "governance.visibility.enforced",
     ]);
+    const observations = await runWithOrgScope(pool, ORG_A, (client) =>
+      RepositoryVisibilityObservationsStore.list(client, ORG_A, PROJECT_A),
+    );
+    const mismatch = observations.find((observation) => observation.observedVisibility === "public");
+    if (mismatch === undefined) throw new Error("expected the rejected admission to persist a public observation");
 
     await expect(
       runWithOrgScope(pool, ORG_A, (client) =>
         client.query(
           "UPDATE repository_visibility_observations SET observed_visibility = 'private' WHERE org_id = $1 AND observation_id = $2",
-          [ORG_A, mismatch.observation.observationId],
+          [ORG_A, mismatch.observationId],
         ),
       ),
     ).rejects.toThrow(/immutable/u);
@@ -132,7 +133,7 @@ describeDb("repository visibility observations — immutable and tenant-isolated
       runWithOrgScope(pool, ORG_A, (client) =>
         client.query("DELETE FROM repository_visibility_observations WHERE org_id = $1 AND observation_id = $2", [
           ORG_A,
-          mismatch.observation.observationId,
+          mismatch.observationId,
         ]),
       ),
     ).rejects.toThrow(/immutable/u);

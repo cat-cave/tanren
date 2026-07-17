@@ -33,6 +33,8 @@ export type { RunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { GithubReviewerAppIdentity } from "../governance/githubReviewerAppIdentity.js";
+import { RepositoryVisibilityRunAdmission } from "../governance/repositoryVisibilityAdmission.js";
 import { createLogger } from "../observability/logger.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
@@ -127,6 +129,15 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       ...(input.credentialScoping === undefined ? {} : { credentialScoping: input.credentialScoping }),
       githubHttp: input.githubHttp,
       ...(input.githubAppMinter === undefined ? {} : { githubAppMinter: input.githubAppMinter }),
+      repositoryVisibilityAdmission: new RepositoryVisibilityRunAdmission(
+        input.pool,
+        new GithubReviewerAppIdentity({
+          pool: input.pool,
+          secrets: input.secrets,
+          http: input.githubHttp,
+          ...(input.githubAppMinter === undefined ? {} : { minter: input.githubAppMinter }),
+        }),
+      ),
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       runStateWriter: input.runStateWriter,
