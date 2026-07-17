@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import { requireRow } from "../data/pgRows.js";
 import {
   type NotificationDeliveryRow,
@@ -14,7 +15,23 @@ import {
   NotificationTargetCreateInput as NotificationTargetCreateInputSchema,
   NotificationTargetRow as NotificationTargetRowSchema,
   NotificationTargetUpdateInput as NotificationTargetUpdateInputSchema,
+  Severity as SeveritySchema,
 } from "./schemas.js";
+
+/**
+ * Partial update for an existing route: toggle `enabled` (the matrix UI's
+ * per-cell checkbox) and/or move the `minSeverity` floor. At least one field is
+ * required so an empty PUT is a loud 400 rather than a no-op write.
+ */
+export const NotificationRouteUpdateInput = z
+  .object({
+    enabled: z.boolean().optional(),
+    minSeverity: SeveritySchema.optional(),
+  })
+  .refine((value) => value.enabled !== undefined || value.minSeverity !== undefined, {
+    message: "at least one of enabled or minSeverity is required",
+  });
+export type NotificationRouteUpdateInput = z.infer<typeof NotificationRouteUpdateInput>;
 
 // repository layer for `notification_targets` and
 // `notification_routes`, plus the dispatch log writer for the existing
@@ -249,6 +266,72 @@ export const NotificationRouteStore = {
       [targetId],
     );
     return result.rows.map((row) => decodeRouteRow(row));
+  },
+
+  // Resolve a single route by id, org-scoped through its target. `notification_routes`
+  // has no org column, so the org predicate lives on the joined `notification_targets`
+  // — a cross-tenant id resolves to `undefined` rather than leaking a foreign row.
+  async getForOrg(client: QueryClient, args: { id: string; orgId: string }): Promise<NotificationRouteRow | undefined> {
+    const result = await client.query<RawRouteRow>(
+      `SELECT ${qualifiedRouteColumns()}
+         FROM notification_routes r
+         JOIN notification_targets t ON r.target_id = t.id
+        WHERE r.id = $1 AND t.org_id = $2`,
+      [args.id, args.orgId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    return decodeRouteRow(row);
+  },
+
+  /**
+   * Toggle `enabled` and/or move the `minSeverity` floor for one route, org-scoped
+   * through the joined target so a cross-tenant id never mutates a foreign row.
+   * Returns `undefined` when the route is missing or not in `orgId`.
+   */
+  async update(
+    client: QueryClient,
+    args: { id: string; orgId: string } & NotificationRouteUpdateInput,
+  ): Promise<NotificationRouteRow | undefined> {
+    const parsed = NotificationRouteUpdateInput.parse({ enabled: args.enabled, minSeverity: args.minSeverity });
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (parsed.enabled !== undefined) {
+      params.push(parsed.enabled ? 1 : 0);
+      sets.push(`enabled = $${params.length}`);
+    }
+    if (parsed.minSeverity !== undefined) {
+      params.push(parsed.minSeverity);
+      sets.push(`min_severity = $${params.length}`);
+    }
+    sets.push("updated_at = now()");
+    params.push(args.id, args.orgId);
+    const result = await client.query<RawRouteRow>(
+      `UPDATE notification_routes r
+          SET ${sets.join(", ")}
+         FROM notification_targets t
+        WHERE r.target_id = t.id AND r.id = $${params.length - 1} AND t.org_id = $${params.length}
+        RETURNING ${qualifiedRouteColumns()}`,
+      params,
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    return decodeRouteRow(row);
+  },
+
+  /**
+   * Delete one route, org-scoped through the joined target. Returns `true` when a
+   * row was removed, `false` when the id was absent or belonged to another org.
+   */
+  async delete(client: QueryClient, args: { id: string; orgId: string }): Promise<boolean> {
+    const result = await client.query<{ id: unknown }>(
+      `DELETE FROM notification_routes r
+         USING notification_targets t
+        WHERE r.target_id = t.id AND r.id = $1 AND t.org_id = $2
+        RETURNING r.id`,
+      [args.id, args.orgId],
+    );
+    return result.rows.length > 0;
   },
 
   // The matrix view needs every route visible to an org. Keep the org

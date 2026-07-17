@@ -23,6 +23,7 @@ import {
   NotificationTargetUpdateInput,
   type DispatchStatus,
 } from "../../engine/notifications/index.js";
+import { NotificationRouteUpdateInput } from "../../engine/notifications/store.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
@@ -228,6 +229,79 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     }
     const created = await NotificationRouteStore.create(options.pool, parsed.data);
     return c.json(toRouteContract(created), 201);
+  });
+
+  // Real upsert/toggle of a route's `enabled` (the matrix UI's per-cell
+  // checkbox) and/or its `minSeverity` floor. Org-scoped; the route is resolved
+  // through its target so a cross-tenant id is a 404, and a user-scoped
+  // target may only be re-routed by its owner — the same guards as POST.
+  app.put("/:orgId/notifications/routes/:id", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const routeId = c.req.param("id");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const parsed = NotificationRouteUpdateInput.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_route_update", issues: parsed.error.issues }, 400);
+    }
+    const route = await NotificationRouteStore.getForOrg(options.pool, { id: routeId, orgId });
+    if (route === undefined) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    const target = await NotificationTargetStore.get(options.pool, route.targetId);
+    if (target === undefined || target.orgId !== orgId) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    if (target.scope === "user" && target.userId !== actor.userId) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    // Same stub-in-prod guard as POST: never leave a route ENABLED to a target
+    // whose channel adapter is not wired in this deploy (would silently drop
+    // fail-severity escalations). Disabling such a route stays allowed.
+    const willBeEnabled = parsed.data.enabled ?? route.enabled;
+    if (willBeEnabled && wiredChannelKinds !== undefined && !wiredChannelKinds.has(target.channelKind)) {
+      return c.json(
+        {
+          error: "channel_not_wired",
+          channelKind: target.channelKind,
+          detail:
+            "cannot enable a route to a channel whose adapter is not wired in this deploy (would silently stub fail-severity escalations)",
+        },
+        400,
+      );
+    }
+    const updated = await NotificationRouteStore.update(options.pool, { id: routeId, orgId, ...parsed.data });
+    if (updated === undefined) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    return c.json(toRouteContract(updated));
+  });
+
+  // Remove a route, org-scoped through its target (same cross-org + user-scope
+  // guards as PUT). Idempotent-ish: a missing/foreign id is a 404.
+  app.delete("/:orgId/notifications/routes/:id", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const routeId = c.req.param("id");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const route = await NotificationRouteStore.getForOrg(options.pool, { id: routeId, orgId });
+    if (route === undefined) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    const target = await NotificationTargetStore.get(options.pool, route.targetId);
+    if (target !== undefined && target.scope === "user" && target.userId !== actor.userId) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    const deleted = await NotificationRouteStore.delete(options.pool, { id: routeId, orgId });
+    if (!deleted) {
+      return c.json({ error: "route_not_found" }, 404);
+    }
+    return c.json({ id: routeId, deleted: true });
   });
 
   return app;

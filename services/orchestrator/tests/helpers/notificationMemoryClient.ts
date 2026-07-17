@@ -40,6 +40,28 @@ export class NotificationMemoryClient {
     if (trimmed.startsWith("INSERT INTO notification_routes")) {
       return this.insertRoute(params);
     }
+    if (trimmed.startsWith("UPDATE notification_routes")) {
+      return this.updateRoute(trimmed, params);
+    }
+    if (trimmed.startsWith("DELETE FROM notification_routes")) {
+      return this.deleteRoute(params);
+    }
+    // getForOrg: a single route resolved by id, org-scoped through the target join.
+    // Must come BEFORE the generic `FROM notification_routes r` listForOrg branch
+    // (which throws unless the SQL ends with the canonical ORDER BY).
+    if (
+      trimmed.startsWith("SELECT") &&
+      trimmed.includes("FROM notification_routes r") &&
+      trimmed.includes("WHERE r.id = $1")
+    ) {
+      const id = String(params[0]);
+      const orgId = String(params[1]);
+      const route = this.routes.get(id);
+      if (route === undefined) return { rowCount: 0, rows: [] };
+      const target = this.targets.get(String(route.target_id));
+      if (target === undefined || target.org_id !== orgId) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [route] };
+    }
     // Two production queries share `FROM notification_routes r JOIN
     // notification_targets t`. Mirror each shape EXACTLY rather than folding
     // them into one branch: listForOrgEvent filters by `AND r.event_name =
@@ -163,6 +185,38 @@ export class NotificationMemoryClient {
     };
     this.routes.set(String(row.id), row);
     return { rowCount: 1, rows: [row] };
+  }
+
+  private updateRoute(sql: string, params: ReadonlyArray<unknown>): StubResult {
+    // Dynamic SET first, then id + org_id as the last two params (store builds the
+    // SET clause in enabled → min_severity order, matching the checks below).
+    const id = String(params.at(-2));
+    const orgId = String(params.at(-1));
+    const route = this.routes.get(id);
+    if (route === undefined) return { rowCount: 0, rows: [] };
+    const target = this.targets.get(String(route.target_id));
+    if (target === undefined || target.org_id !== orgId) return { rowCount: 0, rows: [] };
+    let paramIdx = 0;
+    if (sql.includes("enabled =")) {
+      route.enabled = params[paramIdx++];
+    }
+    if (sql.includes("min_severity =")) {
+      route.min_severity = params[paramIdx++];
+    }
+    route.updated_at = this.now;
+    this.routes.set(id, route);
+    return { rowCount: 1, rows: [route] };
+  }
+
+  private deleteRoute(params: ReadonlyArray<unknown>): StubResult {
+    const id = String(params[0]);
+    const orgId = String(params[1]);
+    const route = this.routes.get(id);
+    if (route === undefined) return { rowCount: 0, rows: [] };
+    const target = this.targets.get(String(route.target_id));
+    if (target === undefined || target.org_id !== orgId) return { rowCount: 0, rows: [] };
+    this.routes.delete(id);
+    return { rowCount: 1, rows: [{ id }] };
   }
 
   private listDispatches(params: ReadonlyArray<unknown>): StubResult {
