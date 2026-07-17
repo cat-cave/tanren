@@ -7,8 +7,9 @@ import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { createSpecOnClient, type ProjectSpecQueryClient, type SpecContract } from "../../workflow/projectSpec.js";
+import { maybePersistIntegrationRequirement } from "../../integrations/requirementStore.js";
 import { behaviorKey, DanglingDesignRefError } from "./deriveDesignContract.js";
-import type { CaptureBehavior, CaptureInterface, InterviewCapture } from "./types.js";
+import type { CaptureBehavior, CaptureDesignContract, CaptureInterface, InterviewCapture } from "./types.js";
 
 // Re-export the design-contract derive helpers (native design subsystem, WS-D1)
 // through this behavior-derive module so `derive.ts` reaches them without a
@@ -79,6 +80,13 @@ export interface DeriveBehaviorSpecInput {
   personaIdByName: Map<string, string>;
   behaviorId: string;
   actor: ActorContext;
+  // in-5 (additive): the project design contract, so the requirement compiler can
+  // read provider-policy constraints. `null`/absent ⇒ compile from G/W/T alone.
+  designContract?: CaptureDesignContract | null;
+  // in-5 (additive): the materialized behavior_revision id, when one exists. When
+  // supplied the compiled requirement is linked to it (behavior↔requirement row);
+  // absent ⇒ the requirement is keyed by the stable behavior key, no link row.
+  behaviorRevisionId?: string;
 }
 
 // Create the spec for one behavior, persist the behavior under its persona, and
@@ -120,6 +128,18 @@ export async function deriveBehaviorSpec(
   );
   /* eslint-enable unicorn/no-thenable */
   await BehaviorStore.linkToSpec(pool, { specId: spec.specId, behaviorId: behaviorRow.id }, input.actor);
+  // in-5 (additive): compile an IntegrationRequirementV1 from this behavior's
+  // G/W/T + design contract and persist it when the behavior genuinely invokes an
+  // external integration. A non-integration behavior is a silent skip; an
+  // ambiguous/unobservable integration behavior throws loud (no vacuous row). This
+  // runs on the same org-scoped transaction client as the rest of the graph.
+  await maybePersistIntegrationRequirement(pool, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    behavior: input.behavior,
+    designContract: input.designContract ?? null,
+    ...(input.behaviorRevisionId !== undefined ? { behaviorRevisionId: input.behaviorRevisionId } : {}),
+  });
   return { ...spec, behaviorId: behaviorRow.id };
 }
 
@@ -221,6 +241,8 @@ export async function deriveInterfaceMilestones(
         personaIdByName,
         behaviorId: plannedBehaviorId,
         actor,
+        // in-5 (additive): thread the captured design contract for provider-policy.
+        designContract: capture.designContract,
       });
       specIds.push(behaviorSpec.specId);
       const bId = behaviorSpec.behaviorId;

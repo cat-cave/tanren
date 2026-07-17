@@ -4,11 +4,13 @@
  * routes/integrations/** (IN-1 / #856 lease).
  */
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
+import { RequirementStore } from "../../engine/integrations/requirementStore.js";
 import type { CasByteStore, Digest } from "../../engine/contracts/cas.js";
 import { contentDigestOf } from "../../engine/contracts/cas.js";
 import {
@@ -58,6 +60,21 @@ export function registerIntegrationContractRoutes(
       return c.json({ error: "org_access_denied" }, 403);
     }
     return c.json(integrationContractCatalog());
+  });
+
+  // in-5: read the compiled integration requirements for a project (the rows the
+  // requirement compiler persisted). RLS-scoped read; sanitized document body only.
+  app.get("/:orgId/projects/:projectId/integration-requirements", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const projectId = c.req.param("projectId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const requirements = await runWithOrgScope(options.pool, orgId, (client) =>
+      RequirementStore.listForProject(client, orgId, projectId),
+    );
+    return c.json({ orgId, projectId, requirements });
   });
 
   app.post("/:orgId/integration-contracts:validate", async (c) => {
