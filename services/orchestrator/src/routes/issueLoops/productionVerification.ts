@@ -30,7 +30,7 @@ export interface ProductionVerificationRoutesOptions {
   readonly pool: pg.Pool;
   readonly contracts?: Pick<SymptomContractStore, "get">;
   readonly enqueue?: Pick<ResolutionJobStore, "enqueue">;
-  readonly jobs?: Pick<ResolutionJobStore, "claimById" | "complete" | "release">;
+  readonly jobs?: Pick<ResolutionJobStore, "claimById" | "verifyActiveLease" | "complete" | "release">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -111,9 +111,19 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       stage: "production",
       idempotencyKey: parsed.data.idempotencyKey,
     });
-    const job = await jobs.claimById({ orgId, id: queued.id, leaseOwner: executionLeaseOwner() });
-    if (job === undefined) {
+    const claimed = await jobs.claimById({ orgId, id: queued.id, leaseOwner: executionLeaseOwner() });
+    if (claimed === undefined) {
       return c.json({ error: "production_verification_not_claimable", resolutionJobId: queued.id }, 409);
+    }
+    // A synchronous claim is still not enough authority to invoke the stage: a
+    // lease can expire or be recovered between the claim and external probe.
+    const job = await jobs.verifyActiveLease({
+      orgId,
+      id: claimed.id,
+      leaseOwner: claimed.leaseOwner,
+    });
+    if (job === undefined) {
+      return c.json({ error: "production_verification_lease_not_active", resolutionJobId: queued.id }, 423);
     }
     let verdict: ResolutionStageResult;
     try {

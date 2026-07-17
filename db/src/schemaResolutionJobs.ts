@@ -65,7 +65,7 @@ export const resolutionJobs = pgTable(
     check("resolution_jobs_stage_check", sql`${table.stage} IN ('baseline','production','counterfactual','soak')`),
     check(
       "resolution_jobs_state_check",
-      sql`${table.state} IN ('queued','running','retryable','authorized','blocked','needs_attention','waived','completed')`,
+      sql`${table.state} IN ('queued','running','retryable','paused','authorized','blocked','needs_attention','waived','completed')`,
     ),
     check("resolution_jobs_attempt_check", sql`${table.attempt} >= 1`),
     check(

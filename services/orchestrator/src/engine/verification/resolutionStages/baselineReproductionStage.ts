@@ -8,8 +8,10 @@ import { SymptomProbeAdapter } from "../../probes/symptomProbeAdapter.js";
 import { IssueLoopStore } from "../../repositories/issueLoops.js";
 import { SymptomContractStore, type SymptomContractRow } from "../../repositories/symptomContracts.js";
 import {
+  startBehaviorVerificationRunStage,
   writeBehaviorVerificationRunStage,
   type BehaviorVerificationRunStatus,
+  type StartedBehaviorVerificationRunStage,
   type WriteBehaviorVerificationRunStageInput,
 } from "../behaviorVerificationRunStage.js";
 
@@ -93,6 +95,9 @@ export class BaselineReproductionStage implements ResolutionStage {
   private readonly contracts: ContractReader;
   private readonly contextResolver: BaselineRuntimeContextResolver;
   private readonly writeVerificationRun: (input: WriteBehaviorVerificationRunStageInput) => Promise<string>;
+  private readonly startVerificationRun:
+    | ((input: WriteBehaviorVerificationRunStageInput) => Promise<StartedBehaviorVerificationRunStage>)
+    | undefined;
   private readonly finalizeVerificationRun: (input: FinalizeVerificationRunInput) => Promise<void>;
   private readonly transitionIssueLoop: NonNullable<BaselineReproductionStageDependencies["transitionIssueLoop"]>;
   private readonly verificationRunId: () => string;
@@ -102,6 +107,8 @@ export class BaselineReproductionStage implements ResolutionStage {
     this.contracts = dependencies.contracts ?? new SymptomContractStore(dependencies.pool);
     this.contextResolver = dependencies.contextResolver ?? new PgBaselineRuntimeContextResolver(dependencies.pool);
     this.writeVerificationRun = dependencies.writeVerificationRun ?? this.writeRunOnPool.bind(this);
+    this.startVerificationRun =
+      dependencies.writeVerificationRun === undefined ? this.startRunOnPool.bind(this) : undefined;
     this.finalizeVerificationRun = dependencies.finalizeVerificationRun ?? this.finalizeRunOnPool.bind(this);
     this.transitionIssueLoop = dependencies.transitionIssueLoop ?? this.transitionLoopOnPool.bind(this);
     this.verificationRunId = dependencies.verificationRunId ?? (() => `vrun_baseline_${randomUUID()}`);
@@ -118,7 +125,7 @@ export class BaselineReproductionStage implements ResolutionStage {
 
     const runtime = await this.resolveRuntimeContext(ctx, job, contract);
     const verificationRunId = runtime.verificationRunId ?? this.verificationRunId();
-    await this.writeVerificationRun({
+    const runInput = {
       orgId: job.orgId,
       id: verificationRunId,
       projectId: job.projectId,
@@ -135,7 +142,17 @@ export class BaselineReproductionStage implements ResolutionStage {
       classification: "inconclusive",
       status: "running",
       ...(runtime.integrationNodeId === undefined ? {} : { integrationNodeId: runtime.integrationNodeId }),
-    });
+    } satisfies WriteBehaviorVerificationRunStageInput;
+    const started =
+      this.startVerificationRun === undefined
+        ? {
+            id: await this.writeVerificationRun(runInput),
+            status: "running" as const,
+            classification: "inconclusive" as const,
+            shouldRun: true,
+          }
+        : await this.startVerificationRun(runInput);
+    if (!started.shouldRun) return recordedBaselineResult(contract, started);
 
     let baseline: SymptomBaselineResult;
     try {
@@ -144,10 +161,10 @@ export class BaselineReproductionStage implements ResolutionStage {
         projectId: job.projectId,
         contractId: contract.id,
         contract: contract.contract,
-        verificationRunId,
+        verificationRunId: started.id,
       });
     } catch {
-      return this.recordProbeFailure(job, contract, verificationRunId);
+      return this.recordProbeFailure(job, contract, started.id);
     }
     // Deliberately outside the probe catch: after a determined baseline outcome,
     // a finalize/transition failure must surface rather than reclassifying a real
@@ -235,6 +252,14 @@ export class BaselineReproductionStage implements ResolutionStage {
     );
   }
 
+  private async startRunOnPool(
+    input: WriteBehaviorVerificationRunStageInput,
+  ): Promise<StartedBehaviorVerificationRunStage> {
+    return runWithOrgScope(this.dependencies.pool, input.orgId, (client) =>
+      startBehaviorVerificationRunStage(client, input),
+    );
+  }
+
   private async finalizeRunOnPool(input: FinalizeVerificationRunInput): Promise<void> {
     const rowCount = await finalizeBaselineVerificationRun(this.dependencies.pool, input);
     if (rowCount !== 1) throw new Error(`baseline verification run ${input.verificationRunId} was not finalized`);
@@ -252,8 +277,12 @@ export class BaselineReproductionStage implements ResolutionStage {
         projectId: input.projectId,
         issueLoopId: input.issueLoopId,
         toState: input.state,
+        fromStates: ["open", "awaiting_reproduction"],
       });
       if (transitioned === undefined) throw new Error(`baseline issue loop ${input.issueLoopId} was not found`);
+      if (!transitioned.changed) {
+        throw new Error(`baseline issue loop ${input.issueLoopId} refused ${input.state} transition`);
+      }
     });
   }
 }
@@ -296,6 +325,28 @@ function classifyBaseline(baseline: SymptomBaselineResult): BaselineClassificati
     status: "failed",
     loopState: "awaiting_reproduction",
   };
+}
+
+function recordedBaselineResult(
+  contract: SymptomContractRow,
+  started: StartedBehaviorVerificationRunStage,
+): ResolutionStageResult {
+  const shared = {
+    proofGrade: contract.proofPolicy,
+    verificationRunId: started.id,
+    assertionIds: [],
+    evidenceRefs: [],
+  };
+  if (started.classification === "product_failure") {
+    return { ...shared, outcome: "passed", classification: "product_failure" };
+  }
+  if (started.classification === "stale_contract") {
+    return { ...shared, outcome: "failed", classification: "stale_contract" };
+  }
+  if (started.classification === "infra_failure" || started.classification === "inconclusive") {
+    return { ...shared, outcome: "inconclusive", classification: started.classification };
+  }
+  throw new Error(`baseline receipt ${started.id} has incompatible classification ${started.classification}`);
 }
 
 class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver {

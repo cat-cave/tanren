@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
-
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export const ISSUE_LOOP_SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -39,7 +38,6 @@ const SourceFindingStatus = z.enum(SOURCE_FINDING_STATUSES);
 export type SourceFindingStatus = z.infer<typeof SourceFindingStatus>;
 const IssueLoopRelation = z.enum(ISSUE_LOOP_RELATIONS);
 export type IssueLoopRelation = z.infer<typeof IssueLoopRelation>;
-
 const JsonRecord = z.record(z.string(), z.unknown());
 
 export const IssueLoopRow = z.object({
@@ -236,6 +234,7 @@ export interface TransitionIssueLoopInput {
   issueLoopId: string;
   toState: IssueLoopState;
   fromState?: IssueLoopState;
+  fromStates?: readonly IssueLoopState[];
 }
 export interface TransitionIssueLoopResult {
   loop: IssueLoopRow;
@@ -274,7 +273,7 @@ export const IssueLoopStore = {
     return decodeIssueLoop(result.rows[0]!);
   },
 
-  async upsertForSource(client: QueryClient, input: UpsertIssueLoopForSourceInput): Promise<IssueLoopRow> {
+  async upsertForSource(client: QueryClient, input: UpsertIssueLoopForSourceInput) {
     const id = `iloop_${randomUUID()}`;
     const result = await client.query<RawIssueLoopRow>(
       `INSERT INTO issue_loops
@@ -297,7 +296,7 @@ export const IssueLoopStore = {
       ],
     );
     const inserted = result.rows[0];
-    if (inserted !== undefined) return decodeIssueLoop(inserted);
+    if (inserted !== undefined) return { loop: decodeIssueLoop(inserted), created: true };
     const existing = await client.query<RawIssueLoopRow>(
       `SELECT ${ISSUE_LOOP_COLUMNS}
          FROM issue_loops
@@ -306,7 +305,7 @@ export const IssueLoopStore = {
     );
     const row = existing.rows[0];
     if (row === undefined) throw new IssueLoopNotFoundError(input.externalKey);
-    return decodeIssueLoop(row);
+    return { loop: decodeIssueLoop(row), created: false };
   },
 
   async get(client: QueryClient, orgId: string, projectId: string, loopId: string): Promise<IssueLoopRow | undefined> {
@@ -427,14 +426,17 @@ export const IssueLoopStore = {
     client: QueryClient,
     input: TransitionIssueLoopInput,
   ): Promise<TransitionIssueLoopResult | undefined> {
+    if (input.fromState !== undefined && input.fromStates !== undefined)
+      throw new Error("issue-loop transition accepts fromState or fromStates, not both");
+    const fromStates = input.fromStates ?? (input.fromState === undefined ? [] : [input.fromState]);
     const result = await client.query<RawIssueLoopRow>(
       `UPDATE issue_loops
           SET state = $4, row_version = row_version + 1, updated_at = now()
         WHERE org_id = $1 AND project_id = $2 AND id = $3
           AND state <> $4
-          AND ($5::text IS NULL OR state = $5)
+          AND (cardinality($5::text[]) = 0 OR state = ANY($5::text[]))
        RETURNING ${ISSUE_LOOP_COLUMNS}`,
-      [input.orgId, input.projectId, input.issueLoopId, input.toState, input.fromState ?? null],
+      [input.orgId, input.projectId, input.issueLoopId, input.toState, fromStates],
     );
     const changed = result.rows[0];
     if (changed !== undefined) return { loop: decodeIssueLoop(changed), changed: true };

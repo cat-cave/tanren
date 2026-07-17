@@ -96,6 +96,10 @@ function fingerprint(input: IssueObservation): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(source), "utf8").digest("hex")}`;
 }
 
+function sourceRevisionHash(providerRevision: string): string {
+  return `sha256:${createHash("sha256").update(providerRevision, "utf8").digest("hex")}`;
+}
+
 function syncPayload(input: ResolutionTransitionInput): Record<string, string> {
   return { externalKey: input.externalKey, desiredState: "closed" };
 }
@@ -114,7 +118,7 @@ async function recordObservation(client: pg.PoolClient, source: InboxSource, inp
   if (projectId === null || projectId === undefined) throw new IssueSourceProjectRequiredError(source.id);
   const observedAt = input.observedAt ?? new Date();
   const fp = fingerprint(input);
-  const loop = await IssueLoopStore.upsertForSource(client, {
+  const loopResult = await IssueLoopStore.upsertForSource(client, {
     orgId: input.orgId,
     projectId,
     sourceId: source.id,
@@ -123,6 +127,7 @@ async function recordObservation(client: pg.PoolClient, source: InboxSource, inp
     severity: loopSeverity(input.severity),
     sourceRevisionId: input.providerRevision,
   });
+  const loop = loopResult.loop;
   const append = await IssueLoopStore.appendFindingIfAbsent(client, {
     orgId: input.orgId,
     projectId,
@@ -150,6 +155,25 @@ async function recordObservation(client: pg.PoolClient, source: InboxSource, inp
         sourceFindingId: append.finding.id,
         sourceId: source.id,
         providerRevision: input.providerRevision,
+      },
+    });
+    if (loopResult.created) {
+      await events.append({
+        orgId: input.orgId,
+        projectId,
+        eventType: "issue_loop.opened",
+        payload: { projectId, issueLoopId: loop.id, sourceFindingId: append.finding.id },
+      });
+    }
+    await events.append({
+      orgId: input.orgId,
+      projectId,
+      eventType: "issue_loop.source_revision_observed",
+      payload: {
+        projectId,
+        issueLoopId: loop.id,
+        sourceFindingId: append.finding.id,
+        sourceRevisionHash: sourceRevisionHash(input.providerRevision),
       },
     });
   }

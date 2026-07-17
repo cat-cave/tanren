@@ -82,6 +82,12 @@ export interface ReleaseResolutionJobInput {
 
 export type RecoverExpiredResolutionJobsInput = ClaimResolutionJobInput;
 
+export interface ResolutionLoopControlInput {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly issueLoopId: string;
+}
+
 /** One minute is long enough for a periodic heartbeat to survive a transient delay. */
 export const DEFAULT_RESOLUTION_JOB_LEASE_MS = 60_000;
 
@@ -161,8 +167,7 @@ export class ResolutionJobStore {
        UPDATE resolution_jobs AS job
           SET state = 'running',
               lease_owner = $2,
-              lease_expiry = now() + ($3::bigint * interval '1 millisecond'),
-              attempt = job.attempt + 1
+              lease_expiry = now() + ($3::bigint * interval '1 millisecond')
          FROM candidate
         WHERE job.org_id = candidate.org_id AND job.id = candidate.id
        RETURNING ${JOB_COLUMNS}`,
@@ -186,8 +191,7 @@ export class ResolutionJobStore {
        UPDATE resolution_jobs AS job
           SET state = 'running',
               lease_owner = $3,
-              lease_expiry = now() + ($4::bigint * interval '1 millisecond'),
-              attempt = job.attempt + 1
+              lease_expiry = now() + ($4::bigint * interval '1 millisecond')
          FROM candidate
         WHERE job.org_id = candidate.org_id AND job.id = candidate.id
        RETURNING ${JOB_COLUMNS}`,
@@ -216,6 +220,34 @@ export class ResolutionJobStore {
     return result.rowCount === 1;
   }
 
+  /**
+   * Fence a stage invocation to the current, unexpired lease and return the
+   * database row that is actually authorized to execute. Callers must never run
+   * a client-supplied reconstruction of a resolution job.
+   */
+  public async verifyActiveLease(input: RenewResolutionJobLeaseInput): Promise<ResolutionJob | undefined> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => this.verifyActiveLeaseOnClient(client, input));
+  }
+
+  public async verifyActiveLeaseOnClient(
+    client: QueryClient,
+    input: RenewResolutionJobLeaseInput,
+  ): Promise<ResolutionJob | undefined> {
+    const result = await client.query<RawResolutionJobRow>(
+      `UPDATE resolution_jobs AS job
+          SET lease_expiry = now() + ($4::bigint * interval '1 millisecond')
+        WHERE org_id = $1
+          AND id = $2
+          AND state = 'running'
+          AND lease_owner = $3
+          AND lease_expiry > now()
+       RETURNING ${JOB_COLUMNS}`,
+      [input.orgId, input.id, input.leaseOwner, leaseDuration(input.leaseMs)],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : decodeLeasedJob(row);
+  }
+
   /** Return a currently owned lease to the ready set without erasing its attempt evidence. */
   public async release(input: ReleaseResolutionJobInput): Promise<boolean> {
     return runWithOrgScope(this.pool, input.orgId, (client) => this.releaseOnClient(client, input));
@@ -230,7 +262,8 @@ export class ResolutionJobStore {
         WHERE org_id = $1
           AND id = $2
           AND state = 'running'
-          AND lease_owner = $3`,
+          AND lease_owner = $3
+          AND lease_expiry > now()`,
       [input.orgId, input.id, input.leaseOwner, input.state ?? "queued"],
     );
     return result.rowCount === 1;
@@ -253,7 +286,8 @@ export class ResolutionJobStore {
         WHERE org_id = $1
           AND id = $2
           AND state = 'running'
-          AND lease_owner = $3`,
+          AND lease_owner = $3
+          AND lease_expiry > now()`,
       [input.orgId, input.id, input.leaseOwner],
     );
     return result.rowCount === 1;
@@ -262,7 +296,8 @@ export class ResolutionJobStore {
   /**
    * Crash recovery claims every expired running row directly for `leaseOwner`.
    * `SKIP LOCKED` makes concurrent recovery passes disjoint; the re-leased row
-   * stays `running` and its monotonically increasing attempt count records replay.
+   * stays `running`. `attempt` is remediation lineage, not a lease-acquisition
+   * counter, so recovery must not mutate it.
    */
   public async recoverExpiredLeases(input: RecoverExpiredResolutionJobsInput): Promise<ResolutionJob[]> {
     return runWithOrgScope(this.pool, input.orgId, (client) => this.recoverExpiredLeasesOnClient(client, input));
@@ -284,14 +319,56 @@ export class ResolutionJobStore {
        )
        UPDATE resolution_jobs AS job
           SET lease_owner = $2,
-              lease_expiry = now() + ($3::bigint * interval '1 millisecond'),
-              attempt = job.attempt + 1
+              lease_expiry = now() + ($3::bigint * interval '1 millisecond')
          FROM expired
         WHERE job.org_id = expired.org_id AND job.id = expired.id
        RETURNING ${JOB_COLUMNS}`,
       [input.orgId, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     return result.rows.map(decodeLeasedJob);
+  }
+
+  /** System-scoped fan-out for the durable periodic scan. */
+  public static async listDistinctRunnableOrgIds(client: QueryClient): Promise<string[]> {
+    const result = await client.query<{ org_id: unknown }>(
+      `SELECT DISTINCT org_id
+         FROM resolution_jobs
+        WHERE state IN ('queued', 'retryable')
+           OR (state = 'running' AND lease_expiry <= now())`,
+    );
+    return result.rows.map((row) => scalarText(row.org_id));
+  }
+
+  /** Pause only unclaimed work; a running stage keeps its owned lease until it settles. */
+  public async pauseLoop(input: ResolutionLoopControlInput): Promise<number> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => this.pauseLoopOnClient(client, input));
+  }
+
+  public async pauseLoopOnClient(client: QueryClient, input: ResolutionLoopControlInput): Promise<number> {
+    const result = await client.query(
+      `UPDATE resolution_jobs
+          SET state = 'paused'
+        WHERE org_id = $1 AND project_id = $2 AND issue_loop_id = $3
+          AND state IN ('queued', 'retryable')`,
+      [input.orgId, input.projectId, input.issueLoopId],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  /** Resume a paused loop's unclaimed work into the normal durable ready set. */
+  public async resumeLoop(input: ResolutionLoopControlInput): Promise<number> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => this.resumeLoopOnClient(client, input));
+  }
+
+  public async resumeLoopOnClient(client: QueryClient, input: ResolutionLoopControlInput): Promise<number> {
+    const result = await client.query(
+      `UPDATE resolution_jobs
+          SET state = 'queued'
+        WHERE org_id = $1 AND project_id = $2 AND issue_loop_id = $3
+          AND state = 'paused'`,
+      [input.orgId, input.projectId, input.issueLoopId],
+    );
+    return result.rowCount ?? 0;
   }
 }
 

@@ -70,6 +70,22 @@ function appFor(enqueued: unknown[] = [], executed: ResolutionJob[] = [], comple
             attempt: 2,
           };
         },
+        async verifyActiveLease(input) {
+          return {
+            id: input.id,
+            orgId: input.orgId,
+            projectId: "project_1",
+            issueLoopId: "loop_1",
+            contractId: "contract_1",
+            releaseInstanceId: "release_1",
+            stage: "production",
+            state: "running",
+            leaseOwner: input.leaseOwner,
+            leaseExpiry: "2026-07-17T19:00:00.000Z",
+            idempotencyKey: "operator-retry-1",
+            attempt: 1,
+          };
+        },
         async complete(input) {
           completed.push(`${input.id}:${input.leaseOwner}`);
           return true;
@@ -137,7 +153,7 @@ describe("production verification retry route", () => {
         id: "rjob_manual_1",
         releaseInstanceId: "release_1",
         stage: "production",
-        attempt: 2,
+        attempt: 1,
       }),
     ]);
     expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);

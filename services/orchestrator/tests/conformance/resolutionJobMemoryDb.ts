@@ -32,6 +32,7 @@ export class ResolutionJobScopedClient {
     if (sql.startsWith("INSERT INTO resolution_jobs")) return this.enqueue(params);
     if (sql.startsWith("WITH candidate AS")) return this.claim(params);
     if (sql.startsWith("WITH expired AS")) return this.recover(params);
+    if (sql.startsWith("UPDATE resolution_jobs AS job SET lease_expiry = now()")) return this.verifyActiveLease(params);
     if (sql.startsWith("UPDATE resolution_jobs SET lease_expiry = now()")) return this.heartbeat(params);
     if (sql.startsWith("UPDATE resolution_jobs SET state = $4")) return this.release(params);
     if (sql.startsWith("UPDATE resolution_jobs SET state = 'completed'")) return this.complete(params);
@@ -81,7 +82,6 @@ export class ResolutionJobScopedClient {
     row.state = "running";
     row.lease_owner = leaseOwner;
     row.lease_expiry = leaseExpiry(this.now(), leaseMs);
-    row.attempt += 1;
     return { rows: [copy(row)], rowCount: 1 };
   }
 
@@ -103,7 +103,6 @@ export class ResolutionJobScopedClient {
     rows.forEach((row) => {
       row.lease_owner = leaseOwner;
       row.lease_expiry = leaseExpiry(observedAt, leaseMs);
-      row.attempt += 1;
     });
     return { rows: rows.map((row) => copy(row)), rowCount: rows.length };
   }
@@ -125,10 +124,33 @@ export class ResolutionJobScopedClient {
     return { rows: [], rowCount: 1 };
   }
 
+  private verifyActiveLease(params: readonly unknown[]): QueryResult {
+    const [orgId, id, leaseOwner, leaseMs] = params as [string, string, string, number];
+    const observedAt = this.now();
+    const row = this.visible().find(
+      (job) =>
+        job.org_id === orgId &&
+        job.id === id &&
+        job.state === "running" &&
+        job.lease_owner === leaseOwner &&
+        job.lease_expiry !== null &&
+        job.lease_expiry > observedAt,
+    );
+    if (row === undefined) return { rows: [], rowCount: 0 };
+    row.lease_expiry = leaseExpiry(observedAt, leaseMs);
+    return { rows: [copy(row)], rowCount: 1 };
+  }
+
   private release(params: readonly unknown[]): QueryResult {
     const [orgId, id, leaseOwner, state] = params as [string, string, string, string];
     const row = this.visible().find(
-      (job) => job.org_id === orgId && job.id === id && job.state === "running" && job.lease_owner === leaseOwner,
+      (job) =>
+        job.org_id === orgId &&
+        job.id === id &&
+        job.state === "running" &&
+        job.lease_owner === leaseOwner &&
+        job.lease_expiry !== null &&
+        job.lease_expiry > this.now(),
     );
     if (row === undefined) return { rows: [], rowCount: 0 };
     row.state = state;
@@ -140,7 +162,13 @@ export class ResolutionJobScopedClient {
   private complete(params: readonly unknown[]): QueryResult {
     const [orgId, id, leaseOwner] = params as [string, string, string];
     const row = this.visible().find(
-      (job) => job.org_id === orgId && job.id === id && job.state === "running" && job.lease_owner === leaseOwner,
+      (job) =>
+        job.org_id === orgId &&
+        job.id === id &&
+        job.state === "running" &&
+        job.lease_owner === leaseOwner &&
+        job.lease_expiry !== null &&
+        job.lease_expiry > this.now(),
     );
     if (row === undefined) return { rows: [], rowCount: 0 };
     row.state = "completed";

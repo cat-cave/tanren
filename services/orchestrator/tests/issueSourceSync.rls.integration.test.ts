@@ -162,7 +162,7 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     return { ...persisted, processed };
   }
 
-  it("records GitHub webhook findings through the bh-3 processor, manual findings, and the frozen finding event", async () => {
+  it("records GitHub webhook findings through the bh-3 processor and emits frozen loop events", async () => {
     const received = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
     expect(received).toMatchObject({ inserted: true, processed: true });
     const duplicate = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
@@ -189,7 +189,13 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       );
       return result.rows;
     });
-    expect(eventTypes.map((event) => event.event_type)).toEqual(["source.finding.recorded"]);
+    expect(eventTypes.map((event) => event.event_type)).toEqual([
+      "source.finding.recorded",
+      "issue_loop.opened",
+      "issue_loop.source_revision_observed",
+    ]);
+    expect(eventTypes[1]?.payload).toMatchObject({ projectId: PROJECT_A, issueLoopId: loop!.id });
+    expect(eventTypes[2]?.payload).toMatchObject({ projectId: PROJECT_A, issueLoopId: loop!.id });
     const manualResult = await manual.ingest(appPool, {
       orgId: ORG_A,
       sourceId: MANUAL_A,
@@ -306,7 +312,11 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     const orgBEvents = await runWithOrgScope(appPool, ORG_B, (client) =>
       client.query<{ event_type: string }>("SELECT event_type FROM events WHERE org_id = $1", [ORG_B]),
     );
-    expect(orgBEvents.rows.map((row) => row.event_type)).toEqual(["source.finding.recorded"]);
+    expect(orgBEvents.rows.map((row) => row.event_type)).toEqual([
+      "source.finding.recorded",
+      "issue_loop.opened",
+      "issue_loop.source_revision_observed",
+    ]);
     const invisible = await runWithOrgScope(appPool, ORG_B, (client) =>
       client.query("SELECT id FROM source_findings WHERE org_id = $1", [ORG_A]),
     );

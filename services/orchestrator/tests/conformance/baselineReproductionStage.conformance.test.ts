@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { AllowAllPeerVerifier } from "../../src/engine/contracts/mtlsChannel.js";
 import type { ResolutionJob, ResolutionStageResult } from "../../src/engine/contracts/resolutionStage.js";
+import type { ResolutionJobStore } from "../../src/engine/repositories/resolutionJobs.js";
 import type { SymptomBaselineResult } from "../../src/engine/contracts/symptomProbe.js";
 import { symptomContractHash, type SymptomContractV1 } from "../../src/engine/contracts/symptomContract.js";
 import type { SymptomContractRow } from "../../src/engine/repositories/symptomContracts.js";
@@ -172,7 +173,7 @@ class BaselineStageSqlMemoryPool {
         string,
       ];
       this.verificationRuns.push({ id, stage, resolutionJobId, classification, status });
-      return { rows: [{ id }], rowCount: 1 };
+      return { rows: [{ id, status, classification }], rowCount: 1 };
     }
     if (sql.includes("FROM symptom_contracts")) {
       const [orgId, contractId] = params as readonly [string, string];
@@ -377,6 +378,17 @@ describe("BaselineReproductionStage conformance", () => {
           return { ...baseline("not_reproduced"), verificationRunId: input.verificationRunId };
         },
       },
+      resolutionJobStore: {
+        async verifyActiveLease() {
+          return job;
+        },
+        async complete() {
+          return true;
+        },
+        async release() {
+          return true;
+        },
+      } as unknown as ResolutionJobStore,
     });
 
     const response = await app.request(
@@ -385,7 +397,8 @@ describe("BaselineReproductionStage conformance", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          job,
+          orgId: job.orgId,
+          leaseOwner: job.leaseOwner,
           context: {
             verificationRunId: "vrun_composition",
             environmentId: "venv_baseline",

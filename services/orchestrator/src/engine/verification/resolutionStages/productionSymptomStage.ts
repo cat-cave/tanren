@@ -13,7 +13,10 @@ import { HttpSymptomProbe } from "../../probes/httpSymptomProbe.js";
 import { SymptomProbeAdapter } from "../../probes/symptomProbeAdapter.js";
 import { ReleaseInstancesStore } from "../../repositories/releaseInstances.js";
 import { SymptomContractStore, type SymptomContractRow } from "../../repositories/symptomContracts.js";
-import { writeBehaviorVerificationRunStage } from "../behaviorVerificationRunStage.js";
+import {
+  startBehaviorVerificationRunStage,
+  type StartedBehaviorVerificationRunStage,
+} from "../behaviorVerificationRunStage.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 
@@ -61,7 +64,7 @@ export class ProductionSymptomStage implements ResolutionStage {
     const contract = await this.requireContract(job);
     const { release, binding } = await this.requireLiveBinding(job);
     const productionContract = contractAtProductionRelease(contract.contract, release.url);
-    const verificationRunId = `vrun_resolution_${job.id}_${job.attempt}`;
+    const verificationRunId = `vrun_resolution_${job.id}`;
     const contractHash = symptomContractHash(contract.contract);
     const contextHash = runtimeContextHash({
       contractHash,
@@ -71,8 +74,8 @@ export class ProductionSymptomStage implements ResolutionStage {
       productionUrl: productionContract.target["url"] as string,
     });
 
-    await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
-      await writeBehaviorVerificationRunStage(client, {
+    const started = await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
+      const receipt = await startBehaviorVerificationRunStage(client, {
         orgId: job.orgId,
         id: verificationRunId,
         projectId: job.projectId,
@@ -95,6 +98,7 @@ export class ProductionSymptomStage implements ResolutionStage {
         resolutionJobId: job.id,
         classification: "inconclusive",
       });
+      if (!receipt.shouldRun) return receipt;
       const events = this.eventsForClient(client);
       await events.append({
         orgId: job.orgId,
@@ -121,7 +125,9 @@ export class ProductionSymptomStage implements ResolutionStage {
           stage: this.kind,
         },
       });
+      return receipt;
     });
+    if (!started.shouldRun) return recordedProductionResult(contract, started);
 
     const probeResult = await this.probe.runVerification({
       orgId: job.orgId,
@@ -136,12 +142,18 @@ export class ProductionSymptomStage implements ResolutionStage {
     await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
       const updated = await client.query(
         `UPDATE behavior_verification_runs
-            SET status = 'completed', classification = $4
-          WHERE org_id = $1 AND id = $2 AND resolution_job_id = $3`,
-        [job.orgId, verificationRunId, job.id, result.classification],
+            SET status = $4, classification = $5
+          WHERE org_id = $1 AND id = $2 AND resolution_job_id = $3 AND stage = 'production'`,
+        [
+          job.orgId,
+          started.id,
+          job.id,
+          result.outcome === "inconclusive" ? "failed" : "completed",
+          result.classification,
+        ],
       );
       if (updated.rowCount !== 1) {
-        throw new Error(`production verification run ${verificationRunId} was not available to finalize`);
+        throw new Error(`production verification run ${started.id} was not available to finalize`);
       }
       await this.appendFinalEvent(this.eventsForClient(client), job, result);
     });
@@ -219,6 +231,28 @@ export class ProductionSymptomStage implements ResolutionStage {
       payload: { ...payload, outcome: "inconclusive", classification: result.classification },
     });
   }
+}
+
+function recordedProductionResult(
+  contract: SymptomContractRow,
+  started: StartedBehaviorVerificationRunStage,
+): ProductionResolutionStageResult {
+  const shared = {
+    proofGrade: contract.proofPolicy,
+    verificationRunId: started.id,
+    assertionIds: [],
+    evidenceRefs: [],
+  };
+  if (started.classification === "product_resolved") {
+    return { ...shared, outcome: "passed", classification: "product_resolved" };
+  }
+  if (started.classification === "product_failure") {
+    return { ...shared, outcome: "failed", classification: "product_failure" };
+  }
+  if (started.classification === "inconclusive" || started.classification === "infra_failure") {
+    return { ...shared, outcome: "inconclusive", classification: started.classification };
+  }
+  throw new Error(`production receipt ${started.id} has incompatible classification ${started.classification}`);
 }
 
 async function runtimeBinding(

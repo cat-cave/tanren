@@ -1,17 +1,21 @@
-import type { ResolutionStage, ResolutionStageKind } from "../contracts/resolutionStage.js";
+import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../contracts/resolutionStage.js";
 import { DEFAULT_RESOLUTION_JOB_LEASE_MS, type ResolutionJobStore } from "../repositories/resolutionJobs.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("resolution-dag-walker");
 
-// bh-6a intentionally registers no stages. bh-8 and bh-10 add implementations;
-// bh-6b wires the stage transitions around this durable claim/lease loop.
-const registeredStages = new Map<ResolutionStageKind, ResolutionStage>();
+type LeaseClaim = {
+  readonly orgId: string;
+  readonly leaseOwner: string;
+  readonly leaseMs: number;
+};
 
 export interface ResolutionDagWalkerDeps {
   readonly store: ResolutionJobStore;
   /** System-scoped enumeration belongs to the caller; all store operations remain org-scoped. */
   readonly orgIds: () => Promise<readonly string[]>;
+  /** The production registry from `resolutionStages/index.ts`, keyed by job stage. */
+  readonly stages: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly leaseOwner: string;
   readonly leaseMs?: number;
 }
@@ -26,10 +30,17 @@ export interface ResolutionDagWalkResult {
   readonly claimedJobIds: readonly string[];
 }
 
+class ResolutionLeaseLostError extends Error {
+  public override readonly name = "ResolutionLeaseLostError";
+}
+
 /**
- * The durable resolution walker skeleton. It scans immediately at startup and
- * periodically thereafter. There is deliberately no stage execution in bh-6a:
- * every leased job is heartbeated once and released back to the ready set.
+ * Durable claim → fence → run → settle orchestration for resolution stages.
+ *
+ * A notification can reduce latency, but this periodic scan is the source of
+ * truth: every claimed/recovered row is re-fenced immediately before invoking a
+ * stage, heartbeated while that stage is running, and settled only through the
+ * same unexpired lease. A completed row is never claimable again.
  */
 export class ResolutionDagWalker {
   private timer: NodeJS.Timeout | undefined;
@@ -82,32 +93,89 @@ export class ResolutionDagWalker {
   }
 
   private async walkOrg(orgId: string): Promise<ResolutionDagWalkResult> {
-    const claim = { orgId, leaseOwner: this.deps.leaseOwner, leaseMs: this.leaseMs };
+    const claim: LeaseClaim = { orgId, leaseOwner: this.deps.leaseOwner, leaseMs: this.leaseMs };
     const recovered = await this.deps.store.recoverExpiredLeases(claim);
-    const recoveredJobIds = recovered.map((job) => job.id);
+    for (const job of recovered) await this.runClaimed(job, claim);
 
-    // A recovered lease is already running, so process it before selecting fresh
-    // work. This avoids re-claiming its just-released row within the same scan.
-    if (recovered.length > 0) {
-      for (const job of recovered) await this.placeholder(job.id, claim);
-      return { orgId, recoveredJobIds, claimedJobIds: [] };
-    }
-
+    // Recovery rows stay running under this worker's fresh lease. After handling
+    // them, also take one normal queued row so a dropped notification only affects
+    // latency, never whether work is eventually driven.
     const next = await this.deps.store.claimNext(claim);
-    if (next === undefined) return { orgId, recoveredJobIds, claimedJobIds: [] };
-    await this.placeholder(next.id, claim);
-    return { orgId, recoveredJobIds, claimedJobIds: [next.id] };
+    if (next !== undefined) await this.runClaimed(next, claim);
+    return {
+      orgId,
+      recoveredJobIds: recovered.map((job) => job.id),
+      claimedJobIds: next === undefined ? [] : [next.id],
+    };
   }
 
-  private async placeholder(
-    jobId: string,
-    claim: { orgId: string; leaseOwner: string; leaseMs: number },
-  ): Promise<void> {
-    // This is the bh-6a placeholder in place of a future registered stage. It
-    // intentionally exercises heartbeat ownership before returning the lease.
-    await this.deps.store.heartbeat({ ...claim, id: jobId });
-    await this.deps.store.release({ orgId: claim.orgId, id: jobId, leaseOwner: claim.leaseOwner });
+  private async runClaimed(claimed: ResolutionJob, claim: LeaseClaim): Promise<void> {
+    // The claim result is not itself authority to execute: re-read and extend the
+    // active lease to protect against an expiry/reclaim between claim and run.
+    const job = await this.deps.store.verifyActiveLease({ ...claim, id: claimed.id });
+    if (job === undefined) {
+      throw new ResolutionLeaseLostError(`resolution job ${claimed.id} no longer has this worker's active lease`);
+    }
+    const stage = this.deps.stages.get(job.stage);
+    if (stage === undefined) {
+      await this.releaseAfterStageFailure(job, claim, new Error(`resolution stage ${job.stage} is not registered`));
+      return;
+    }
+
+    const heartbeatEveryMs = Math.max(1, Math.floor(claim.leaseMs / 3));
+    let stopped = false;
+    let heartbeatError: Error | undefined;
+    let heartbeatInFlight: Promise<void> = Promise.resolve();
+    const heartbeat = (): void => {
+      heartbeatInFlight = heartbeatInFlight
+        .then(async () => {
+          if (stopped) return;
+          const renewed = await this.deps.store.heartbeat({ ...claim, id: job.id });
+          if (!renewed) {
+            throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease while ${job.stage} ran`);
+          }
+        })
+        .catch((error: unknown) => {
+          heartbeatError = asError(error);
+        });
+    };
+    const timer = setInterval(heartbeat, heartbeatEveryMs);
+    timer.unref?.();
+
+    try {
+      const result = await stage.run(job, {});
+      stopped = true;
+      clearInterval(timer);
+      await heartbeatInFlight;
+      if (heartbeatError !== undefined) throw asError(heartbeatError);
+
+      if (result.outcome === "inconclusive") {
+        const released = await this.deps.store.release({ ...claim, id: job.id, state: "retryable" });
+        if (!released) {
+          throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before retry transition`);
+        }
+        return;
+      }
+      const completed = await this.deps.store.complete({ ...claim, id: job.id });
+      if (!completed) {
+        throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before completion`);
+      }
+    } catch (error) {
+      stopped = true;
+      clearInterval(timer);
+      await this.releaseAfterStageFailure(job, claim, error);
+    }
+  }
+
+  private async releaseAfterStageFailure(job: ResolutionJob, claim: LeaseClaim, error: unknown): Promise<never> {
+    const released = await this.deps.store.release({ ...claim, id: job.id, state: "retryable" });
+    if (!released) {
+      throw new Error(`resolution job ${job.id} failed and could not be released under its lease`, { cause: error });
+    }
+    throw asError(error);
   }
 }
 
-export { registeredStages };
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}

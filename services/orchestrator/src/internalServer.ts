@@ -25,6 +25,7 @@ import { createInternalFixtureLeaseRoutes } from "./routes/internal/fixtureLease
 import { createInternalResolutionJobRoutes } from "./routes/internal/resolutionJobs.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
 import { BaselineReproductionStage, type BaselineProbe } from "./engine/verification/resolutionStages/index.js";
+import type { ResolutionJobStore } from "./engine/repositories/resolutionJobs.js";
 import { parsedEnv } from "./envSchema.js";
 import { createLogger } from "./engine/observability/logger.js";
 
@@ -50,6 +51,8 @@ export interface InternalAppDependencies {
   readonly verifier?: MtlsPeerVerifier;
   /** Test seam for the live BaselineReproductionStage's SP-5 probe call. */
   readonly baselineProbe?: BaselineProbe;
+  /** Test seam for mTLS reproduction lease fencing. */
+  readonly resolutionJobStore?: ResolutionJobStore;
 }
 
 /** Build the internal control-plane Hono app (the `/internal/*` surface). */
@@ -66,6 +69,7 @@ export function buildInternalApp(deps: InternalAppDependencies): Hono {
     createInternalResolutionJobRoutes({
       pool: deps.pool,
       verifier,
+      ...(deps.resolutionJobStore === undefined ? {} : { store: deps.resolutionJobStore }),
       baselineStage: new BaselineReproductionStage({
         pool: deps.pool,
         ...(deps.baselineProbe === undefined ? {} : { probe: deps.baselineProbe }),
