@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assertionId": {
+      "type": "string"
+    },
+    "expectedHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "issueLoopId": {
+      "type": "string"
+    },
+    "observedHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive"
+      ],
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "timingMs": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "verificationRunId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "verificationRunId",
+    "assertionId",
+    "expectedHash",
+    "observedHash",
+    "outcome",
+    "timingMs"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.symptom.assertion.recorded"
+}

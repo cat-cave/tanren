@@ -47,6 +47,9 @@ export const projects = pgTable(
     // (the autonomous walker drives it), or 'archived' (walker + strand
     // reconciler skip it; in-flight runs/specs are cancelled on archive).
     lifecycle: text("lifecycle").notNull().default("active"),
+    // Governance tier visibility predicate (gv-8). NULL preserves the existing
+    // project rows until the governance lane supplies an explicit visibility.
+    repoVisibility: text("repo_visibility"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
       .notNull()
@@ -60,6 +63,7 @@ export const projects = pgTable(
     uniqueIndex("projects_org_project_unique").on(table.orgId, table.projectId),
     index("projects_org_id").on(table.orgId),
     check("projects_lifecycle_check", sql`${table.lifecycle} IN ('deriving','active','archived')`),
+    check("projects_repo_visibility_check", sql`${table.repoVisibility} IN ('public','private')`),
   ],
 );
 

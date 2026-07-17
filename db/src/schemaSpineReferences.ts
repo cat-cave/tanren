@@ -43,3 +43,9 @@ export const behaviorVerdictsReference = pgTable("behavior_verdicts", {
   projectId: text("project_id").notNull(),
   id: text("id").notNull(),
 });
+
+/** Reference-only runtime-verification run identity (migration 0037). */
+export const behaviorVerificationRunsReference = pgTable("behavior_verification_runs", {
+  orgId: text("org_id").notNull(),
+  id: text("id").notNull(),
+});

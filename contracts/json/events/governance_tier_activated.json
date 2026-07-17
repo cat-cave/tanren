@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "effectivePolicyHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "policyBindingId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "tierId": {
+      "type": "string"
+    },
+    "tierName": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "tierId",
+    "tierName",
+    "policyBindingId",
+    "effectivePolicyHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.governance.tier.activated"
+}
