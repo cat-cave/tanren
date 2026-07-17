@@ -16,6 +16,7 @@ const ORG_B = "org_effect_observer_b";
 const PROJECT_A = "project_effect_observer_a";
 const PROJECT_B = "project_effect_observer_b";
 const TRIGGER_A = `sha256:${"a".repeat(64)}`;
+const TRIGGER_CONCURRENT = `sha256:${"c".repeat(64)}`;
 
 function databaseName(): string {
   return `tanren_effect_observer_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -194,6 +195,24 @@ describeDb("SideEffectObserverAdapter — immutable evidence, watermark upsert, 
         ]),
       ),
     ).rejects.toThrow(/immutable.*append-only.*DELETE rejected/iu);
+  });
+
+  it("classifies concurrent observations of one trigger as ok and duplicate", async () => {
+    const observations = await Promise.all(
+      ["cursor_concurrent_a", "cursor_concurrent_b"].map((afterWatermark) =>
+        observer.observe({
+          orgId: ORG_A,
+          projectId: PROJECT_A,
+          observer: "github_webhook",
+          provider: "github",
+          triggerIdHash: TRIGGER_CONCURRENT,
+          afterWatermark,
+        }),
+      ),
+    );
+
+    const classifications = observations.map(([observation]) => observation?.classification).sort();
+    expect(classifications).toEqual(["duplicate", "ok"]);
   });
 
   it("returns zero observer evidence and watermarks from the foreign org", async () => {

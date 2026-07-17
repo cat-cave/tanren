@@ -43,6 +43,9 @@ class EffectObserverScopedClient {
       this.orgId = orgMatch[1];
       return { rows: [], rowCount: 0 };
     }
+    if (sql === "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))") {
+      return { rows: [], rowCount: 1 };
+    }
     if (
       sql.startsWith("SELECT org_id, project_id, observation_id") &&
       sql.includes("FROM behavior_effect_observations")
@@ -51,7 +54,8 @@ class EffectObserverScopedClient {
     }
     if (sql.startsWith("INSERT INTO behavior_effect_observations")) return this.insertObservation(params);
     if (sql.startsWith("INSERT INTO effect_observer_watermarks")) return this.upsertWatermark(params);
-    if (/^(UPDATE|DELETE) behavior_effect_observations/u.test(sql)) return this.immutableMutation(params);
+    const immutableMutation = /^(UPDATE|DELETE)(?: FROM)? behavior_effect_observations/u.exec(sql);
+    if (immutableMutation !== null) return this.immutableMutation(immutableMutation[1], params);
     throw new Error(`EffectObserverMemoryDb: unrecognized SQL: ${sql}`);
   }
 
@@ -151,13 +155,13 @@ class EffectObserverScopedClient {
     return { rows: [], rowCount: 1 };
   }
 
-  private immutableMutation(params: readonly unknown[]): QueryResult {
+  private immutableMutation(operation: string, params: readonly unknown[]): QueryResult {
     const [orgId, observationId] = params as [string, string];
     const visible = this.db.behaviorEffectObservations.some(
       (row) => row.org_id === this.orgId && row.org_id === orgId && row.observation_id === observationId,
     );
     if (!visible) return { rows: [], rowCount: 0 };
-    throw new Error("behavior_effect_observations rows are immutable (append-only): UPDATE rejected");
+    throw new Error(`behavior_effect_observations rows are immutable (append-only): ${operation} rejected`);
   }
 }
 
@@ -246,6 +250,15 @@ describe("PgSideEffectObserverAdapter conformance (in-memory pg, RLS-modeled)", 
         ),
       ),
     ).rejects.toThrow(/immutable.*append-only/iu);
+
+    await expect(
+      runWithOrgScope(pool, ORG_A, (client) =>
+        client.query("DELETE FROM behavior_effect_observations WHERE org_id = $1 AND observation_id = $2", [
+          ORG_A,
+          "effect_ok",
+        ]),
+      ),
+    ).rejects.toThrow(/immutable.*append-only.*DELETE rejected/iu);
 
     const foreignRows = await runWithOrgScope(pool, ORG_B, (client) =>
       repository.listForProject(client, { orgId: ORG_A, projectId: PROJECT_A }),
