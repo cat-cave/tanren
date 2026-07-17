@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "observer": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "watermarkHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "observer",
+    "watermarkHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.observer.watermark.advanced"
+}

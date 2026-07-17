@@ -435,6 +435,41 @@
       "when": 1784295682588,
       "tag": "0063_governance_binding_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1784298006763,
+      "tag": "0064_runtime_fixture_leases",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1784298040390,
+      "tag": "0065_runtime_effect_observations",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1784298088163,
+      "tag": "0066_integration_proof_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1784298109337,
+      "tag": "0067_repository_visibility_observations",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1784298115423,
+      "tag": "0068_wave6_event_vocab",
+      "breakpoints": true
     }
   ]
 }

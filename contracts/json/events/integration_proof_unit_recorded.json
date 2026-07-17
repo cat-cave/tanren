@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "inputHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "proofUnitId": {
+      "type": "string"
+    },
+    "quarantineEpoch": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "subjectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "proofUnitId",
+    "kind",
+    "subjectId",
+    "quarantineEpoch"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.proof_unit.recorded"
+}

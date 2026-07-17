@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cursorHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "observationId": {
+      "type": "string"
+    },
+    "observer": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "observationId",
+    "observer",
+    "provider"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.observer.inconclusive_external"
+}
