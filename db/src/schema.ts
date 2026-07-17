@@ -495,3 +495,4 @@ export {
 } from "./schemaDesignSystems.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
 export { governancePolicyRevisions } from "./schemaGovernance.js";
+export * from "./schemaEffectivePolicySnapshots.js";

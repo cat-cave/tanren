@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "catalogDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "catalogId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "catalogId",
+    "catalogDigest",
+    "artifactIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.design.catalog.built"
+}

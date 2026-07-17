@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseSha": {
+      "type": "string"
+    },
+    "diagnosticsDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "failureCode": {
+      "type": "string"
+    },
+    "memberKey": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "memberKey",
+    "baseSha",
+    "failureCode",
+    "diagnosticsDigest"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.node.materialization_failed"
+}
