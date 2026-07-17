@@ -37,6 +37,7 @@ import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts
 import type { DeployProvisionerDeps, DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import { pollUntilTerminal } from "./pollUntilTerminal.js";
+import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
 
 /** The adapter-class kind this impl registers under. */
 export const DIRECT_API_ADAPTER_KIND = "direct_api";
@@ -49,6 +50,10 @@ export interface DirectApiDeployAdapterDeps {
   urlProbe: UrlReachabilityProbe;
   /** The verify poll CADENCE (the spacing between polls; no count — poll-until-terminal). */
   poll: VerifyPollPolicy;
+  /** Durable release lifecycle store; required for every direct-api adapter. */
+  releaseInstances: ReleaseInstancesRepository;
+  /** The scalar integration-node lineage for a build that has no preview input yet. */
+  integrationNodeId?: string;
 }
 
 /**
@@ -87,7 +92,22 @@ export class DirectApiDeployAdapter implements DeployAdapter {
       ref,
       deployed.deploymentId,
     );
-    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+    await this.releaseInstances().create({
+      orgId: authority.deploy.orgId,
+      projectId: authority.deploy.projectId,
+      provider: ref.provider,
+      appId: ref.appId,
+      environment: "preview",
+      deploymentId: deployed.deploymentId,
+      sourceRef: source.ref,
+      artifactDigest: identity.artifactDigest,
+      providerChecksum: identity.providerChecksum,
+      integrationNodeId: this.integrationNodeId(authority.deploy),
+      behaviorRevisionIds: [],
+      url: deployed.url,
+      state: "built",
+    });
+    return { ...identity, deploymentId: deployed.deploymentId, url: deployed.url, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
@@ -102,6 +122,21 @@ export class DirectApiDeployAdapter implements DeployAdapter {
   async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
     const deployed = await this.deploy(grant, ref, input.source);
     this.assertResolvedUrl(ref, deployed.deploymentId, deployed.url, "apply preview");
+    await this.releaseInstances().applyPreview({
+      orgId: grant.orgId,
+      projectId: grant.projectId,
+      provider: ref.provider,
+      appId: ref.appId,
+      environment: "preview",
+      deploymentId: deployed.deploymentId,
+      sourceRef: input.source.ref,
+      artifactDigest: input.artifactDigest,
+      providerChecksum: null,
+      integrationNodeId: input.integrationNodeId,
+      behaviorRevisionIds: input.behaviorRevisionIds,
+      url: deployed.url,
+      state: "preview",
+    });
     return {
       deploymentId: deployed.deploymentId,
       url: deployed.url,
@@ -115,6 +150,17 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
     const promoted = await provisioner.promoteToProduction(grant, ref.appId, input.deploymentId);
     this.assertResolvedUrl(ref, promoted.deploymentId, promoted.url, "promote");
+    await this.releaseInstances().promote({
+      orgId: grant.orgId,
+      projectId: grant.projectId,
+      provider: ref.provider,
+      appId: ref.appId,
+      deploymentId: input.deploymentId,
+      promotedDeploymentId: promoted.deploymentId,
+      artifactDigest: input.artifactDigest,
+      previousReleaseInstanceId: input.previousReleaseInstanceId,
+      url: promoted.url,
+    });
     return {
       deploymentId: promoted.deploymentId,
       url: promoted.url,
@@ -128,6 +174,14 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
     const restored = await provisioner.rollbackToDeployment(grant, ref.appId, input.targetReleaseInstanceId);
     this.assertResolvedUrl(ref, restored.deploymentId, restored.url, "rollback");
+    await this.releaseInstances().rollback({
+      orgId: grant.orgId,
+      projectId: grant.projectId,
+      releaseInstanceId: input.targetReleaseInstanceId,
+      targetArtifactDigest: input.targetArtifactDigest,
+      deploymentId: restored.deploymentId,
+      url: restored.url,
+    });
     return {
       deploymentId: restored.deploymentId,
       url: restored.url,
@@ -140,6 +194,12 @@ export class DirectApiDeployAdapter implements DeployAdapter {
   async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
     await provisioner.teardownDeployment(grant, ref.appId, previewId);
+    await this.releaseInstances().teardownPreview({
+      orgId: grant.orgId,
+      provider: ref.provider,
+      appId: ref.appId,
+      deploymentId: previewId,
+    });
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
@@ -179,10 +239,13 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     ref: DeployRef,
     deploymentId: string,
   ): Promise<DeployVerification> {
+    const releases = this.releaseInstances();
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    let verifiedGrant: OrgGrant | undefined;
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await provisioner.deploymentStatus(await grantForAttempt(), ref.appId, deploymentId);
+        verifiedGrant = await grantForAttempt();
+        const read = await provisioner.deploymentStatus(verifiedGrant, ref.appId, deploymentId);
         return { state: read.state, ready: read.terminalReady, failed: read.terminalFailed, url: read.url };
       },
       onFailureTerminal: (state) =>
@@ -196,7 +259,17 @@ export class DirectApiDeployAdapter implements DeployAdapter {
         ),
       intervalMs: this.deps.poll.intervalMs,
     });
-    return this.smokeCheck(ref, deploymentId, poll.state, poll.url, pollCount);
+    const verification = await this.smokeCheck(ref, deploymentId, poll.state, poll.url, pollCount);
+    if (verifiedGrant === undefined) throw new Error("deploy verify: provider never supplied an org grant");
+    await releases.markLive({
+      orgId: verifiedGrant.orgId,
+      projectId: verifiedGrant.projectId,
+      provider: ref.provider,
+      appId: ref.appId,
+      deploymentId,
+      url: verification.url,
+    });
+    return verification;
   }
 
   /**
@@ -240,5 +313,18 @@ export class DirectApiDeployAdapter implements DeployAdapter {
         `deploy ${operation}: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' returned no resolved URL`,
       );
     }
+  }
+
+  private integrationNodeId(grant: OrgGrant): string {
+    const metadataNode = grant.metadata["integrationNodeId"];
+    if (typeof metadataNode === "string" && metadataNode !== "") return metadataNode;
+    if (this.deps.integrationNodeId !== undefined && this.deps.integrationNodeId !== "") {
+      return this.deps.integrationNodeId;
+    }
+    return `run:${grant.projectId}`;
+  }
+
+  private releaseInstances(): ReleaseInstancesRepository {
+    return this.deps.releaseInstances;
   }
 }

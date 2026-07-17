@@ -7,19 +7,19 @@
 import { runWithJobOrgId } from "@tanren/db";
 import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.js";
 import type { EventStore } from "../eventStore.js";
-import type { SecretStore } from "../contracts/secretStore.js";
-import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
-import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
-import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
+import { buildDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../deploy/buildDeployAdapter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
-import type { ProjectDeployTarget } from "./deployOnMerge.js";
+import type { ProjectDeployTarget } from "./deployOnMergeShared.js";
 import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
+import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
+import type { DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
 
 export type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 export { loadValidatedRunEvent, type ValidatedRunLineage } from "./runLineage.js";
+export { createLogger } from "../observability/logger.js";
 
 // Structured logger for the deploy-verify convergence loop's per-iteration `*.retrying`
 // observability (Codex critic #13). The wrapping helper's own failures + successes fire
@@ -44,10 +44,11 @@ const DEPLOY_TRIGGER_FAILED_REASON =
 /** The deploy-path collaborators the verify/append helpers run over (the watcher's deps subset). */
 export interface DeployVerifyContext {
   eventStore: EventStore;
-  transport: DeployHttpTransport;
-  secrets: SecretStore;
+  transport: DeployProvisionerDeps["transport"];
+  secrets: DeployProvisionerDeps["secrets"];
   urlProbe?: UrlReachabilityProbe;
   verifyPoll?: VerifyPollPolicy;
+  releaseInstances: ReleaseInstancesRepository;
 }
 
 /**
@@ -134,6 +135,7 @@ export async function verifyDeploy(
   const { target } = args;
   const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
     provisioner: { transport: ctx.transport, secrets: ctx.secrets },
+    releaseInstances: ctx.releaseInstances,
     ...(ctx.urlProbe !== undefined && { urlProbe: ctx.urlProbe }),
     ...(ctx.verifyPoll !== undefined && { poll: ctx.verifyPoll }),
   });

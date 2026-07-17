@@ -16,7 +16,7 @@
 // grant list lives here too (the caller supplies the grants).
 
 import { migrateProjectConfig } from "../config/index.js";
-import type { ProjectDeployTarget } from "./deployOnMerge.js";
+import type { ProjectDeployTarget } from "./deployOnMergeShared.js";
 
 /** The canonical capability id a deploy-capable integration grant advertises. */
 export const DEPLOY_CAPABILITY = "deploy";
