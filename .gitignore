@@ -18,3 +18,4 @@ connections.manifest.local.yaml
 # Claude Code agent worktrees
 .claude/
 tanren.acceptance.json
+*.tsbuildinfo
