@@ -129,6 +129,19 @@ export interface WebhookEventRec {
   // Insertion-order proxy for the sweeper's `ORDER BY created_at ASC` read.
   seq: number;
 }
+export interface SourceSyncOutboxRec {
+  org_id: string;
+  id: string;
+  issue_loop_id: string;
+  source_id: string;
+  operation: string;
+  state: string;
+  payload_hash: string;
+  claim_owner: string | null;
+  claim_expires_at: string | null;
+  created_at: Date;
+  seq: number;
+}
 export interface AuditJobRec {
   id: string;
   org_id: string;
@@ -157,6 +170,7 @@ export class ForgeRecoveryDb {
   inboxSources: InboxSourceRec[] = [];
   candidates: CandidateRec[] = [];
   webhookEvents: WebhookEventRec[] = [];
+  sourceSyncOutbox: SourceSyncOutboxRec[] = [];
   auditJobs: AuditJobRec[] = [];
   // Monotonic insert/update counter for the candidate + webhook-event recency sorts.
   seq = 0;
@@ -203,6 +217,21 @@ export function webhookEventCols(e: WebhookEventRec): Record<string, unknown> {
     signature_algo: e.signature_algo,
     signature_key_version: e.signature_key_version,
     delivery_signed_at: e.delivery_signed_at,
+  };
+}
+
+export function sourceSyncOutboxCols(e: SourceSyncOutboxRec): Record<string, unknown> {
+  return {
+    org_id: e.org_id,
+    id: e.id,
+    issue_loop_id: e.issue_loop_id,
+    source_id: e.source_id,
+    operation: e.operation,
+    state: e.state,
+    payload_hash: e.payload_hash,
+    claim_owner: e.claim_owner,
+    claim_expires_at: e.claim_expires_at,
+    created_at: e.created_at,
   };
 }
 

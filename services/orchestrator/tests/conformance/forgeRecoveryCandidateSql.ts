@@ -11,6 +11,8 @@ import {
   type CandidateRec,
   type ForgeRecoveryDb,
   type QueryResult,
+  sourceSyncOutboxCols,
+  type SourceSyncOutboxRec,
   type WebhookEventRec,
 } from "./forgeRecoveryRecords.js";
 
@@ -214,6 +216,83 @@ export function webhookEventSql(
     e.last_error = error;
     e.status = poison ? "dead_lettered" : "failed";
     return { rows: [{ status: e.status }], rowCount: 1 };
+  }
+  return undefined;
+}
+
+export function sourceSyncOutboxSql(
+  db: ForgeRecoveryDb,
+  orgId: string,
+  sql: string,
+  params: readonly unknown[],
+): QueryResult | undefined {
+  const visible = (): SourceSyncOutboxRec[] => db.sourceSyncOutbox.filter((row) => row.org_id === orgId);
+  if (sql.startsWith("INSERT INTO source_sync_outbox")) {
+    const [ownOrgId, id, issueLoopId, sourceId, operation, payloadHash] = params as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    if (db.sourceSyncOutbox.some((row) => row.org_id === ownOrgId && row.id === id)) {
+      return { rows: [], rowCount: 0 };
+    }
+    const rec: SourceSyncOutboxRec = {
+      org_id: ownOrgId,
+      id,
+      issue_loop_id: issueLoopId,
+      source_id: sourceId,
+      operation,
+      state: "pending",
+      payload_hash: payloadHash,
+      claim_owner: null,
+      claim_expires_at: null,
+      created_at: new Date("2026-03-01T00:00:00.000Z"),
+      seq: ++db.seq,
+    };
+    db.sourceSyncOutbox.push(rec);
+    return { rows: [sourceSyncOutboxCols(rec)], rowCount: 1 };
+  }
+  if (sql.startsWith("SELECT org_id, id, issue_loop_id, source_id, operation, state, payload_hash")) {
+    const row = visible().find((candidate) => candidate.id === params[0]);
+    return row === undefined ? { rows: [], rowCount: 0 } : { rows: [sourceSyncOutboxCols(row)], rowCount: 1 };
+  }
+  if (/^SELECT .* FROM source_sync_outbox WHERE state IN \('pending','sent'\)/u.test(sql)) {
+    const limit = params[0] as number;
+    const rows = visible()
+      .filter((row) => ["pending", "sent"].includes(row.state) && row.claim_owner === null)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, limit)
+      .map((row) => sourceSyncOutboxCols(row));
+    return { rows, rowCount: rows.length };
+  }
+  if (sql === "SELECT DISTINCT org_id FROM source_sync_outbox WHERE state IN ('pending','sent')") {
+    return { rows: [...new Set(visible().map((row) => ({ org_id: row.org_id })))], rowCount: visible().length };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET claim_owner = $2")) {
+    const row = visible().find((candidate) => candidate.id === params[0]);
+    if (row !== undefined) row.claim_owner = params[1] as string;
+    return { rows: [], rowCount: row === undefined ? 0 : 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox SET state = 'sent'")) {
+    const row = visible().find((candidate) => candidate.id === params[0] && candidate.claim_owner === params[1]);
+    if (row !== undefined) row.state = "sent";
+    return { rows: [], rowCount: row === undefined ? 0 : 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("state = 'verified'")) {
+    const row = visible().find((candidate) => candidate.id === params[0] && candidate.claim_owner === params[1]);
+    if (row !== undefined) {
+      row.state = "verified";
+      row.claim_owner = null;
+    }
+    return { rows: [], rowCount: row === undefined ? 0 : 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("state = 'externally_closed_unverified'")) {
+    const row = visible().find((candidate) => candidate.id === params[0]);
+    if (row !== undefined && ["pending", "sent"].includes(row.state)) row.state = "externally_closed_unverified";
+    return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
   return undefined;
 }

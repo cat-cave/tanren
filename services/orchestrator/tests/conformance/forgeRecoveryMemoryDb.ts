@@ -21,7 +21,7 @@ import {
   type RunRec,
   type SpecRec,
 } from "./forgeRecoveryRecords.js";
-import { candidateSql, webhookEventSql } from "./forgeRecoveryCandidateSql.js";
+import { candidateSql, sourceSyncOutboxSql, webhookEventSql } from "./forgeRecoveryCandidateSql.js";
 
 export { ForgeRecoveryDb } from "./forgeRecoveryRecords.js";
 export type { QueryResult } from "./forgeRecoveryRecords.js";
@@ -90,6 +90,7 @@ export class ForgeRecoveryScopedClient {
       this.inboxSql(sql, params) ??
       this.candidateSql(sql, params) ??
       this.webhookEventSql(sql, params) ??
+      this.sourceSyncOutboxSql(sql, params) ??
       this.auditSql(sql, params)
     );
   }
@@ -363,6 +364,10 @@ export class ForgeRecoveryScopedClient {
 
   private webhookEventSql(sql: string, params: readonly unknown[]): QueryResult | undefined {
     return webhookEventSql(this.db, this.orgId, sql, params);
+  }
+
+  private sourceSyncOutboxSql(sql: string, params: readonly unknown[]): QueryResult | undefined {
+    return sourceSyncOutboxSql(this.db, this.orgId, sql, params);
   }
 
   private auditSql(sql: string, params: readonly unknown[]): QueryResult | undefined {

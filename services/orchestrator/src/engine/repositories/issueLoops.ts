@@ -1,15 +1,4 @@
 // cspell:ignore iloop sfind
-// bh-1 — the IssueLoop aggregate store. `issue_loops` is the durable lifecycle
-// root of a reported issue; `source_findings` is its immutable, append-only log
-// of normalized provider observations; `issue_loop_edges` records causal
-// relationships between loops. Every method takes an org-scoped `QueryClient`
-// (a `scopedPool` proxy in routes, or an in-transaction client under
-// `runWithOrgScope` in workers/tests), so RLS + the belt-and-suspenders
-// `WHERE org_id = $1` guarantee no cross-org read or write can succeed.
-//
-// Findings are never mutated: a new provider revision is a NEW append. The
-// database refuses UPDATE/DELETE on `source_findings` via the migration-0049
-// trigger, so this store deliberately exposes no update/delete for findings.
 
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
@@ -72,7 +61,6 @@ export const IssueLoopRow = z.object({
   updatedAt: z.date(),
 });
 export type IssueLoopRow = z.infer<typeof IssueLoopRow>;
-
 export const SourceFindingRow = z.object({
   orgId: z.string().min(1),
   id: z.string().min(1),
@@ -94,7 +82,6 @@ export const SourceFindingRow = z.object({
   createdAt: z.date(),
 });
 export type SourceFindingRow = z.infer<typeof SourceFindingRow>;
-
 interface RawIssueLoopRow {
   org_id: unknown;
   id: unknown;
@@ -203,7 +190,6 @@ export interface CreateIssueLoopInput {
   sourceRevisionId?: string | null;
   resolutionPolicy?: IssueLoopResolutionPolicy;
 }
-
 export interface AppendSourceFindingInput {
   orgId: string;
   projectId: string;
@@ -222,7 +208,6 @@ export interface AppendSourceFindingInput {
   context?: Record<string, unknown>;
   rawArtifactRef?: string | null;
 }
-
 export interface LinkIssueLoopEdgeInput {
   orgId: string;
   projectId: string;
@@ -230,7 +215,32 @@ export interface LinkIssueLoopEdgeInput {
   relatedIssueLoopId: string;
   relation: IssueLoopRelation;
 }
-
+export interface UpsertIssueLoopForSourceInput {
+  orgId: string;
+  projectId: string;
+  sourceId: string;
+  externalKey: string;
+  fingerprint: string;
+  severity: IssueLoopSeverity;
+  sourceRevisionId?: string | null;
+  generation?: number;
+  resolutionPolicy?: IssueLoopResolutionPolicy;
+}
+export interface AppendSourceFindingResult {
+  finding: SourceFindingRow;
+  inserted: boolean;
+}
+export interface TransitionIssueLoopInput {
+  orgId: string;
+  projectId: string;
+  issueLoopId: string;
+  toState: IssueLoopState;
+  fromState?: IssueLoopState;
+}
+export interface TransitionIssueLoopResult {
+  loop: IssueLoopRow;
+  changed: boolean;
+}
 export class IssueLoopNotFoundError extends Error {
   override readonly name = "IssueLoopNotFoundError";
   constructor(readonly loopId: string) {
@@ -238,10 +248,6 @@ export class IssueLoopNotFoundError extends Error {
   }
 }
 
-/**
- * The IssueLoop aggregate store. Findings are immutable: this store appends new
- * findings and never updates or deletes an existing one (the DB refuses it too).
- */
 export const IssueLoopStore = {
   async create(client: QueryClient, input: CreateIssueLoopInput): Promise<IssueLoopRow> {
     const id = `iloop_${randomUUID()}`;
@@ -268,12 +274,55 @@ export const IssueLoopStore = {
     return decodeIssueLoop(result.rows[0]!);
   },
 
+  async upsertForSource(client: QueryClient, input: UpsertIssueLoopForSourceInput): Promise<IssueLoopRow> {
+    const id = `iloop_${randomUUID()}`;
+    const result = await client.query<RawIssueLoopRow>(
+      `INSERT INTO issue_loops
+         (org_id, id, project_id, source_id, external_key, generation, fingerprint,
+          severity, state, source_revision_id, resolution_policy, row_version, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, 1, now())
+       ON CONFLICT (org_id, source_id, external_key, generation) DO NOTHING
+       RETURNING ${ISSUE_LOOP_COLUMNS}`,
+      [
+        input.orgId,
+        id,
+        input.projectId,
+        input.sourceId,
+        input.externalKey,
+        input.generation ?? 1,
+        input.fingerprint,
+        input.severity,
+        input.sourceRevisionId ?? null,
+        input.resolutionPolicy ?? "active_causal",
+      ],
+    );
+    const inserted = result.rows[0];
+    if (inserted !== undefined) return decodeIssueLoop(inserted);
+    const existing = await client.query<RawIssueLoopRow>(
+      `SELECT ${ISSUE_LOOP_COLUMNS}
+         FROM issue_loops
+        WHERE org_id = $1 AND source_id = $2 AND external_key = $3 AND generation = $4`,
+      [input.orgId, input.sourceId, input.externalKey, input.generation ?? 1],
+    );
+    const row = existing.rows[0];
+    if (row === undefined) throw new IssueLoopNotFoundError(input.externalKey);
+    return decodeIssueLoop(row);
+  },
+
   async get(client: QueryClient, orgId: string, projectId: string, loopId: string): Promise<IssueLoopRow | undefined> {
     const result = await client.query<RawIssueLoopRow>(
       `SELECT ${ISSUE_LOOP_COLUMNS}
          FROM issue_loops
         WHERE org_id = $1 AND project_id = $2 AND id = $3`,
       [orgId, projectId, loopId],
+    );
+    return result.rows[0] === undefined ? undefined : decodeIssueLoop(result.rows[0]);
+  },
+
+  async getById(client: QueryClient, orgId: string, loopId: string): Promise<IssueLoopRow | undefined> {
+    const result = await client.query<RawIssueLoopRow>(
+      `SELECT ${ISSUE_LOOP_COLUMNS} FROM issue_loops WHERE org_id = $1 AND id = $2`,
+      [orgId, loopId],
     );
     return result.rows[0] === undefined ? undefined : decodeIssueLoop(result.rows[0]);
   },
@@ -326,6 +375,105 @@ export const IssueLoopStore = {
       ],
     );
     return decodeSourceFinding(result.rows[0]!);
+  },
+
+  async appendFindingIfAbsent(
+    client: QueryClient,
+    input: AppendSourceFindingInput,
+  ): Promise<AppendSourceFindingResult> {
+    const id = `sfind_${randomUUID()}`;
+    const result = await client.query<RawSourceFindingRow>(
+      `INSERT INTO source_findings
+         (org_id, id, project_id, issue_loop_id, source_id, provider_object_id,
+          provider_revision, delivery_id, status, release, environment, title, body,
+          context, fingerprint, observed_at, raw_artifact_ref)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17)
+       ON CONFLICT (org_id, source_id, provider_object_id, provider_revision) DO NOTHING
+       RETURNING ${SOURCE_FINDING_COLUMNS}`,
+      [
+        input.orgId,
+        id,
+        input.projectId,
+        input.issueLoopId,
+        input.sourceId,
+        input.providerObjectId,
+        input.providerRevision,
+        input.deliveryId ?? null,
+        input.status,
+        input.release ?? null,
+        input.environment ?? null,
+        input.title,
+        input.body ?? "",
+        JSON.stringify(input.context ?? {}),
+        input.fingerprint,
+        input.observedAt,
+        input.rawArtifactRef ?? null,
+      ],
+    );
+    const inserted = result.rows[0];
+    if (inserted !== undefined) return { finding: decodeSourceFinding(inserted), inserted: true };
+    const existing = await client.query<RawSourceFindingRow>(
+      `SELECT ${SOURCE_FINDING_COLUMNS}
+         FROM source_findings
+        WHERE org_id = $1 AND source_id = $2 AND provider_object_id = $3 AND provider_revision = $4`,
+      [input.orgId, input.sourceId, input.providerObjectId, input.providerRevision],
+    );
+    const row = existing.rows[0];
+    if (row === undefined) throw new Error("source finding disappeared after idempotent conflict");
+    return { finding: decodeSourceFinding(row), inserted: false };
+  },
+
+  async transition(
+    client: QueryClient,
+    input: TransitionIssueLoopInput,
+  ): Promise<TransitionIssueLoopResult | undefined> {
+    const result = await client.query<RawIssueLoopRow>(
+      `UPDATE issue_loops
+          SET state = $4, row_version = row_version + 1, updated_at = now()
+        WHERE org_id = $1 AND project_id = $2 AND id = $3
+          AND state <> $4
+          AND ($5::text IS NULL OR state = $5)
+       RETURNING ${ISSUE_LOOP_COLUMNS}`,
+      [input.orgId, input.projectId, input.issueLoopId, input.toState, input.fromState ?? null],
+    );
+    const changed = result.rows[0];
+    if (changed !== undefined) return { loop: decodeIssueLoop(changed), changed: true };
+    const current = await IssueLoopStore.get(client, input.orgId, input.projectId, input.issueLoopId);
+    return current === undefined ? undefined : { loop: current, changed: false };
+  },
+
+  async markSourceSyncVerified(
+    client: QueryClient,
+    orgId: string,
+    projectId: string,
+    issueLoopId: string,
+  ): Promise<TransitionIssueLoopResult | undefined> {
+    return IssueLoopStore.transition(client, {
+      orgId,
+      projectId,
+      issueLoopId,
+      toState: "verified_closed",
+      fromState: "verified_source_sync_pending",
+    });
+  },
+
+  async markExternallyClosedUnverified(
+    client: QueryClient,
+    orgId: string,
+    projectId: string,
+    issueLoopId: string,
+  ): Promise<TransitionIssueLoopResult | undefined> {
+    const result = await client.query<RawIssueLoopRow>(
+      `UPDATE issue_loops
+          SET state = 'externally_closed_unverified', row_version = row_version + 1, updated_at = now()
+        WHERE org_id = $1 AND project_id = $2 AND id = $3 AND state <> 'verified_closed'
+       RETURNING ${ISSUE_LOOP_COLUMNS}`,
+      [orgId, projectId, issueLoopId],
+    );
+    const changed = result.rows[0];
+    if (changed !== undefined) return { loop: decodeIssueLoop(changed), changed: true };
+    const current = await IssueLoopStore.get(client, orgId, projectId, issueLoopId);
+    return current === undefined ? undefined : { loop: current, changed: false };
   },
 
   async listFindings(client: QueryClient, orgId: string, loopId: string): Promise<SourceFindingRow[]> {
