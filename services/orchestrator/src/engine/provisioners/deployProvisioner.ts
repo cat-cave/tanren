@@ -122,6 +122,12 @@ export interface DeployProviderApi {
    * deployment whose status cannot be read is a hard error, never an assumed-ready.
    */
   getDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus>;
+  /**
+   * Perform provider-specific cleanup only after a deployment has passed the
+   * adapter's health verification and its release row is durable. Providers with
+   * no such cleanup omit this hook.
+   */
+  afterVerifiedDeployment?(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void>;
   /** Read the immutable artifact identity attached to an existing deployment. */
   resolveArtifactIdentity(
     grant: OrgGrant,
@@ -227,6 +233,27 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
       );
     }
     return this.api.getDeployment(grant, token, app, deploymentId);
+  }
+
+  /**
+   * Run a provider's best-effort post-verification cleanup. The direct-api adapter
+   * calls this only after the ready poll, URL smoke check, and `markLive` all
+   * succeed, so cleanup can never remove the prior live surface for a failed
+   * deployment. Providers without this hook intentionally do nothing.
+   */
+  async afterVerifiedDeployment(grant: OrgGrant, appId: string, deploymentId: string): Promise<void> {
+    const cleanup = this.api.afterVerifiedDeployment;
+    if (cleanup === undefined) {
+      return;
+    }
+    const { token, app } = await this.appAccess(
+      grant,
+      appId,
+      deploymentId,
+      "verify",
+      "clean up a verified deployment on",
+    );
+    await cleanup.call(this.api, grant, token, app, deploymentId);
   }
 
   /** Resolve an existing deployment's provider-reported artifact identity. */
@@ -336,7 +363,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     grant: OrgGrant,
     appId: string,
     deploymentId: string,
-    authorityOperation: "resolve_artifact_identity" | "promote" | "rollback" | "teardown_deployment",
+    authorityOperation: "verify" | "resolve_artifact_identity" | "promote" | "rollback" | "teardown_deployment",
     description: string,
   ): Promise<{ token: string; app: DeployApp }> {
     const token = await this.resolveToken(grant, authorityOperation, { resourceId: appId, deploymentId });
