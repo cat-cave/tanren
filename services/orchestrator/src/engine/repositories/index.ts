@@ -7,6 +7,27 @@ export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
 export { ProjectRow, ProjectStore, type ProjectConfigSnapshot, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
+// bh-1 back-half self-healing foundation: the durable IssueLoop aggregate + its
+// immutable, append-only source findings and causal edges.
+export {
+  IssueLoopStore,
+  IssueLoopRow,
+  SourceFindingRow,
+  IssueLoopNotFoundError,
+  ISSUE_LOOP_SEVERITIES,
+  ISSUE_LOOP_STATES,
+  ISSUE_LOOP_RESOLUTION_POLICIES,
+  ISSUE_LOOP_RELATIONS,
+  SOURCE_FINDING_STATUSES,
+  type IssueLoopSeverity,
+  type IssueLoopState,
+  type IssueLoopResolutionPolicy,
+  type IssueLoopRelation,
+  type SourceFindingStatus,
+  type CreateIssueLoopInput,
+  type AppendSourceFindingInput,
+  type LinkIssueLoopEdgeInput,
+} from "./issueLoops.js";
 // Integration lifecycle foundation: a connection owns authentication identity;
 // explicit grants own plane/environment/capability authority.
 export {
