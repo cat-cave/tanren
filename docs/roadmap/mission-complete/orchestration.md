@@ -1,4 +1,4 @@
-<!-- cspell:ignore rootlessport -->
+<!-- cspell:ignore rootlessport regen -->
 
 # Mission-complete orchestration playbook
 
@@ -150,3 +150,40 @@ node credit.
   does _not_ stop it, so the next worktree's smoke fails to bind `:5000`
   (`rootlessport ... address already in use`). Tear the stack down first, then
   `git worktree remove`.
+
+## 8. Wave-2/3 learnings (2026-07-17)
+
+- **Build migration/event nodes off _latest_ `origin/main`, never a stale wave
+  base.** The drizzle snapshot chain is cumulative (`prevId` → prior snapshot id).
+  A node based on pre-barrier main re-carries the already-merged migrations and its
+  `0050_snapshot.prevId` points at the wrong ancestor → a painful conflict + snapshot
+  regen at rebase time (ds-0). Re-create the worktree from `origin/main` after each
+  migration-bearing merge lands.
+- **RLS proof tests MUST assert as the non-superuser `tanren_app` role.** The
+  `tanren` owner (what `createDbPool()` uses) is a **superuser** — it BYPASSES row
+  level security even under `FORCE ROW LEVEL SECURITY`, so a cross-org "sees zero
+  rows" assertion run as owner silently passes-by-bypass (or fails to isolate). Seed
+  as owner; run the org-scoped assertions through a pool connected as `tanren_app`.
+  The gold-standard self-contained pattern (provision ephemeral db → migrate → seed
+  via owner → assert via `tanren_app` → drop) is
+  `services/orchestrator/tests/integrationEventsRead.rls.integration.test.ts` — copy
+  it. Also remember to seed the `organizations` + `projects` rows (FK) before any
+  tenant insert.
+- **A pg-gated test is DEAD unless wired into a `smoke-rls-*` recipe.** Hosted CI
+  runs `just ci` but **not** `just smoke`, and the test `skipIf`s itself off its env
+  gate — so an unwired RLS test never runs anywhere (silent green = cosplay). Add a
+  `smoke-rls-<node>` recipe **and** append it to the master `smoke:` list, and make
+  the recipe's env var **match the test's actual gate var** (e.g. `TANREN_GV7_PG_TEST`,
+  not the generic `TANREN_RLS_DB_TEST`) — a mismatch skips the suite.
+- **Codex division of labor: codex WRITES + typechecks; the root runs the gates.**
+  Codex times out (~25min, exit 124) when asked to run the full gate set itself; the
+  code is complete + typechecks regardless. Have it write + `tsc -b` only, then the
+  root runs lint/knip/spelling/architecture/drift + smoke. Model routing: **terra/sol**
+  for heavy barrier/migration authoring, **luna** for node code + mechanical fixes,
+  **grok** for the adversarial audit.
+- **Strip `tsconfig.tsbuildinfo` before committing** — it is not gitignored and a
+  build artifact; `git rm --cached` it out of the node diff.
+- **Parallel smokes:** `TANREN_PORT_OFFSET` ≥ 1000 (offset 100 collides
+  orchestrator@100 = allocator@0 = 3200) **and** a matched
+  `TANREN_SEED_VAULT_ADDR=http://127.0.0.1:$((18200+offset))` (seed-platform-creds
+  hardcodes 18200).
