@@ -1,148 +1,37 @@
-// JJ-LOCAL INTEGRATION (tanren-owns-the-engine.md §3 — the one unified run model, §7 —
-// "the server-side integration-branch build + 409 handling" is deleted), Wave-3 /
-// Slice-3b. The SOLE integration assembler: a LOCAL integration over A1's
-// `buildLiveJjWorkspace`, replacing the deleted server-side host-ref build (the
-// `tanren/integ`/`tanren/batch` ref assembled via the 409-prone GitHub `/merges` API):
-//
-//   1. Open ONE live jj workspace on the base branch (jj's `git clone --colocate`
-//      fetches the base + every member bookmark as `<branch>@origin`).
-//   2. Stack the ordered members onto the base LOCALLY via jj's native rebase — a member
-//      that conflicts with an earlier member is recorded IN the commit (jj first-class
-//      conflicts: the rebase SUCCEEDS and records, it never aborts), which we surface as
-//      the SAME spec-vs-spec `conflict` the server build returned.
-//   3. Export the CLEAN local ref + materialize the node's `headSha`/`treeHash`. The
-//      export REFUSES a still-conflicted ref (the §2 fail-closed boundary).
-//
-// NO `tanren/integ` / `tanren/batch` ref is written to the HOST — the integration is a
-// runner-local jj bookmark; only the materialized identity (headSha/treeHash) flows
-// back. This closes `mergeAuthorityImpl.ts:90`'s "Wave 2 carries headSha forward":
-// `prepareIntegration` now materializes the head VIA the node.
-//
-// FAIL-CLOSED: the live workspace is ALWAYS released (LOUD on a leak); a member that
-// cannot be resolved/rebased is a LOUD throw (never integrate a phantom); a conflicted
-// export THROWS (never a conflicted ref to the host).
+// The live-workspace adapter for the ONE WorkspaceVcsCore integration operation.
+// It owns runner allocation/release; the jj core owns cloning, real PR-head assembly,
+// conflict recording, clean export, and exact base/head/tree identities.
 
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { RunnerHandle } from "../contracts/allocator.js";
-import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
-import { quoteSshShellArg } from "../ssh/command.js";
-import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import { runWorkspaceSshCommand } from "../workspace/ssh.js";
-import { buildLiveJjWorkspace, type LiveJjWorkspaceDeps, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
-import { SpeculativeAssemblyError } from "./speculativeAssemblyError.js";
+import type {
+  WorkspaceHandle,
+  WorkspaceIntegrationAssembly,
+  WorkspaceIntegrationMember,
+} from "../contracts/workspaceVcsCore.js";
+import { buildLiveJjWorkspace, type LiveJjWorkspace, type LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
 
-/**
- * A member's SPEC lifecycle bucket (mirrors the walker's `classifySpecStatus`), used to
- * classify a member whose `<branch>@origin` is GONE and did NOT merge: `pending`/`in_flight`
- * are NON-TERMINAL (the ancestor WILL publish a head — BENIGN wait); `terminal_blocked` never
- * will (LOUD fault); `done` (an unprovable merge here — the merged-drop handles real merges via
- * `knownHeadSha`) is also a LOUD fault.
- */
-export type AncestorSpecPhase = "pending" | "in_flight" | "done" | "terminal_blocked";
+export { AncestorNotReadyError } from "../contracts/workspaceVcsCore.js";
+export type { AncestorSpecPhase } from "../contracts/workspaceVcsCore.js";
 
-/**
- * A member's `<branch>@origin` is GONE and it did NOT merge, but its SPEC is still NON-TERMINAL
- * (it WILL publish a head): a BENIGN "not ready yet" condition, NOT a fault. The dependent must
- * benign-WAIT (re-driven once the ancestor is ready), never TERMINALLY strand. Distinguished by
- * TYPE from the loud `Error` the fail-closed default throws, so the run finalizer routes it to
- * the never-discard re-drive (not `needs_attention`).
- */
-export class AncestorNotReadyError extends Error {
-  constructor(
-    readonly specId: string,
-    readonly branch: string,
-    readonly phase: AncestorSpecPhase,
-    baseBranch: string,
-  ) {
-    super(
-      `jj-local integration: member ${specId} (${branch}) has no ${branch}@origin ref and did NOT ` +
-        `merge into ${baseBranch}, but its spec is still ${phase} (non-terminal) — the ancestor has not ` +
-        `published its head yet; the dependent benign-waits to be re-driven (never strands)`,
-    );
-    this.name = "AncestorNotReadyError";
-  }
-}
+/** Backward-compatible name for an ordered real PR-head input to the core. */
+export type JjIntegrationMember = WorkspaceIntegrationMember;
 
-/** One ordered member to integrate: its remote bookmark name (the PR head branch). */
-export interface JjIntegrationMember {
-  specId: string;
-  branch: string;
-  /**
-   * The member's last-known PR-head sha (`ancestor_stack[].headSha`, captured at a prior
-   * assembly). Load-bearing ONLY for the merged-and-deleted-mid-flight race
-   * (`tanren-owns-the-engine.md §3 never-discard`): when a member's `<branch>@origin` is
-   * GONE — the PR merged and the merge deleted its head branch WHILE this dependent was
-   * in-flight assembling against it — this sha lets us PROVE the member MERGED (its commit
-   * is now contained in the base branch) and DROP it (its content is in the base, mirroring
-   * the coordinator's "ancestors that merged are dropped"), rather than crash on the vanished
-   * ref and TERMINALLY strand the dependent. A missing/empty sha (or a sha NOT contained in
-   * the base) keeps the missing-branch a LOUD failure — only a PROVEN merge is benign.
-   */
-  knownHeadSha?: string;
-  /**
-   * The member's SPEC lifecycle bucket at assembly time (`classifySpecStatus`). For the "branch
-   * gone, not merged" case: a `pending`/`in_flight` ancestor WILL publish a head (BENIGN wait)
-   * vs. a `terminal_blocked` one that never will (LOUD fault). ABSENT ⇒ the fail-closed default.
-   */
-  ancestorPhase?: AncestorSpecPhase;
-}
-
-/** The facts the jj-local integration clones + stacks against. */
+/** The jj-local caller's input; the core receives the live workspace path separately. */
 export interface JjLocalIntegrationInput {
   baseBranch: string;
-  /** The repo URL the workspace clones (the SAME the deps' facts carry). */
   repoUrl: string;
-  /** The ordered members (DAG order — ancestors before dependents) to stack on the base. */
   members: ReadonlyArray<JjIntegrationMember>;
-  /** A stable, safe local bookmark name for the integrated head (NEVER pushed to the host). */
   localRef: string;
 }
 
-/**
- * The result of a jj-local integration. On `integrated`: the materialized `headSha` +
- * `treeHash` of the locally-stacked node, the exact cloned base commit the stack was
- * assembled over, the per-member head SHAs captured at
- * integration time (the divergence key), and the (LOCAL) ref name. On `conflict`: the
- * spec-vs-spec pair jj recorded (the member that conflicted with an earlier-stacked one).
- */
+/** The result retains an optional handle so existing injected test ports stay lightweight. */
 export type JjLocalIntegrationResult =
-  | {
-      outcome: "integrated";
-      localRef: string;
-      /** The exact cloned `baseBranch` bookmark commit, before any local working commit. */
-      baseSha: string;
-      headSha: string;
-      treeHash: string;
-      memberHeadShas: Record<string, string>;
-      /**
-       * The OPEN workspace handle the integration assembled `localRef` in (present
-       * when `integrateOverWorkspace` ran the real assembly). The BOOTSTRAP consumer
-       * (`bootstrapDependentBase`) reads it to create the dependent's run branch AT
-       * the integrated head on the SAME open workspace; the batch consumer (which
-       * gates on `LiveJjWorkspace`, not the handle) ignores it. Optional so a fake
-       * integration result (the batch unit tests) need not synthesize a handle.
-       */
+  | (Omit<Extract<WorkspaceIntegrationAssembly, { outcome: "integrated" }>, "workspace"> & {
       workspace?: WorkspaceHandle;
-    }
-  | {
-      outcome: "conflict";
-      conflictBetween: { specId: string; otherSpecId: string };
-      message: string;
-    };
+    })
+  | Extract<WorkspaceIntegrationAssembly, { outcome: "conflict" }>;
 
-/**
- * Run a jj-local integration over a freshly provisioned live jj workspace, releasing it
- * (LOUD on a leak) on EVERY path. The workspace deps (allocator/ssh/secrets/vcsProvider/
- * facts) are A1's — the SAME thread the live conflict resolver + base-shift use. `ssh` is
- * threaded separately so the few non-contract jj probes (remote-bookmark sha, tree hash,
- * bookmark fast-forward) shell over the SAME substrate the core uses.
- *
- * The CONTINUATION (`onIntegrated`) runs WHILE the workspace is still open — the
- * integrated head is a LOCAL jj bookmark (never a host ref), so the gate MUST run on
- * THIS workspace (the §3b point: no `tanren/batch` host ref to clone elsewhere). It is
- * handed the live workspace + the integrated result. On a `conflict` outcome the
- * continuation is NOT called (there is nothing to gate); the conflict result flows back.
- */
+/** Provision one runner, run a continuation against its clean local integration, then release it. */
 export async function withJjLocalIntegration<T>(
   workspaceDeps: LiveJjWorkspaceDeps,
   input: JjLocalIntegrationInput,
@@ -154,9 +43,7 @@ export async function withJjLocalIntegration<T>(
   const live = await buildLiveJjWorkspace(workspaceDeps);
   try {
     const integration = await integrateOverWorkspace(live, workspaceDeps.ssh, input);
-    if (integration.outcome === "conflict") {
-      return integration;
-    }
+    if (integration.outcome === "conflict") return integration;
     return { outcome: "integrated", value: await onIntegrated(live, integration) };
   } finally {
     await live.release();
@@ -164,333 +51,13 @@ export async function withJjLocalIntegration<T>(
 }
 
 /**
- * Stack the ordered members onto the base in the open workspace. The workspace's clone
- * already fetched every bookmark; we build a fresh local integration bookmark on the
- * base, then rebase each member's segment onto the accumulated head IN ORDER. jj records
- * a conflict IN the commit (the rebase never aborts), so after each member the rebase
- * result tells us whether the head carries a conflict: a recorded conflict ⇒ the
- * spec-vs-spec `conflict` the coordinator routes to the resolver. A clean stack ⇒ export
- * the clean ref + read headSha/treeHash.
+ * Assemble over an already allocated runner. The legacy SSH argument remains at the
+ * adapter boundary for compatibility; the core carries the same bound substrate.
  */
 export async function integrateOverWorkspace(
   live: LiveJjWorkspace,
-  ssh: CommandSubstrate,
+  _ssh: CommandSubstrate,
   input: JjLocalIntegrationInput,
 ): Promise<JjLocalIntegrationResult> {
-  const { core, workspacePath, target } = live;
-  const ws = await core.openWorkspace({ repoUrl: input.repoUrl, baseBranch: input.baseBranch, path: workspacePath });
-  // Capture the exact base bookmark imported by THIS clone before `core.branch` creates
-  // a distinct local working commit on top of it. This is the authoritative provenance
-  // for the base→integrated-head product diff; a pre-clone host read can race the clone.
-  const baseSha = await readBookmarkSha(ssh, target, workspacePath, input.baseBranch);
-  // NEVER-DISCARD RACE (tanren-owns-the-engine.md §3): a member's `<branch>@origin` may have
-  // VANISHED between enqueue and now — its PR merged and the merge deleted the head branch
-  // WHILE this dependent was in-flight assembling against it. Resolve the LIVE member set
-  // BEFORE tracking/stacking: a member whose branch is gone but whose commit is PROVABLY in
-  // the base (it merged) is DROPPED (its content is already in `baseBranch`, mirroring the
-  // coordinator's "ancestors that merged are dropped"); a branch gone for ANY OTHER reason is
-  // still a LOUD throw (no silent masking of a real missing ref). The surviving members keep
-  // the caller's DAG order.
-  const members = await resolveLiveMembers(ssh, target, workspacePath, input.baseBranch, input.members);
-  // §3.5 PREP (SAME as the jj applier's gather() / the base-shift rebase): `jj git clone`
-  // imports each member's NON-default branch only as a REMOTE-tracking bookmark
-  // (`<branch>@origin`), which jj treats as IMMUTABLE — rebasing it refuses with "would
-  // rewrite immutable commits". So track each member's remote bookmark as a LOCAL `<branch>`
-  // bookmark (the mutable name we rebase + read back), and empty the immutable set for THIS
-  // short-lived workspace. Without this every member rebase refuses → the whole batch wedges.
-  await prepareMemberBookmarks(ssh, target, workspacePath, members);
-  // Create the local integration bookmark at the base head (NEVER a host ref). After this,
-  // the accumulated integration head is tracked purely from each rebase result — no
-  // intermediate host writes, no re-reads.
-  await core.branch(ws, input.localRef, input.baseBranch);
-  let accumulatedHead = await readBookmarkSha(ssh, target, workspacePath, input.localRef);
-
-  const memberHeadShas: Record<string, string> = {};
-  const merged: string[] = [];
-  for (const member of members) {
-    // The member's remote bookmark head AT integration time (the divergence key) — read
-    // from the REMOTE-tracking ref, which a LOCAL rebase below never advances (it stays the
-    // pristine pre-integration head).
-    memberHeadShas[member.specId] = await readBookmarkSha(ssh, target, workspacePath, `${member.branch}@origin`);
-    // Rebase the member's segment (the tracked LOCAL bookmark, NOT the immutable remote one)
-    // onto the accumulated integration head. jj first-class conflicts: a conflicting rebase
-    // SUCCEEDS + records the conflict IN the commit. `rebaseOnto` reads the post-rebase head
-    // from the LOCAL `<branch>` bookmark — which the local rewrite DID advance (the
-    // remote-tracking `<branch>@origin` would NOT, yielding the un-rebased head, §3.5).
-    const rebase = await core.rebaseOnto(ws, member.branch, accumulatedHead);
-    accumulatedHead = rebase.headSha;
-    // Fast-forward the integration bookmark to the rebased member head (the new top).
-    await setBookmark(ssh, target, workspacePath, input.localRef, accumulatedHead);
-    if (rebase.outcome === "conflicted") {
-      // The other side is the prior stacked member (or the base) — the spec-vs-spec
-      // conflict the coordinator routes to the resolver (early, on the integration, not
-      // against the innocent dependent). Mirrors the server build's `conflictBetween`.
-      const otherSpecId = merged.at(-1) ?? input.baseBranch;
-      return {
-        outcome: "conflict",
-        conflictBetween: { specId: member.specId, otherSpecId },
-        message: `member ${member.specId} (${member.branch}) conflicts with the integration of ${otherSpecId} on ${input.localRef} (jj-local)`,
-      };
-    }
-    merged.push(member.specId);
-  }
-
-  // Materialize the integrated tree ON DISK before returning. `jj rebase` + `jj bookmark
-  // set` only move COMMITS/BOOKMARKS — they NEVER move `@` (the working copy), which
-  // `openWorkspace` left on the BASE branch (`jj new <baseBranch>`). Without this, the
-  // continuation runs against `workspacePath`'s BASE tree (no member files), not the
-  // integrated head — the no-PR-ever-merged root cause: the batch re-gate runs `pre_merge`
-  // on the base working copy, so a greenfield scaffold failed with `no justfile found`
-  // (the scaffold's files live ONLY on the integrated bookmark, never on the base working
-  // copy), got bisected/blamed, and dequeued as a `conflict`. `checkout` (`jj edit
-  // <localRef>`) checks out that commit's tree on the colocated workspace, so the on-disk
-  // working copy at `workspacePath` now reflects the integrated files. Done ONLY on the
-  // CLEAN path (a conflicted member short-circuited above — there is nothing clean to
-  // materialize, and `exportCleanGitRef` would refuse it anyway).
-  //
-  // SAFE for the BOOTSTRAP consumer (`bootstrapDependentBase`): it then runs `core.branch(
-  // ws, runBranch, localRef)`, which creates the run branch with `localRef` as the EXPLICIT
-  // parent (`jj new localRef`), independent of where `@` sits — and leaves `@` on a fresh
-  // child of `localRef` (still the integrated tree). Moving `@` to `localRef` first does
-  // not disturb it.
-  await core.checkout(ws, input.localRef);
-  // Export the CLEAN local ref (REFUSES a still-conflicted ref — the §2 boundary) +
-  // materialize the node's head + tree. The export wrote the git ref into the colocated
-  // .git, so the tree is read from git off the exported head sha.
-  const exported = await core.exportCleanGitRef(ws, input.localRef);
-  const treeHash = await readTreeHash(ssh, target, workspacePath, exported.headSha);
-  // Surface the open `ws` handle so the bootstrap consumer can create the dependent's
-  // run branch at the integrated head ON THIS workspace (the batch consumer ignores it).
-  return {
-    outcome: "integrated",
-    localRef: input.localRef,
-    baseSha,
-    headSha: exported.headSha,
-    treeHash,
-    memberHeadShas,
-    workspace: ws,
-  };
-}
-
-/**
- * §3.5 prep: track each member's REMOTE bookmark as a LOCAL bookmark (the mutable name the
- * member rebase names + reads back), and empty the immutable set so a published head can be
- * rewritten in THIS short-lived workspace. Mirrors `jjWorkspaceApplier.gather()` +
- * `baseShiftLiveRebase` verbatim. FAIL-CLOSED: a track/config failure throws (no `|| true`).
- */
-async function prepareMemberBookmarks(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  members: ReadonlyArray<JjIntegrationMember>,
-): Promise<void> {
-  // jj 0.42 `bookmark track` takes the bare bookmark NAME (not `<name>@origin`) plus
-  // `--remote`; it imports `<name>@origin` as the LOCAL `<name>` bookmark.
-  const trackCommands = members.map((m) => `jj bookmark track ${quoteSshShellArg(m.branch)} --remote origin`);
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "jj-local integration: track member bookmarks + allow rewriting them",
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: [
-      "set -eu",
-      ...trackCommands,
-      `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
-    ].join(" && "),
-  });
-}
-
-/**
- * NEVER-DISCARD RACE (tanren-owns-the-engine.md §3): resolve which members are STILL live
- * before the assembly tracks/stacks them. A member's `<branch>@origin` may have VANISHED
- * because its PR merged + the merge deleted the head branch WHILE this dependent was
- * in-flight assembling — the read of the gone ref would otherwise crash the run and
- * TERMINALLY strand the dependent.
- *
- * For each ordered member:
- *   - the `<branch>@origin` ref RESOLVES ⇒ a live member (kept, in order);
- *   - GONE but PROVEN merged (`knownHeadSha` is a 40-hex sha CONTAINED in `<baseBranch>@origin`)
- *     ⇒ DROP it (its content is in the base) and continue with a smaller, still-correct stack;
- *   - GONE, not merged, but its SPEC is still NON-TERMINAL (`pending`/`in_flight` — it WILL
- *     publish a head) ⇒ a BENIGN {@link AncestorNotReadyError}: the dependent ran ahead of the
- *     ancestor's `pr_open`; it benign-WAITS to be re-driven, never TERMINALLY strands;
- *   - GONE for ANY OTHER reason (no/unknown phase, a TERMINAL ancestor, a phantom/off-scope ref)
- *     ⇒ a LOUD throw (a genuine missing ref is never silently masked).
- *
- * FAIL-CLOSED: a proven merge DROPS; a provably non-terminal ancestor benign-waits; everything
- * else (the default when we can prove neither) stays a hard failure.
- */
-async function resolveLiveMembers(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  baseBranch: string,
-  members: ReadonlyArray<JjIntegrationMember>,
-): Promise<JjIntegrationMember[]> {
-  const live: JjIntegrationMember[] = [];
-  for (const member of members) {
-    if (await revisionExists(ssh, target, workspacePath, `${member.branch}@origin`)) {
-      live.push(member);
-      continue;
-    }
-    // The member's branch is GONE. Only a PROVEN merge (its commit now in the base) is a
-    // benign drop — anything else is a real missing-ref fault we must NOT mask.
-    const knownHeadSha = member.knownHeadSha;
-    const merged =
-      knownHeadSha !== undefined &&
-      /^[0-9a-f]{40}$/u.test(knownHeadSha) &&
-      (await commitContainedInBase(ssh, target, workspacePath, knownHeadSha, baseBranch));
-    if (merged) {
-      // Its content is already in `baseBranch` — drop it (never-discard: nothing is lost).
-      continue;
-    }
-    // NOT merged, branch gone. BENIGN iff the ancestor's SPEC is still NON-TERMINAL (it WILL
-    // publish a head) — the dependent ran ahead of `pr_open`; it benign-WAITS, never strands.
-    // FAIL-CLOSED: an absent/unknown phase, a TERMINAL ancestor, or a `done`-but-unprovable
-    // member all stay LOUD — only a provably non-terminal phase is benign.
-    if (member.ancestorPhase === "pending" || member.ancestorPhase === "in_flight") {
-      throw new AncestorNotReadyError(member.specId, member.branch, member.ancestorPhase, baseBranch);
-    }
-    throw new SpeculativeAssemblyError(
-      "missing_ancestor_ref",
-      `jj-local integration: member ${member.specId} (${member.branch}) has no ${member.branch}@origin ref ` +
-        `and did NOT merge into ${baseBranch} (knownHeadSha=${knownHeadSha ?? "<none>"}, ancestorPhase=` +
-        `${member.ancestorPhase ?? "<unknown>"}) — refusing to silently drop a genuinely missing ancestor branch`,
-    );
-  }
-  return live;
-}
-
-/** True iff `rev` RESOLVES in the workspace (a non-throwing presence probe — no LOUD failure). */
-async function revisionExists(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  rev: string,
-): Promise<boolean> {
-  // `jj log -r <rev>` exits non-zero when the revision does not resolve; probe the exit code
-  // directly (NOT `runWorkspaceSshCommand`, which throws) so a legitimately-absent ref is a
-  // clean `false`, not an error. The substrate boundary is the same the rest of this file uses.
-  // `ssh.run` (NOT `runWorkspaceSshCommand`) returns the result IN-BAND (no throw), so a
-  // legitimately-absent ref reads as a clean non-zero exit rather than an error.
-  const result = await ssh.run(target, {
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
-  });
-  // A clean exit with a 40-hex sha ⇒ present. A non-zero exit (or a substrate failure/timeout,
-  // which a real connectivity fault would raise) ⇒ absent — the caller then PROVES merge-or-not
-  // via the base-containment check, so a connectivity blip cannot masquerade as a benign drop
-  // (it has no merged commit in the base, so it stays a loud failure).
-  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
-    return false;
-  }
-  return /^[0-9a-f]{40}$/u.test(result.stdout.trim());
-}
-
-/**
- * True iff `headSha` is CONTAINED in `<baseBranch>@origin` (the member's commit landed in the
- * base — i.e. the PR merged). The workspace is `--colocate`d (jj wrote a real `.git`), so
- * `git merge-base --is-ancestor <headSha> <baseBranch>@origin's sha` is the stable containment
- * read: exit 0 ⇒ ancestor (merged), exit 1 ⇒ not (genuinely missing). A non-existent `headSha`
- * (`git` cannot resolve it) is NOT-contained ⇒ the caller keeps it a LOUD failure.
- */
-async function commitContainedInBase(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  headSha: string,
-  baseBranch: string,
-): Promise<boolean> {
-  // Resolve the base branch's current remote sha (the merge lands here); jj imported it as
-  // the `<baseBranch>@origin` remote-tracking bookmark. If even the base is gone the assembly
-  // can't proceed — let the caller's downstream base read raise the real error.
-  const baseSha = (
-    await ssh.run(target, {
-      cwd: workspacePath,
-      watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-      command: `jj log -r ${quoteSshShellArg(`${baseBranch}@origin`)} --no-graph -T 'commit_id'`,
-    })
-  ).stdout.trim();
-  if (!/^[0-9a-f]{40}$/u.test(baseSha)) {
-    return false;
-  }
-  const result = await ssh.run(target, {
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: `git merge-base --is-ancestor ${quoteSshShellArg(headSha)} ${quoteSshShellArg(baseSha)}`,
-  });
-  // `--is-ancestor` exits 0 when `headSha` is an ancestor of `baseSha` (contained ⇒ merged), 1
-  // when not, and >1 / a substrate failure on a bad arg (e.g. an unknown `headSha`). Only a
-  // clean exit-0 is a proven merge; everything else stays NOT-contained (a loud failure).
-  return result.failure === undefined && result.stalled !== true && result.exitCode === 0;
-}
-
-/** Read a bookmark's commit sha via jj's `commit_id` template (the value `jj git export` writes). */
-async function readBookmarkSha(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  rev: string,
-): Promise<string> {
-  const out = await runWorkspaceSshCommand(ssh, target, {
-    label: "jj read bookmark sha",
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
-  });
-  const sha = out.stdout.trim();
-  if (!/^[0-9a-f]{40}$/u.test(sha)) {
-    throw new SpeculativeAssemblyError(
-      "head_sha_unresolved",
-      `jj-local integration: revision ${rev} did not resolve a head sha`,
-    );
-  }
-  return sha;
-}
-
-/** Point a local bookmark at `sha` (fast-forward the integration top after a rebase). */
-async function setBookmark(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  bookmark: string,
-  sha: string,
-): Promise<void> {
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "jj set integration bookmark",
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: [
-      "set -eu",
-      `jj bookmark set ${quoteSshShellArg(bookmark)} -r ${quoteSshShellArg(sha)} --allow-backwards`,
-    ].join(" && "),
-  });
-}
-
-/**
- * Read the integrated head's git tree hash (the materialized node's `treeHash`) off the
- * exported head sha. jj 0.42 has NO `tree_id` template keyword on a Commit, and the
- * workspace is `--colocate`d (the export wrote a real git ref), so `git rev-parse
- * <sha>^{tree}` is the stable read. The tree hash is the content identity proof reuse keys on.
- */
-async function readTreeHash(
-  ssh: CommandSubstrate,
-  target: RunnerHandle,
-  workspacePath: string,
-  headSha: string,
-): Promise<string> {
-  const out = await runWorkspaceSshCommand(ssh, target, {
-    label: "jj-local integration: read tree hash",
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: `git rev-parse ${quoteSshShellArg(`${headSha}^{tree}`)}`,
-  });
-  const treeId = out.stdout.trim();
-  if (!/^[0-9a-f]{40}$/u.test(treeId)) {
-    throw new SpeculativeAssemblyError(
-      "tree_hash_unresolved",
-      `jj-local integration: ${headSha} did not resolve a git tree hash`,
-    );
-  }
-  return treeId;
+  return live.core.assembleIntegration({ ...input, path: live.workspacePath });
 }

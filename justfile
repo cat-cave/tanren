@@ -900,7 +900,7 @@ smoke-rls-behavior-coverage:
 # classification (mq-1) + multi-member evaluation list/detail + cross-org 404
 # parity (mq-2) against real Postgres.
 smoke-rls-merge-queue-authority:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/mergeQueueAuthoritySignals.rls.integration.test.ts services/orchestrator/tests/mergeQueueAuthorityEvaluations.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/mergeQueueAuthoritySignals.rls.integration.test.ts services/orchestrator/tests/mergeQueueAuthorityEvaluations.rls.integration.test.ts services/orchestrator/tests/integrationNodeMaterializer.rls.integration.test.ts
 
 # IN-1: real Vault 1.18 KV v2 CAS=0 wire proof. The compose dev Vault exposes
 # its dev listener on TANREN_VAULT_HOST_PORT (default 18200).

@@ -1,19 +1,5 @@
-// The Wave-1 jujutsu (jj) implementation of the `WorkspaceVcsCore` seam
-// (engine/contracts/workspaceVcsCore.ts, tanren-owns-the-engine.md §2). jj's
-// native primitives ARE the machinery Tanren was hand-rolling: a rebase that
-// conflicts STILL SUCCEEDS and records the conflict IN the commit; editing an
-// ancestor auto-restacks descendants and PROPAGATES the resolution down; the
-// operation log makes every op undoable. So "a conflict must never brick" is true
-// by construction here, not by a `git merge --abort` dance.
-//
-// SUBSTRATE: this impl shells the `jj` CLI through the same {@link CommandSubstrate}
-// the rest of the runner workspace code uses (engine/workspace/githubPush.ts,
-// plannerRunWorkspace.ts). It runs jj over SSH against the allocated runner exactly
-// like `git`. The §7 guardrail ("jj-lib as the state authority, NOT CLI
-// text-parsing") is the Rust-rewrite target; this TypeScript orchestrator drives jj
-// over the command substrate and reads jj's own machine-stable signals (its
-// `--no-graph` template output + nonzero exit on a conflicted export), never
-// scraping the human graph log.
+// The jj-only `WorkspaceVcsCore` implementation: first-class conflicts, automatic
+// restacking, clean git export, operation undo, and local subset materialization.
 //
 // REF RESOLUTION SEAM ({@link JjRefResolver}): production threads real repo URLs +
 // real git shas straight through (the identity resolver). The conformance harness
@@ -25,12 +11,14 @@ import { createHash } from "node:crypto";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type {
+  AssembleWorkspaceIntegrationInput,
   OpenWorkspaceInput,
   RebaseResult,
   RecordedConflict,
   ResolveConflictInput,
   RestackResult,
   WorkspaceHandle,
+  WorkspaceIntegrationAssembly,
   WorkspaceVcsCore,
 } from "../contracts/workspaceVcsCore.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -38,6 +26,7 @@ import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildJjCloneCommand, type JjCloneCredential } from "./jjCloneAuth.js";
 import { toTomlString } from "./jjConfigValue.js";
+import { assembleJjWorkspaceIntegration } from "../workspace/jjIntegrationAssembly.js";
 
 export type { JjCloneCredential } from "./jjCloneAuth.js";
 
@@ -210,6 +199,10 @@ export class JjWorkspaceVcsCore implements WorkspaceVcsCore {
     ]);
     this.workspaces.set(workspaceId, { path: input.path, currentBranch: input.baseBranch, opStack: [] });
     return { workspaceId, path: input.path };
+  }
+
+  async assembleIntegration(input: AssembleWorkspaceIntegrationInput): Promise<WorkspaceIntegrationAssembly> {
+    return assembleJjWorkspaceIntegration({ core: this, ssh: this.substrate, target: this.target }, input);
   }
 
   async branch(workspace: WorkspaceHandle, name: string, atBranch?: string): Promise<void> {

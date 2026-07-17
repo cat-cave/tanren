@@ -86,6 +86,65 @@ export interface RestackResult {
   stillConflicted: ReadonlyArray<RecordedConflict>;
 }
 
+/** The lifecycle state used when a missing ancestor ref is classified at assembly time. */
+export type AncestorSpecPhase = "pending" | "in_flight" | "done" | "terminal_blocked";
+
+/** One ordered, published PR-head ref included in a local integration assembly. */
+export interface WorkspaceIntegrationMember {
+  specId: string;
+  branch: string;
+  /** Last known head, used only to prove a deleted branch already landed in the base. */
+  knownHeadSha?: string;
+  /** Lets a non-terminal, not-yet-published ancestor become a benign wait rather than a fault. */
+  ancestorPhase?: AncestorSpecPhase;
+}
+
+/** The local, jj-only integration operation identity and its ordered PR-head refs. */
+export interface AssembleWorkspaceIntegrationInput {
+  repoUrl: string;
+  baseBranch: string;
+  /** The runner-local workspace path the core owns while it assembles this subset. */
+  path: string;
+  /** Stable local bookmark identity; it is never pushed as a host integration ref. */
+  localRef: string;
+  members: ReadonlyArray<WorkspaceIntegrationMember>;
+}
+
+/** A clean materialization, or the recorded spec-vs-spec conflict that stopped it. */
+export type WorkspaceIntegrationAssembly =
+  | {
+      outcome: "integrated";
+      workspace: WorkspaceHandle;
+      localRef: string;
+      baseSha: string;
+      headSha: string;
+      treeHash: string;
+      /** PR heads read from the clone's immutable `<branch>@origin` refs, in caller order. */
+      memberHeadShas: Record<string, string>;
+    }
+  | {
+      outcome: "conflict";
+      conflictBetween: { specId: string; otherSpecId: string };
+      message: string;
+    };
+
+/** A benign, typed wait when a speculative ancestor has not published a PR head yet. */
+export class AncestorNotReadyError extends Error {
+  constructor(
+    readonly specId: string,
+    readonly branch: string,
+    readonly phase: Extract<AncestorSpecPhase, "pending" | "in_flight">,
+    baseBranch: string,
+  ) {
+    super(
+      `jj-local integration: member ${specId} (${branch}) has no ${branch}@origin ref and did NOT ` +
+        `merge into ${baseBranch}, but its spec is still ${phase} (non-terminal) — the ancestor has not ` +
+        `published its head yet; the dependent benign-waits to be re-driven (never strands)`,
+    );
+    this.name = "AncestorNotReadyError";
+  }
+}
+
 /**
  * The `WorkspaceVcsCore` contract. Every op is local to the runner workspace; NO op
  * here touches the host (that is `CodeHost`). The impl owns the VCS backend (jj — the
@@ -95,6 +154,13 @@ export interface RestackResult {
 export interface WorkspaceVcsCore {
   /** Clone/import a repo at `baseBranch` into a runner-local working copy. */
   openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle>;
+
+  /**
+   * Assemble an ordered, authorized subset from the clone's real PR-head refs. The
+   * operation is jj-local: it records conflicts without discarding work, exports only
+   * a clean local ref, and returns the exact base/head/tree identities for persistence.
+   */
+  assembleIntegration(input: AssembleWorkspaceIntegrationInput): Promise<WorkspaceIntegrationAssembly>;
 
   /**
    * Create a branch `name` at `atBranch`'s head (or the current head when
