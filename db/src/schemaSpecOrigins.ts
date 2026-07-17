@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { check, foreignKey, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  check,
+  foreignKey,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
 import { issueLoops, sourceFindings } from "./schemaIssueLoops.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
@@ -45,7 +55,10 @@ export const specOrigins = pgTable(
       table.ordinal,
     ),
     index("spec_origins_org_id").on(table.orgId),
-    check("spec_origins_role_check", sql`${table.role} IN ('primary_fix','repair','rollback','probe_capability','followup')`),
+    check(
+      "spec_origins_role_check",
+      sql`${table.role} IN ('primary_fix','repair','rollback','probe_capability','followup')`,
+    ),
     integrationOrgIsolationPolicy(table.orgId),
   ],
 ).enableRLS();

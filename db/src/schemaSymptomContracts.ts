@@ -1,5 +1,17 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  foreignKey,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 import { issueLoops } from "./schemaIssueLoops.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
