@@ -161,8 +161,7 @@ import {
   RecoveryReviseRoutedPayload,
   RecoveryRollbackQueuedPayload,
 } from "./schemas/recovery.js";
-import { RedactionRawAccessPayload } from "./schemas/redaction.js";
-import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
+import { eventVocabularyMiscRegistry } from "./schemas/eventVocabularyMisc.js";
 import {
   DagBudgetMilestonePayload,
   DagBudgetPausedPayload,
@@ -190,6 +189,7 @@ export const EventRegistry = {
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
   ...designSystemVocabularyRegistry,
+  ...eventVocabularyMiscRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
@@ -397,7 +397,6 @@ export const EventRegistry = {
 
   // Redaction audit: emitted whenever an elevated-scope actor
   // reads raw payload values via the redaction serializer.
-  "redaction.raw_access": RedactionRawAccessPayload,
 
   // failure recovery: operator-initiated recovery actions against a
   // halted run, persisted as run lineage in the events table.
@@ -409,8 +408,6 @@ export const EventRegistry = {
   // Tanren-method benchmark: the post-merge HIDDEN-ACCEPT-TIER outcome (§2.1).
   // Emitted by the BenchmarkRunner's accept step after a trial's PR merges —
   // the equivalence oracle the config under test never saw.
-  "benchmark.accept.passed": BenchmarkAcceptPassedPayload,
-  "benchmark.accept.failed": BenchmarkAcceptFailedPayload,
 
   // DagWalker (autonomy-engine.md §1a): the per-project background scheduler's
   // autonomous decisions — auto-enqueue, drain, budget pause/milestone, saturation.

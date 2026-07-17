@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "generation": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "leaseOwner": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "partitionId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "partitionId",
+    "leaseOwner",
+    "generation"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.partition.released"
+}

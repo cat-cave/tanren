@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "findingIds": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "groupId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "memberId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "partitionId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "audit_policy",
+        "member_gate",
+        "behavior_proof",
+        "design_proof"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "partitionId",
+    "groupId",
+    "memberId",
+    "reason",
+    "findingIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.member.isolated"
+}

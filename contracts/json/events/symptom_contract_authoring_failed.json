@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorTaskId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "failureCode": {
+      "enum": [
+        "invalid_source",
+        "unsupported_contract",
+        "validation_failed",
+        "provider_failure",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "issueLoopId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "failureCode"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.symptom.contract.authoring_failed"
+}
