@@ -102,12 +102,11 @@ async function activeBinding(client: QueryClient, input: RecordEffectivePolicySn
        FROM policy_bindings b
        JOIN governance_tiers t
          ON t.org_id = b.org_id AND t.project_id = b.project_id AND t.id = b.tier_id
-       LEFT JOIN governance_policy_revisions r
+      LEFT JOIN governance_policy_revisions r
          ON r.org_id = b.org_id AND r.project_id = b.project_id
         AND r.policy_hash = b.effective_policy_hash
-      WHERE b.org_id = $1 AND b.project_id = $2
+      WHERE b.org_id = $1 AND b.project_id = $2 AND b.is_active
         AND ($3::text IS NULL OR b.id = $3)
-      ORDER BY b.created_at DESC, b.id DESC, r.revision_number DESC
       LIMIT 1`,
     [input.orgId, input.projectId, input.bindingId ?? null],
   );

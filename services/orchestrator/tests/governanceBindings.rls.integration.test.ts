@@ -28,6 +28,7 @@ const ORG_A = "org_governance_bindings_a";
 const ORG_B = "org_governance_bindings_b";
 const PROJECT_A = "project_governance_bindings_a";
 const PROJECT_B = "project_governance_bindings_b";
+const PROJECT_REACTIVATION = "project_governance_bindings_reactivation";
 const ADMIN_ACTOR: ActorContext = {
   userId: "user_governance_bindings_admin",
   orgId: ORG_A,
@@ -53,7 +54,8 @@ function databaseUrl(url: string, database: string, appRole = false): string {
 async function seedProject(pool: Pool, orgId: string, projectId: string): Promise<void> {
   await pool.query(
     `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
     [orgId],
   );
   await pool.query(
@@ -225,6 +227,100 @@ describeDb("governance bindings and effective-policy receipts — RLS and append
     );
     expect(events.rows.filter((row) => row.event_type === "governance.binding.superseded")).toHaveLength(1);
     expect(events.rows.filter((row) => row.event_type === "governance.binding.activated")).toHaveLength(2);
+  });
+
+  it("reactivates a superseded tier so the response and new receipt name the active policy", async () => {
+    const pool = requirePool(appPool);
+    await seedProject(requirePool(ownerPool), ORG_A, PROJECT_REACTIVATION);
+    const tierA = await runWithOrgScope(pool, ORG_A, (client) =>
+      createGovernanceTier(client, {
+        orgId: ORG_A,
+        projectId: PROJECT_REACTIVATION,
+        tierName: "reactivation-a",
+        preset: "standard",
+      }),
+    );
+    const tierB = await runWithOrgScope(pool, ORG_A, (client) =>
+      createGovernanceTier(client, {
+        orgId: ORG_A,
+        projectId: PROJECT_REACTIVATION,
+        tierName: "reactivation-b",
+        preset: "private",
+      }),
+    );
+    const app = governanceApp(pool);
+
+    const firstActivation = await app.request(
+      `/orgs/${ORG_A}/projects/${PROJECT_REACTIVATION}/governance/tiers/${tierA.id}/bind`,
+      { method: "POST" },
+    );
+    expect(firstActivation.status).toBe(201);
+    const firstBody = (await firstActivation.json()) as { binding: { id: string; isActive: boolean } };
+
+    const secondActivation = await app.request(
+      `/orgs/${ORG_A}/projects/${PROJECT_REACTIVATION}/governance/tiers/${tierB.id}/bind`,
+      { method: "POST" },
+    );
+    expect(secondActivation.status).toBe(201);
+    const bindingsAfterSecondActivation = await runWithOrgScope(pool, ORG_A, (client) =>
+      client.query<{ tier_id: string; is_active: boolean }>(
+        `SELECT tier_id, is_active
+           FROM policy_bindings
+          WHERE org_id = $1 AND project_id = $2`,
+        [ORG_A, PROJECT_REACTIVATION],
+      ),
+    );
+    expect(bindingsAfterSecondActivation.rows).toEqual(
+      expect.arrayContaining([
+        { tier_id: tierA.id, is_active: false },
+        { tier_id: tierB.id, is_active: true },
+      ]),
+    );
+
+    const reactivation = await app.request(
+      `/orgs/${ORG_A}/projects/${PROJECT_REACTIVATION}/governance/tiers/${tierA.id}/bind`,
+      { method: "POST" },
+    );
+    expect(reactivation.status).toBe(201);
+    const reactivatedBody = (await reactivation.json()) as {
+      binding: { id: string; tierId: string; effectivePolicyHash: string; isActive: boolean };
+    };
+    expect(reactivatedBody.binding).toMatchObject({
+      id: firstBody.binding.id,
+      tierId: tierA.id,
+      effectivePolicyHash: tierA.canonicalHash,
+      isActive: true,
+    });
+
+    const receipt = await runWithOrgScope(pool, ORG_A, (client) =>
+      recordEffectivePolicySnapshot(client, {
+        orgId: ORG_A,
+        projectId: PROJECT_REACTIVATION,
+        subjectKind: "run",
+        subjectId: "run_governance_reactivation_a",
+        createdBy: ADMIN_ACTOR.userId,
+      }),
+    );
+    expect(receipt.bindingId).toBe(firstBody.binding.id);
+    expect(receipt.tierId).toBe(tierA.id);
+    expect(receipt.effectivePolicyHash).toBe(tierA.canonicalHash);
+
+    const bindings = await runWithOrgScope(pool, ORG_A, (client) =>
+      client.query<{ tier_id: string; is_active: boolean }>(
+        `SELECT tier_id, is_active
+           FROM policy_bindings
+          WHERE org_id = $1 AND project_id = $2
+          ORDER BY tier_id`,
+        [ORG_A, PROJECT_REACTIVATION],
+      ),
+    );
+    expect(bindings.rows).toHaveLength(2);
+    expect(bindings.rows).toEqual(
+      expect.arrayContaining([
+        { tier_id: tierA.id, is_active: true },
+        { tier_id: tierB.id, is_active: false },
+      ]),
+    );
   });
 
   it("can provision the second tenant without exposing the first tenant's rows", async () => {
