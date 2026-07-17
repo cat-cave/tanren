@@ -13,6 +13,7 @@
 // conflict state itself.
 
 import type pg from "pg";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { recordEffectivePolicySnapshot } from "../governance/effectivePolicySnapshotStore.js";
 import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
@@ -232,11 +233,13 @@ export async function buildBundleForMergeStage(
   context: ReviewMergeRunContext,
 ): Promise<MergeAuthorityBundle> {
   const pool = input.pool as pg.Pool;
-  const meta = await pool.query<{ project_config: unknown; org_id: string }>(
-    `SELECT p.config AS project_config, r.org_id
-       FROM runs r JOIN projects p ON p.project_id = r.project_id
-      WHERE r.run_id = $1`,
-    [context.runId],
+  const meta = await runWithSystemScope(pool, (client) =>
+    client.query<{ project_config: unknown; org_id: string }>(
+      `SELECT p.config AS project_config, r.org_id
+         FROM runs r JOIN projects p ON p.project_id = r.project_id
+        WHERE r.run_id = $1`,
+      [context.runId],
+    ),
   );
   const row = meta.rows[0];
   if (row === undefined || row.org_id === null) {
@@ -265,13 +268,15 @@ export async function buildBundleForMergeStage(
   // BEFORE building the bundle — an unresolvable config throws here, so a land is never
   // authorized with an empty `""` hash.
   const gateConfigHash = await resolveMergeCandidateGateConfigHash(codeHost, context);
-  const effectivePolicySnapshot = await recordEffectivePolicySnapshot(pool, {
-    orgId: row.org_id,
-    projectId: context.projectId,
-    subjectKind: "run",
-    subjectId: context.runId,
-    createdBy: "system:merge-authority",
-  });
+  const effectivePolicySnapshot = await runWithOrgScope(pool, row.org_id, (client) =>
+    recordEffectivePolicySnapshot(client, {
+      orgId: row.org_id,
+      projectId: context.projectId,
+      subjectKind: "run",
+      subjectId: context.runId,
+      createdBy: "system:merge-authority",
+    }),
+  );
   return buildMergeAuthorityBundle({
     pool,
     // PLANE-SPLIT (REQUIRED — audit D-R3.2): the durable land finalize routes through the
