@@ -83,15 +83,19 @@ export interface MergeQueueEntry {
   priority: SpecPriority;
   /** Stable creation-order tiebreak (lower sorts first) AFTER priority. */
   orderKey: number;
+  /** Independently leased scheduling boundary for this member. */
+  partitionId?: string;
+  /** Stable semantic scope used to select the member's partition. */
+  scopeFingerprint?: string;
 }
 
 /**
  * A point-in-time snapshot of a project's native merge queue + the DAG facts the
  * coordinator needs to order it, loaded under RLS. `mergedSpecIds` is the set of
  * specs that have GENUINELY merged (status done/merged) — used to test whether an
- * entry's ancestors are satisfied. `mergingInFlight` is whether ANOTHER entry is
- * already claimed (`status = 'merging'`) — the SERIALIZATION signal (at most one
- * merge in flight per project).
+ * entry's ancestors are satisfied. `mergingInFlight` means every queued candidate
+ * is held behind an unexpired lease in its own partition; it is not a project-wide
+ * merge lock.
  */
 export interface MergeQueueSnapshot {
   projectId: string;
@@ -99,10 +103,10 @@ export interface MergeQueueSnapshot {
   entries: MergeQueueEntry[];
   /** Spec ids that have genuinely merged (done/merged) — satisfied ancestors. */
   mergedSpecIds: Set<string>;
-  /** True when another entry is already `merging` (serialization: hold this pass). */
+  /** True only when no candidate can acquire its own partition lease this pass. */
   mergingInFlight: boolean;
   /**
-   * When `mergingInFlight` is true, the time until the oldest fresh merge claim can
+   * When `mergingInFlight` is true, the time until a fresh partition lease can
    * be considered stale. Coordinators surface this as a serialized retry so a
    * restarted worker wakes itself after the lease instead of waiting for an
    * unrelated notification.
@@ -224,6 +228,8 @@ export interface MergeQueueModel {
     specId: string;
     prUrl: string;
     prNumber: number;
+    targetBranch?: string;
+    scopeFingerprint?: string;
   }): Promise<{ queueId: string; created: boolean }>;
 
   /** Load the project's queue snapshot + the DAG facts to order it, under RLS. */
@@ -235,6 +241,9 @@ export interface MergeQueueModel {
    * loses), so two passes never drive the same merge or two merges at once.
    */
   claim(queueId: string): Promise<boolean>;
+
+  /** Renew this process's current partition lease before a live merge drive. */
+  renewClaim?(queueId: string): Promise<boolean>;
 
   /** Mark a claimed entry as terminally MERGED (merging → merged). */
   markMerged(queueId: string): Promise<void>;
@@ -272,6 +281,15 @@ export interface MergeQueueModel {
    * safe.
    */
   recoverStaleClaims(projectId: string): Promise<number>;
+
+  /** Move a deterministic poison member out of its shared partition before repair. */
+  isolateMember?(input: {
+    queueId: string;
+    groupId: string;
+    memberId: string;
+    reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
+    findingIds: string[];
+  }): Promise<boolean>;
 }
 
 /**

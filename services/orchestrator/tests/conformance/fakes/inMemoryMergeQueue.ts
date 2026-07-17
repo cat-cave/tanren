@@ -315,6 +315,17 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
       attempts: input.attempts,
     });
   }
+
+  // MQ-4's pg-only partition store owns these events. The in-memory queue keeps
+  // the old compatibility seam, so these are deliberately recording no-ops.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitPartitionLeased(): Promise<void> {}
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitPartitionReleased(): Promise<void> {}
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitMemberIsolated(): Promise<void> {}
 }
 
 /**

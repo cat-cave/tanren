@@ -122,15 +122,12 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
-    // Crash recovery first; the lease is the same native-queue mechanism.
     await this.deps.queue.recoverStaleClaims(projectId);
 
     const maxBatchSize = await this.resolveMaxBatchSize(projectId);
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
     const queueDepth = snapshot.entries.length;
 
-    // Form the batch from the CURRENT snapshot (a merge already in flight ⇒ empty
-    // batch: the native queue's serialization lock dominates and we hold this pass).
     const formation = formBatch(snapshot, maxBatchSize);
     if (formation.batch.length === 0) {
       const holdReason = snapshot.mergingInFlight
@@ -138,7 +135,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         : snapshot.entries.length === 0
           ? "empty"
           : "all_blocked";
-      // A non-infra hold (serialized/empty/all_blocked) ends any infra-hold streak.
       await this.infraHolds.reset(projectId);
       const retryAfterMs = holdReason === "serialized" ? serializedRetryAfterMs(snapshot) : undefined;
       return { projectId, holdReason, queueDepth, ...(retryAfterMs !== undefined && { retryAfterMs }) };
@@ -418,19 +414,14 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   ): Promise<CoordinateResult> {
     let mergedSpecId: string | undefined;
     let dequeuedSpecId: string | undefined;
+    let leaseContended = false;
     for (const entry of batch) {
       const claimed = await this.deps.queue.claim(entry.queueId);
       if (!claimed) {
-        // The winning pass may die; arm a lease-bound serialized retry.
-        const refreshed = await this.deps.queue.loadSnapshot(projectId);
-        return {
-          projectId,
-          queueDepth,
-          holdReason: "serialized",
-          retryAfterMs: serializedRetryAfterMs(refreshed),
-          ...(mergedSpecId !== undefined && { mergedSpecId }),
-        };
+        leaseContended = true;
+        continue;
       }
+      await this.deps.queue.renewClaim?.(entry.queueId);
       await this.deps.events.emitAdvanced({ projectId, entry, queueDepth });
 
       const outcome = await this.driveOne(projectId, entry);
@@ -451,9 +442,17 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       if (settled !== "dequeued") {
         return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
       }
-      // mq-1: member isolation — a dequeued policy culprit must not stop eligible siblings.
       dequeuedSpecId = entry.specId;
       continue;
+    }
+    if (mergedSpecId === undefined && dequeuedSpecId === undefined && leaseContended) {
+      const refreshed = await this.deps.queue.loadSnapshot(projectId);
+      return {
+        projectId,
+        queueDepth,
+        holdReason: "serialized",
+        retryAfterMs: serializedRetryAfterMs(refreshed),
+      };
     }
     return {
       projectId,

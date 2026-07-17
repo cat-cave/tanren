@@ -54,6 +54,7 @@ export async function applyRecordDraftPrCreated(
     specId: input.specId,
     prUrl: input.prUrl,
     prNumber: input.prNumber,
+    targetBranch: input.baseBranch,
   });
   if (created) {
     await events.append({

@@ -261,6 +261,8 @@ export type NativeQueueEnqueuer = (input: {
   specId: string;
   prUrl: string;
   prNumber: number;
+  targetBranch?: string;
+  scopeFingerprint?: string;
 }) => Promise<{ created: boolean }>;
 
 /**
@@ -288,6 +290,8 @@ export type NativeQueueOnClientEnqueuer = (
     specId: string;
     prUrl: string;
     prNumber: number;
+    targetBranch?: string;
+    scopeFingerprint?: string;
   },
 ) => Promise<{ created: boolean }>;
 
