@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "artifactId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "expectedMatrixDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "releaseId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "validationRunId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "releaseId",
+    "artifactId",
+    "artifactDigest",
+    "validationRunId",
+    "expectedMatrixDigest"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designSystem.artifact.validated"
+}

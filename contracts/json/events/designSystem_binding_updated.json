@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "generatedUpgradeSpecIds": {
+      "items": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 4096,
+      "type": "array"
+    },
+    "newReleaseId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "oldReleaseId": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pinMode": {
+      "enum": [
+        "release",
+        "channel"
+      ],
+      "type": "string"
+    },
+    "projectId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "bindingId",
+    "oldReleaseId",
+    "newReleaseId",
+    "pinMode",
+    "generatedUpgradeSpecIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designSystem.binding.updated"
+}
