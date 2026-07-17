@@ -23,6 +23,11 @@ import type {
   AuthorizedSubsetEvaluation,
   LandGroupLandOutcome,
 } from "../../../src/engine/merge/multiMemberAuthorityTypes.js";
+import type {
+  IntegrationNodeMaterializationPersistence,
+  MaterializationFailureRecord,
+  MaterializedIntegrationNodeRecord,
+} from "../../../src/engine/merge/integrationNodeMaterializer.js";
 
 interface QueueRow {
   queueId: string;
@@ -284,6 +289,59 @@ export class ScriptedMergeRunner implements MergeRunner {
     this.drives.push({ runId: input.runId });
     return this.scripted.get(input.runId) ?? { kind: "merged", mergeSha: `sha_${input.runId}` };
   }
+}
+
+/**
+ * In-memory persistence for the MQ-11 conformance exercise. It records the same
+ * node/event boundary as the Pg adapter so a materializer fake cannot drift unseen.
+ */
+export function createInMemoryIntegrationNodeMaterializationStore(): IntegrationNodeMaterializationPersistence & {
+  readonly nodes: Array<MaterializedIntegrationNodeRecord & { nodeId: string }>;
+  readonly events: Array<
+    | {
+        type: "integration.node.materialized";
+        nodeId: string;
+        memberKey: string;
+        baseSha: string;
+        headSha: string;
+        treeHash: string;
+      }
+    | { type: "integration.node.materialization_failed"; failure: MaterializationFailureRecord }
+  >;
+} {
+  const nodes: Array<MaterializedIntegrationNodeRecord & { nodeId: string }> = [];
+  const events: Array<
+    | {
+        type: "integration.node.materialized";
+        nodeId: string;
+        memberKey: string;
+        baseSha: string;
+        headSha: string;
+        treeHash: string;
+      }
+    | { type: "integration.node.materialization_failed"; failure: MaterializationFailureRecord }
+  > = [];
+
+  return {
+    nodes,
+    events,
+    async persistMaterialized(input: MaterializedIntegrationNodeRecord): Promise<string> {
+      const nodeId = `inode_fake_${nodes.length + 1}`;
+      nodes.push({ ...input, nodeId });
+      events.push({
+        type: "integration.node.materialized",
+        nodeId,
+        memberKey: input.memberKey,
+        baseSha: input.baseSha,
+        headSha: input.headSha,
+        treeHash: input.treeHash,
+      });
+      return nodeId;
+    },
+    async recordMaterializationFailure(input: MaterializationFailureRecord): Promise<void> {
+      events.push({ type: "integration.node.materialization_failed", failure: input });
+    },
+  };
 }
 
 /**

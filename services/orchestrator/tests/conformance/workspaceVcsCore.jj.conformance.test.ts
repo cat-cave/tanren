@@ -75,6 +75,15 @@ class PathRemappingJjCore implements WorkspaceVcsCore {
     const path = join(this.scratchRoot, `ws-${++wsCounter}`);
     return this.inner.openWorkspace({ ...input, repoUrl: this.origin, path });
   }
+  assembleIntegration(
+    input: Parameters<WorkspaceVcsCore["assembleIntegration"]>[0],
+  ): ReturnType<WorkspaceVcsCore["assembleIntegration"]> {
+    return this.inner.assembleIntegration({
+      ...input,
+      repoUrl: this.origin,
+      path: join(this.scratchRoot, `ws-${++wsCounter}`),
+    });
+  }
   branch(ws: WorkspaceHandle, name: string, atBranch?: string): Promise<void> {
     return this.inner.branch(ws, name, atBranch);
   }

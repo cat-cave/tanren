@@ -215,6 +215,9 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
   openWorkspace(): never {
     this.unreachable("openWorkspace");
   }
+  assembleIntegration(): never {
+    this.unreachable("assembleIntegration");
+  }
   branch(): never {
     this.unreachable("branch");
   }

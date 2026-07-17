@@ -12,13 +12,16 @@
 // ancestor's recorded conflict PROPAGATES to its descendants until restack clears
 // it. Fixtures live HERE, never src/.
 
+import { createHash } from "node:crypto";
 import type {
+  AssembleWorkspaceIntegrationInput,
   OpenWorkspaceInput,
   RebaseResult,
   RecordedConflict,
   ResolveConflictInput,
   RestackResult,
   WorkspaceHandle,
+  WorkspaceIntegrationAssembly,
   WorkspaceVcsCore,
 } from "../../../src/engine/contracts/workspaceVcsCore.js";
 
@@ -47,16 +50,53 @@ function snapshot(branches: Map<string, BranchState>): Map<string, BranchState> 
 
 export class InMemoryWorkspaceVcsCore implements WorkspaceVcsCore {
   private readonly workspaces = new Map<string, WorkspaceState>();
+  private readonly remoteRefs = new Map<string, string>();
   private seq = 0;
+  /** Every exercised subset assembly, including the immutable ancestor refs it consumed. */
+  readonly assemblies: Array<{ baseSha: string; memberHeadShas: Record<string, string>; localRef: string }> = [];
+
+  /** Seed a clone-visible base or PR-head ref for an integration materialization test. */
+  seedRemoteRef(branch: string, headSha: string): void {
+    this.remoteRefs.set(branch, headSha);
+  }
 
   async openWorkspace(input: OpenWorkspaceInput): Promise<WorkspaceHandle> {
     const workspaceId = `ws_${++this.seq}`;
     this.workspaces.set(workspaceId, {
-      branches: new Map([[input.baseBranch, { headSha: `sha-${input.baseBranch}` }]]),
+      branches: new Map([
+        [input.baseBranch, { headSha: this.remoteRefs.get(input.baseBranch) ?? `sha-${input.baseBranch}` }],
+      ]),
       currentBranch: input.baseBranch,
       opLog: [],
     });
     return { workspaceId, path: input.path };
+  }
+
+  async assembleIntegration(input: AssembleWorkspaceIntegrationInput): Promise<WorkspaceIntegrationAssembly> {
+    const workspace = await this.openWorkspace(input);
+    const state = this.require(workspace);
+    const baseSha = this.remoteRefs.get(input.baseBranch) ?? `sha-${input.baseBranch}`;
+    const memberHeadShas: Record<string, string> = {};
+    const integratedHeads: string[] = [];
+    for (const member of input.members) {
+      const headSha = this.remoteRefs.get(member.branch);
+      if (headSha === undefined) throw new Error(`missing remote PR-head ref ${member.branch}@origin`);
+      if (headSha.startsWith("conflict-")) {
+        return {
+          outcome: "conflict",
+          conflictBetween: { specId: member.specId, otherSpecId: input.members.at(-2)?.specId ?? input.baseBranch },
+          message: `recorded fake jj conflict for ${member.specId}`,
+        };
+      }
+      memberHeadShas[member.specId] = headSha;
+      integratedHeads.push(headSha);
+    }
+    const headSha = fakeSha(`head:${baseSha}:${integratedHeads.join(",")}`);
+    const treeHash = fakeSha(`tree:${baseSha}:${integratedHeads.join(",")}`);
+    state.branches.set(input.localRef, { headSha, parent: input.baseBranch });
+    state.currentBranch = input.localRef;
+    this.assemblies.push({ baseSha, memberHeadShas, localRef: input.localRef });
+    return { outcome: "integrated", workspace, localRef: input.localRef, baseSha, headSha, treeHash, memberHeadShas };
   }
 
   async branch(workspace: WorkspaceHandle, name: string, atBranch?: string): Promise<void> {
@@ -178,4 +218,8 @@ export class InMemoryWorkspaceVcsCore implements WorkspaceVcsCore {
     if (st === undefined) throw new Error(`unknown workspace ${workspace.workspaceId}`);
     return st;
   }
+}
+
+function fakeSha(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 40);
 }

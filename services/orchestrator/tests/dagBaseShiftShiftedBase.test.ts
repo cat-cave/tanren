@@ -90,6 +90,9 @@ class ConflictingCore implements WorkspaceVcsCore {
   async openWorkspace(): Promise<{ workspaceId: string; path: string }> {
     return { workspaceId: "ws_1", path: "/scratch/ws_1" };
   }
+  async assembleIntegration(): Promise<never> {
+    throw new Error("subset assembly is outside this base-shift fixture");
+  }
   async branch(): Promise<void> {}
   async checkout(): Promise<void> {}
   async commit(): Promise<{ headSha: string }> {
@@ -247,6 +250,9 @@ describe("BaseShiftCoordinator — threads the re-resolved stack + nonSpeculativ
 class CleanCore implements WorkspaceVcsCore {
   async openWorkspace(): Promise<{ workspaceId: string; path: string }> {
     return { workspaceId: "ws_1", path: "/scratch/ws_1" };
+  }
+  async assembleIntegration(): Promise<never> {
+    throw new Error("subset assembly is outside this base-shift fixture");
   }
   async branch(): Promise<void> {}
   async checkout(): Promise<void> {}
