@@ -164,7 +164,7 @@ it("EXERCISES the synced fake: jj-assembles and materializes an authorized two-m
       memberKey: expectedKey,
       baseSha,
       headSha: result.headSha,
-      treeHash: result.treeHash,
+      treeHash: "sha256:1e70c6a371ea86c0149c1db6d5f1131780fb9d8516b9f3e885c7fff6dd3f9e24",
     }),
   ]);
 });

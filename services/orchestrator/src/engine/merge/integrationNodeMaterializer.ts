@@ -217,6 +217,6 @@ export function buildPgIntegrationNodeMaterializer(
   return new IntegrationNodeMaterializer(workspace, new PgIntegrationNodeMaterializationPersistence(pool));
 }
 
-function digest(value: string): `sha256:${string}` {
+export function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
