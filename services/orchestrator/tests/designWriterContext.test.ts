@@ -446,4 +446,35 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
     expect([...context.behaviorsById.keys()]).toEqual(["behavior_view_runs"]);
     expect(context.behaviorsById.get("behavior_view_runs")?.persona).toBe("Operator");
   });
+
+  it("additively injects an explicitly resolved web catalog and tokens for the Writer", async () => {
+    const block = await loadDesignContextBlock({
+      client: fakeClient({ personas, behaviors }),
+      orgScope: { kind: "org", orgId: ORG },
+      projectId: PROJECT,
+      webDesignSystem: {
+        designSystemId: "system_web",
+        releaseId: "release_web_1",
+        artifactId: "artifact_web_1",
+        tokens: [{ path: "color.primary", cssVariable: "--tanren-color-primary", cssValue: "#155eef", type: "color" }],
+        catalog: {
+          schemaVersion: 1,
+          framework: "react",
+          style: "shadcn",
+          components: [
+            {
+              key: "dialog",
+              primitive: "@radix-ui/react-dialog",
+              packageName: "@radix-ui/react-dialog",
+              sourcePath: "components/ui/dialog.tsx",
+              tokenBindings: { background: "--tanren-color-primary" },
+            },
+          ],
+        },
+      },
+    });
+    expect(block).toContain("Web design system — use this published system");
+    expect(block).toContain("--tanren-color-primary = #155eef");
+    expect(block).toContain("dialog (@radix-ui/react-dialog; components/ui/dialog.tsx)");
+  });
 });
