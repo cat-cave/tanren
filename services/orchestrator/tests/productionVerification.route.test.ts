@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
-import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../src/engine/contracts/resolutionStage.js";
+import type {
+  ResolutionJob,
+  ResolutionStage,
+  ResolutionStageKind,
+  ResolutionStageResult,
+} from "../src/engine/contracts/resolutionStage.js";
 import type { SymptomContractRow } from "../src/engine/repositories/symptomContracts.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
@@ -29,7 +34,22 @@ const VERDICT = {
   evidenceRefs: ["evidence_1"],
 };
 
-function appFor(enqueued: unknown[] = [], executed: ResolutionJob[] = [], completed: string[] = []) {
+const INCONCLUSIVE_VERDICT = {
+  outcome: "inconclusive" as const,
+  classification: "infra_failure" as const,
+  proofGrade: "active_causal" as const,
+  verificationRunId: "vrun_inconclusive",
+  assertionIds: [],
+  evidenceRefs: [],
+};
+
+function appFor(
+  enqueued: unknown[] = [],
+  executed: ResolutionJob[] = [],
+  completed: string[] = [],
+  released: unknown[] = [],
+  verdict: ResolutionStageResult = VERDICT,
+) {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
     c.set("actor", ACTOR);
@@ -90,7 +110,8 @@ function appFor(enqueued: unknown[] = [], executed: ResolutionJob[] = [], comple
           completed.push(`${input.id}:${input.leaseOwner}`);
           return true;
         },
-        async release() {
+        async release(input) {
+          released.push(input);
           return true;
         },
       },
@@ -101,7 +122,7 @@ function appFor(enqueued: unknown[] = [], executed: ResolutionJob[] = [], comple
             kind: "production",
             async run(job) {
               executed.push(job);
-              return VERDICT;
+              return verdict;
             },
           },
         ],
@@ -157,5 +178,27 @@ describe("production verification retry route", () => {
       }),
     ]);
     expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);
+  });
+
+  it("returns an inconclusive production verification job to retryable instead of completing it", async () => {
+    const completed: string[] = [];
+    const released: unknown[] = [];
+    const response = await appFor([], [], completed, released, INCONCLUSIVE_VERDICT).request(
+      "/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          contractId: "contract_1",
+          releaseInstanceId: "release_1",
+          idempotencyKey: "operator-retry-inconclusive",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ verdict: INCONCLUSIVE_VERDICT });
+    expect(completed).toEqual([]);
+    expect(released).toEqual([expect.objectContaining({ id: "rjob_manual_1", state: "retryable" })]);
   });
 });

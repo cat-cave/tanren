@@ -152,7 +152,11 @@ export class BaselineReproductionStage implements ResolutionStage {
             shouldRun: true,
           }
         : await this.startVerificationRun(runInput);
-    if (!started.shouldRun) return recordedBaselineResult(contract, started);
+    if (!started.shouldRun) {
+      const result = recordedBaselineResult(contract, started);
+      await this.reconcileRecordedLoopState(job, result);
+      return result;
+    }
 
     let baseline: SymptomBaselineResult;
     try {
@@ -235,6 +239,17 @@ export class BaselineReproductionStage implements ResolutionStage {
     };
   }
 
+  private async reconcileRecordedLoopState(job: ResolutionJob, result: ResolutionStageResult): Promise<void> {
+    const state = loopStateForRecordedBaselineResult(result);
+    if (state === undefined) return;
+    await this.transitionIssueLoop({
+      orgId: job.orgId,
+      projectId: job.projectId,
+      issueLoopId: job.issueLoopId,
+      state,
+    });
+  }
+
   private async resolveRuntimeContext(
     ctx: unknown,
     job: ResolutionJob,
@@ -280,7 +295,7 @@ export class BaselineReproductionStage implements ResolutionStage {
         fromStates: ["open", "awaiting_reproduction"],
       });
       if (transitioned === undefined) throw new Error(`baseline issue loop ${input.issueLoopId} was not found`);
-      if (!transitioned.changed) {
+      if (!transitioned.changed && transitioned.loop.state !== input.state) {
         throw new Error(`baseline issue loop ${input.issueLoopId} refused ${input.state} transition`);
       }
     });
@@ -347,6 +362,14 @@ function recordedBaselineResult(
     return { ...shared, outcome: "inconclusive", classification: started.classification };
   }
   throw new Error(`baseline receipt ${started.id} has incompatible classification ${started.classification}`);
+}
+
+function loopStateForRecordedBaselineResult(
+  result: ResolutionStageResult,
+): "awaiting_reproduction" | "reproduced" | undefined {
+  if (result.classification === "product_failure" && result.outcome === "passed") return "reproduced";
+  if (result.outcome === "inconclusive") return "awaiting_reproduction";
+  return undefined;
 }
 
 class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver {

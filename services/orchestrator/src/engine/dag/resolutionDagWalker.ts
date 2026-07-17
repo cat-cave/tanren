@@ -1,6 +1,7 @@
 import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../contracts/resolutionStage.js";
 import { DEFAULT_RESOLUTION_JOB_LEASE_MS, type ResolutionJobStore } from "../repositories/resolutionJobs.js";
 import { createLogger } from "../observability/logger.js";
+import { settleResolutionJob } from "./resolutionJobSettlement.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -149,16 +150,9 @@ export class ResolutionDagWalker {
       await heartbeatInFlight;
       if (heartbeatError !== undefined) throw asError(heartbeatError);
 
-      if (result.outcome === "inconclusive") {
-        const released = await this.deps.store.release({ ...claim, id: job.id, state: "retryable" });
-        if (!released) {
-          throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before retry transition`);
-        }
-        return;
-      }
-      const completed = await this.deps.store.complete({ ...claim, id: job.id });
-      if (!completed) {
-        throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before completion`);
+      const settled = await settleResolutionJob(this.deps.store, job, result);
+      if (!settled) {
+        throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before result settlement`);
       }
     } catch (error) {
       stopped = true;

@@ -255,6 +255,9 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
     const before = probe.calls();
     await stage.run(crashed, {});
     expect(probe.calls() - before).toBe(1);
+    // Model the precise crash window after receipt finalization but before its
+    // separate issue-loop transition commits. Recovery must replay that CAS.
+    await owner.query("UPDATE issue_loops SET state = 'open' WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]);
     await runWithOrgScope(app, ORG_ID, (client) =>
       client.query(
         "UPDATE resolution_jobs SET lease_expiry = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
@@ -281,6 +284,92 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       ),
     );
     expect(runs.rows[0]).toEqual({ count: "1" });
+    const loop = await runWithOrgScope(app, ORG_ID, (client) =>
+      client.query<{ state: string }>("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]),
+    );
+    expect(loop.rows).toEqual([{ state: "reproduced" }]);
     await expect(jobs.claimNext({ orgId: ORG_ID, leaseOwner: "negative-control" })).resolves.toBeUndefined();
+  });
+
+  it("retries repeated infrastructure failures without rejecting an already-awaiting reproduction loop", async () => {
+    await owner.query("UPDATE issue_loops SET state = 'open' WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]);
+    await jobs.enqueue({
+      orgId: ORG_ID,
+      projectId: PROJECT_ID,
+      id: "rjob_resolution_infra_retry",
+      issueLoopId: LOOP_ID,
+      contractId,
+      stage: "baseline",
+      idempotencyKey: "resolution-infra-retry",
+    });
+    const stage = new BaselineReproductionStage({
+      pool: app,
+      probe: {
+        async runBaseline() {
+          throw new Error("probe infrastructure unavailable");
+        },
+      },
+    });
+    const walker = new ResolutionDagWalker({
+      store: jobs,
+      orgIds: async () => [ORG_ID],
+      stages: new Map([["baseline", stage]]),
+      leaseOwner: "resolution-infra-walker",
+      leaseMs: 30_000,
+    });
+
+    await expect(walker.tick()).resolves.toEqual([
+      { orgId: ORG_ID, recoveredJobIds: [], claimedJobIds: ["rjob_resolution_infra_retry"] },
+    ]);
+    await expect(walker.tick()).resolves.toEqual([
+      { orgId: ORG_ID, recoveredJobIds: [], claimedJobIds: ["rjob_resolution_infra_retry"] },
+    ]);
+
+    const [job, loop, run] = await runWithOrgScope(app, ORG_ID, async (client) => {
+      const rows = await Promise.all([
+        client.query("SELECT state FROM resolution_jobs WHERE org_id = $1 AND id = $2", [
+          ORG_ID,
+          "rjob_resolution_infra_retry",
+        ]),
+        client.query("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]),
+        client.query(
+          `SELECT count(*)::text AS count, classification, status
+             FROM behavior_verification_runs
+            WHERE resolution_job_id = $1 AND stage = 'baseline'
+            GROUP BY classification, status`,
+          ["rjob_resolution_infra_retry"],
+        ),
+      ]);
+      return rows.map((row) => row.rows[0]);
+    });
+    expect(job).toEqual({ state: "retryable" });
+    expect(loop).toEqual({ state: "awaiting_reproduction" });
+    expect(run).toEqual({ count: "1", classification: "infra_failure", status: "failed" });
+  });
+
+  it("refuses a baseline transition from a verified-closed loop through the real IssueLoopStore", async () => {
+    await owner.query("UPDATE issue_loops SET state = 'verified_closed' WHERE org_id = $1 AND id = $2", [
+      ORG_ID,
+      LOOP_ID,
+    ]);
+    await jobs.enqueue({
+      orgId: ORG_ID,
+      projectId: PROJECT_ID,
+      id: "rjob_resolution_terminal_loop",
+      issueLoopId: LOOP_ID,
+      contractId,
+      stage: "baseline",
+      idempotencyKey: "resolution-terminal-loop",
+    });
+    const claimed = await jobs.claimNext({ orgId: ORG_ID, leaseOwner: "terminal-loop-worker", leaseMs: 30_000 });
+    if (claimed === undefined) throw new Error("expected terminal-loop fixture job to claim");
+
+    await expect(new BaselineReproductionStage({ pool: app }).run(claimed, {})).rejects.toThrow(
+      /refused reproduced transition/u,
+    );
+    const loop = await runWithOrgScope(app, ORG_ID, (client) =>
+      client.query<{ state: string }>("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]),
+    );
+    expect(loop.rows).toEqual([{ state: "verified_closed" }]);
   });
 });

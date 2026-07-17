@@ -3,6 +3,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
 import type { ResolutionStage } from "../../engine/contracts/resolutionStage.js";
+import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { verifyInternalPeer } from "./internalWriteShared.js";
 
@@ -83,10 +84,7 @@ export function createInternalResolutionJobRoutes(deps: ResolutionJobRouteDeps):
         throw new Error(`baseline resolution job ${job.id} failed and could not be released`, { cause: error });
       throw error;
     }
-    const settled =
-      result.outcome === "inconclusive"
-        ? await store.release({ orgId: job.orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" })
-        : await store.complete({ orgId: job.orgId, id: job.id, leaseOwner: job.leaseOwner });
+    const settled = await settleResolutionJob(store, job, result);
     if (!settled) return c.json({ error: "resolution_job_lease_lost" }, 423);
     return c.json({ result });
   });

@@ -12,6 +12,7 @@ import type {
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
+import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
 import { createResolutionStageRegistry } from "../../engine/verification/resolutionStages/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
@@ -132,8 +133,8 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;
     }
-    if (!(await jobs.complete({ orgId, id: job.id, leaseOwner: job.leaseOwner }))) {
-      throw new Error(`production verification job ${job.id} lost its lease before completion`);
+    if (!(await settleResolutionJob(jobs, job, verdict))) {
+      throw new Error(`production verification job ${job.id} lost its lease before result settlement`);
     }
     return c.json(
       {
