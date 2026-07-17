@@ -68,8 +68,10 @@ describe("gv-3 resolveMergeCandidateGateConfigHash — real gate-config hash", (
     const host = codeHostReadingCiYaml(async () => CI_YAML_A);
     const hash = await resolveMergeCandidateGateConfigHash(host, contextWith("feat/x"));
     expect(hash).toBe(hashGateConfig(resolveCiConfig(CI_YAML_A)));
-    expect(hash).not.toBe(""); // the whole point — never the former `""`
-    expect(hash).toMatch(/^[0-9a-f]{64}$/u); // a real sha256 hex digest
+    // the whole point — never the former `""`
+    expect(hash).not.toBe("");
+    // a real sha256 hex digest
+    expect(hash).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("NEGATIVE CONTROL: two candidates with different CI config → different hashes (reuse refused)", async () => {
@@ -85,9 +87,10 @@ describe("gv-3 resolveMergeCandidateGateConfigHash — real gate-config hash", (
   });
 
   it('an ABSENT ci.yml resolves to the default tiers — a REAL non-empty hash, never `""`', async () => {
-    const host = codeHostReadingCiYaml(async () => undefined); // no file in the repo
+    // no file in the repo
+    const host = codeHostReadingCiYaml(async () => {});
     const hash = await resolveMergeCandidateGateConfigHash(host, contextWith("feat/x"));
-    expect(hash).toBe(hashGateConfig(resolveCiConfig(undefined)));
+    expect(hash).toBe(hashGateConfig(resolveCiConfig()));
     expect(hash).not.toBe("");
     expect(hash).toMatch(/^[0-9a-f]{64}$/u);
   });
@@ -108,7 +111,7 @@ describe("gv-3 resolveMergeCandidateGateConfigHash — real gate-config hash", (
 
   it('FAIL-CLOSED: an invalid ci.yml throws from resolveCiConfig (never a silent `""`)', async () => {
     const host = codeHostReadingCiYaml(async () => "version: 1\ntiers: {}\nwhen: {}\n");
-    await expect(resolveMergeCandidateGateConfigHash(host, contextWith("feat/x"))).rejects.toThrow();
+    await expect(resolveMergeCandidateGateConfigHash(host, contextWith("feat/x"))).rejects.toThrow(Error);
   });
 });
 
