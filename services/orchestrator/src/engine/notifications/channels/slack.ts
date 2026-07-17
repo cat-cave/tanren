@@ -1,3 +1,4 @@
+// cspell:ignore xoxb xoxp xoxa xoxr xapp xoxe
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
