@@ -125,12 +125,25 @@ async function settleMemberFailure(
   let dequeuedSpecId: string | undefined;
   for (const entry of input.batch) {
     if (!failed.has(entry.specId)) continue;
-    const claimed = await input.deps.queue.claim(entry.queueId);
-    if (!claimed) return hold(input, "serialized", evaluation, AUTHORITY_RETRY_AFTER_MS);
     const member = evaluation.members.find((candidate) => candidate.specId === entry.specId);
+    const reason = isolationReason(member?.reasonCodes);
+    const findingIds = [...new Set(member?.findingIds ?? evaluation.findingIds)];
+    if (input.deps.queue.isolateMember === undefined) {
+      const claimed = await input.deps.queue.claim(entry.queueId);
+      if (!claimed) return hold(input, "serialized", evaluation, AUTHORITY_RETRY_AFTER_MS);
+    } else {
+      const isolated = await input.deps.queue.isolateMember({
+        queueId: entry.queueId,
+        groupId: evaluation.groupId,
+        memberId: entry.specId,
+        reason,
+        findingIds,
+      });
+      if (!isolated) return hold(input, "serialized", evaluation, AUTHORITY_RETRY_AFTER_MS);
+    }
     const detail =
       `mq-2 member policy evaluation ${evaluation.evaluationId}: ` +
-      `findings=${member?.findingIds.join(",") ?? "unavailable"}`;
+      `findings=${findingIds.join(",") || "unavailable"}`;
     const settled = await settleFailedDrive(input.deps, input.projectId, entry, detail);
     if (settled === "retained") return hold(input, "merge_retry", evaluation, AUTHORITY_RETRY_AFTER_MS);
     dequeuedSpecId = entry.specId;
@@ -145,6 +158,15 @@ async function settleMemberFailure(
     evaluation,
     ...(dequeuedSpecId !== undefined && { dequeuedSpecId }),
   };
+}
+
+function isolationReason(
+  reasonCodes: ReadonlyArray<string> | undefined,
+): "audit_policy" | "member_gate" | "behavior_proof" | "design_proof" {
+  if (reasonCodes?.includes("member_gate") === true) return "member_gate";
+  if (reasonCodes?.includes("behavior_proof") === true) return "behavior_proof";
+  if (reasonCodes?.includes("design_proof") === true) return "design_proof";
+  return "audit_policy";
 }
 
 function hold(

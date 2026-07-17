@@ -14,8 +14,8 @@ import {
   type MergeQueueSnapshot,
   type MergeRunner,
 } from "../contracts/mergeCoordinator.js";
-import { type DriveMergeForQueuedRun } from "./coordinator.js";
-import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
+import { type DriveMergeForQueuedRun, type MergeQueueEventEmitter } from "./coordinator.js";
+import { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
 /** Resolve a project's org (the system-scoped bootstrap before any tenant work). */
@@ -39,6 +39,8 @@ interface QueueEntryRow {
   depends_on: unknown;
   priority: unknown;
   rn: string | number;
+  partition_id: string | null;
+  scope_fingerprint: string | null;
 }
 
 // Re-export so batchCoordinatorBuild can assemble queue + events from one module
@@ -55,7 +57,15 @@ function asStringArray(value: unknown): string[] {
  * sees zero rows, so the snapshot is always exactly the project's own queue.
  */
 export class PgMergeQueueModel implements MergeQueueModel {
-  constructor(private readonly pool: pg.Pool) {}
+  private readonly partitions: PgMergeQueuePartitionStore;
+  private readonly leaseOwners = new Map<string, string>();
+
+  constructor(
+    private readonly pool: pg.Pool,
+    events?: MergeQueueEventEmitter,
+  ) {
+    this.partitions = new PgMergeQueuePartitionStore(events);
+  }
 
   async enqueue(input: {
     projectId: string;
@@ -63,6 +73,8 @@ export class PgMergeQueueModel implements MergeQueueModel {
     specId: string;
     prUrl: string;
     prNumber: number;
+    targetBranch?: string;
+    scopeFingerprint?: string;
   }): Promise<{ queueId: string; created: boolean }> {
     const orgId = await resolveProjectOrg(this.pool, input.projectId);
     if (orgId === null) {
@@ -89,6 +101,8 @@ export class PgMergeQueueModel implements MergeQueueModel {
       specId: string;
       prUrl: string;
       prNumber: number;
+      targetBranch?: string;
+      scopeFingerprint?: string;
     },
   ): Promise<{ queueId: string; created: boolean }> {
     const existing = await client.query<{ queue_id: string }>(
@@ -99,11 +113,29 @@ export class PgMergeQueueModel implements MergeQueueModel {
     if (found !== undefined) {
       return { queueId: found.queue_id, created: false };
     }
+    const partition = await this.partitions.ensureOnClient(client, {
+      orgId,
+      projectId: input.projectId,
+      specId: input.specId,
+      ...(input.targetBranch === undefined ? {} : { targetBranch: input.targetBranch }),
+      ...(input.scopeFingerprint === undefined ? {} : { scopeFingerprint: input.scopeFingerprint }),
+    });
     const queueId = `mq_${randomUUID()}`;
     await client.query(
-      `INSERT INTO merge_queue (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number)
-       VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)`,
-      [queueId, input.runId, input.specId, input.projectId, orgId, input.prUrl, String(input.prNumber)],
+      `INSERT INTO merge_queue
+         (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number, partition_id, scope_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9)`,
+      [
+        queueId,
+        input.runId,
+        input.specId,
+        input.projectId,
+        orgId,
+        input.prUrl,
+        String(input.prNumber),
+        partition.id,
+        input.scopeFingerprint ?? `spec:${input.specId}`,
+      ],
     );
     return { queueId, created: true };
   }
@@ -118,11 +150,19 @@ export class PgMergeQueueModel implements MergeQueueModel {
       // Ordered deterministically by enqueue time for a stable orderKey tiebreak.
       const entryRows = await client.query<QueueEntryRow>(
         `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
-                s.depends_on, s.priority,
+                s.depends_on, s.priority, mq.partition_id, mq.scope_fingerprint,
                 row_number() OVER (ORDER BY mq.enqueued_at, mq.queue_id) AS rn
            FROM merge_queue mq
            JOIN specs s ON s.spec_id = mq.spec_id
-          WHERE mq.project_id = $1 AND mq.status = 'queued'`,
+          WHERE mq.project_id = $1 AND mq.status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM merge_queue held
+               WHERE held.org_id = mq.org_id
+                 AND held.partition_id IS NOT DISTINCT FROM mq.partition_id
+                 AND held.status = 'merging'
+                 AND held.lease_expires_at > now()
+            )`,
         [projectId],
       );
       const entries: MergeQueueEntry[] = entryRows.rows.map((row) => ({
@@ -136,18 +176,21 @@ export class PgMergeQueueModel implements MergeQueueModel {
         dependsOn: asStringArray(row.depends_on),
         priority: SpecPriority.parse(row.priority),
         orderKey: Number(row.rn),
+        ...(row.partition_id === null ? {} : { partitionId: row.partition_id }),
+        ...(row.scope_fingerprint === null ? {} : { scopeFingerprint: row.scope_fingerprint }),
       }));
 
       const merging = await client.query<{ count: string; retry_after_ms: string | null }>(
         `SELECT count(*)::text AS count,
-                ceil(greatest(0, extract(epoch from ((min(claimed_at) + ($2::bigint * interval '1 millisecond')) - now())) * 1000))::text AS retry_after_ms
+                ceil(greatest(0, extract(epoch from (min(lease_expires_at) - now())) * 1000))::text AS retry_after_ms
            FROM merge_queue
           WHERE project_id = $1
-            AND status = 'merging'`,
-        [projectId, MERGE_CLAIM_LEASE_MS],
+            AND status = 'merging'
+            AND lease_expires_at > now()`,
+        [projectId],
       );
       const mergingRow = merging.rows[0];
-      const mergingInFlight = Number(mergingRow?.count ?? "0") > 0;
+      const mergingInFlight = entries.length === 0 && Number(mergingRow?.count ?? "0") > 0;
       const serializedRetryAfterMs = parseSerializedRetryAfterMs(mergingRow?.retry_after_ms);
 
       // The specs that have GENUINELY merged — satisfied ancestors. An unresolved
@@ -192,69 +235,70 @@ export class PgMergeQueueModel implements MergeQueueModel {
   async claim(queueId: string): Promise<boolean> {
     const orgId = await this.resolveQueueOrg(queueId);
     if (orgId === null) return false;
+    const lease = await runWithOrgScope(this.pool, orgId, (client) => this.partitions.acquireOnClient(client, queueId));
+    if (lease === null) return false;
+    this.leaseOwners.set(queueId, lease.leaseOwner);
+    return true;
+  }
+
+  async renewClaim(queueId: string): Promise<boolean> {
+    const leaseOwner = this.leaseOwners.get(queueId);
+    const orgId = await this.resolveQueueOrg(queueId);
+    if (leaseOwner === undefined || orgId === null) return false;
     return runWithOrgScope(this.pool, orgId, async (client) => {
-      // The atomic serialization lock: flip queued → merging only if STILL queued.
-      // A concurrent pass that already claimed it updates 0 rows and loses.
-      const result = await client.query(
-        "UPDATE merge_queue SET status = 'merging', claimed_at = now() WHERE queue_id = $1 AND status = 'queued'",
-        [queueId],
-      );
-      return (result.rowCount ?? 0) === 1;
+      return (await this.partitions.renewOnClient(client, { queueId, leaseOwner })) !== null;
     });
   }
 
   async markMerged(queueId: string): Promise<void> {
-    await this.settle(queueId, "UPDATE merge_queue SET status = 'merged', settled_at = now() WHERE queue_id = $1", []);
+    await this.release(queueId, { nextStatus: "merged" });
   }
 
   async releaseClaim(queueId: string): Promise<void> {
     // Return a claimed entry to `queued` WITHOUT settling it (the entry stays in the
     // queue) — the transient-merge-drive hold path. Only flips a STILL-`merging` row
     // so it cannot resurrect a settled (merged/dequeued) entry.
-    await this.settle(
-      queueId,
-      "UPDATE merge_queue SET status = 'queued', claimed_at = NULL WHERE queue_id = $1 AND status = 'merging'",
-      [],
-    );
+    await this.release(queueId, { nextStatus: "queued" });
   }
 
   async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
-    await this.settle(
-      queueId,
-      "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
-      [reason],
-    );
+    await this.release(queueId, { nextStatus: "dequeued", reason });
   }
 
   async recoverStaleClaims(projectId: string): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, projectId);
     if (orgId === null) return 0;
     return runWithOrgScope(this.pool, orgId, async (client) => {
-      // A coordinator died mid-merge: return its STALE `merging` rows to `queued` so
-      // the queue is recoverable. ONLY a claim older than the lease is reclaimed — a
-      // fresh, legitimately in-flight `merging` claim SURVIVES (a concurrent
-      // coordinate pass must not reset + double-drive an active merge). A
-      // never-claimed row (claimed_at NULL) is also reclaimed (an inconsistent
-      // state). The GitHub merge is idempotent, so re-queuing a genuinely-dead
-      // claim is safe.
-      const result = await client.query(
-        `UPDATE merge_queue
-            SET status = 'queued', claimed_at = NULL
-          WHERE project_id = $1
-            AND status = 'merging'
-            AND (claimed_at IS NULL OR claimed_at < now() - ($2::bigint * interval '1 millisecond'))`,
-        [projectId, MERGE_CLAIM_LEASE_MS],
-      );
-      return result.rowCount ?? 0;
+      return this.partitions.reclaimExpiredOnClient(client, projectId);
     });
   }
 
-  private async settle(queueId: string, sql: string, extra: unknown[]): Promise<void> {
+  async isolateMember(input: {
+    queueId: string;
+    groupId: string;
+    memberId: string;
+    reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
+    findingIds: string[];
+  }): Promise<boolean> {
+    const orgId = await this.resolveQueueOrg(input.queueId);
+    if (orgId === null) return false;
+    const isolated = await runWithOrgScope(this.pool, orgId, (client) =>
+      this.partitions.isolateOnClient(client, input),
+    );
+    if (isolated) this.leaseOwners.delete(input.queueId);
+    return isolated;
+  }
+
+  private async release(
+    queueId: string,
+    input: { nextStatus: "queued" | "merged" | "dequeued"; reason?: DequeueReason },
+  ): Promise<void> {
     const orgId = await this.resolveQueueOrg(queueId);
     if (orgId === null) return;
     await runWithOrgScope(this.pool, orgId, async (client) => {
-      await client.query(sql, [queueId, ...extra]);
+      await this.partitions.releaseOnClient(client, { queueId, ...input });
     });
+    this.leaseOwners.delete(queueId);
   }
 
   /** Resolve a queue entry's org (system-scoped) so the scoped write hits its row. */

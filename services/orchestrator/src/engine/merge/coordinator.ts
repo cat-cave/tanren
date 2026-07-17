@@ -33,6 +33,31 @@ export interface MergeQueueEventEmitter {
     attempts: number;
     message: string;
   }): Promise<void>;
+  emitPartitionLeased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    generation: number;
+    scopeFingerprint?: string;
+  }): Promise<void>;
+  emitPartitionReleased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    generation: number;
+  }): Promise<void>;
+  emitMemberIsolated(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    groupId: string;
+    memberId: string;
+    reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
+    findingIds: string[];
+  }): Promise<void>;
 }
 
 /**

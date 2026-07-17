@@ -59,7 +59,8 @@ export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Pro
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
   const recoverySettlement = requireRecoveryOwnedSettlementWriter(runStateWriter);
-  const queueModel = new PgMergeQueueModel(deps.pool);
+  const events = new PgMergeQueueEventEmitter(deps.pool, runStateWriter);
+  const queueModel = new PgMergeQueueModel(deps.pool, events);
   return new BatchMergeCoordinator({
     queue: queueModel,
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
@@ -85,7 +86,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     }),
     // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP); the queue
     // event emitters route every event through it.
-    events: new PgMergeQueueEventEmitter(deps.pool, runStateWriter),
+    events,
     batchEvents: new PgBatchMergeEventEmitter(deps.pool, runStateWriter),
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, routes through the writer.

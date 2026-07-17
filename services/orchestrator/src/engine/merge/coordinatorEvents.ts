@@ -110,6 +110,80 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
       },
     });
   }
+
+  async emitPartitionLeased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    generation: number;
+    scopeFingerprint?: string;
+  }): Promise<void> {
+    await this.store.append({
+      runId: input.entry.runId,
+      specId: input.entry.specId,
+      projectId: input.projectId,
+      orgId: this.orgId,
+      eventType: "merge.partition.leased",
+      payload: {
+        projectId: input.projectId,
+        partitionId: input.partitionId,
+        leaseOwner: input.leaseOwner,
+        leaseExpiresAt: input.leaseExpiresAt.toISOString(),
+        generation: input.generation,
+        ...(input.scopeFingerprint === undefined ? {} : { scopeFingerprint: input.scopeFingerprint }),
+      },
+    });
+  }
+
+  async emitPartitionReleased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    generation: number;
+  }): Promise<void> {
+    await this.store.append({
+      runId: input.entry.runId,
+      specId: input.entry.specId,
+      projectId: input.projectId,
+      orgId: this.orgId,
+      eventType: "merge.partition.released",
+      payload: {
+        projectId: input.projectId,
+        partitionId: input.partitionId,
+        leaseOwner: input.leaseOwner,
+        generation: input.generation,
+      },
+    });
+  }
+
+  async emitMemberIsolated(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    groupId: string;
+    memberId: string;
+    reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
+    findingIds: string[];
+  }): Promise<void> {
+    await this.store.append({
+      runId: input.entry.runId,
+      specId: input.entry.specId,
+      projectId: input.projectId,
+      orgId: this.orgId,
+      eventType: "merge.member.isolated",
+      payload: {
+        projectId: input.projectId,
+        partitionId: input.partitionId,
+        groupId: input.groupId,
+        memberId: input.memberId,
+        reason: input.reason,
+        findingIds: input.findingIds,
+      },
+    });
+  }
 }
 
 /**
@@ -167,5 +241,39 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
     message: string;
   }): Promise<void> {
     await this.withScopedEmitter(input.projectId, (emitter) => emitter.emitInfraBlocked(input));
+  }
+
+  async emitPartitionLeased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    leaseExpiresAt: Date;
+    generation: number;
+    scopeFingerprint?: string;
+  }): Promise<void> {
+    await this.withScopedEmitter(input.projectId, (emitter) => emitter.emitPartitionLeased(input));
+  }
+
+  async emitPartitionReleased(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    leaseOwner: string;
+    generation: number;
+  }): Promise<void> {
+    await this.withScopedEmitter(input.projectId, (emitter) => emitter.emitPartitionReleased(input));
+  }
+
+  async emitMemberIsolated(input: {
+    projectId: string;
+    entry: MergeQueueEntry;
+    partitionId: string;
+    groupId: string;
+    memberId: string;
+    reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
+    findingIds: string[];
+  }): Promise<void> {
+    await this.withScopedEmitter(input.projectId, (emitter) => emitter.emitMemberIsolated(input));
   }
 }
