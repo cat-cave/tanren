@@ -140,6 +140,67 @@ describe("compileIntegrationRequirement — no integration (biases toward no-op)
   });
 });
 
+describe("compileIntegrationRequirement — ADVERSARIAL (ordinary English / over-evidence)", () => {
+  it("does NOT classify a bare provider word used as ordinary English", () => {
+    expect(
+      compileIntegrationRequirement(
+        behavior({
+          persona: "member",
+          title: "stay focused",
+          when: "the form is submitted",
+          then: "don't slack off and make sure the work gets done",
+        }),
+        null,
+      ).kind,
+    ).toBe("no_integration");
+
+    expect(
+      compileIntegrationRequirement(
+        behavior({
+          persona: "operator",
+          title: "watch the pipeline",
+          when: "a job fails",
+          then: "keep a sentry over the process and retry it",
+        }),
+        null,
+      ).kind,
+    ).toBe("no_integration");
+  });
+
+  it("DOES classify a provider named as an explicit delivery destination", () => {
+    const result = compileIntegrationRequirement(
+      behavior({
+        persona: "operator",
+        title: "celebrate closed deals",
+        when: "the 100th deal closes",
+        then: "post a message to Slack when a deal closes",
+      }),
+      null,
+    );
+    expect(result.kind).toBe("requirement");
+    if (result.kind !== "requirement") return;
+    expect(result.requirement.capability).toBe("messaging.send");
+    expect(result.requirement.expectedEffect.provider).toBe("slack");
+  });
+
+  it("does NOT read a version number or 'hits' as a threshold", () => {
+    const result = compileIntegrationRequirement(
+      behavior({
+        persona: "operator",
+        title: "announce releases",
+        given: "API v2 hits production",
+        when: "a user clicks the deploy button",
+        then: "post a message to our Slack channel",
+      }),
+      null,
+    );
+    expect(result.kind).toBe("requirement");
+    if (result.kind !== "requirement") return;
+    // Evidenced by the click, NOT defaulted to threshold by the "v2"/"hits".
+    expect(result.requirement.trigger.kind).toBe("user_action");
+  });
+});
+
 describe("compileIntegrationRequirement — NEGATIVE CONTROLS (ambiguous ⇒ no row)", () => {
   it("fails typed (unsupported) for a Discord behavior — never Slack scopes", () => {
     const result = compileIntegrationRequirement(
@@ -202,5 +263,24 @@ describe("compileIntegrationRequirement — NEGATIVE CONTROLS (ambiguous ⇒ no 
     expect(result.kind).toBe("ambiguous");
     if (result.kind !== "ambiguous") return;
     expect(result.issues.some((i) => i.code === "provider_forbidden_by_design")).toBe(true);
+  });
+
+  it("honors natural constraint phrasing — 'Slack is not allowed' / 'instead of Slack'", () => {
+    for (const constraint of ["Slack is not allowed", "Slack is forbidden", "Use email instead of Slack"]) {
+      const design: CaptureDesignContract = {
+        domain: "saas-web",
+        identity: "a link shortener",
+        intent: "keep the product simple",
+        principles: [],
+        constraints: [constraint],
+        personas: [],
+        behaviors: [],
+        dimensions: [],
+      };
+      const result = compileIntegrationRequirement(slackCelebrate, design);
+      expect(result.kind, `constraint: ${constraint}`).toBe("ambiguous");
+      if (result.kind !== "ambiguous") continue;
+      expect(result.issues.some((i) => i.code === "provider_forbidden_by_design")).toBe(true);
+    }
   });
 });

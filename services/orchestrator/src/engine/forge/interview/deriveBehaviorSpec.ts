@@ -84,8 +84,12 @@ export interface DeriveBehaviorSpecInput {
   // read provider-policy constraints. `null`/absent ⇒ compile from G/W/T alone.
   designContract?: CaptureDesignContract | null;
   // in-5 (additive): the materialized behavior_revision id, when one exists. When
-  // supplied the compiled requirement is linked to it (behavior↔requirement row);
-  // absent ⇒ the requirement is keyed by the stable behavior key, no link row.
+  // supplied the compiled requirement is PERSISTED and linked to it
+  // (behavior↔requirement row). When ABSENT (today's greenfield derive, pre
+  // behavior_revision materialization) the requirement is still COMPILED — an
+  // ambiguous behavior throws loud — but NOTHING is persisted (a
+  // behavior_revision-sourced row requires a genuine behavior_revisions.id; in-6
+  // supplies it and persists then). No row is written under a fabricated source.
   behaviorRevisionId?: string;
 }
 

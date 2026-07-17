@@ -180,26 +180,79 @@ function normalizeText(behavior: CaptureBehavior): string {
   return `${behavior.title} ${behavior.given} ${behavior.when} ${behavior.then}`.toLowerCase();
 }
 
+// The ROOT-CAUSE fix: a provider token alone is NOT evidence — ordinary English
+// ("don't slack off", "keep a sentry over the process", "slack tide") names a
+// provider without invoking it. An integration requirement is classified only
+// when the provider co-occurs with an explicit external-delivery SIGNAL: a
+// delivery verb/preposition tied to the provider, or the provider named with a
+// service noun ("slack channel", "sentry error", "post to slack", "report to
+// sentry"). Family-specific delivery vocabulary keeps the collocation honest.
+const FAMILY_SIGNAL: Readonly<Record<IntegrationCapability, { readonly verbs: string; readonly nouns: string }>> = {
+  "messaging.send": {
+    verbs:
+      "post|posts|posted|posting|send|sends|sent|sending|message|messages|messaged|messaging|notify|notifies|notified|notifying|announce|announces|announced|announcing|broadcast|broadcasts|broadcasted|alert|alerts|alerted|ping|pings|pinged|deliver|delivers|delivered|publish|publishes|published|dm|drop|drops|dropped",
+    nouns:
+      "channel|channels|message|messages|notification|notifications|webhook|webhooks|workspace|workspaces|bot|bots|dm|dms|thread|threads|post|posts|announcement|announcements|integration",
+  },
+  "errors.capture": {
+    verbs:
+      "report|reports|reported|reporting|capture|captures|captured|capturing|send|sends|sent|sending|log|logs|logged|logging|track|tracks|tracked|tracking|ingest|ingests|ingested|forward|forwards|forwarded|push|pushes|pushed|record|records|recorded",
+    nouns: "error|errors|exception|exceptions|event|events|issue|issues|dsn|crash|crashes|stack trace|stacktrace|integration",
+  },
+};
+
+// Prepositions that mark a provider as a delivery destination/service.
+const DELIVERY_PREPS = "to|into|in|on|onto|via|through|using|toward|towards";
+// Optional article/possessive between a preposition and the provider.
+const ARTICLE = "(?:the\\s+|our\\s+|a\\s+|an\\s+|my\\s+|your\\s+|their\\s+)?";
+
+function providerHasIntegrationSignal(text: string, provider: string, family: IntegrationCapability): boolean {
+  const sig = FAMILY_SIGNAL[family];
+  // (a) provider immediately followed by a family service noun: "slack channel".
+  if (new RegExp(`\\b${provider}\\b\\s*(?:'s\\s+)?(?:${sig.nouns})\\b`, "u").test(text)) return true;
+  // (b) service noun … delivery prep … provider: "message … to slack", "error … in sentry".
+  if (new RegExp(`\\b(?:${sig.nouns})\\b[\\s\\w]{0,24}?\\b(?:${DELIVERY_PREPS})\\b\\s+${ARTICLE}${provider}\\b`, "u").test(text)) {
+    return true;
+  }
+  // (c) delivery verb … delivery prep … provider: "post … to slack", "report … to sentry".
+  if (new RegExp(`\\b(?:${sig.verbs})\\b[^.]{0,40}?\\b(?:${DELIVERY_PREPS})\\b\\s+${ARTICLE}${provider}\\b`, "u").test(text)) {
+    return true;
+  }
+  // (d) delivery verb immediately targeting the provider: "notify slack", "message discord".
+  if (new RegExp(`\\b(?:${sig.verbs})\\b\\s+${ARTICLE}${provider}\\b`, "u").test(text)) return true;
+  return false;
+}
+
 function detectProviders(text: string): string[] {
-  // Word-boundary match so "slackness" does not resolve "slack". Deterministic
-  // insertion order (ALL_KNOWN_PROVIDERS), de-duplicated.
+  // A provider is detected ONLY when it co-occurs with an integration signal (see
+  // providerHasIntegrationSignal). Deterministic order (ALL_KNOWN_PROVIDERS).
   const found: string[] = [];
   for (const token of ALL_KNOWN_PROVIDERS) {
-    const re = new RegExp(`\\b${token}\\b`, "u");
-    if (re.test(text) && !found.includes(token)) found.push(token);
+    if (found.includes(token)) continue;
+    if (providerHasIntegrationSignal(text, token, capabilityOf(token))) found.push(token);
   }
   return found;
 }
 
-/** Providers the design contract explicitly forbids (negative verb + provider). */
+/**
+ * Providers the design contract explicitly forbids. Handles natural constraint
+ * phrasing in either order: a negative verb before the provider ("do not use
+ * Slack", "instead of Slack") AND a negative predicate after it ("Slack is not
+ * allowed", "Slack is forbidden").
+ */
 function forbiddenProviders(design: CaptureDesignContract | null): Set<string> {
   const forbidden = new Set<string>();
   if (design === null) return forbidden;
   const lines = [...design.constraints, ...design.principles].map((l) => l.toLowerCase());
+  const before =
+    "no|not|never|avoid|avoids|forbid|forbids|forbidden|ban|bans|banned|prohibit|prohibits|prohibited|disallow|disallows|disallowed|do not use|don't use|without|instead of";
+  const after =
+    "not allowed|not permitted|forbidden|banned|prohibited|disallowed|off[- ]limits|not to be used|is not|are not|is never|are never|is banned|is forbidden|is prohibited";
   for (const line of lines) {
     for (const token of ALL_KNOWN_PROVIDERS) {
-      const re = new RegExp(`\\b(no|not|never|avoid|forbid|forbidden|do not use|don't use)\\b[^.]*\\b${token}\\b`, "u");
-      if (re.test(line)) forbidden.add(token);
+      const negBefore = new RegExp(`\\b(?:${before})\\b[^.]{0,40}?\\b${token}\\b`, "u");
+      const negAfter = new RegExp(`\\b${token}\\b[^.]{0,40}?\\b(?:${after})\\b`, "u");
+      if (negBefore.test(line) || negAfter.test(line)) forbidden.add(token);
     }
   }
   return forbidden;
@@ -208,17 +261,20 @@ function forbiddenProviders(design: CaptureDesignContract | null): Set<string> {
 /**
  * The trigger stimulus kind, ONLY when the G/W/T evidences one. Returns
  * `undefined` when unevidenced — the caller then fails closed (ambiguous), never
- * a silent `event` fallback. A bare number is NOT a threshold (so "port 80",
- * "API v12", "wait 10 seconds" are not misread); a threshold needs a threshold
- * verb + a number, or an ordinal ("the 100th click").
+ * a silent `event` fallback. A bare number is NOT a threshold: a threshold needs
+ * a real quantity tied to a comparator/ordinal ("the 100th click", "after 5
+ * failures", "crosses 100 clicks"). A version number or the word "hits" alone
+ * ("API v2 hits production") is NOT a threshold.
  */
 function detectTriggerKind(text: string): "user_action" | "http" | "schedule" | "event" | "threshold" | undefined {
   const ordinal = /\b\d+(?:st|nd|rd|th)\b/u.test(text);
-  const thresholdVerb =
-    /\b(cross|crosses|crossed|reach|reaches|reached|exceed|exceeds|exceeded|surpass|surpasses|surpassed|threshold|hit|hits)\b/u.test(
+  // A comparator/quantifier immediately governing a number ("reaches 100",
+  // "after 5", "over 100", "at least 3").
+  const quantifiedThreshold =
+    /\b(?:cross|crosses|crossed|reach|reaches|reached|exceed|exceeds|exceeded|surpass|surpasses|surpassed|above|below|over|under|after|every|at least|more than|greater than|less than|fewer than|no more than|up to)\s+(?:the\s+)?\d+/u.test(
       text,
     );
-  if (ordinal || (thresholdVerb && /\d/u.test(text))) return "threshold";
+  if (ordinal || quantifiedThreshold) return "threshold";
   if (/\b(every|daily|hourly|nightly|weekly|monthly|cron|scheduled|on a schedule)\b/u.test(text)) return "schedule";
   if (/\b(http|https|endpoint|webhook|api request|get request|post request|incoming request|inbound request)\b/u.test(text)) {
     return "http";
