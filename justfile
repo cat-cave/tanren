@@ -960,7 +960,7 @@ smoke-rls-fixture-leases:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/fixtureLeases.rls.integration.test.ts
 
 smoke-rls-effect-observations:
-  echo "wave-6 barrier stub — rv-8 lane replaces body"
+  TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/effectObserver.rls.integration.test.ts
 
 smoke-rls-integration-proof-units:
   echo "wave-6 barrier stub — mq-6 lane replaces body"
