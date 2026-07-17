@@ -54,13 +54,9 @@ export {
   type MatrixMatch,
 } from "./matrix.js";
 
-export {
-  NotificationDispatcher,
-  effectiveSeverityFor,
-  type DispatcherDeps,
-  type DefaultRoute,
-  type EventContext,
-} from "./dispatcher.js";
+export { NotificationDispatcher, type DispatcherDeps, type DefaultRoute } from "./dispatcher.js";
+
+export { effectiveSeverityFor, type EventContext } from "./messageFormat.js";
 
 export {
   buildChannelRegistry,
