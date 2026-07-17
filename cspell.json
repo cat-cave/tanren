@@ -241,6 +241,7 @@
     "hanko",
     "hashlib",
     "hashtext",
+    "hashtextextended",
     "HEADGREEN",
     "healthcheck",
     "healthz",

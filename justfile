@@ -957,7 +957,7 @@ smoke-rls-governance-bindings:
 # WAVE-6 barrier claims the four lane-owned RLS smoke recipe names. Each owning
 # lane replaces only its no-op body once its live conformance proof lands.
 smoke-rls-fixture-leases:
-  echo "wave-6 barrier stub — rv-7 lane replaces body"
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/fixtureLeases.rls.integration.test.ts
 
 smoke-rls-effect-observations:
   echo "wave-6 barrier stub — rv-8 lane replaces body"

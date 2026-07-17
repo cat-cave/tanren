@@ -20,6 +20,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
+import { createInternalFixtureLeaseRoutes } from "./routes/internal/fixtureLeases.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
 import { parsedEnv } from "./envSchema.js";
 import { createLogger } from "./engine/observability/logger.js";
@@ -48,6 +49,7 @@ export function buildInternalApp(deps: { pool: pg.Pool }): Hono {
   // handshake, so this is defense-in-depth + the peer-identity surface.
   const verifier = new NodeMtlsPeerVerifier();
   app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier }));
+  app.route("/", createInternalFixtureLeaseRoutes({ pool: deps.pool, verifier }));
   // The run-state WRITE endpoints (append-event / record-cost /
   // finalize-run) the remote-writes worker posts its tenant writes to.
   app.route("/", createInternalRunStateWriteRoutes({ pool: deps.pool, verifier }));
