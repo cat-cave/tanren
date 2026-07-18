@@ -29,6 +29,13 @@ export {
 } from "./notify.js";
 export type { NotifyHandler } from "./notify.js";
 export { isRecoverableRun, RECOVERABLE_OUTCOMES, RECOVERABLE_OUTCOMES_LIST } from "./recoveryOutcomes.js";
+export {
+  AllocatorAllocatedPayload,
+  AllocatorEventRegistry,
+  appendAllocatorEvent,
+  RunnerSweptPayload,
+} from "./allocatorEventStore.js";
+export type { AllocatorEventInput, AllocatorEventName, AllocatorEventPayload } from "./allocatorEventStore.js";
 export * as schema from "./schema.js";
 export { stateEnumLists } from "./stateEnums.js";
 export type { StateEnumName } from "./stateEnums.js";

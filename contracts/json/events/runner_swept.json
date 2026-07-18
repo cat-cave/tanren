@@ -5,7 +5,7 @@
     "reason": {
       "enum": [
         "terminal_run",
-        "ttl_exceeded",
+        "lease_lapsed",
         "unclaimed_grace"
       ],
       "type": "string"

@@ -55,19 +55,10 @@ export const RunnerSweptPayload = z
   .object({
     /** The reclaimed runner's id (the resource the sweep targeted). */
     runnerId: z.string(),
-    /**
-     * The owning run id, or `null` for a wedged allocation never tied to a real
-     * `runs` row (the unclaimed-grace case). A NON-SECRET resource handle.
-     */
+    /** The owning run id, or null for an unclaimed allocation. */
     runId: z.string().nullable(),
-    /**
-     * Why the runner was stuck — the discriminated state the sweeper reclaimed it
-     * from. `terminal_run`: its owning run is terminal but the runner was never
-     * released. `ttl_exceeded`: it outlived the run-hours TTL ceiling (the
-     * apex-relevant leak guard). `unclaimed_grace`: a wedged allocation never tied
-     * to a live run, past the grace window.
-     */
-    reason: z.enum(["terminal_run", "ttl_exceeded", "unclaimed_grace"]),
+    /** The allocator's actual reclamation decision. */
+    reason: z.enum(["terminal_run", "lease_lapsed", "unclaimed_grace"]),
   })
   .strict();
 

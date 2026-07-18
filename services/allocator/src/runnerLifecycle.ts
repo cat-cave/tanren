@@ -99,7 +99,12 @@ export interface AllocationAudit {
   projectId: string | null;
   orgId: string;
   imageSha: string;
-  runless: boolean;
+  target: {
+    host: string;
+    port: number;
+    username: string;
+    hostKeyFingerprint: string;
+  };
 }
 
 export interface RunnerStore {
@@ -315,7 +320,12 @@ export class RunnerLifecycle {
           projectId: record.projectId,
           orgId: input.orgId,
           imageSha: inspected.imageSha,
-          runless: input.runless === true,
+          target: {
+            host: sshHost,
+            port: sshPort,
+            username: "tanren",
+            hostKeyFingerprint,
+          },
         });
 
         return {

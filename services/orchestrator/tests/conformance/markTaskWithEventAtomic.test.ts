@@ -435,7 +435,7 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
   it.each(MISMATCHES)("mismatched pair: transition=%s eventType=%s fails", (transition, eventType) => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: ORG, transition, outcome: "passed", failureKind: "crashed" },
-      event: { projectId: PROJECT, eventType, payload: { taskKind: "write" } },
+      event: { projectId: PROJECT, orgId: ORG, eventType, payload: { taskKind: "write" } },
     });
     expect(result.success).toBe(false);
   });
@@ -444,7 +444,7 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
   it.each(NON_TERMINAL)("non-terminal transition (%s) is rejected", (transition) => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: ORG, transition },
-      event: { projectId: PROJECT, eventType: "task.completed", payload: { taskKind: "write" } },
+      event: { projectId: PROJECT, orgId: ORG, eventType: "task.completed", payload: { taskKind: "write" } },
     });
     expect(result.success).toBe(false);
   });
@@ -458,7 +458,7 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
   it("(D2) the priorEvents field is admitted as an optional array (runId + idempotencyKey required)", () => {
     const ok = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: ORG, transition: "done", outcome: "passed" },
-      event: { projectId: PROJECT, eventType: "task.completed", payload: { taskKind: "review" } },
+      event: { projectId: PROJECT, orgId: ORG, eventType: "task.completed", payload: { taskKind: "review" } },
       priorEvents: [
         {
           runId: "r",
