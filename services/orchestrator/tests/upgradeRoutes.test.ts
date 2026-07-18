@@ -64,7 +64,10 @@ function buildHarness(projectConfigOverrides: Record<string, unknown>) {
   return { app, pool };
 }
 
-async function post(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
+async function post(
+  app: Hono<ActorContextEnv>,
+  path: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path, { method: "POST" });
   return { status: res.status, body: await res.json().catch(() => null) };
 }

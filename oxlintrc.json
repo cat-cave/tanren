@@ -11,6 +11,14 @@
   "rules": {
     "eqeqeq": "error",
     "no-debugger": "error",
+    // no-explicit-any: ratcheted off→error. Explicit `any` disables the type
+    // checker at that site (unsafe member access / assignment flow past the
+    // boundary). The only hits were 11 test HTTP-helper return types
+    // (`Promise<{ status: number; body: any }>`); each was retyped to
+    // `body: Record<string, unknown>` — property access at the assertion sites
+    // still typechecks, no call-site changes, no behavior change. Pinning at
+    // error keeps production + test source `any`-free.
+    "typescript/no-explicit-any": "error",
     "no-await-in-loop": "off",
     "no-var": "error",
     "prefer-const": "error",

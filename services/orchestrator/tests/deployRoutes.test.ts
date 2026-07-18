@@ -72,7 +72,10 @@ function buildHarness(boundActor: ActorContext = admin) {
   return { app, pool, attestations, events };
 }
 
-async function postJson(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
+async function postJson(
+  app: Hono<ActorContextEnv>,
+  path: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
