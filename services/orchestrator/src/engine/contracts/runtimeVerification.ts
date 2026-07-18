@@ -53,6 +53,7 @@ import type {
 
 export * from "./runtimeVerificationPlan.js";
 export * from "./runtimeVerificationAdapters.js";
+export * from "./runtimeVerificationInvariants.js";
 
 export interface RuntimeVerificationHarness {
   readonly casByteStore: CasByteStore;
@@ -127,6 +128,11 @@ export interface RuntimeVerificationRepository {
       readonly artifactManifestDigest?: Digest;
     },
   ): Promise<BehaviorVerificationAttemptId>;
+  /**
+   * Impls MUST call {@link assertVerdictAssertionCoverage} on the input before
+   * persistence so a passed verdict with executed < required (or required < 1)
+   * fails loud, matching the 0079 behavior_verdicts DB CHECKs.
+   */
   recordVerdict(
     scope: VerificationScope,
     input: {
