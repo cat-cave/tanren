@@ -42,7 +42,7 @@ import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMint
 import type { JjCloneCredential } from "../../../providers/jjWorkspaceVcsCore.js";
 import type { LiveJjWorkspace } from "../../../providers/liveJjWorkspace.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
-import { trackPublishedHeadCommands } from "../../../providers/jjPublishedHead.js";
+import { readFetchedPublishedHeadSha, trackPublishedHeadCommands } from "../../../providers/jjPublishedHead.js";
 import { buildActivityWatchdog } from "../../../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 import { pushJjHead } from "./jjAuthedPush.js";
@@ -112,6 +112,14 @@ export interface JjConflictApplierDeps {
 interface OpenState {
   workspace: WorkspaceHandle;
   conflict: RecordedConflict;
+  /**
+   * #1059 — the sha jj FETCHED for the PR head (`<headBranch>@origin`, the PRE-rebase remote
+   * head) captured during `gather()`. `publishResolved` leases the force-push against it, so a
+   * reviewer/writer commit that moved the forge head during the answerer + re-gate window
+   * rejects the push (a loud throw the base-shift coordinator maps to a HOLD + re-drive) rather
+   * than being silently overwritten by the resolved head.
+   */
+  fetchedHeadSha: string;
 }
 
 export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
@@ -181,6 +189,15 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       ].join(" && "),
       ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
+    // #1059: capture the fetched (pre-rebase) remote head — the `--force-with-lease` value the
+    // eventual `publishResolved` push guards against a concurrent reviewer/writer commit. Read
+    // now (before the rebase rewrites the LOCAL head bookmark; `<headBranch>@origin` is untouched).
+    const fetchedHeadSha = await readFetchedPublishedHeadSha({
+      ssh: this.deps.ssh,
+      target: this.deps.target,
+      workspacePath: this.deps.workspacePath,
+      headBranch: facts.headBranch,
+    });
     const rebase = await core.rebaseOnto(workspace, facts.headBranch, facts.baseRevision);
     if (rebase.outcome === "clean" || rebase.conflict === undefined) {
       // A clean rebase recorded NO conflict. This is a real "nothing to resolve" state
@@ -189,7 +206,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       this.opened = undefined;
       return { files: [] };
     }
-    this.opened = { workspace, conflict: rebase.conflict };
+    this.opened = { workspace, conflict: rebase.conflict, fetchedHeadSha };
     const files = await this.readConflictedFiles(rebase.conflict);
     return { files };
   }
@@ -222,7 +239,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
     // exportCleanGitRef THROWS if the head still carries an unresolved conflict — a
     // conflicted ref is NEVER exported to the host (the §2 fail-closed boundary).
     await this.deps.core.exportCleanGitRef(open.workspace, this.deps.facts.headBranch);
-    await this.pushResolvedHead();
+    await this.pushResolvedHead(open.fetchedHeadSha);
     await this.releaseWorkspace();
   }
 
@@ -273,11 +290,14 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
   }
 
   /** Push the jj-exported resolved head onto the PR branch (App-first/static authed). */
-  private async pushResolvedHead(): Promise<void> {
+  private async pushResolvedHead(expectedRemoteHeadSha: string): Promise<void> {
     const { facts } = this.deps;
-    // FORCE push (inside `pushJjHead`): the rebase REWROTE the head's history (the
-    // resolution is a new commit chain on the shifted base), so the push is non-fast-forward
-    // by construction. The SAME shared push machinery the §3.1 base-shift clean rebase uses.
+    // FORCE-WITH-LEASE push (inside `pushJjHead`, #1059): the rebase REWROTE the head's history
+    // (the resolution is a new commit chain on the shifted base), so the push is non-fast-forward
+    // by construction. It leases against the sha jj FETCHED (`expectedRemoteHeadSha`) so a
+    // reviewer/writer commit that moved the forge head during the answerer + re-gate window
+    // rejects the push (a throw the base-shift coordinator maps to a HOLD + re-drive) rather than
+    // being silently overwritten. The SAME shared push machinery the §3.1 clean rebase uses.
     await pushJjHead({
       ssh: this.deps.ssh,
       target: this.deps.target,
@@ -288,6 +308,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: facts.repoUrl,
       headBranch: facts.headBranch,
+      expectedRemoteHeadSha,
       ...(facts.installation !== undefined && { installation: facts.installation }),
       githubCredentialRef: facts.githubCredentialRef,
     });

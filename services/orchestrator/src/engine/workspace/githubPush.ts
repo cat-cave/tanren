@@ -412,20 +412,51 @@ export function gitAuthedCommand(gitArgs: string[]): string {
   return [...GIT_AUTH_ENV_PREFIX, "git", ...gitArgs].join(" ");
 }
 
-export function buildGitHubPushCommand(input: { repoUrl: string; branch: string; sourceRef?: string }): string {
+// The `--force-with-lease` guard for a non-fast-forward push (#1059). A jj rebase / conflict
+// resolution REWRITES the dependent PR head's history, so the publish is non-fast-forward by
+// construction. A BLIND `--force` overwrites whatever the remote branch currently holds — so a
+// reviewer/writer commit pushed to that branch DURING our fetch→rebase→answerer→re-gate window
+// (minutes) is SILENTLY lost, and the stale head then CAS-lands to `main`. `--force-with-lease`
+// makes the push land ONLY if the remote head still equals `expectedSha` (the sha we FETCHED
+// before rewriting); if the remote moved, git REJECTS the push (non-zero exit) and the caller
+// HOLDs + re-drives (re-fetch, re-rebase incorporating the reviewer commit, re-gate). This is
+// the dependent-head analogue of the ff-only `expectedMainSha` CAS on the main-land.
+//
+// FAIL-CLOSED: a non-40-hex `expectedSha` throws (never degrade to a lease with an empty/bogus
+// expected value, which would push effectively-blind).
+export function forceWithLeaseArg(branch: string, expectedSha: string): string {
+  const validBranch = validateGitBranchName(branch);
+  if (!/^[0-9a-f]{40}$/u.test(expectedSha)) {
+    throw new Error(`unsafe force-with-lease expected sha for ${branch}: '${expectedSha}'`);
+  }
+  return `--force-with-lease=refs/heads/${validBranch}:${expectedSha}`;
+}
+
+export function buildGitHubPushCommand(input: {
+  repoUrl: string;
+  branch: string;
+  sourceRef?: string;
+  /**
+   * When set, the push is guarded by `--force-with-lease=refs/heads/<branch>:<expectedSha>`
+   * (#1059) instead of a blind `--force`: the dependent PR-head publish that a base-shift
+   * rebase/resolution rewrites. Absent ⇒ a blind `--force` — the INITIAL PR-branch push, whose
+   * branch Tanren is the sole writer of (no concurrent-write hazard) so a lease would only add a
+   * spurious first-push rejection.
+   */
+  forceWithLease?: { expectedSha: string };
+}): string {
   const branch = validateGitBranchName(input.branch);
   const sourceRef = validatePushSourceRef(input.sourceRef);
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
+  const forceArg =
+    input.forceWithLease === undefined
+      ? "--force"
+      : quoteSshShellArg(forceWithLeaseArg(branch, input.forceWithLease.expectedSha));
 
   return [
     "set -eu",
     ...gitTokenAuthPrelude(),
-    gitAuthedCommand([
-      "push",
-      "--force",
-      quoteSshShellArg(remote),
-      quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`),
-    ]),
+    gitAuthedCommand(["push", forceArg, quoteSshShellArg(remote), quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`)]),
   ].join(" && ");
 }
 

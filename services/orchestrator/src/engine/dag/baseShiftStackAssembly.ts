@@ -25,7 +25,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
-import { trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
+import { readFetchedPublishedHeadSha, trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
 import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { integrateOverWorkspace, type JjIntegrationMember } from "./jjLocalIntegration.js";
 import type { AncestorStack } from "./ancestorStack.js";
@@ -97,6 +97,8 @@ export async function assembleBaseShiftStackWorkspace(input: {
       workspacePath: assembled.live.workspacePath,
       repoUrl: ctx.repoUrl,
       headBranch: ctx.headBranch,
+      // #1059: the sha jj fetched for the dependent head — the clean-rebase publish leases on it.
+      fetchedHeadSha: assembled.fetchedDependentHeadSha,
       ...(ctx.installation !== undefined && { installation: ctx.installation }),
       githubCredentialRef: ctx.githubCredentialRef,
     },
@@ -112,6 +114,13 @@ export interface AssembledBaseShiftStack {
   workspace: WorkspaceHandle;
   /** The assembled stack head's REAL commit sha — the `rebaseOnto -d` target (NOT a host ref). */
   assembledHeadSha: string;
+  /**
+   * #1059 — the sha jj FETCHED for the dependent's OWN published head (`<headBranch>@origin`,
+   * the PRE-rebase remote head). The clean-rebase publish leases against it (`--force-with-lease`)
+   * so a reviewer/writer commit that moved the forge head mid-window rejects the push (HOLD +
+   * re-drive) rather than being blindly overwritten.
+   */
+  fetchedDependentHeadSha: string;
 }
 
 /**
@@ -205,7 +214,14 @@ export async function assembleBaseShiftStackLive(input: {
       ].join(" && "),
       ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
-    return { live, workspace, assembledHeadSha: integration.headSha };
+    // #1059: capture the fetched dependent-head sha (`<headBranch>@origin`) for the publish lease.
+    const fetchedDependentHeadSha = await readFetchedPublishedHeadSha({
+      ssh: deps.ssh,
+      target: live.target,
+      workspacePath: live.workspacePath,
+      headBranch: ctx.headBranch,
+    });
+    return { live, workspace, assembledHeadSha: integration.headSha, fetchedDependentHeadSha };
   } catch (error) {
     // FAIL-CLOSED: a failed clone/assembly/prep must NOT leak the runner — release loudly
     // before re-throwing (the coordinator maps the throw to a hold; the work survives).

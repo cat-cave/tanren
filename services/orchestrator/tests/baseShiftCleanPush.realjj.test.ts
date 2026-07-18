@@ -108,7 +108,9 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
 
     await core.exportCleanGitRef(ws, "feat");
     // §3.1 PUSH: the SAME shared push machinery the provider's `publishCleanRebase` uses
-    // (anonymous push to the local origin — no token/installation).
+    // (anonymous push to the local origin — no token/installation). #1059: lease against the
+    // FETCHED head (`featSha`) — nothing moved the origin `feat`, so the lease holds and the
+    // push lands.
     await pushJjHead({
       ssh,
       target: LOCAL_HANDLE,
@@ -117,6 +119,7 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
       githubHttp: {} as never,
       repoUrl: originPath,
       headBranch: "feat",
+      expectedRemoteHeadSha: featSha,
       githubCredentialRef: "",
       timeoutMs: 60_000,
     });
@@ -124,6 +127,69 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
     // The ORIGIN's `feat` now points at the rebased head — the rebase was PUSHED, not left
     // local-only (the bug the re-gate then verified against the stale forge tree).
     expect(await onForge(originPath, "feat")).toBe(rebase.headSha);
+  });
+
+  // #1059 (P1 data-loss): the dependent-head publish is `--force-with-lease`, NOT a blind
+  // `--force`. When a concurrent reviewer/writer commit advances the remote head DURING the
+  // base-shift window (fetch → rebase → answerer → re-gate), the lease is stale and git REJECTS
+  // the push — the reviewer's commit is NEVER overwritten. `pushJjHead` throws, which the
+  // base-shift coordinator maps to a HOLD + re-drive (proven separately in the coordinator unit
+  // test); here we prove the PUSH-LEVEL half: reject, do not overwrite.
+  it("REJECTS the publish (never overwrites) when the remote head MOVED during the window", async () => {
+    const { originPath, featSha } = makeShiftFixture();
+    const ssh = new LocalCommandSubstrate();
+    const scratch = mkdtempSync(join(tmpdir(), "tanren-base-shift-ws-"));
+    const wsPath = join(scratch, "ws");
+    const core = new JjWorkspaceVcsCore({ substrate: ssh, target: LOCAL_HANDLE, timeoutMs: 60_000 });
+
+    // Open + prep + rebase feat (H1) onto the shifted base — the workspace FETCHED feat at H1.
+    const ws = await core.openWorkspace({ repoUrl: originPath, baseBranch: "main", path: wsPath });
+    await ssh.run(LOCAL_HANDLE, {
+      command: [
+        "set -eu",
+        "jj bookmark track feat --remote origin",
+        `jj config set --repo 'revset-aliases."immutable_heads()"' 'none()'`,
+      ].join(" && "),
+      cwd: wsPath,
+      timeoutMs: 60_000,
+    });
+    const rebase = await core.rebaseOnto(ws, "feat", "main2@origin");
+    expect(rebase.outcome).toBe("clean");
+    const rebasedHead = rebase.headSha; // H2 — local only.
+    await core.exportCleanGitRef(ws, "feat");
+
+    // CONCURRENT WRITER: a reviewer/writer commit advances the ORIGIN's `feat` to H3 while our
+    // workspace still holds the H1 lease value (`featSha`).
+    git(originPath, ["checkout", "--quiet", "feat"]);
+    writeFileSync(join(originPath, "reviewer-fix.txt"), "reviewer fix landed mid-window\n");
+    git(originPath, ["add", "-A"]);
+    git(originPath, ["commit", "--quiet", "-m", "reviewer fix"]);
+    const h3 = git(originPath, ["rev-parse", "feat"]).trim();
+    git(originPath, ["checkout", "--quiet", "main"]);
+    expect(h3).not.toBe(featSha);
+    expect(h3).not.toBe(rebasedHead);
+
+    // The publish leases against the FETCHED sha (H1 = featSha), but the origin is now at H3 →
+    // git REJECTS the push. `pushJjHead` surfaces the non-zero exit as a throw (fail-closed).
+    await expect(
+      pushJjHead({
+        ssh,
+        target: LOCAL_HANDLE,
+        workspacePath: wsPath,
+        secrets: {} as never,
+        githubHttp: {} as never,
+        repoUrl: originPath,
+        headBranch: "feat",
+        expectedRemoteHeadSha: featSha,
+        githubCredentialRef: "",
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow();
+
+    // THE PROOF: the reviewer's commit (H3) SURVIVES — the stale rebased head (H2) never
+    // overwrote it. The base-shift coordinator now HOLDs + re-drives (re-fetch H3, re-rebase).
+    expect(await onForge(originPath, "feat")).toBe(h3);
+    expect(await onForge(originPath, "feat")).not.toBe(rebasedHead);
   });
 });
 

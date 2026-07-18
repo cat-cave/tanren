@@ -57,7 +57,13 @@ const DECISION: PercolationDecision = {
 class RecordingWorkspaceCore implements WorkspaceVcsCore {
   readonly rebaseCalls: Array<{ branch: string; baseSha: string }> = [];
   readonly resolveCalls: Array<{ branch: string; conflictId: string }> = [];
-  constructor(private readonly conflictOnRebase: boolean) {}
+  constructor(
+    private readonly conflictOnRebase: boolean,
+    // #1059: when set, `rebaseOnto` THROWS — the live provider's `rebaseOnto` propagates a
+    // publish failure (a rejected `--force-with-lease` when the remote head moved mid-window)
+    // out of this seam exactly this way, so the coordinator must map it to a fail-closed HOLD.
+    private readonly throwOnRebase?: Error,
+  ) {}
 
   async openWorkspace(): Promise<{ workspaceId: string; path: string }> {
     return { workspaceId: "ws_1", path: "/scratch/ws_1" };
@@ -72,6 +78,9 @@ class RecordingWorkspaceCore implements WorkspaceVcsCore {
   }
   async rebaseOnto(_ws: { workspaceId: string }, branch: string, baseSha: string): Promise<RebaseResult> {
     this.rebaseCalls.push({ branch, baseSha });
+    if (this.throwOnRebase !== undefined) {
+      throw this.throwOnRebase;
+    }
     if (this.conflictOnRebase) {
       const conflict: RecordedConflict = {
         conflictId: "cfl_1",
@@ -249,8 +258,9 @@ function harness(opts: {
   reGate?: ReGateVerdict;
   reGateError?: string;
   resolution?: ConflictResolution;
+  throwOnRebase?: Error;
 }): Harness {
-  const workspace = new RecordingWorkspaceCore(opts.conflictOnRebase ?? false);
+  const workspace = new RecordingWorkspaceCore(opts.conflictOnRebase ?? false, opts.throwOnRebase);
   const opener = new RecordingOpener();
   const reGate = scriptedReGate(opts.reGate ?? "passed", opts.reGateError);
   const resolver = scriptedResolver(opts.resolution ?? { resolved: true, headSha: "sha-resolved" });
@@ -419,6 +429,27 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(h.events.events).toEqual([
       { runId: DEP_RUN, decision: "replanned", rebaseConflicted: true, sameRunId: true },
     ]);
+  });
+
+  it("#1059 FAIL-CLOSED: a clean-rebase publish that REJECTS (stale `--force-with-lease`) HOLDS, never lands the stale head", async () => {
+    // The live provider's `publishCleanRebase` force-pushes the rebased head with
+    // `--force-with-lease=refs/heads/<head>:<fetched-sha>`. A reviewer/writer commit that moved
+    // the remote head during the fetch→rebase→re-gate window makes the lease stale, so git
+    // REJECTS the push and `pushJjHead` throws — which propagates OUT of the provider's
+    // `rebaseOnto` (modelled here). The coordinator MUST map it to a fail-closed HOLD: never a
+    // silent overwrite, and never a proceed-to-land on the stale head.
+    const reject = new Error(
+      "jj publish: push head failed: exit 1; stderr: ! [rejected] feat -> feat (stale info)",
+    );
+    const h = harness({ throwOnRebase: reject });
+    await expect(reexec(h)).rejects.toBeInstanceOf(BaseShiftHeldError);
+    // The work SURVIVES — the stale head was NEVER landed and NEVER replanned: just a loud hold.
+    expect(h.persistence.repointStacks).toEqual([]); // no keep-run / land
+    expect(h.persistence.markedInFlight).toEqual([]);
+    expect(h.persistence.replanned).toEqual([]);
+    // The re-gate never ran — we held BEFORE verifying/landing anything on the stale head.
+    expect(h.reGate.calls).toBe(0);
+    expect(h.events.events).toEqual([]);
   });
 
   it("FAIL-CLOSED: a `pending` (inconclusive) re-gate HOLDS — never merges, never discards", async () => {

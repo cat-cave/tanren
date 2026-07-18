@@ -204,6 +204,10 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: live.pushFacts.repoUrl,
       headBranch: live.pushFacts.headBranch,
+      // #1059: lease the publish against the fetched (pre-rebase) forge head — a reviewer/writer
+      // commit that moved it mid-window rejects the push, and the coordinator maps the throw to a
+      // HOLD + re-drive (never a blind overwrite, never a proceed-to-land on the stale head).
+      expectedRemoteHeadSha: live.pushFacts.fetchedHeadSha,
       ...(live.pushFacts.installation !== undefined && { installation: live.pushFacts.installation }),
       githubCredentialRef: live.pushFacts.githubCredentialRef,
     });
