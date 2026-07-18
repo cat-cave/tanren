@@ -5,6 +5,7 @@ import { createSpecRoutes } from "../specs/index.js";
 import { createIssueLoopRoutes } from "./index.js";
 import { createIssueLoopCommandRoutes } from "./commands.js";
 import { createProductionVerificationRoutes } from "./productionVerification.js";
+import { createResolutionProofRoutes } from "./resolutionProof.js";
 
 /**
  * Mount the project work-intake surfaces on the org-scoping pool:
@@ -30,4 +31,6 @@ export function mountProjectWorkSurfaces(app: Hono<ActorContextEnv>, scopedPool:
   // This command is deliberately on the documented public v1 path. It leases
   // and executes the registered locked production stage synchronously.
   app.route("/v1/orgs", createProductionVerificationRoutes({ pool: scopedPool }));
+  // bh-14a read-only proof surface: the sealed resolution-proof chain for a loop.
+  app.route("/v1/orgs", createResolutionProofRoutes({ pool: scopedPool }));
 }

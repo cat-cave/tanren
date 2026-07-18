@@ -3,3 +3,4 @@
 export { resolutionJobs } from "./schemaResolutionJobs.js";
 export { resolutionDecisions } from "./schemaResolutionDecisions.js";
 export { remediationAttempts } from "./schemaRemediationAttempts.js";
+export { resolutionProofs } from "./schemaResolutionProofs.js";

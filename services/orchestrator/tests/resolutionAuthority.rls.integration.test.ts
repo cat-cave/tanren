@@ -394,7 +394,11 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
         input_snapshot_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
       },
     ]);
-    expect(rows.events).toEqual([{ event_type: "resolution.blocked" }, { event_type: "resolution.authorized" }]);
+    expect(rows.events.map((e) => e.event_type)).toEqual([
+      "resolution.blocked",
+      "resolution.proof.sealed",
+      "resolution.authorized",
+    ]);
     expect(rows.loop).toEqual({ state: "verified_source_sync_pending" });
     const repairs = await runWithOrgScope(app, ORG_ID, (client) =>
       client.query("SELECT spec_id FROM remediation_attempts WHERE org_id = $1 AND issue_loop_id = $2", [
@@ -444,7 +448,6 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       },
     ]);
   });
-
   it("records needs_attention for an inconclusive production probe, never authorization", async () => {
     const stage = new ProductionSymptomStage({
       pool: app,

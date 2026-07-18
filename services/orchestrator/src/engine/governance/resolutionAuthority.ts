@@ -13,6 +13,7 @@ import type {
 import { RESOLUTION_AUTHORITY_VERSION } from "../contracts/resolutionAuthority.js";
 import { PgEventStore } from "../eventStore.js";
 import { SourceSyncOutboxStore } from "../repositories/sourceSyncOutbox.js";
+import { sealResolutionProof } from "./resolutionProofSealer.js";
 
 export interface ResolutionAuthorityEvidenceSource {
   snapshot(input: { readonly orgId: string; readonly resolutionJobId: string }): Promise<ResolutionEvidenceSnapshot>;
@@ -432,6 +433,25 @@ export class PgResolutionAuthorityDecisionStore implements ResolutionAuthorityDe
           inputSnapshotHash: input.inputSnapshotHash,
         },
       });
+      // A blocked decision is a terminal outcome for this attempt: seal a
+      // tamper-evident proof over its evidence in the SAME transaction so the
+      // blocked verdict (symptom failed while gate/merge/deploy stayed green) is
+      // durably recorded. The authorized/waived terminal is sealed later, when
+      // the source sync reaches verified_closed. `needs_attention` is a hold, not
+      // a terminal, so it seals nothing here.
+      if (input.decision === "blocked") {
+        await sealResolutionProof(
+          client,
+          {
+            orgId: input.snapshot.orgId,
+            projectId: input.snapshot.projectId,
+            issueLoopId: input.snapshot.issueLoopId,
+            resolutionJobId: input.snapshot.resolutionJobId,
+            resolutionDecisionId: id,
+          },
+          "blocked",
+        );
+      }
       return { id, created: true };
     });
   }
