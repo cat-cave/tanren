@@ -7,6 +7,12 @@ import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js"
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
 import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
 import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
+import {
+  PgRepairRouter,
+  RepairRoutingDecisionNotBlockedError,
+  RepairRoutingDecisionNotFoundError,
+  type RepairRouter,
+} from "../../engine/workflow/repairRouting.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -26,6 +32,12 @@ const waiveSchema = z
   })
   .strict();
 
+const routeRepairSchema = z
+  .object({
+    resolutionDecisionId: z.string().min(1).max(256),
+  })
+  .strict();
+
 type RouteContext = Context<ActorContextEnv>;
 
 export interface IssueLoopCommandRoutesOptions {
@@ -34,6 +46,8 @@ export interface IssueLoopCommandRoutesOptions {
   readonly contracts?: Pick<SymptomContractStore, "get">;
   /** The authenticated admin-only waiver is the only public authority action. */
   readonly authority?: Pick<ResolutionAuthority, "waive">;
+  /** The blocked-decision repair router; defaults to the production router. */
+  readonly repairRouter?: RepairRouter;
   readonly jobId?: () => string;
 }
 
@@ -69,6 +83,7 @@ export function createIssueLoopCommandRoutes(options: IssueLoopCommandRoutesOpti
   const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
   const contracts = options.contracts ?? new SymptomContractStore(options.pool);
   const authority = options.authority ?? buildResolutionAuthority(options.pool);
+  const repairRouter = options.repairRouter ?? new PgRepairRouter(options.pool);
   const jobId = options.jobId ?? (() => `rjob_steered_${randomUUID()}`);
 
   app.post("/:orgId/projects/:projectId/issue-loops/:loopId/steer", async (c) => {
@@ -119,6 +134,36 @@ export function createIssueLoopCommandRoutes(options: IssueLoopCommandRoutesOpti
       reason: parsed.data.reason,
     });
     return c.json({ version: "v1" as const, ...scope, resolutionDecision: decision });
+  });
+
+  // A caller can request a replay-safe repair route, but can never submit a
+  // verdict, failure signature, hypothesis, or evidence. The router re-reads
+  // the immutable bh-11 decision and fails closed unless it is `blocked`.
+  app.post("/:orgId/projects/:projectId/issue-loops/:loopId/route-repair", async (c) => {
+    const scope = authorize(c);
+    if (isResponse(scope)) return scope;
+    const parsed = routeRepairSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_repair_route", issues: parsed.error.issues }, 400);
+    try {
+      const repair = await repairRouter.route({
+        orgId: scope.orgId,
+        projectId: scope.projectId,
+        issueLoopId: scope.loopId,
+        resolutionDecisionId: parsed.data.resolutionDecisionId,
+      });
+      return c.json(
+        { version: "v1" as const, ...scope, repair },
+        repair.kind === "routed" && repair.created ? 202 : 200,
+      );
+    } catch (error) {
+      if (error instanceof RepairRoutingDecisionNotFoundError) {
+        return c.json({ error: "resolution_decision_not_found" }, 404);
+      }
+      if (error instanceof RepairRoutingDecisionNotBlockedError) {
+        return c.json({ error: "resolution_decision_not_blocked" }, 409);
+      }
+      throw error;
+    }
   });
 
   app.post("/:orgId/projects/:projectId/issue-loops/:loopId/resume", async (c) => {

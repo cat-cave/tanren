@@ -10,7 +10,11 @@ import type {
   ResolutionStageResult,
 } from "../../engine/contracts/resolutionStage.js";
 import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
-import { authorizeProductionResolution } from "../../engine/dag/productionResolutionAuthorization.js";
+import {
+  authorizeProductionResolution,
+  buildProductionRepairRouter,
+  type RepairRouter,
+} from "../../engine/dag/productionResolutionAuthorization.js";
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
@@ -37,6 +41,8 @@ export interface ProductionVerificationRoutesOptions {
   readonly jobs?: Pick<ResolutionJobStore, "claimById" | "verifyActiveLease" | "complete" | "release">;
   /** Required for the production decision; the default is the live authority. */
   readonly authority?: Pick<ResolutionAuthority, "authorize">;
+  /** Required for blocked decisions; defaults to the live deterministic router. */
+  readonly repairRouter?: RepairRouter;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -72,6 +78,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const enqueue = options.enqueue ?? new ResolutionJobStore(options.pool);
   const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
   const authority = options.authority ?? buildResolutionAuthority(options.pool);
+  const repairRouter = options.repairRouter ?? buildProductionRepairRouter(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -143,7 +150,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       // Keep the direct operator retry on the walker’s sole-decision path. The
       // stage has written immutable production evidence, but this lease must not
       // become completed until the authority records its decision and event.
-      await authorizeProductionResolution(authority, job);
+      await authorizeProductionResolution(authority, job, repairRouter);
     } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;

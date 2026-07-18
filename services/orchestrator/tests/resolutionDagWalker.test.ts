@@ -180,10 +180,24 @@ describe("ResolutionDagWalker", () => {
           throw new Error("walker cannot waive a resolution");
         },
       },
+      repairRouter: {
+        async route(input) {
+          calls.push(`repair:${input.resolutionDecisionId}`);
+          return {
+            kind: "routed",
+            created: true,
+            projectId: productionJob.projectId,
+            issueLoopId: productionJob.issueLoopId,
+            remediationAttemptId: "remediation_1",
+            specId: "spec_repair_1",
+            failureSignatureHash: "sha256:" + "c".repeat(64),
+          };
+        },
+      },
       leaseOwner: "walker_a",
     });
 
     await walker.tick();
-    expect(calls).toEqual(["production-stage", "authority:rjob_production", "complete"]);
+    expect(calls).toEqual(["production-stage", "authority:rjob_production", "repair:rdec_blocked", "complete"]);
   });
 });
