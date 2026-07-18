@@ -9,11 +9,7 @@ import {
   type IssueLoopSeverity,
   type SourceFindingRow,
 } from "../repositories/issueLoops.js";
-import {
-  SourceSyncOutboxStore,
-  type SourceSyncOperation,
-  type SourceSyncOutboxRow,
-} from "../repositories/sourceSyncOutbox.js";
+import { SourceSyncOutboxStore, type SourceSyncOutboxRow } from "../repositories/sourceSyncOutbox.js";
 
 export type IssueObservationStatus = "open" | "closed" | "reopened" | "edited" | "deleted" | "unknown";
 export type IssueObservationSeverity = "info" | "warn" | "fail";
@@ -55,6 +51,17 @@ export interface SourceSyncReadback {
   providerRevision: string;
   desiredState: "open" | "closed" | "comment_recorded";
 }
+
+/** An independently recorded operator confirmation for a manual source operation. */
+export interface ManualSourceSyncConfirmation {
+  lookup(input: SourceSyncRequest): Promise<{ receipt: SourceSyncReceipt; readback: SourceSyncReadback } | null>;
+}
+
+const noManualSourceSyncConfirmation: ManualSourceSyncConfirmation = {
+  async lookup() {
+    return null;
+  },
+};
 
 export interface IssueSourceAdapter {
   readonly provider: string;
@@ -241,22 +248,21 @@ export async function ingestIssueObservation(pool: pg.Pool, input: IssueObservat
 export class ManualIssueSourceAdapter implements IssueSourceAdapter {
   readonly provider = "manual";
 
+  constructor(private readonly confirmations: ManualSourceSyncConfirmation = noManualSourceSyncConfirmation) {}
+
   ingest(pool: pg.Pool, observation: IssueObservation): Promise<IssueSourceIngestResult> {
     return ingestIssueObservation(pool, observation);
   }
 
   async sync(input: SourceSyncRequest): Promise<SourceSyncReceipt> {
-    return { providerRevision: input.outbox.payloadHash };
+    const confirmation = await this.confirmations.lookup(input);
+    if (confirmation === null) throw new Error("manual source sync requires external operator confirmation");
+    return confirmation.receipt;
   }
 
   async readback(input: SourceSyncRequest): Promise<SourceSyncReadback> {
-    const desiredState = manualDesiredState(input.outbox.operation);
-    return { providerRevision: input.outbox.payloadHash, desiredState };
+    const confirmation = await this.confirmations.lookup(input);
+    if (confirmation === null) throw new Error("manual source sync requires external operator confirmation");
+    return confirmation.readback;
   }
-}
-
-function manualDesiredState(operation: SourceSyncOperation): SourceSyncReadback["desiredState"] {
-  if (operation === "close") return "closed";
-  if (operation === "reopen") return "open";
-  return "comment_recorded";
 }

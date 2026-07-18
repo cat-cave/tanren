@@ -16,6 +16,21 @@ export async function authorizeSourceSync(
   pool: Pool,
   input: { orgId: string; projectId: string; issueLoopId: string },
 ): Promise<{ id: string; created: boolean }> {
+  return recordSourceSyncDecision(pool, input, "authorized");
+}
+
+export async function blockSourceSync(
+  pool: Pool,
+  input: { orgId: string; projectId: string; issueLoopId: string },
+): Promise<{ id: string; created: boolean }> {
+  return recordSourceSyncDecision(pool, input, "blocked");
+}
+
+async function recordSourceSyncDecision(
+  pool: Pool,
+  input: { orgId: string; projectId: string; issueLoopId: string },
+  expectedDecision: "authorized" | "blocked",
+): Promise<{ id: string; created: boolean }> {
   const contract = await new SymptomContractStore(pool).create({
     orgId: input.orgId,
     projectId: input.projectId,
@@ -63,9 +78,15 @@ export async function authorizeSourceSync(
           deployment: { releaseInstanceId: null, artifactDigest, mergeSha: sha },
           production: {
             ...run,
-            outcome: "passed" as const,
-            classification: "product_resolved" as const,
-            assertionOutcomes: [{ id: `vassert_${input.issueLoopId}`, outcome: "passed" as const }],
+            outcome: expectedDecision === "authorized" ? ("passed" as const) : ("failed" as const),
+            classification:
+              expectedDecision === "authorized" ? ("product_resolved" as const) : ("product_failure" as const),
+            assertionOutcomes: [
+              {
+                id: `vassert_${input.issueLoopId}`,
+                outcome: expectedDecision === "authorized" ? ("passed" as const) : ("failed" as const),
+              },
+            ],
           },
           proofGrade: "active_causal" as const,
           resolutionPolicy: "active_causal" as const,
@@ -75,7 +96,8 @@ export async function authorizeSourceSync(
     new PgResolutionAuthorityDecisionStore(pool),
   );
   const decision = await authority.authorize({ orgId: input.orgId, resolutionJobId: jobId });
-  if (decision.decision !== "authorized") throw new Error("source-sync fixture did not receive an authorized decision");
+  if (decision.decision !== expectedDecision)
+    throw new Error(`source-sync fixture did not receive a ${expectedDecision} decision`);
   const retried = await authority.authorize({ orgId: input.orgId, resolutionJobId: jobId });
   if (retried.id !== decision.id || retried.created) throw new Error("source-sync authority retry was not idempotent");
   return { id: decision.id, created: decision.created };

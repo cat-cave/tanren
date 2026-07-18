@@ -267,10 +267,23 @@ export const SourceSyncOutboxStore = {
       `UPDATE source_sync_outbox
           SET state = 'sent', attempt = attempt + 1, last_error = NULL, updated_at = now()
         WHERE org_id = $1 AND id = $2 AND state IN ('pending','sent') AND claim_owner = $3
+          AND claim_expires_at > now()
        RETURNING ${COLUMNS}`,
       [input.orgId, input.id, input.workerId],
     );
     return result.rows[0] === undefined ? undefined : mapRow(result.rows[0]);
+  },
+
+  async renewClaim(client: QueryClient, input: SourceSyncClaimInput): Promise<boolean> {
+    positiveLease(input);
+    const result = await client.query(
+      `UPDATE source_sync_outbox
+          SET claim_expires_at = now() + ($4::bigint * interval '1 millisecond'), updated_at = now()
+        WHERE org_id = $1 AND id = $2 AND state IN ('pending','sent') AND claim_owner = $3
+          AND claim_expires_at > now()`,
+      [input.orgId, input.id, input.workerId, input.leaseMs],
+    );
+    return (result.rowCount ?? 0) === 1;
   },
 
   async recordProviderReceipt(
@@ -280,7 +293,8 @@ export const SourceSyncOutboxStore = {
     const result = await client.query(
       `UPDATE source_sync_outbox
           SET provider_receipt = $4::jsonb, last_error = NULL, updated_at = now()
-        WHERE org_id = $1 AND id = $2 AND state = 'sent' AND claim_owner = $3`,
+        WHERE org_id = $1 AND id = $2 AND state = 'sent' AND claim_owner = $3
+          AND claim_expires_at > now()`,
       [input.orgId, input.id, input.workerId, JSON.stringify(input.receipt)],
     );
     return (result.rowCount ?? 0) === 1;
@@ -296,7 +310,9 @@ export const SourceSyncOutboxStore = {
       `UPDATE source_sync_outbox
           SET state = 'verified', readback = $4::jsonb, claim_owner = NULL, claim_expires_at = NULL,
               next_attempt_at = now(), last_error = NULL, updated_at = now()
-        WHERE org_id = $1 AND id = $2 AND state = 'sent' AND claim_owner = $3 AND provider_receipt IS NOT NULL`,
+        WHERE org_id = $1 AND id = $2 AND state = 'sent' AND claim_owner = $3 AND provider_receipt IS NOT NULL
+          AND provider_receipt->>'reconciled' IS DISTINCT FROM 'true'
+          AND claim_expires_at > now()`,
       [input.orgId, input.id, input.workerId, JSON.stringify(input.readback)],
     );
     return (result.rowCount ?? 0) === 1;
@@ -332,6 +348,7 @@ export const SourceSyncOutboxStore = {
       `UPDATE source_sync_outbox
           SET claim_owner = NULL, claim_expires_at = NULL, next_attempt_at = now(), updated_at = now()
         WHERE org_id = $1 AND id = $2 AND state IN ('pending','sent')
+          AND (claim_owner IS NULL OR claim_expires_at <= now())
        RETURNING ${COLUMNS}`,
       [orgId, id],
     );

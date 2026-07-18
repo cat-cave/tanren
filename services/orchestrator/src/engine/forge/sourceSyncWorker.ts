@@ -45,12 +45,20 @@ function readbackMatches(outbox: SourceSyncOutboxRow, readback: SourceSyncReadba
   return readback.desiredState === "comment_recorded";
 }
 
-function receiptRecord(receipt: SourceSyncReceipt, reconciled = false): Record<string, unknown> {
-  return { providerRevision: receipt.providerRevision, ...(reconciled ? { reconciled: true } : {}) };
+function receiptRecord(receipt: SourceSyncReceipt): Record<string, unknown> {
+  return { providerRevision: receipt.providerRevision };
 }
 
 function readbackRecord(readback: SourceSyncReadback): Record<string, unknown> {
   return { providerRevision: readback.providerRevision, desiredState: readback.desiredState };
+}
+
+function hasGenuineMutationReceipt(outbox: SourceSyncOutboxRow): boolean {
+  return (
+    outbox.providerReceipt !== null &&
+    outbox.providerReceipt["reconciled"] !== true &&
+    outbox.providerReceipt["reconciled"] !== "true"
+  );
 }
 
 async function loadWork(client: pg.PoolClient, outbox: SourceSyncOutboxRow): Promise<WorkContext | undefined> {
@@ -158,24 +166,57 @@ async function completeSync(
   });
 }
 
+function startLeaseHeartbeat(
+  deps: SourceSyncWorkerDeps,
+  outbox: SourceSyncOutboxRow,
+  workerId: string,
+  leaseMs: number,
+): { stop(): void } {
+  let stopped = false;
+  let renewing = false;
+  const renew = async (): Promise<void> => {
+    if (stopped || renewing) return;
+    renewing = true;
+    try {
+      const renewed = await runWithOrgScope(deps.pool, outbox.orgId, (client) =>
+        SourceSyncOutboxStore.renewClaim(client, { orgId: outbox.orgId, id: outbox.id, workerId, leaseMs }),
+      );
+      if (!renewed) stopped = true;
+    } finally {
+      renewing = false;
+    }
+  };
+  const interval = setInterval(() => void renew(), Math.max(1, Math.floor(leaseMs / 3)));
+  interval.unref?.();
+  return {
+    stop(): void {
+      stopped = true;
+      clearInterval(interval);
+    },
+  };
+}
+
 export async function processSourceSync(
   deps: SourceSyncWorkerDeps,
   row: SourceSyncOutboxRow,
 ): Promise<SourceSyncProcessResult | undefined> {
   const workerId = deps.workerId ?? `source-sync-${randomUUID()}`;
+  const leaseMs = deps.claimLeaseMs ?? DEFAULT_SOURCE_SYNC_LEASE_MS;
   const claimed = await runWithOrgScope(deps.pool, row.orgId, (client) =>
     SourceSyncOutboxStore.claim(client, {
       orgId: row.orgId,
       id: row.id,
       workerId,
-      leaseMs: deps.claimLeaseMs ?? DEFAULT_SOURCE_SYNC_LEASE_MS,
+      leaseMs,
     }),
   );
   if (claimed === undefined) return undefined;
+  const heartbeat = startLeaseHeartbeat(deps, claimed, workerId, leaseMs);
   let context: WorkContext | undefined;
   try {
     context = await runWithOrgScope(deps.pool, row.orgId, (client) => loadWork(client, claimed));
   } catch {
+    heartbeat.stop();
     await runWithOrgScope(deps.pool, row.orgId, (client) =>
       SourceSyncOutboxStore.release(client, { orgId: row.orgId, id: row.id, workerId }),
     );
@@ -183,6 +224,7 @@ export async function processSourceSync(
   }
   const adapter = context === undefined ? undefined : deps.adapters.get(context.source.kind);
   if (context === undefined || adapter === undefined) {
+    heartbeat.stop();
     await runWithOrgScope(deps.pool, row.orgId, (client) =>
       SourceSyncOutboxStore.release(client, { orgId: row.orgId, id: row.id, workerId }),
     );
@@ -191,23 +233,12 @@ export async function processSourceSync(
 
   let attempted = claimed;
   try {
-    if (claimed.state === "sent") {
+    if (claimed.state === "sent" && hasGenuineMutationReceipt(claimed)) {
       const recoveredReadback = await adapter.readback(context);
-      if (readbackMatches(context.outbox, recoveredReadback)) {
-        if (claimed.providerReceipt === null) {
-          const recorded = await runWithOrgScope(deps.pool, row.orgId, (client) =>
-            SourceSyncOutboxStore.recordProviderReceipt(client, {
-              orgId: row.orgId,
-              id: row.id,
-              workerId,
-              receipt: receiptRecord({ providerRevision: recoveredReadback.providerRevision }, true),
-            }),
-          );
-          if (!recorded) return { outbox: claimed, verified: false };
-        }
-        const verified = await completeSync(deps, context, workerId, recoveredReadback);
-        return { outbox: { ...claimed, state: verified ? "verified" : claimed.state }, verified };
-      }
+      if (!readbackMatches(context.outbox, recoveredReadback))
+        throw new Error(`source sync readback does not match ${claimed.operation}`);
+      const verified = await completeSync(deps, context, workerId, recoveredReadback);
+      return { outbox: { ...claimed, state: verified ? "verified" : claimed.state }, verified };
     }
 
     const begun = await runWithOrgScope(deps.pool, row.orgId, (client) =>
@@ -233,6 +264,8 @@ export async function processSourceSync(
   } catch (error) {
     await releaseFailure(deps, context, workerId, error, attempted.attempt);
     return { outbox: attempted, verified: false };
+  } finally {
+    heartbeat.stop();
   }
 }
 

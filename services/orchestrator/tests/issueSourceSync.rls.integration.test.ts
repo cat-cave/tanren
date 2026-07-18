@@ -80,6 +80,8 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
   let manual: ManualIssueSourceAdapter;
   let closeFails = false;
   let closeMutations = 0;
+  let readbackState: "open" | "closed" | undefined;
+  let providerState: "open" | "closed" = "closed";
 
   beforeAll(async () => {
     const adminPool = new Pool({ connectionString: ADMIN_URL });
@@ -115,15 +117,19 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
         if (input.method === "PATCH") {
           closeMutations += 1;
           if (closeFails) return { status: 503, body: { message: "provider unavailable" } };
+          providerState = (input.body as { state: "open" | "closed" }).state;
           return {
             status: 200,
             body: {
               number: 41,
-              state: input.body === undefined ? "closed" : (input.body as { state: "open" | "closed" }).state,
+              state: providerState,
             },
           };
         }
-        return { status: 200, body: { number: 41, state: "closed", updated_at: "2026-07-17T13:00:00Z" } };
+        return {
+          status: 200,
+          body: { number: 41, state: readbackState ?? providerState, updated_at: "2026-07-17T13:00:00Z" },
+        };
       },
     };
     github = new GithubIssueSourceAdapter({
@@ -318,20 +324,86 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     ).find((candidate) => candidate.externalKey === "gh-cat-cave/fixture#44")!;
     await recordAuthorizedDecision(loop.id);
     const pending = await closeOutbox(loop.id);
+    closeMutations = 0;
+    readbackState = "closed";
     closeFails = true;
     const failed = await (
       await import("../src/engine/forge/sourceSyncWorker.js")
     ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-failure" }, pending!);
-    closeFails = false;
     expect(failed?.verified).toBe(false);
     const state = await runWithOrgScope(appPool, ORG_A, (client) =>
       IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id),
     );
     expect(state?.state).toBe("verified_source_sync_pending");
+    const redriven = await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.redrive(client, ORG_A, pending!.id),
+    );
+    expect(redriven).toMatchObject({ state: "sent", providerReceipt: null });
+    const recovered = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync(
+      { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-recovery" },
+      redriven!,
+    );
+    expect(recovered?.verified).toBe(false);
+    expect(closeMutations).toBe(2);
+    const stillPending = await runWithOrgScope(appPool, ORG_A, (client) =>
+      IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id),
+    );
+    expect(stillPending?.state).toBe("verified_source_sync_pending");
+    closeFails = false;
+    const retried = await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.redrive(client, ORG_A, pending!.id),
+    );
+    const completed = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-redrive" }, retried!);
+    expect(completed?.verified).toBe(true);
+    expect(closeMutations).toBe(3);
+    await expect(
+      runWithOrgScope(appPool, ORG_A, (client) =>
+        client.query<{ state: string; provider_receipt: unknown }>(
+          "SELECT state, provider_receipt FROM source_sync_outbox WHERE org_id = $1 AND id = $2",
+          [ORG_A, pending!.id],
+        ),
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "verified", provider_receipt: { providerRevision: expect.any(String) } }],
+    });
+    const successCount = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM events WHERE org_id = $1 AND event_type = 'source_issue.sync.succeeded' AND payload->>'issueLoopId' = $2",
+        [ORG_A, loop.id],
+      ),
+    );
+    expect(successCount.rows).toEqual([{ count: "1" }]);
+    readbackState = undefined;
     const events = await runWithOrgScope(appPool, ORG_A, (client) =>
       client.query<{ event_type: string }>("SELECT event_type FROM events WHERE org_id = $1", [ORG_A]),
     );
     expect(events.rows.map((event) => event.event_type)).toContain("source_issue.sync.failed");
+  });
+
+  it("rejects an open GitHub readback after a successful close mutation", async () => {
+    await receiveGithubWebhook(issue(46, "opened", "2026-07-17T16:30:00Z"), "delivery-46-open");
+    const loop = (
+      await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
+    ).find((candidate) => candidate.externalKey === "gh-cat-cave/fixture#46")!;
+    await recordAuthorizedDecision(loop.id);
+    readbackState = "open";
+    const rejected = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync(
+      { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-open-readback" },
+      (await closeOutbox(loop.id))!,
+    );
+    expect(rejected?.verified).toBe(false);
+    await expect(
+      runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id)),
+    ).resolves.toMatchObject({
+      state: "verified_source_sync_pending",
+    });
+    readbackState = undefined;
   });
 
   it("claims and redrives an authority-created outbox row through the internal mTLS surface", async () => {
@@ -358,6 +430,9 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     await expect(claim.json()).resolves.toMatchObject({
       outbox: { id: pending!.id, claimOwner: "internal-source-sync" },
     });
+    await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.release(client, { orgId: ORG_A, id: pending!.id, workerId: "internal-source-sync" }),
+    );
     const redrive = await routes.request(
       `/internal/source-sync/${pending!.id}/redrive`,
       {
