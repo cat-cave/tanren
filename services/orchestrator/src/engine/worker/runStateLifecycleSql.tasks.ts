@@ -295,8 +295,9 @@ const priorEventShape = z
     taskId: z.string().min(1).optional(),
     specId: z.string().min(1).optional(),
     projectId: z.string().min(1),
-    // v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit orgId.
-    orgId: z.string().optional(),
+    // #826: this writer stamps org_id directly; an omitted value cannot fall back
+    // to a project-derived or ambient tenant scope (events.org_id is NOT NULL).
+    orgId: z.string().min(1),
     eventType: z
       .string()
       .min(1)
@@ -328,8 +329,9 @@ export const terminalPairSchema = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
-        // v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit orgId.
-        orgId: z.string().optional(),
+        // #826: this terminal write stamps events.org_id directly; it cannot inherit
+        // tenant scope from the project or an ambient request context.
+        orgId: z.string().min(1),
         eventType: z.enum(TERMINAL_TASK_EVENT_TYPES),
         // The payload is parsed downstream by `PgEventStore.append` against the
         // event-registry schema for the named type — keep it permissive here

@@ -110,6 +110,13 @@ describeDb("allocator service PgRunnerStore — runner row written under RLS, sw
     await adminPool.end();
   }, 30_000);
 
+  it("uses the restricted tanren_app role rather than a superuser", async () => {
+    const identity = await appPool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+    );
+    expect(identity.rows[0]).toEqual({ current_user: APP_ROLE, rolsuper: false, rolbypassrls: false });
+  });
+
   it("(a) insert writes the runners row under the run's org scope; visible under ORG_A, zero under ORG_B", async () => {
     const store = new PgRunnerStore(systemPool, appPool);
     await store.insert(recordFor(ORG_A, "runner_scoped"));
@@ -233,6 +240,51 @@ describeDb("allocator service PgRunnerStore — runner row written under RLS, sw
     expect(row.rows[0]?.container_id).toBe("host-2");
     expect(row.rows[0]?.released_at).toBeNull();
     expect(row.rows[0]?.status).toBe("claimed");
+  });
+
+  it("(f) records the allocation event with its explicit org_id; RLS hides it from another org", async () => {
+    const store = new PgRunnerStore(systemPool, appPool);
+    await store.recordAllocated({
+      runnerId: "runner_event_scoped",
+      runId: RUN_A,
+      projectId: PROJECT_A,
+      orgId: ORG_A,
+      imageSha: "img@sha256:event",
+      target: {
+        host: "runner-event",
+        port: 22,
+        username: "tanren",
+        hostKeyFingerprint: "SHA256:event",
+      },
+    });
+
+    const underA = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ org_id: string; event_type: string; payload: unknown }>(
+        "SELECT org_id, event_type, payload FROM events WHERE run_id = $1 AND event_type = 'allocator.allocated'",
+        [RUN_A],
+      ),
+    );
+    expect(underA.rows).toEqual([
+      {
+        org_id: ORG_A,
+        event_type: "allocator.allocated",
+        payload: {
+          runnerId: "runner_event_scoped",
+          imageSha: "img@sha256:event",
+          target: {
+            host: "runner-event",
+            port: 22,
+            username: "tanren",
+            hostKeyFingerprint: "SHA256:event",
+          },
+        },
+      },
+    ]);
+
+    const underB = await runWithOrgScope(appPool, ORG_B, (client) =>
+      client.query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'allocator.allocated'", [RUN_A]),
+    );
+    expect(underB.rowCount).toBe(0);
   });
 });
 

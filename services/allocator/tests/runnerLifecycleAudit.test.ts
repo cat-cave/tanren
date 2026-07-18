@@ -78,7 +78,7 @@ describe("RunnerLifecycle.allocate — durable allocation audit", () => {
       runId: "run_42",
       projectId: "proj_a",
       orgId: "org_test",
-      runless: false,
+      target: expect.objectContaining({ host: "tanren-runner-run_42", port: 22, username: "tanren" }),
     });
   });
 
@@ -98,7 +98,7 @@ describe("RunnerLifecycle.allocate — durable allocation audit", () => {
       runId: null,
       projectId: null,
       orgId: "org_test",
-      runless: true,
+      target: expect.objectContaining({ host: "tanren-runner-forge_org_test_abcd1234", port: 22, username: "tanren" }),
     });
   });
 });

@@ -27,6 +27,7 @@ const BASE = {
   runId: "run_round3_priors",
   specId: "spec_round3",
   projectId: "project_round3",
+  orgId: "org_round3",
   taskId: "task_round3",
 };
 
@@ -50,11 +51,17 @@ describe("round-3 priorEvents discipline (H-R3.1 + H-R3.2 + H-R3.3)", () => {
   it.each(TERMINAL_LEAK_TYPES)("(H-R3.1) terminalPairSchema rejects priorEvents.eventType=%s", (eventType) => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: "org_round3", transition: "done", outcome: "passed" },
-      event: { projectId: BASE.projectId, eventType: "task.completed", payload: { taskKind: "review" } },
+      event: {
+        projectId: BASE.projectId,
+        orgId: BASE.orgId,
+        eventType: "task.completed",
+        payload: { taskKind: "review" },
+      },
       priorEvents: [
         {
           runId: "r",
           projectId: BASE.projectId,
+          orgId: BASE.orgId,
           eventType,
           payload: {},
           idempotencyKey: "r:terminal-leak",
@@ -67,11 +74,17 @@ describe("round-3 priorEvents discipline (H-R3.1 + H-R3.2 + H-R3.3)", () => {
   it("(H-R3.2) terminalPairSchema rejects priorEvents entry missing idempotencyKey", () => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: "org_round3", transition: "done", outcome: "passed" },
-      event: { projectId: BASE.projectId, eventType: "task.completed", payload: { taskKind: "review" } },
+      event: {
+        projectId: BASE.projectId,
+        orgId: BASE.orgId,
+        eventType: "task.completed",
+        payload: { taskKind: "review" },
+      },
       priorEvents: [
         {
           runId: "r",
           projectId: BASE.projectId,
+          orgId: BASE.orgId,
           eventType: "review.approved",
           payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },
           // intentionally NO idempotencyKey
@@ -84,10 +97,38 @@ describe("round-3 priorEvents discipline (H-R3.1 + H-R3.2 + H-R3.3)", () => {
   it("(H-R3.2) terminalPairSchema rejects priorEvents entry missing runId", () => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: "org_round3", transition: "done", outcome: "passed" },
-      event: { projectId: BASE.projectId, eventType: "task.completed", payload: { taskKind: "review" } },
+      event: {
+        projectId: BASE.projectId,
+        orgId: BASE.orgId,
+        eventType: "task.completed",
+        payload: { taskKind: "review" },
+      },
       priorEvents: [
         {
           // intentionally NO runId
+          projectId: BASE.projectId,
+          orgId: BASE.orgId,
+          eventType: "review.approved",
+          payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },
+          idempotencyKey: "r:review:approved",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a priorEvents entry without an explicit orgId", () => {
+    const result = terminalPairSchema.safeParse({
+      task: { taskId: "t", orgId: BASE.orgId, transition: "done", outcome: "passed" },
+      event: {
+        projectId: BASE.projectId,
+        orgId: BASE.orgId,
+        eventType: "task.completed",
+        payload: { taskKind: "review" },
+      },
+      priorEvents: [
+        {
+          runId: "r",
           projectId: BASE.projectId,
           eventType: "review.approved",
           payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },

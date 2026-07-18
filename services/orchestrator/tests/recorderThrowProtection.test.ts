@@ -121,7 +121,7 @@ class GuardHarness {
         return undefined as never;
       },
     } as unknown as CostRecorder;
-    return { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1" };
+    return { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1", orgId: "org_1" };
   }
 }
 

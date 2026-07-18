@@ -179,7 +179,7 @@ export class PgEventStore implements EventStore {
     const client = resolveWritableClient(this.pool);
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload, idempotency_key)
-       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
        ON CONFLICT DO NOTHING
        RETURNING id::text AS id`,
       [
@@ -187,6 +187,7 @@ export class PgEventStore implements EventStore {
         input.taskId ?? null,
         input.specId ?? null,
         input.projectId,
+        input.orgId,
         input.eventType,
         JSON.stringify(parsed),
         input.idempotencyKey,

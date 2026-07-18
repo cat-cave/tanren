@@ -1,15 +1,76 @@
-// The allocator service's SOLE `events` writer — the allocator-side analogue of the
-// orchestrator's PgEventStore. The allocator is a SEPARATE de-privileged
-// microservice (its own package), so it cannot route through the orchestrator's
-// in-process event store; this module is the ONE place the allocator appends a
-// durable, org-scoped audit event, keeping the single-event-writer invariant per
-// service. All writes are org-scoped (RLS) on the restricted app-role pool.
+// The allocator service's SOLE `events` writer. Its typed append API validates
+// allocator-owned payloads and preserves the event notification fanout.
 
 import type pg from "pg";
-import { runWithOrgScope } from "@tanren/db";
+import { notifyEventAppended, notifyRunActivity, runWithOrgScope } from "@tanren/db";
+import { z } from "zod";
 import type { AllocationAudit, SweptAudit } from "./runnerLifecycle.js";
 
-const allocatorName = "sidecar-docker";
+type EventClient = Pick<pg.PoolClient, "query">;
+
+const SshTargetSummary = z
+  .object({
+    host: z.string(),
+    port: z.number().int(),
+    username: z.string(),
+    hostKeyFingerprint: z.string(),
+  })
+  .strict();
+
+const allocatorEventRegistry = {
+  "allocator.allocated": z
+    .object({
+      runnerId: z.string(),
+      imageSha: z.string(),
+      target: SshTargetSummary,
+    })
+    .strict(),
+  "runner.swept": z
+    .object({
+      runnerId: z.string(),
+      runId: z.string().nullable(),
+      reason: z.enum(["terminal_run", "lease_lapsed", "unclaimed_grace"]),
+    })
+    .strict(),
+} as const;
+
+type AllocatorEventName = keyof typeof allocatorEventRegistry;
+type AllocatorEventInput<N extends AllocatorEventName> = {
+  runId: string | null;
+  projectId: string | null;
+  /** Explicit tenant key; never inferred from a project row or ambient scope. */
+  orgId: string;
+  eventType: N;
+  payload: z.output<(typeof allocatorEventRegistry)[N]>;
+};
+
+/**
+ * The allocator's typed append API. It is the only allocator-side SQL writer
+ * for `events`, and callers must supply the tenant key that is stamped on row.
+ */
+async function appendAllocatorEvent<N extends AllocatorEventName>(
+  client: EventClient,
+  input: AllocatorEventInput<N>,
+): Promise<void> {
+  if (input.orgId.trim() === "") {
+    throw new Error("appendAllocatorEvent: explicit orgId must be non-empty");
+  }
+  const payload: unknown = allocatorEventRegistry[input.eventType].parse(input.payload);
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO events (run_id, project_id, org_id, event_type, payload)
+     VALUES ($1, $2, $3, $4, $5::jsonb)
+     RETURNING id::text AS id`,
+    [input.runId, input.projectId, input.orgId, input.eventType, JSON.stringify(payload)],
+  );
+  const eventId = inserted.rows[0]?.id;
+  if (eventId === undefined) {
+    throw new Error("appendAllocatorEvent: event insert returned no id");
+  }
+  if (input.runId !== null) {
+    await notifyRunActivity(client, input.runId);
+  }
+  await notifyEventAppended(client, eventId);
+}
 
 /**
  * Append the durable `allocator.allocated` audit event for a successful allocation,
@@ -19,21 +80,17 @@ const allocatorName = "sidecar-docker";
  */
 export async function recordAllocatedEvent(appPool: pg.Pool, audit: AllocationAudit): Promise<void> {
   await runWithOrgScope(appPool, audit.orgId, async (client) => {
-    await client.query(
-      `INSERT INTO events (run_id, project_id, org_id, event_type, payload)
-       VALUES ($1, $2, $3, 'allocator.allocated', $4::jsonb)`,
-      [
-        audit.runId,
-        audit.projectId,
-        audit.orgId,
-        JSON.stringify({
-          runnerId: audit.runnerId,
-          allocator: allocatorName,
-          imageSha: audit.imageSha,
-          runless: audit.runless,
-        }),
-      ],
-    );
+    await appendAllocatorEvent(client, {
+      runId: audit.runId,
+      projectId: audit.projectId,
+      orgId: audit.orgId,
+      eventType: "allocator.allocated",
+      payload: {
+        runnerId: audit.runnerId,
+        imageSha: audit.imageSha,
+        target: audit.target,
+      },
+    });
   });
 }
 
@@ -47,19 +104,16 @@ export async function recordAllocatedEvent(appPool: pg.Pool, audit: AllocationAu
  */
 export async function recordSweptEvent(appPool: pg.Pool, audit: SweptAudit): Promise<void> {
   await runWithOrgScope(appPool, audit.orgId, async (client) => {
-    await client.query(
-      `INSERT INTO events (run_id, project_id, org_id, event_type, payload)
-       VALUES ($1, $2, $3, 'runner.swept', $4::jsonb)`,
-      [
-        audit.runId,
-        audit.projectId,
-        audit.orgId,
-        JSON.stringify({
-          runnerId: audit.runnerId,
-          runId: audit.runId,
-          reason: audit.reason,
-        }),
-      ],
-    );
+    await appendAllocatorEvent(client, {
+      runId: audit.runId,
+      projectId: audit.projectId,
+      orgId: audit.orgId,
+      eventType: "runner.swept",
+      payload: {
+        runnerId: audit.runnerId,
+        runId: audit.runId,
+        reason: audit.reason,
+      },
+    });
   });
 }

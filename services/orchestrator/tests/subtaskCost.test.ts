@@ -55,6 +55,7 @@ function ctx(recorder: CostRecorder, accountingFailures?: AccountingFailure[]): 
     runId: "run_1",
     specId: "spec_1",
     projectId: "proj_1",
+    orgId: "org_1",
     ...(accountingFailures !== undefined && {
       emitTokenAccountingFailed: async (input) => {
         accountingFailures.push(input);
