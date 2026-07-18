@@ -38,9 +38,14 @@ import type { DeployProvisionerDeps, DeployResult, DeploySource } from "../provi
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import { pollUntilTerminal } from "./pollUntilTerminal.js";
 import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
+import { reapHadFailure, type ReapOutcome } from "../provisioners/deployProvisioner.js";
+import type { ReapFailureReporter } from "./reapFailureReporter.js";
+import { createLogger } from "../observability/logger.js";
 
 /** The adapter-class kind this impl registers under. */
 export const DIRECT_API_ADAPTER_KIND = "direct_api";
+
+const reapLog = createLogger("deploy-reap");
 
 /** Wiring the `direct_api` adapter runs over: the provisioner deps + the verify seams. */
 export interface DirectApiDeployAdapterDeps {
@@ -54,6 +59,16 @@ export interface DirectApiDeployAdapterDeps {
   releaseInstances: ReleaseInstancesRepository;
   /** The scalar integration-node lineage for a build that has no preview input yet. */
   integrationNodeId?: string;
+  /**
+   * OPTIONAL durable reporter for a non-converged post-verify machine reap. When the
+   * Fly single-instance reap cannot fully converge (a list/delete blip), the deploy
+   * STILL succeeds — but instead of silently swallowing the failure this reporter
+   * emits a LOUD, durable `deploy.reap_failed` so machine-accumulation is attributable
+   * to infra (the apex-v96 class), not blamed on product code. Omitted only for
+   * pure-adapter unit tests that assert the verify contract without the event tail;
+   * production wiring supplies it (see deployOnMergeReads.ts). Absent ⇒ a loud log only.
+   */
+  reapFailureReporter?: ReapFailureReporter;
 }
 
 /**
@@ -272,9 +287,77 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     // Fly's single-instance convergence reaps old machines through this hook. It
     // deliberately runs only after the ready poll, smoke check, and durable live
     // transition above. Cleanup is best-effort: it must not turn a verified, marked
-    // live release into a failed deployment when the provider's reap call flakes.
-    await provisioner.afterVerifiedDeployment(verifiedGrant, ref.appId, deploymentId).catch(() => {});
+    // live release into a failed deployment when the provider's reap call flakes —
+    // BUT a flake is NOT silently swallowed (that re-introduces the apex-v96
+    // machine-accumulation → file-store-fragmentation class). A non-converged reap
+    // is reported LOUD + durable (`deploy.reap_failed`), and the out-of-band
+    // Fly-machine reconciler sweep retries next pass.
+    const reapOutcome = await provisioner
+      .afterVerifiedDeployment(verifiedGrant, ref.appId, deploymentId)
+      .catch((error: unknown): ReapOutcome | undefined => {
+        // A THROW from the reap hook (never expected — the reap is internally
+        // best-effort) still must not fail the deploy, but it IS reported as a
+        // list-level failure so the accumulation risk stays visible.
+        reapLog.warn("post-verify reap hook threw (deploy unaffected)", {
+          provider: ref.provider,
+          appId: ref.appId,
+          deploymentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          appName: ref.appId,
+          keptMachineId: deploymentId,
+          reapedMachineIds: [],
+          listFailed: true,
+          failedMachineIds: [],
+        };
+      });
+    if (reapOutcome !== undefined && reapHadFailure(reapOutcome)) {
+      await this.reportReapFailure(reapOutcome, verifiedGrant, ref.provider, ref.appId, deploymentId);
+    }
     return verification;
+  }
+
+  /**
+   * Emit the durable `deploy.reap_failed` for a non-converged reap (or loudly log
+   * when no reporter is wired). NEVER throws — a reporting failure must not fail an
+   * already-verified, marked-live deploy.
+   */
+  private async reportReapFailure(
+    outcome: ReapOutcome,
+    grant: OrgGrant,
+    provider: string,
+    appId: string,
+    deploymentId: string,
+  ): Promise<void> {
+    const reporter = this.deps.reapFailureReporter;
+    if (reporter === undefined) {
+      reapLog.warn("post-verify machine reap did not converge (no durable reporter wired)", {
+        provider,
+        appId,
+        deploymentId,
+        listFailed: outcome.listFailed,
+        failedMachineCount: outcome.failedMachineIds.length,
+        reapedMachineCount: outcome.reapedMachineIds.length,
+      });
+      return;
+    }
+    await reporter
+      .report(outcome, {
+        orgId: grant.orgId,
+        projectId: grant.projectId,
+        provider,
+        appId,
+        deploymentId,
+        source: "verify",
+      })
+      .catch((error: unknown) => {
+        reapLog.error(
+          "failed to emit deploy.reap_failed (deploy unaffected)",
+          { provider, appId, deploymentId },
+          error,
+        );
+      });
   }
 
   /**

@@ -30,6 +30,11 @@ export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
 // from here so the worker boot starts it without a new import dependency.
 export { startRunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
 export type { RunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
+// apex-v96 guard: the Fly-machine orphan sweeper is another co-located worker
+// reconciler (durable out-of-band reap of accumulated Fly machines). Re-exported
+// here so the worker boot starts it without a new import dependency.
+export { startFlyMachineOrphanSweeper } from "./buildFlyMachineOrphanSweeper.js";
+export type { FlyMachineOrphanSweeper } from "./buildFlyMachineOrphanSweeper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";

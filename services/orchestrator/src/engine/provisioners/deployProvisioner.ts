@@ -87,6 +87,36 @@ export interface DeploymentStatus {
 }
 
 /**
+ * The outcome of a single-instance app's post-verify machine reap (Fly's
+ * "converge to exactly one machine" step). The reap is best-effort by contract —
+ * it NEVER fails the deploy — but it must NOT silently swallow a list/delete blip
+ * (that re-introduces the apex-v96 machine-accumulation → file-store-fragmentation
+ * class). This record carries what the reap DID and what it COULDN'T, so the caller
+ * can emit a LOUD, durable `deploy.reap_failed` when {@link reapHadFailure} holds.
+ */
+export interface ReapOutcome {
+  /** The app whose machines were reaped. */
+  appName: string;
+  /** The live deployment/machine id the reap keeps (must never be deleted). */
+  keptMachineId: string;
+  /** The stale machine ids successfully deleted this pass. */
+  reapedMachineIds: string[];
+  /** True when the machines LIST call failed — nothing could be enumerated or reaped. */
+  listFailed: boolean;
+  /** Machine ids whose individual DELETE failed (stale machines left behind). */
+  failedMachineIds: string[];
+}
+
+/**
+ * Whether a reap left the app at accumulation risk — a failed enumeration OR any
+ * failed per-machine delete. A clean reap (nothing to delete, or every stale
+ * machine deleted) returns false, so the durable emit fires ONLY on real trouble.
+ */
+export function reapHadFailure(outcome: ReapOutcome): boolean {
+  return outcome.listFailed || outcome.failedMachineIds.length > 0;
+}
+
+/**
  * The provider-specific HTTP primitives. The base class drives find-or-create,
  * bind, discover, artifact assembly, and runtime env attachment on top of these;
  * a new deploy provider implements only this surface (Vercel / Fly do today).
@@ -125,9 +155,16 @@ export interface DeployProviderApi {
   /**
    * Perform provider-specific cleanup only after a deployment has passed the
    * adapter's health verification and its release row is durable. Providers with
-   * no such cleanup omit this hook.
+   * no such cleanup omit this hook. Returns a {@link ReapOutcome} describing what
+   * the reap did/couldn't (so the caller can emit a durable `deploy.reap_failed`),
+   * or `undefined` when the provider's cleanup is not a machine reap.
    */
-  afterVerifiedDeployment?(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void>;
+  afterVerifiedDeployment?(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<ReapOutcome | undefined>;
   /** Read the immutable artifact identity attached to an existing deployment. */
   resolveArtifactIdentity(
     grant: OrgGrant,
@@ -241,10 +278,14 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * succeed, so cleanup can never remove the prior live surface for a failed
    * deployment. Providers without this hook intentionally do nothing.
    */
-  async afterVerifiedDeployment(grant: OrgGrant, appId: string, deploymentId: string): Promise<void> {
+  async afterVerifiedDeployment(
+    grant: OrgGrant,
+    appId: string,
+    deploymentId: string,
+  ): Promise<ReapOutcome | undefined> {
     const cleanup = this.api.afterVerifiedDeployment;
     if (cleanup === undefined) {
-      return;
+      return undefined;
     }
     const { token, app } = await this.appAccess(
       grant,
@@ -253,7 +294,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
       "verify",
       "clean up a verified deployment on",
     );
-    await cleanup.call(this.api, grant, token, app, deploymentId);
+    return cleanup.call(this.api, grant, token, app, deploymentId);
   }
 
   /** Resolve an existing deployment's provider-reported artifact identity. */

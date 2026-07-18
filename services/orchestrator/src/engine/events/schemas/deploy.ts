@@ -194,6 +194,49 @@ export const DeployManualConfirmedPayload = z
   .strict();
 export type DeployManualConfirmedPayload = z.infer<typeof DeployManualConfirmedPayload>;
 
+// Deploy REAP FAILED ("a single-instance app's stale-machine reap did not fully
+// converge"): the post-verify reap (or the out-of-band Fly-machine reconciler sweep)
+// could NOT enumerate or delete one-or-more of an app's prior machines, so the app may
+// be ACCUMULATING machines. This is the apex-v96 fragmentation class made LOUD +
+// DURABLE: a single-instance product's file store fragments across accumulated
+// machines, presenting as a false "persistence broken" PRODUCT symptom — but the root
+// cause is INFRA (a reap blip), not product code. Emitting this event makes an apex
+// halt from accumulation attributable to infra rather than blamed on the product.
+// The deploy itself STILL SUCCEEDS (reap is best-effort, non-fatal) — this event is
+// the visible, durable breadcrumb, and the durable Fly-machine reconciler sweep
+// retries on its next pass (a transient blip self-corrects; a persistent one keeps
+// firing this event). SECURITY: every field is non-secret (provider + ids + counts +
+// a fixed reason); the deploy token never reaches here.
+export const DeployReapFailedPayload = z
+  .object({
+    /** The deploy provider kind (`deploy.flyio` — only Fly reaps machines today). */
+    provider: z.string(),
+    /** The deployed app/project id whose machines were being reaped. */
+    appId: z.string(),
+    /** The LIVE deployment/machine id the reap keeps (the one it must NOT delete). */
+    deploymentId: z.string(),
+    /**
+     * Where the reap ran: `verify` (the inline post-verified-deploy reap) or `sweeper`
+     * (the out-of-band durable Fly-machine orphan reconciler). Distinguishes a one-off
+     * deploy-time blip from a recurring reconciler-observed accumulation.
+     */
+    source: z.enum(["verify", "sweeper"]),
+    /**
+     * True when the machines LIST call itself failed — the reap could not even enumerate
+     * the app's machines, so NOTHING was reaped this pass (the strongest accumulation risk).
+     */
+    listFailed: z.boolean(),
+    /** How many individual machine DELETE calls failed this pass (stale machines left behind). */
+    failedMachineCount: z.number().int().nonnegative(),
+    /** How many stale machines WERE successfully reaped this pass (partial progress is honest). */
+    reapedMachineCount: z.number().int().nonnegative(),
+    /** A FIXED, non-secret failure summary (never raw provider HTTP text, which can embed secrets). */
+    reason: z.string(),
+  })
+  .extend(AuditEnvelope.shape)
+  .strict();
+export type DeployReapFailedPayload = z.infer<typeof DeployReapFailedPayload>;
+
 // Deploy SKIPPED ("an expected deploy could not even be RESOLVED"): a PRE-resolution
 // failure on merge that occurs BEFORE a deploy target is known — so it cannot be a
 // `deploy.failed` (which requires a resolved provider + appId). Both reasons reach here

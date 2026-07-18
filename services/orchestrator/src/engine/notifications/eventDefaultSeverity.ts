@@ -196,6 +196,13 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // reaches the operator rather than a silent triggered-but-unverified stall.
   "deploy.failed": "warn",
 
+  // A single-instance app's stale-machine reap did not fully converge (a list/delete
+  // blip left prior machines behind → accumulation risk → the apex-v96 file-store
+  // fragmentation class). Operator-actionable (an INFRA blip, not product code) →
+  // `warn` so it reaches the operator + is attributable to infra. The deploy itself
+  // still succeeded; the durable reconciler sweep retries next pass.
+  "deploy.reap_failed": "warn",
+
   // A deploy that was EXPECTED could not even be RESOLVED on merge (incomplete deploy
   // config / a missing mergeSha) — a PRE-resolution skip that previously was console-only.
   // Operator-actionable (the merge produced no deploy) → `warn` so it reaches the operator.
