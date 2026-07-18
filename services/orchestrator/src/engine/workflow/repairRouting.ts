@@ -3,11 +3,14 @@
 // reads the immutable ResolutionAuthority decision and its locked evidence itself.
 
 import { runWithOrgScope } from "@tanren/db";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
 import { SpecOriginStore } from "../repositories/specOrigins.js";
 import { createSpecOnClient } from "./projectSpec.js";
+import { repairFailureSignature, type RepairFailureAssertion } from "./repairFailureSignature.js";
+
+export { repairFailureSignature } from "./repairFailureSignature.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 
@@ -75,17 +78,14 @@ type DecisionRow = {
   readonly issue_loop_id: unknown;
   readonly resolution_job_id: unknown;
   readonly decision: unknown;
-  readonly decision_reasons: unknown;
-  readonly input_snapshot_hash: unknown;
   readonly contract_id: unknown;
   readonly contract_hash: unknown;
-  readonly source_revision: unknown;
   readonly verification_run_id: unknown;
+  readonly verification_classification: unknown;
 };
 
 type AssertionRow = {
-  readonly expected_hash: unknown;
-  readonly observed_hash: unknown;
+  readonly sample_data: unknown;
   readonly outcome: unknown;
 };
 
@@ -101,20 +101,6 @@ type ParentOriginRow = {
 
 type AttemptRow = { readonly id: unknown; readonly spec_id: unknown };
 type IterationRow = { readonly iteration: unknown };
-
-type FailureAssertion = {
-  readonly expectedHash: string;
-  readonly observedHash: string;
-  readonly outcome: string;
-};
-
-type FailureSignatureInput = {
-  readonly contractId: string;
-  readonly contractHash: string | null;
-  readonly sourceRevision: string | null;
-  readonly decisionReasons: readonly string[];
-  readonly assertions: readonly FailureAssertion[];
-};
 
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) throw new Error(`repair routing has no ${name}`);
@@ -132,52 +118,25 @@ function stringArray(value: unknown, name: string): string[] {
   return [...new Set(value)].sort((left, right) => left.localeCompare(right));
 }
 
-function decisionReasons(value: unknown): string[] {
-  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
-    return [...value].sort((left, right) => left.localeCompare(right));
+function assertionShape(value: unknown): { expectedObservation: unknown; observedObservation: unknown } {
+  const sample =
+    typeof value === "string"
+      ? (() => {
+          try {
+            return JSON.parse(value) as unknown;
+          } catch {
+            throw new Error("repair routing has malformed verification_assertions.sample_data");
+          }
+        })()
+      : value;
+  if (sample === null || typeof sample !== "object" || Array.isArray(sample)) {
+    throw new Error("repair routing has malformed verification_assertions.sample_data");
   }
-  if (typeof value !== "string") throw new Error("repair routing has malformed decision_reasons");
-  try {
-    return stringArray(JSON.parse(value), "decision_reasons");
-  } catch {
-    throw new Error("repair routing has malformed decision_reasons");
+  const record = sample as Record<string, unknown>;
+  if (!("expectedObservation" in record) || !("observedObservation" in record)) {
+    throw new Error("repair routing has incomplete verification_assertions.sample_data");
   }
-}
-
-function canonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalValue(item));
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, canonicalValue(child)]),
-    );
-  }
-  return value;
-}
-
-/**
- * A recurrence signature excludes job, decision, and assertion ids on purpose.
- * Those ids change for a replay even when the locked contract observes precisely
- * the same failure. It retains contract revision, decision reasons, and the
- * expected/observed assertion hashes so source/evidence changes can route anew.
- */
-export function repairFailureSignature(input: FailureSignatureInput): string {
-  const canonical = JSON.stringify(
-    canonicalValue({
-      version: "tanren-repair-failure-signature.v1",
-      contractId: input.contractId,
-      contractHash: input.contractHash,
-      sourceRevision: input.sourceRevision,
-      decisionReasons: [...input.decisionReasons].sort((left, right) => left.localeCompare(right)),
-      assertions: [...input.assertions].sort((left, right) =>
-        `${left.expectedHash}:${left.observedHash}:${left.outcome}`.localeCompare(
-          `${right.expectedHash}:${right.observedHash}:${right.outcome}`,
-        ),
-      ),
-    }),
-  );
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+  return { expectedObservation: record["expectedObservation"], observedObservation: record["observedObservation"] };
 }
 
 function routeHypothesis(resolutionDecisionId: string, failureSignatureHash: string): string {
@@ -217,12 +176,15 @@ export class PgRepairRouter implements RepairRouter {
     const loopRow = loop.rows[0];
     if (loopRow === undefined) throw new RepairRoutingDecisionNotFoundError(input.resolutionDecisionId);
 
-    const assertions = await this.loadAssertions(client, input.orgId, optionalText(decision.verification_run_id));
+    const assertions = await this.loadAssertions(
+      client,
+      input.orgId,
+      requiredText(decision.verification_run_id, "verification_run_id"),
+    );
     const failureSignatureHash = repairFailureSignature({
       contractId: requiredText(decision.contract_id, "resolution_decisions.contract_id"),
-      contractHash: optionalText(decision.contract_hash),
-      sourceRevision: optionalText(decision.source_revision),
-      decisionReasons: decisionReasons(decision.decision_reasons),
+      contractHash: requiredText(decision.contract_hash, "symptom_contracts.canonical_hash"),
+      classification: requiredText(decision.verification_classification, "behavior_verification_runs.classification"),
       assertions,
     });
     const hypothesis = routeHypothesis(input.resolutionDecisionId, failureSignatureHash);
@@ -382,14 +344,15 @@ export class PgRepairRouter implements RepairRouter {
   private async loadBlockedDecision(client: QueryClient, input: RepairRouteInput): Promise<DecisionRow> {
     const result = await client.query<DecisionRow>(
       `SELECT decision.id, decision.project_id, decision.issue_loop_id, decision.resolution_job_id,
-              decision.decision, decision.decision_reasons, decision.input_snapshot_hash,
-              decision.contract_id, contract.canonical_hash AS contract_hash, contract.source_revision,
-              decision.verification_run_id
+              decision.decision, decision.contract_id, contract.canonical_hash AS contract_hash,
+              decision.verification_run_id, verification.classification AS verification_classification
          FROM resolution_decisions AS decision
          JOIN resolution_jobs AS job
            ON job.org_id = decision.org_id AND job.id = decision.resolution_job_id
          JOIN symptom_contracts AS contract
            ON contract.org_id = decision.org_id AND contract.id = decision.contract_id
+         LEFT JOIN behavior_verification_runs AS verification
+           ON verification.org_id = decision.org_id AND verification.id = decision.verification_run_id
         WHERE decision.org_id = $1 AND decision.id = $2
         FOR UPDATE OF decision`,
       [input.orgId, input.resolutionDecisionId],
@@ -403,19 +366,18 @@ export class PgRepairRouter implements RepairRouter {
   private async loadAssertions(
     client: QueryClient,
     orgId: string,
-    verificationRunId: string | null,
-  ): Promise<FailureAssertion[]> {
-    if (verificationRunId === null) return [];
+    verificationRunId: string,
+  ): Promise<RepairFailureAssertion[]> {
     const result = await client.query<AssertionRow>(
-      `SELECT expected_hash, observed_hash, outcome
+      `SELECT sample_data, outcome
          FROM verification_assertions
         WHERE org_id = $1 AND verification_run_id = $2
-        ORDER BY expected_hash, observed_hash, outcome`,
+        ORDER BY id`,
       [orgId, verificationRunId],
     );
+    if (result.rows.length === 0) throw new Error("repair routing has no production verification assertions");
     return result.rows.map((row) => ({
-      expectedHash: requiredText(row.expected_hash, "verification_assertions.expected_hash"),
-      observedHash: requiredText(row.observed_hash, "verification_assertions.observed_hash"),
+      ...assertionShape(row.sample_data),
       outcome: requiredText(row.outcome, "verification_assertions.outcome"),
     }));
   }
@@ -447,8 +409,8 @@ export class PgRepairRouter implements RepairRouter {
         WHERE origin.org_id = $1 AND origin.project_id = $2 AND origin.issue_loop_id = $3
           AND origin.role IN ('primary_fix', 'repair') AND spec.status = 'merged'
         GROUP BY origin.spec_id, spec.title, origin.triage_task_id, spec.origin_run_id,
-                 origin.attempt_number, origin.ordinal, origin.id
-        ORDER BY origin.attempt_number DESC, origin.ordinal DESC, origin.id DESC
+                 spec.created_at, origin.attempt_number, origin.ordinal, origin.id
+        ORDER BY origin.attempt_number DESC, spec.created_at DESC, origin.ordinal DESC, origin.id DESC
         LIMIT 1`,
       [orgId, projectId, issueLoopId],
     );
