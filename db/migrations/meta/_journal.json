@@ -533,6 +533,13 @@
       "when": 1784330048666,
       "tag": "0077_jittery_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1784336772226,
+      "tag": "0078_warm_nekra",
+      "breakpoints": true
     }
   ]
 }

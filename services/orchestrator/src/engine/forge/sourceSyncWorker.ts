@@ -5,6 +5,7 @@ import { PgEventStore } from "../eventStore.js";
 import { InboxStore, type InboxSource } from "./inbox/index.js";
 import { IssueLoopStore, type IssueLoopRow } from "../repositories/issueLoops.js";
 import { SourceSyncOutboxStore, type SourceSyncOutboxRow } from "../repositories/sourceSyncOutbox.js";
+import { sealResolutionProof } from "../governance/resolutionProofSealer.js";
 import type { IssueSourceAdapter, SourceSyncReadback, SourceSyncReceipt } from "./issueSourceAdapter.js";
 
 const DEFAULT_SOURCE_SYNC_LEASE_MS = 5 * 60_000;
@@ -161,6 +162,20 @@ async function completeSync(
           resolutionDecisionId: row.id,
         },
       });
+      // The loop has reached its authorized/waived terminal: the authority decision
+      // is verified AND the source is confirmed closed. Seal the tamper-evident
+      // proof (including this verified_closed receipt) in the same transaction.
+      await sealResolutionProof(
+        client,
+        {
+          orgId: context.loop.orgId,
+          projectId: context.loop.projectId,
+          issueLoopId: context.loop.id,
+          resolutionJobId: row.resolution_job_id,
+          resolutionDecisionId: row.id,
+        },
+        "authorized_verified_closed",
+      );
     }
     return true;
   });
