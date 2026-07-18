@@ -9,8 +9,8 @@ const log = createLogger("merge-claim-lease");
 
 /**
  * Bridges a queued merge drive's ActivityWatchdog sign-of-life events to its claim
- * lease. A fixed-point watchdog emits no progress, so a silent/wedged drive stops
- * refreshing and remains reclaimable after the normal lease window.
+ * heartbeat. A fixed-point watchdog emits no progress, while the session liveness
+ * fence is lost automatically when a coordinator actually dies.
  */
 export class MergeClaimActivityLease {
   private renewal = Promise.resolve();
@@ -20,11 +20,6 @@ export class MergeClaimActivityLease {
     private readonly queue: MergeQueueModel,
     private readonly queueId: string,
   ) {}
-
-  /** Establish the initial lease before handing the claim to the merge drive. */
-  async start(): Promise<void> {
-    await this.queue.renewClaim?.(this.queueId);
-  }
 
   /** Request a refresh from a real ActivityWatchdog work-signature advancement. */
   onWatchdogProgress(): void {

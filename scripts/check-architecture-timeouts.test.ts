@@ -206,6 +206,13 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
     expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
   });
 
+  it("flags the retired native merge-claim TTL disguised as a lease constant (#1023)", () => {
+    const text = "export const MERGE_CLAIM_LEASE_MS = 15 * 60 * 1000;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.message).toContain("MERGE_CLAIM_LEASE_MS");
+  });
+
   it("(h) flags Promise.race against a setTimeout that rejects (the disguised wall-clock wait)", () => {
     const text =
       "await Promise.race([\n" +

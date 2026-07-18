@@ -449,7 +449,6 @@ export async function driveClaimedMerge(
   entry: MergeQueueEntry,
 ): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
   const lease = new MergeClaimActivityLease(deps.queue, entry.queueId);
-  await lease.start();
   try {
     return await deps.runner.driveMerge({
       runId: entry.runId,

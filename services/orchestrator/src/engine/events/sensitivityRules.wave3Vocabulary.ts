@@ -37,7 +37,7 @@ export const wave3VocabularySensitivityRules: SensitivityRule[] = [
     "projectId",
     "partitionId",
     "leaseOwner",
-    "leaseExpiresAt",
+    "leaseHeartbeatAt",
     "generation",
     "scopeFingerprint",
   ]),

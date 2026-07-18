@@ -43,7 +43,7 @@ export interface MergeQueueEventEmitter {
     entry: MergeQueueEntry;
     partitionId: string;
     leaseOwner: string;
-    leaseExpiresAt: Date;
+    leaseHeartbeatAt: Date;
     generation: number;
     scopeFingerprint?: string;
   }): Promise<void>;

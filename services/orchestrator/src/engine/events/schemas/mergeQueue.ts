@@ -292,7 +292,7 @@ export const MergePartitionLeasedPayload = z
     projectId: z.string().min(1),
     partitionId: z.string().min(1),
     leaseOwner: z.string().min(1),
-    leaseExpiresAt: z.string().datetime({ offset: true }),
+    leaseHeartbeatAt: z.string().datetime({ offset: true }),
     generation: z.number().int().nonnegative(),
     scopeFingerprint: z.string().min(1).optional(),
   })

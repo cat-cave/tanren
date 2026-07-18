@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
-import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
 
 const DEFAULT_TARGET_BRANCH = "main";
 const DEFAULT_CAPACITY = 1;
@@ -46,7 +45,8 @@ interface UnpartitionedQueueRow {
 export interface MergeQueuePartitionLease {
   partitionId: string;
   leaseOwner: string;
-  leaseExpiresAt: Date;
+  /** Last ActivityWatchdog-proven merge progress; never a reclamation deadline. */
+  leaseHeartbeatAt: Date;
   generation: number;
   scopeFingerprint?: string;
 }
@@ -125,7 +125,7 @@ export class PgMergeQueuePartitionStore {
     return partition;
   }
 
-  /** CAS acquire under the partition-row lock; a fresh holder exhausts capacity. */
+  /** CAS acquire under the partition-row lock; a live holder exhausts capacity. */
   async acquireOnClient(client: pg.PoolClient, queueId: string): Promise<MergeQueuePartitionLease | null> {
     // `partition_id` was added after the native queue was already in use, and a few
     // recovery-owned writers deliberately insert the queue row directly. Adopt an
@@ -149,7 +149,7 @@ export class PgMergeQueuePartitionStore {
       `SELECT count(*)::text AS count
          FROM merge_queue
         WHERE org_id = $1 AND partition_id = $2 AND status = 'merging'
-          AND lease_expires_at > now()`,
+          AND lease_owner IS NOT NULL`,
       [row.org_id, row.id],
     );
     if (Number(active.rows[0]?.count ?? "0") >= row.capacity) return null;
@@ -158,17 +158,19 @@ export class PgMergeQueuePartitionStore {
     const acquired = await client.query<{ lease_expires_at: Date }>(
       `UPDATE merge_queue
           SET status = 'merging', claimed_at = now(), lease_owner = $2,
-              lease_expires_at = now() + ($3::bigint * interval '1 millisecond')
+              -- Migration 0054 requires a non-null companion for lease_owner. It
+              -- now records the last proven heartbeat, not a wall-clock expiry.
+              lease_expires_at = now()
         WHERE queue_id = $1 AND status = 'queued'
         RETURNING lease_expires_at`,
-      [queueId, leaseOwner, MERGE_CLAIM_LEASE_MS],
+      [queueId, leaseOwner],
     );
-    const leaseExpiresAt = acquired.rows[0]?.lease_expires_at;
-    if (leaseExpiresAt === undefined) return null;
+    const leaseHeartbeatAt = acquired.rows[0]?.lease_expires_at;
+    if (leaseHeartbeatAt === undefined) return null;
     const lease: MergeQueuePartitionLease = {
       partitionId: row.id,
       leaseOwner,
-      leaseExpiresAt,
+      leaseHeartbeatAt,
       generation: row.generation,
       ...(row.scope_fingerprint === null ? {} : { scopeFingerprint: row.scope_fingerprint }),
     };
@@ -207,27 +209,27 @@ export class PgMergeQueuePartitionStore {
     );
   }
 
-  /** A live holder renews its own lease; a stale/dead owner cannot revive it. */
+  /** A real merge-progress signal renews its durable heartbeat. */
   async renewOnClient(
     client: pg.PoolClient,
     input: { queueId: string; leaseOwner: string },
   ): Promise<MergeQueuePartitionLease | null> {
     const renewed = await client.query<LeaseRow>(
       `UPDATE merge_queue mq
-          SET lease_expires_at = now() + ($3::bigint * interval '1 millisecond')
+          SET claimed_at = now(), lease_expires_at = now()
          FROM merge_queue_partitions p
         WHERE mq.queue_id = $1 AND mq.org_id = p.org_id AND mq.partition_id = p.id
-          AND mq.status = 'merging' AND mq.lease_owner = $2 AND mq.lease_expires_at > now()
+          AND mq.status = 'merging' AND mq.lease_owner = $2
         RETURNING mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
                   mq.scope_fingerprint, mq.lease_owner, mq.lease_expires_at, p.id, p.scope_key, p.mode, p.generation`,
-      [input.queueId, input.leaseOwner, MERGE_CLAIM_LEASE_MS],
+      [input.queueId, input.leaseOwner],
     );
     const row = renewed.rows[0];
     if (row === undefined || row.lease_owner === null || row.lease_expires_at === null) return null;
     return {
       partitionId: row.id,
       leaseOwner: row.lease_owner,
-      leaseExpiresAt: row.lease_expires_at,
+      leaseHeartbeatAt: row.lease_expires_at,
       generation: row.generation,
       ...(row.scope_fingerprint === null ? {} : { scopeFingerprint: row.scope_fingerprint }),
     };
@@ -271,37 +273,56 @@ export class PgMergeQueuePartitionStore {
     return true;
   }
 
-  /** Reclaim only expired/malformed leases: a live unexpired holder is never reset. */
-  async reclaimExpiredOnClient(client: pg.PoolClient, projectId: string): Promise<number> {
-    const expired = await client.query<LeaseRow>(
+  /** List holders for the liveness-fence reaper; no elapsed-time predicate is involved. */
+  async claimedOnClient(
+    client: pg.PoolClient,
+    projectId: string,
+  ): Promise<Array<{ queueId: string; leaseOwner: string | null }>> {
+    const claimed = await client.query<LeaseRow>(
       `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
               mq.scope_fingerprint, mq.lease_owner, mq.lease_expires_at,
               p.id, p.scope_key, p.mode, p.generation
          FROM merge_queue mq
          LEFT JOIN merge_queue_partitions p ON p.org_id = mq.org_id AND p.id = mq.partition_id
-        WHERE mq.project_id = $1 AND mq.status = 'merging'
-          AND (mq.lease_expires_at IS NULL OR mq.lease_expires_at <= now())
-        FOR UPDATE OF mq`,
+        WHERE mq.project_id = $1 AND mq.status = 'merging'`,
       [projectId],
     );
-    for (const row of expired.rows) {
-      await client.query(
-        `UPDATE merge_queue
-            SET status = 'queued', claimed_at = NULL, lease_owner = NULL, lease_expires_at = NULL
-          WHERE queue_id = $1`,
-        [row.queue_id],
-      );
-      if (row.lease_owner !== null && row.id !== null) {
-        await this.events?.emitPartitionReleased({
-          projectId: row.project_id,
-          entry: entryOf(row),
-          partitionId: row.id,
-          leaseOwner: row.lease_owner,
-          generation: row.generation,
-        });
-      }
+    return claimed.rows.map((row) => ({ queueId: row.queue_id, leaseOwner: row.lease_owner }));
+  }
+
+  /** Reclaim only after the caller proved this holder has lost its liveness fence. */
+  async reclaimAbsentOwnerOnClient(
+    client: pg.PoolClient,
+    input: { queueId: string; leaseOwner: string | null },
+  ): Promise<boolean> {
+    const held = await client.query<LeaseRow & { status: string }>(
+      `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
+              mq.scope_fingerprint, mq.lease_owner, mq.lease_expires_at, mq.status,
+              p.id, p.scope_key, p.mode, p.generation
+         FROM merge_queue mq
+         LEFT JOIN merge_queue_partitions p ON p.org_id = mq.org_id AND p.id = mq.partition_id
+        WHERE mq.queue_id = $1
+        FOR UPDATE OF mq`,
+      [input.queueId],
+    );
+    const row = held.rows[0];
+    if (row === undefined || row.status !== "merging" || row.lease_owner !== input.leaseOwner) return false;
+    await client.query(
+      `UPDATE merge_queue
+          SET status = 'queued', claimed_at = NULL, lease_owner = NULL, lease_expires_at = NULL
+        WHERE queue_id = $1`,
+      [row.queue_id],
+    );
+    if (row.lease_owner !== null && row.id !== null) {
+      await this.events?.emitPartitionReleased({
+        projectId: row.project_id,
+        entry: entryOf(row),
+        partitionId: row.id,
+        leaseOwner: row.lease_owner,
+        generation: row.generation,
+      });
     }
-    return expired.rows.length;
+    return true;
   }
 
   /** Route a poison member to its own partition and release any shared lease first. */

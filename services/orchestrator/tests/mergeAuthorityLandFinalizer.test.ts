@@ -229,7 +229,7 @@ describeDb("in-16 — transactional delivery outbox on authorized land", () => {
     expect(await deliveryRows()).toHaveLength(0);
   });
 
-  it("IDEMPOTENCY: a reconcile retry re-runs the applier with the same key and inserts exactly ONE outbox row, not two", async () => {
+  it("IDEMPOTENCY: a merge.completed replay is a no-op — one event and one outbox row", async () => {
     // First land persists the decision row + the outbox row.
     const authority = buildAuthority();
     const auth = await authority.authorizeLand(confAllClearInput(), CONF_ENVELOPE);
@@ -237,8 +237,9 @@ describeDb("in-16 — transactional delivery outbox on authorized land", () => {
     const first = await deliveryRows();
     expect(first).toHaveLength(1);
 
-    // A `merge_state_unknown` reconcile retry re-runs the SAME finalize applier (same
-    // deterministic key). `ON CONFLICT DO NOTHING` makes the outbox INSERT a no-op.
+    // A `merge_state_unknown` reconcile retry re-runs the SAME finalize applier.
+    // The locked `merged` spec is the once-only gate, so this cannot append a second
+    // terminal event or re-apply any land side effect.
     await runWithOrgScope(ownerPool, ORG_ID, (client) =>
       applyFinalizeLand(client, finalizeInput({ mergeSha: first[0]!.merge_sha })),
     );
@@ -246,5 +247,6 @@ describeDb("in-16 — transactional delivery outbox on authorized land", () => {
     const after = await deliveryRows();
     expect(after).toHaveLength(1);
     expect(after[0]!.id).toBe(first[0]!.id);
+    expect(await mergeCompletedCount()).toBe(1);
   });
 });

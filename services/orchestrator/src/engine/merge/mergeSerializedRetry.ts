@@ -1,15 +1,11 @@
-import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
-
-const SERIALIZED_RETRY_BUFFER_MS = 1_000;
+// A wake cadence, not a lease deadline. It merely gives a coordinator another
+// opportunity to observe a released liveness fence after a crash; a live fence
+// continues to win indefinitely.
+const MERGE_QUEUE_REDRIVE_CADENCE_MS = 1_000;
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
-export function serializedRetryAfterMs(snapshot: { serializedRetryAfterMs?: number }): number {
-  return boundedRetryDelayMs((snapshot.serializedRetryAfterMs ?? MERGE_CLAIM_LEASE_MS) + SERIALIZED_RETRY_BUFFER_MS);
-}
-
-export function parseSerializedRetryAfterMs(value: string | null | undefined): number | undefined {
-  const parsed = value === null || value === undefined ? undefined : Number(value);
-  return parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined;
+export function serializedRetryAfterMs(_snapshot?: unknown): number {
+  return MERGE_QUEUE_REDRIVE_CADENCE_MS;
 }
 
 export function boundedRetryDelayMs(delayMs: number): number {

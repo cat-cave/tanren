@@ -5,12 +5,10 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseDigest } from "../src/engine/contracts/cas.js";
 import type { LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
-import type { RunStateWriter } from "../src/engine/contracts/runStateWriter.js";
 import { PgLandGroupStore, type LandGroupMemberContext } from "../src/engine/merge/landGroupStore.js";
 import { MergeAuthorityV2Impl, SubjectEqualityRevalidator } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import { LandCasRejectedError } from "../src/engine/providers/githubCodeHost.js";
 import type { LandAuthorizedIntegrationInput } from "../src/engine/contracts/codeHost.js";
-import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -52,35 +50,40 @@ function databaseUrl(url: string, database: string, app = false): string {
   return parsed.toString();
 }
 
-function members(projectId: string): LandGroupMemberContext[] {
+function members(projectId: string, suffix = ""): LandGroupMemberContext[] {
   return [
     {
-      specId: "spec_land_a",
-      runId: "run_land_a",
+      specId: `spec_land_a${suffix}`,
+      runId: `run_land_a${suffix}`,
       branch: "feature/a",
       headSha: "member-a",
       prNumber: 41,
       prUrl: "https://example.test/pulls/41",
       projectId,
-      taskId: "task_land_a",
+      taskId: `task_land_a${suffix}`,
     },
     {
-      specId: "spec_land_b",
-      runId: "run_land_b",
+      specId: `spec_land_b${suffix}`,
+      runId: `run_land_b${suffix}`,
       branch: "feature/b",
       headSha: "member-b",
       prNumber: 42,
       prUrl: "https://example.test/pulls/42",
       projectId,
-      taskId: "task_land_b",
+      taskId: `task_land_b${suffix}`,
     },
   ];
 }
 
-function envelope(input: { nodeId: string; expectedMainSha: string; authorizedSha: string }): LandBindingEnvelope {
+function envelope(input: {
+  nodeId: string;
+  expectedMainSha: string;
+  authorizedSha: string;
+  members?: ReadonlyArray<LandGroupMemberContext>;
+}): LandBindingEnvelope {
   return {
     subject: { kind: "integration_node", id: input.nodeId },
-    members: members(PROJECT_A).map((member) => ({ ...member, disposition: "admit" })),
+    members: (input.members ?? members(PROJECT_A)).map((member) => ({ ...member, disposition: "admit" })),
     headSha: input.authorizedSha,
     expectedMainSha: input.expectedMainSha,
     artifactDigest: parseDigest(`sha256:${"a".repeat(64)}`),
@@ -111,7 +114,6 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
   const repo = { owner: "tanren", name: "land-groups" };
   let owner: Pool;
   let runtime: Pool;
-  let writer: RunStateWriter;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: adminUrl });
@@ -120,7 +122,6 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
     owner = new Pool({ connectionString: databaseUrl(adminUrl, database) });
     await migrate(owner);
     runtime = new Pool({ connectionString: databaseUrl(adminUrl, database, true) });
-    writer = new DirectRunStateWriter(runtime);
     await seed(owner, ORG_A, PROJECT_A);
     await seed(owner, ORG_B, "project_land_group_b");
   }, 60_000);
@@ -145,7 +146,7 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
       expectedMainSha: "main-before",
       authorizedSha: "authorized-before",
     });
-    const firstAuthority = authorityFor(runtime, writer, "group-before", host);
+    const firstAuthority = authorityFor(runtime, "group-before", host);
     const firstAuth = await firstAuthority.authorizeLand(cleanInput(first), first);
     await expect(firstAuthority.land(firstAuth)).rejects.toBeInstanceOf(LandCasRejectedError);
 
@@ -153,7 +154,7 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
     // integration/decision against it. There is no retry cap; this test drives one
     // such progression and then replays the completed reconcile token.
     const retry = envelope({ nodeId: "node-after", expectedMainSha: "main-moved", authorizedSha: "authorized-after" });
-    const retryAuthority = authorityFor(runtime, writer, "group-after", host);
+    const retryAuthority = authorityFor(runtime, "group-after", host);
     const retryAuth = await retryAuthority.authorizeLand(cleanInput(retry), retry);
     await expect(retryAuthority.land(retryAuth)).resolves.toEqual({
       kind: "landed",
@@ -196,6 +197,76 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
     });
   });
 
+  it("rolls back every member when a crash interrupts group finalization, then resumes exactly once", async () => {
+    const crashMembers = members(PROJECT_A, "_crash");
+    await seedMembers(owner, ORG_A, PROJECT_A, crashMembers);
+    const host = new InMemoryCodeHost();
+    host.seed(repo, "main", "main-crash-before");
+    const binding = envelope({
+      nodeId: "node-crash",
+      expectedMainSha: "main-crash-before",
+      authorizedSha: "authorized-crash",
+      members: crashMembers,
+    });
+    const authority = authorityFor(runtime, "group-crash", host, crashMembers);
+    const auth = await authority.authorizeLand(cleanInput(binding), binding);
+
+    // Fail the second member's terminal-event write. The host CAS has already
+    // advanced, so the following assertion proves the durable group transaction
+    // leaves no half-finalized member behind and the normal reconcile replay can
+    // finish the exact group once.
+    await owner.query(`CREATE FUNCTION fail_land_group_second_member() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.event_type = 'merge.completed' AND NEW.run_id = 'run_land_b_crash' THEN
+          RAISE EXCEPTION 'injected land-group finalize crash';
+        END IF;
+        RETURN NEW;
+      END;
+    $$`);
+    await owner.query(
+      "CREATE TRIGGER fail_land_group_second_member BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION fail_land_group_second_member()",
+    );
+    try {
+      await expect(authority.land(auth)).resolves.toMatchObject({ kind: "merge_state_unknown" });
+    } finally {
+      await owner.query("DROP TRIGGER IF EXISTS fail_land_group_second_member ON events");
+      await owner.query("DROP FUNCTION IF EXISTS fail_land_group_second_member()");
+    }
+
+    await runWithOrgScope(runtime, ORG_A, async (client) => {
+      const group = await client.query<{ state: string }>("SELECT state FROM land_groups WHERE id = 'group-crash'");
+      const outcomes = await client.query<{ outcome: string }>(
+        "SELECT outcome FROM land_group_members WHERE land_group_id = 'group-crash' ORDER BY member_key",
+      );
+      const specs = await client.query<{ status: string }>(
+        "SELECT status FROM specs WHERE spec_id = ANY($1) ORDER BY spec_id",
+        [crashMembers.map((member) => member.specId)],
+      );
+      const completed = await client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM events WHERE run_id = ANY($1) AND event_type = 'merge.completed'",
+        [crashMembers.map((member) => member.runId)],
+      );
+      expect(group.rows[0]?.state).toBe("formed");
+      expect(outcomes.rows).toEqual([{ outcome: "pending" }, { outcome: "pending" }]);
+      expect(specs.rows).toEqual([{ status: "in_flight" }, { status: "in_flight" }]);
+      expect(completed.rows[0]?.count).toBe("0");
+    });
+
+    await expect(authority.land(auth)).resolves.toMatchObject({ kind: "landed", mainSha: "authorized-crash" });
+    await expect(authority.land(auth)).resolves.toMatchObject({ kind: "landed", mainSha: "authorized-crash" });
+    await runWithOrgScope(runtime, ORG_A, async (client) => {
+      const outcomes = await client.query<{ outcome: string }>(
+        "SELECT outcome FROM land_group_members WHERE land_group_id = 'group-crash' ORDER BY member_key",
+      );
+      const completed = await client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM events WHERE run_id = ANY($1) AND event_type = 'merge.completed'",
+        [crashMembers.map((member) => member.runId)],
+      );
+      expect(outcomes.rows).toEqual([{ outcome: "landed" }, { outcome: "landed" }]);
+      expect(completed.rows[0]?.count).toBe("2");
+    });
+  });
+
   it("keeps all durable group rows invisible across orgs and without an RLS scope", async () => {
     await runWithOrgScope(runtime, ORG_B, async (client) => {
       const groups = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM land_groups");
@@ -214,22 +285,21 @@ describeDb("land groups — real PG and enforced tanren_app RLS", () => {
 
 function authorityFor(
   pool: Pool,
-  writer: RunStateWriter,
   groupId: string,
-  host: RaceThenLandHost,
+  host: InMemoryCodeHost,
+  memberContexts = members(PROJECT_A),
 ): MergeAuthorityV2Impl {
   return new MergeAuthorityV2Impl(
     host,
     new SubjectEqualityRevalidator(),
     new PgLandGroupStore({
       pool,
-      writer,
       orgId: ORG_A,
       projectId: PROJECT_A,
       groupId,
       partitionId: "partition-land",
       policyVersion: 1,
-      members: members(PROJECT_A),
+      members: memberContexts,
     }),
   );
 }
@@ -246,7 +316,16 @@ async function seed(pool: Pool, orgId: string, projectId: string): Promise<void>
     orgId,
   ]);
   if (orgId !== ORG_A) return;
-  for (const member of members(projectId)) {
+  await seedMembers(pool, orgId, projectId, members(projectId));
+}
+
+async function seedMembers(
+  pool: Pool,
+  orgId: string,
+  projectId: string,
+  memberContexts: ReadonlyArray<LandGroupMemberContext>,
+): Promise<void> {
+  for (const member of memberContexts) {
     await pool.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
        VALUES ($1,$2,$3,$1,$1,'in_flight')`,

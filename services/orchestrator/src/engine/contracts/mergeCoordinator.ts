@@ -96,7 +96,7 @@ export interface MergeQueueEntry {
  * specs that have GENUINELY merged (status done/merged) — used to test whether an
  * entry's ancestors are satisfied. `mergingInFlight` means every queued candidate
  * is held behind an unexpired lease in its own partition; it is not a project-wide
- * merge lock.
+ * merge lock held by a live liveness fence.
  */
 export interface MergeQueueSnapshot {
   projectId: string;
@@ -104,15 +104,8 @@ export interface MergeQueueSnapshot {
   entries: MergeQueueEntry[];
   /** Spec ids that have genuinely merged (done/merged) — satisfied ancestors. */
   mergedSpecIds: Set<string>;
-  /** True only when no candidate can acquire its own partition lease this pass. */
+  /** True only when no candidate can acquire its own live partition claim this pass. */
   mergingInFlight: boolean;
-  /**
-   * When `mergingInFlight` is true, the time until a fresh partition lease can
-   * be considered stale. Coordinators surface this as a serialized retry so a
-   * restarted worker wakes itself after the lease instead of waiting for an
-   * unrelated notification.
-   */
-  serializedRetryAfterMs?: number;
 }
 
 // ---- The pure selection core ----------------------------------------------
@@ -243,7 +236,7 @@ export interface MergeQueueModel {
    */
   claim(queueId: string): Promise<boolean>;
 
-  /** Renew this process's current partition lease before a live merge drive. */
+  /** Record an ActivityWatchdog-proven progress heartbeat for this process's live claim. */
   renewClaim?(queueId: string): Promise<boolean>;
 
   /** Mark a claimed entry as terminally MERGED (merging → merged). */
@@ -256,7 +249,7 @@ export interface MergeQueueModel {
    * or dequeued (a terminal run would never re-ready, so retiring the candidate
    * would STRAND a clean PR); instead the claim is released so the subscriber's
    * delayed re-drive re-picks it once the gateway recovers. Distinct from
-   * `recoverStaleClaims` (which only fires after the 15-min lease) — this releases
+   * `recoverStaleClaims` (which only fires after the owner loses its liveness fence) — this releases
    * IMMEDIATELY. Idempotent: a no-longer-`merging` row is left untouched.
    */
   releaseClaim(queueId: string): Promise<void>;
@@ -275,9 +268,9 @@ export interface MergeQueueModel {
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
 
   /**
-   * Crash recovery: return any entries left `merging` (a coordinator died
-   * mid-merge) back to `queued` so the queue is recoverable on restart. Returns the
-   * count recovered. Idempotent (no stale claims ⇒ 0). The actual GitHub merge is
+   * Crash recovery: return entries left `merging` only after their coordinator
+   * lost its database-session liveness fence. Returns the count recovered.
+   * Idempotent (no dead claims ⇒ 0). The actual GitHub merge is
    * itself idempotent (a re-driven already-merged PR is a no-op), so re-queuing is
    * safe.
    */

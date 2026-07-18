@@ -31,7 +31,8 @@
 //   (e) banned IDENTIFIERS — DEFAULT_TIMEOUT_MS, *_TIMEOUT_MS = 600_000, maxWriterIter*,
 //       maxRetriesPerTransient*, MAX_*_ATTEMPTS, maxRunHours, DEFAULT_TRIAL_TIMEOUT_MS, plus
 //       the BARE retry-cap family (MAX_ATTEMPTS, RETRY_LIMIT, ATTEMPT_LIMIT, MAX_TRIES,
-//       RETRY_CAP, ATTEMPT_CAP, RETRY_COUNT, MAX_RETRY_COUNT) — added task #41 / audit #672
+//       RETRY_CAP, ATTEMPT_CAP, RETRY_COUNT, MAX_RETRY_COUNT), and the retired native
+//       merge-claim TTL (MERGE_CLAIM_LEASE_MS) — added task #41 / audit #672 / #1023
 //       because the prior suffix-only patterns required a leading qualifier.
 //   (f) ssh2 connect-config `timeout:` (the apex v44 socket-LIFETIME idle bound).
 //   (g) `AbortSignal.timeout(N)` — the standard-library wall-clock-kill primitive feeding
@@ -213,6 +214,10 @@ const bannedIdentifierPatterns = [
   // `MAX_TRIES` / `ATTEMPT_LIMIT` / `RETRY_CAP` / `ATTEMPT_CAP` / `RETRY_COUNT` scanned past
   // the gate. Enumerated to keep the surface explicit + reviewable (additions are loud).
   /\b(MAX_ATTEMPTS|RETRY_LIMIT|ATTEMPT_LIMIT|MAX_TRIES|RETRY_CAP|ATTEMPT_CAP|RETRY_COUNT|MAX_RETRY_COUNT)\b/gu,
+  // Issue #1023: the native queue previously disguised a total-duration limit as a
+  // renewable 15-minute `MERGE_CLAIM_LEASE_MS`. Its advisory liveness fence plus
+  // progress heartbeat must never regress to a clock-based claim expiry.
+  /\b(MERGE_CLAIM_LEASE_MS)\b/gu,
 ];
 
 function isProductionSource(file) {

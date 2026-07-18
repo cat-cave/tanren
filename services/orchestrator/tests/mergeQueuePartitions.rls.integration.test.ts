@@ -71,12 +71,13 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
        VALUES ($1, 'mq-4', 'https://example.com/mq-4.git', $2)`,
       [PROJECT, ORG],
     );
-    for (const member of ["a", "b", "poison", "sibling"]) await seedMember(ownerPool, member);
+    for (const member of ["a", "b", "orphan", "poison", "sibling"]) await seedMember(ownerPool, member);
     const events = new PgMergeQueueEventEmitter(appPool, new DirectRunStateWriter(appPool));
     queue = new PgMergeQueueModel(appPool, events);
     for (const [member, scopeFingerprint] of [
       ["a", "scope-a"],
       ["b", "scope-b"],
+      ["orphan", "scope-orphan"],
       ["poison", "scope-shared"],
       ["sibling", "scope-shared"],
     ] as const) {
@@ -132,16 +133,32 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
     expect(unscoped.rows[0]?.count).toBe("0");
   });
 
-  it("reclaims only an expired holder and lets a new owner acquire it", async () => {
+  it("keeps a long-live holder despite an old heartbeat, then reclaims only a missing liveness fence", async () => {
+    // `lease_expires_at` is retained for migration-0054 compatibility but now
+    // records heartbeat evidence. A stale-looking timestamp cannot steal a live
+    // merge from its PostgreSQL advisory-lock holder.
     await runWithOrgScope(appPool, ORG, (client) =>
       client.query("UPDATE merge_queue SET lease_expires_at = now() - interval '1 millisecond' WHERE queue_id = $1", [
         queueIds.get("a"),
       ]),
     );
+    await expect(queue.recoverStaleClaims(PROJECT)).resolves.toBe(0);
+
+    // Model a coordinator that crashed after the durable claim write: there is
+    // no matching session fence, which is a real sign of death and is therefore
+    // safe to recover without waiting for any fixed TTL.
+    await runWithOrgScope(appPool, ORG, (client) =>
+      client.query(
+        `UPDATE merge_queue
+            SET status = 'merging', claimed_at = now(), lease_owner = 'lost-owner', lease_expires_at = now()
+          WHERE queue_id = $1`,
+        [queueIds.get("orphan")],
+      ),
+    );
     await expect(queue.recoverStaleClaims(PROJECT)).resolves.toBe(1);
-    await expect(queue.claim(queueIds.get("a")!)).resolves.toBe(true);
+    await expect(queue.claim(queueIds.get("orphan")!)).resolves.toBe(true);
     expect(queue.renewClaim).toBeDefined();
-    await expect(queue.renewClaim!(queueIds.get("a")!)).resolves.toBe(true);
+    await expect(queue.renewClaim!(queueIds.get("orphan")!)).resolves.toBe(true);
   });
 
   it("isolates a poison member, releases its shared scope, and appends the frozen event", async () => {
