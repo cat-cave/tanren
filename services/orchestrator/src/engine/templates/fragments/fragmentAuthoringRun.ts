@@ -48,6 +48,10 @@ export interface FragmentAuthoringInput {
   actor: ActorContext;
   missing: readonly FragmentSpec[];
   lifecycle: CaptureLifecycle;
+  /** The current unified library (bundled + prior org fragments). Freshly
+   * authored fragments merge into this library so retries and batch compose
+   * retain earlier org fragments. */
+  library?: FragmentLibrary;
   /** OPTIONAL semi-structured product context. Passed through to each per-fragment
    * writer prompt so the writer can make domain-informed defaults. */
   productContext?: ProductContext;
@@ -249,8 +253,10 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
       }
     }
 
-    // Assemble the augmented library: bundled core + freshly-authored fragments.
-    const library = loadFragmentLibrary();
+    // Assemble the augmented library: the caller's bundled + persisted-org
+    // library plus freshly-authored fragments. A new authored id wins over a
+    // stale same-id entry, matching the unified-loader shadowing precedence.
+    const library = input.library ?? loadFragmentLibrary();
     for (const item of authored) {
       const fragment = interpretOrgFragment(item.source);
       if (library.has(fragment.id)) {

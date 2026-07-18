@@ -20,8 +20,8 @@ import { loadFragmentLibrary as loadBundledLibrary } from "./library/index.js";
 import { FragmentContractSchema, type FragmentContractShape } from "../../repositories/fragments.js";
 import {
   assertOnlyVfsStatements,
+  collectVfsStatements,
   extractApplyBody,
-  findMatchingClose,
   FragmentBodyParseError,
 } from "./fragmentBodyWalker.js";
 import {
@@ -339,32 +339,16 @@ export function parseFragmentBody(bodyTs: string): FragmentOp[] {
   //    blank lines are allowed; anything else halts with a writer-facing
   //    rejection that names the offending prefix.
   assertOnlyVfsStatements(body);
-  // 3) Walk the body a second time, collecting each `vfs.<method>(…)` call.
-  //    `assertOnlyVfsStatements` has already proven every top-level unit is
-  //    either a comment, whitespace, or a vfs call — so this loop's only job
-  //    is to slice each call and hand it to `toOp`. Comment-stripping keeps
-  //    the CALL_PATTERN regex simple.
-  const stripped = body.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
-  const ops: FragmentOp[] = [];
-  let i = 0;
-  while (i < stripped.length) {
-    const next = stripped.indexOf("vfs.", i);
-    if (next === -1) break;
-    let end = next + 4;
-    while (end < stripped.length && stripped[end] !== "(") end += 1;
-    if (end >= stripped.length) break;
-    const openParen = end;
-    const closeParen = findMatchingClose(stripped, openParen, "apply() body has unbalanced parens in a vfs.* call");
-    const stmt = stripped.slice(next, closeParen + 1);
+  // 3) Collect each `vfs.<method>(…)` call with the same state-aware walker.
+  //    In particular, it never strips comment-looking text from string or
+  //    template-literal arguments before those arguments reach `toOp`.
+  return collectVfsStatements(body).map((stmt) => {
     const cm = CALL_PATTERN.exec(stmt);
-    if (cm !== null) {
-      const method = cm[1]!;
-      const args = splitArgs(cm[2]!);
-      ops.push(toOp(method, args));
+    if (cm === null) {
+      throw new FragmentBodyParseError(`could not parse vfs statement: ${truncateForError(stmt)}`);
     }
-    i = closeParen + 1;
-  }
-  return ops;
+    return toOp(cm[1]!, splitArgs(cm[2]!));
+  });
 }
 
 /** The allowed constrained-subset ops — surfaced in rejection messages so the

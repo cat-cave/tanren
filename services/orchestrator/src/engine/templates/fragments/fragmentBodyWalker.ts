@@ -240,6 +240,24 @@ export function extractApplyBody(bodyTs: string): string {
  * `previousAttempt.rejection`, so the writer sees the exact reason.
  */
 export function assertOnlyVfsStatements(body: string): void {
+  walkVfsStatements(body);
+}
+
+/** Collect every top-level `vfs.<method>(...)` statement from an apply body.
+ *
+ * This shares the exact string/template/comment-aware walk used by
+ * `assertOnlyVfsStatements`: comments are skipped only when they occur in code
+ * position, while comment-looking text inside an argument remains part of that
+ * argument's source slice. */
+export function collectVfsStatements(body: string): string[] {
+  const statements: string[] = [];
+  walkVfsStatements(body, (start, end) => {
+    statements.push(body.slice(start, end));
+  });
+  return statements;
+}
+
+function walkVfsStatements(body: string, onStatement?: (start: number, end: number) => void): void {
   let i = 0;
   // The loop shape here is a FIXED-LENGTH BODY WALK: `i` strictly advances by
   // at least one on every iteration (via one of the branches below), so the
@@ -278,7 +296,9 @@ export function assertOnlyVfsStatements(body: string): void {
       throw rejectNonVfs(body, i);
     }
     const closeParen = findMatchingClose(body, cursor, "apply() body has unbalanced parens in a vfs.* call");
-    i = closeParen + 1;
+    const statementEnd = closeParen + 1;
+    onStatement?.(i, statementEnd);
+    i = statementEnd;
   }
 }
 
