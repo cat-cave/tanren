@@ -22,14 +22,13 @@ import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerg
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
-import { buildNotificationDispatcher } from "../notifications/build.js";
-import { startNotificationSubscriber } from "../notifications/subscriber.js";
 import { startPausedRunResumeProber, type PausedRunResumeProber } from "../usage/pausedRunResumeProber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
-import type { NotificationSubscriber } from "../notifications/subscriber.js";
+import { buildSourceSyncWorker } from "./sourceSyncWorkerBuild.js";
+import { startWorkerNotifications } from "./notificationAutonomy.js";
 
 const log = createLogger("run-worker");
 
@@ -61,6 +60,8 @@ export interface AutonomyLoops {
   dagWalker: DagWalkerSubscriber;
   /** Durable self-healing stage dispatcher; periodic scan backs up notifications. */
   resolutionDagWalker: ReturnType<typeof buildResolutionDagWalker>;
+  /** Durable provider mutation + readback worker for ResolutionAuthority outbox rows. */
+  sourceSyncWorker: ReturnType<typeof buildSourceSyncWorker>;
   /** the native merge queue coordinator subscriber. */
   mergeCoordinator: MergeCoordinatorSubscriber;
   /** tempering.md dim A: the post-merge-failure → auto-issue watcher subscriber. */
@@ -71,7 +72,7 @@ export interface AutonomyLoops {
    * — the wiring that makes `dag.spec.needs_attention` (and every fail-severity
    * escalation) actually reach a human.
    */
-  notifications: NotificationSubscriber;
+  notifications: Awaited<ReturnType<typeof startWorkerNotifications>>["subscriber"];
   intake: BootedIntake;
   /**
    * CI-intelligence PR2: the flaky+duration detector ON A LOOP. It runs the
@@ -141,6 +142,14 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const resolutionDagWalker = buildResolutionDagWalker(deps.pool);
   resolutionDagWalker.start();
   log.info("ResolutionDagWalker started (durable self-healing stage dispatch)");
+  const sourceSyncWorker = buildSourceSyncWorker({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    githubHttp: deps.githubHttp,
+    ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+  });
+  sourceSyncWorker.start();
+  log.info("source-sync outbox worker started (provider mutation + readback reconciliation)");
   // the native intelligent merge queue. It reacts on the SAME run-activity bus
   // — a ready `native_queue` run entering the queue, and a merge completing — and
   // merges ONE entry at a time in DAG order (ancestor before dependent), driving the
@@ -218,16 +227,10 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // `dag.spec.needs_attention` (project-scoped, no run id ⇒ no `tanren_run` wake)
   // reaches a human only because notifications key off the every-event channel.
   // Its own LISTEN connection so it never contends with the other notify pumps.
-  const notificationNotifyListener = new PgNotifyListener(deps.pool);
-  const { dispatcher } = buildNotificationDispatcher({
+  const { listener: notificationNotifyListener, subscriber: notifications } = await startWorkerNotifications({
     pool: deps.pool,
     secrets: deps.secrets,
-    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-  });
-  const notifications = await startNotificationSubscriber({
-    pool: deps.pool,
-    notifyListener: notificationNotifyListener,
-    dispatcher,
+    ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
   });
   log.info("notification dispatcher subscriber started (events now reach humans)");
   const intake = startIntake({
@@ -279,6 +282,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // BEFORE the promise settles) — await them so a subsequent restart or
     // teardown never races a still-in-flight subscribe from the prior lifetime.
     resolutionDagWalker.stop();
+    sourceSyncWorker.stop();
     await Promise.all([dagWalker.stop(), mergeCoordinator.stop(), postMerge.stop(), notifications.stop()]);
     intake.stop();
     ciInsights.stop();
@@ -291,6 +295,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   return {
     dagWalker,
     resolutionDagWalker,
+    sourceSyncWorker,
     mergeCoordinator,
     postMerge,
     notifications,

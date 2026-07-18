@@ -4,23 +4,19 @@ import { Pool } from "pg";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { IssueLoopStore } from "../src/engine/repositories/issueLoops.js";
 import { SourceSyncOutboxStore } from "../src/engine/repositories/sourceSyncOutbox.js";
-import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import {
   GithubIssueSourceAdapter,
   ingestGithubWebhookObservation,
 } from "../src/engine/forge/githubIssueSourceAdapter.js";
-import {
-  ManualIssueSourceAdapter,
-  ResolutionAuthorityRequiredError,
-  enqueueResolutionSync,
-} from "../src/engine/forge/issueSourceAdapter.js";
+import { ManualIssueSourceAdapter } from "../src/engine/forge/issueSourceAdapter.js";
 import { WebhookEventStore } from "../src/engine/repositories/webhookEvents.js";
 import { intakeAutoRouteDeps, processWebhookEvent } from "../src/engine/forge/intake/index.js";
+import { createInternalSourceSyncRoutes } from "../src/routes/internal/sourceSync.js";
 import type { CandidateTriage, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
+import { authorizeSourceSync } from "./helpers/sourceSyncAuthority.js";
 
-const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
-const describeDb = enabled ? describe : describe.skip;
+const describeDb = process.env["TANREN_RLS_DB_TEST"] === "1" ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 const APP_ROLE = "tanren_app";
 const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
@@ -82,6 +78,10 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
   let appPool: Pool;
   let github: GithubIssueSourceAdapter;
   let manual: ManualIssueSourceAdapter;
+  let closeFails = false;
+  let closeMutations = 0;
+  let readbackState: "open" | "closed" | undefined;
+  let providerState: "open" | "closed" = "closed";
 
   beforeAll(async () => {
     const adminPool = new Pool({ connectionString: ADMIN_URL });
@@ -114,8 +114,22 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     await secrets.put({ ref: TOKEN_REF, value: "gh-test-token" });
     const githubHttp: GitHubHttpClient = {
       async request(input) {
-        if (input.method === "PATCH") return { status: 200, body: { state: "closed" } };
-        return { status: 200, body: { number: 41, state: "closed", updated_at: "2026-07-17T13:00:00Z" } };
+        if (input.method === "PATCH") {
+          closeMutations += 1;
+          if (closeFails) return { status: 503, body: { message: "provider unavailable" } };
+          providerState = (input.body as { state: "open" | "closed" }).state;
+          return {
+            status: 200,
+            body: {
+              number: 41,
+              state: providerState,
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: { number: 41, state: readbackState ?? providerState, updated_at: "2026-07-17T13:00:00Z" },
+        };
       },
     };
     github = new GithubIssueSourceAdapter({
@@ -167,53 +181,23 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     return { ...persisted, processed };
   }
 
-  async function recordAuthorizedDecision(issueLoopId: string): Promise<void> {
-    const contract = await new SymptomContractStore(appPool).create({
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      contract: {
-        version: 1,
-        issueLoopId,
-        target: { url: "https://source-sync.example/symptom" },
-        expectedFailingObservation: { status: 200, body: { status: "still_broken" } },
-        expectedCorrectedObservation: { status: 200, body: { status: "fixed" } },
-        proofPolicy: "active_causal",
-        sourceRevision: `source-sync-${issueLoopId}`,
-        baselineRequired: true,
-      },
-    });
-    const jobId = `rjob_source_sync_${issueLoopId}`;
-    await runWithOrgScope(appPool, ORG_A, async (client) => {
-      await client.query(
-        `INSERT INTO resolution_jobs
-           (org_id, project_id, id, issue_loop_id, contract_id, stage, state, idempotency_key, attempt)
-         VALUES ($1, $2, $3, $4, $5, 'production', 'completed', $3, 1)`,
-        [ORG_A, PROJECT_A, jobId, issueLoopId, contract.id],
-      );
-      await client.query(
-        `INSERT INTO resolution_decisions
-           (org_id, project_id, id, resolution_job_id, issue_loop_id, decision, decision_reasons,
-            authority_version, contract_id, release_instance_id, verification_run_id, input_snapshot_hash)
-         VALUES ($1, $2, $3, $4, $5, 'authorized', '[]'::jsonb, $6, $7, NULL, NULL, $8)`,
-        [
-          ORG_A,
-          PROJECT_A,
-          `rdec_source_sync_${issueLoopId}`,
-          jobId,
-          issueLoopId,
-          "tanren-resolution-authority.v1",
-          contract.id,
-          `sha256:${"a".repeat(64)}`,
-        ],
-      );
-      await client.query(
-        `UPDATE issue_loops
-            SET state = 'verified_source_sync_pending', row_version = row_version + 1, updated_at = now()
-          WHERE org_id = $1 AND project_id = $2 AND id = $3`,
-        [ORG_A, PROJECT_A, issueLoopId],
-      );
+  async function recordAuthorizedDecision(issueLoopId: string): Promise<{ id: string }> {
+    return authorizeSourceSync(appPool, { orgId: ORG_A, projectId: PROJECT_A, issueLoopId });
+  }
+
+  async function closeOutbox(loopId: string) {
+    return runWithOrgScope(appPool, ORG_A, async (client) => {
+      const rows = await SourceSyncOutboxStore.listRunnable(client, 20);
+      return rows.find((row) => row.issueLoopId === loopId && row.operation === "close");
     });
   }
+
+  it("uses tanren_app without superuser or RLS-bypass privileges", async () => {
+    const identity = await appPool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      "SELECT current_user, r.rolsuper, r.rolbypassrls FROM pg_roles AS r WHERE r.rolname = current_user",
+    );
+    expect(identity.rows[0]).toEqual({ current_user: "tanren_app", rolsuper: false, rolbypassrls: false });
+  });
 
   it("records GitHub webhook findings through the bh-3 processor and emits frozen loop events", async () => {
     const received = await receiveGithubWebhook(issue(41, "opened", "2026-07-17T12:00:00Z"), "delivery-41");
@@ -263,34 +247,27 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
     expect(manualResult.loop.projectId).toBe(PROJECT_A);
   });
 
-  it("enqueues a resolution, claims/syncs/verifies it, and warns on an external close", async () => {
+  it("enqueues only through the authority, reads back before verified closure, and reconciles external drift", async () => {
     const open = await receiveGithubWebhook(issue(42, "opened", "2026-07-17T14:00:00Z"), "delivery-42-open");
     const loopId = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#42")!.id;
-    await expect(
-      enqueueResolutionSync(appPool, {
-        orgId: ORG_A,
-        projectId: PROJECT_A,
-        issueLoopId: loopId,
-        sourceId: SOURCE_A,
-        externalKey: "gh-cat-cave/fixture#42",
-      }),
-    ).rejects.toBeInstanceOf(ResolutionAuthorityRequiredError);
-    await recordAuthorizedDecision(loopId);
-    const pending = await enqueueResolutionSync(appPool, {
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      issueLoopId: loopId,
-      sourceId: SOURCE_A,
-      externalKey: "gh-cat-cave/fixture#42",
-    });
-    expect(pending.loop.state).toBe("verified_source_sync_pending");
-    expect(pending.outbox.state).toBe("pending");
+    const decision = await recordAuthorizedDecision(loopId);
+    const pending = await closeOutbox(loopId);
+    expect(pending).toMatchObject({ state: "pending", resolutionDecisionId: decision.id });
+    const outboxCount = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM source_sync_outbox WHERE org_id = $1 AND issue_loop_id = $2 AND operation = 'close'",
+        [ORG_A, loopId],
+      ),
+    );
+    expect(outboxCount.rows).toEqual([{ count: "1" }]);
+    closeMutations = 0;
     const processed = await (
       await import("../src/engine/forge/sourceSyncWorker.js")
-    ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-a" }, pending.outbox);
+    ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-a" }, pending!);
     expect(processed?.verified).toBe(true);
+    expect(closeMutations).toBe(1);
     const verified = await runWithOrgScope(appPool, ORG_A, (client) =>
       IssueLoopStore.get(client, ORG_A, PROJECT_A, loopId),
     );
@@ -301,33 +278,27 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#43")!;
     await recordAuthorizedDecision(siblingLoop.id);
-    const siblingPending = await enqueueResolutionSync(appPool, {
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      issueLoopId: siblingLoop.id,
-      sourceId: SOURCE_A,
-      externalKey: siblingLoop.externalKey,
-    });
-    expect(siblingPending.outbox.state).toBe("pending");
+    const siblingPending = await closeOutbox(siblingLoop.id);
+    expect(siblingPending?.state).toBe("pending");
     const external = await receiveGithubWebhook(issue(43, "closed", "2026-07-17T15:00:00Z"), "delivery-closed-43");
     expect(external.processed).toBe(true);
     const externalLoop = (
       await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
     ).find((loop) => loop.externalKey === "gh-cat-cave/fixture#43");
-    expect(externalLoop?.state).toBe("externally_closed_unverified");
+    expect(externalLoop?.state).toBe("open");
     const externalOutbox = await runWithOrgScope(appPool, ORG_A, (client) =>
       client.query<{ id: string; state: string }>(
         "SELECT id, state FROM source_sync_outbox WHERE org_id = $1 AND issue_loop_id = $2",
         [ORG_A, externalLoop!.id],
       ),
     );
-    expect(externalOutbox.rows).toContainEqual({ id: siblingPending.outbox.id, state: "externally_closed_unverified" });
+    expect(externalOutbox.rows).toContainEqual({ id: siblingPending!.id, state: "externally_closed_unverified" });
     expect(
       await (
         await import("../src/engine/forge/sourceSyncWorker.js")
       ).processSourceSync(
         { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-sibling" },
-        siblingPending.outbox,
+        siblingPending!,
       ),
     ).toBeUndefined();
     const eventTypes = await runWithOrgScope(appPool, ORG_A, async (client) => {
@@ -337,10 +308,142 @@ describeDb("IssueSourceAdapter + source-sync outbox — RLS integration", () => 
       );
       return result.rows.map((row) => row.event_type);
     });
-    expect(eventTypes).toContain("source.sync.pending");
-    expect(eventTypes).toContain("source.sync.verified");
+    expect(eventTypes).toContain("source_issue.sync.enqueued");
+    expect(eventTypes).toContain("source_issue.sync.succeeded");
+    expect(eventTypes).toContain("issue_loop.verified");
+    expect(eventTypes).toContain("source_issue.sync.drifted");
     expect(eventTypes).toContain("source.sync.externally_closed_unverified");
+    expect(eventTypes).toContain("issue_loop.reopened");
     expect(open.processed).toBe(true);
+  });
+
+  it("keeps an authority-authorized loop pending when the provider mutation fails", async () => {
+    await receiveGithubWebhook(issue(44, "opened", "2026-07-17T15:30:00Z"), "delivery-44-open");
+    const loop = (
+      await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
+    ).find((candidate) => candidate.externalKey === "gh-cat-cave/fixture#44")!;
+    await recordAuthorizedDecision(loop.id);
+    const pending = await closeOutbox(loop.id);
+    closeMutations = 0;
+    readbackState = "closed";
+    closeFails = true;
+    const failed = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-failure" }, pending!);
+    expect(failed?.verified).toBe(false);
+    const state = await runWithOrgScope(appPool, ORG_A, (client) =>
+      IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id),
+    );
+    expect(state?.state).toBe("verified_source_sync_pending");
+    const redriven = await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.redrive(client, ORG_A, pending!.id),
+    );
+    expect(redriven).toMatchObject({ state: "sent", providerReceipt: null });
+    const recovered = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync(
+      { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-recovery" },
+      redriven!,
+    );
+    expect(recovered?.verified).toBe(false);
+    expect(closeMutations).toBe(2);
+    const stillPending = await runWithOrgScope(appPool, ORG_A, (client) =>
+      IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id),
+    );
+    expect(stillPending?.state).toBe("verified_source_sync_pending");
+    closeFails = false;
+    const retried = await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.redrive(client, ORG_A, pending!.id),
+    );
+    const completed = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync({ pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-redrive" }, retried!);
+    expect(completed?.verified).toBe(true);
+    expect(closeMutations).toBe(3);
+    await expect(
+      runWithOrgScope(appPool, ORG_A, (client) =>
+        client.query<{ state: string; provider_receipt: unknown }>(
+          "SELECT state, provider_receipt FROM source_sync_outbox WHERE org_id = $1 AND id = $2",
+          [ORG_A, pending!.id],
+        ),
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ state: "verified", provider_receipt: { providerRevision: expect.any(String) } }],
+    });
+    const successCount = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM events WHERE org_id = $1 AND event_type = 'source_issue.sync.succeeded' AND payload->>'issueLoopId' = $2",
+        [ORG_A, loop.id],
+      ),
+    );
+    expect(successCount.rows).toEqual([{ count: "1" }]);
+    readbackState = undefined;
+    const events = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ event_type: string }>("SELECT event_type FROM events WHERE org_id = $1", [ORG_A]),
+    );
+    expect(events.rows.map((event) => event.event_type)).toContain("source_issue.sync.failed");
+  });
+
+  it("rejects an open GitHub readback after a successful close mutation", async () => {
+    await receiveGithubWebhook(issue(46, "opened", "2026-07-17T16:30:00Z"), "delivery-46-open");
+    const loop = (
+      await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
+    ).find((candidate) => candidate.externalKey === "gh-cat-cave/fixture#46")!;
+    await recordAuthorizedDecision(loop.id);
+    readbackState = "open";
+    const rejected = await (
+      await import("../src/engine/forge/sourceSyncWorker.js")
+    ).processSourceSync(
+      { pool: appPool, adapters: new Map([["issues", github]]), workerId: "sync-open-readback" },
+      (await closeOutbox(loop.id))!,
+    );
+    expect(rejected?.verified).toBe(false);
+    await expect(
+      runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.get(client, ORG_A, PROJECT_A, loop.id)),
+    ).resolves.toMatchObject({
+      state: "verified_source_sync_pending",
+    });
+    readbackState = undefined;
+  });
+
+  it("claims and redrives an authority-created outbox row through the internal mTLS surface", async () => {
+    await receiveGithubWebhook(issue(45, "opened", "2026-07-17T16:00:00Z"), "delivery-45-open");
+    const loop = (
+      await runWithOrgScope(appPool, ORG_A, (client) => IssueLoopStore.listForProject(client, ORG_A, PROJECT_A))
+    ).find((candidate) => candidate.externalKey === "gh-cat-cave/fixture#45")!;
+    await recordAuthorizedDecision(loop.id);
+    const pending = await closeOutbox(loop.id);
+    const routes = createInternalSourceSyncRoutes({
+      pool: appPool,
+      verifier: { verify: () => ({ commonName: "source-sync-test" }) },
+    });
+    const claim = await routes.request(
+      "/internal/source-sync/claim",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ orgId: ORG_A, workerId: "internal-source-sync", sourceSyncOutboxId: pending!.id }),
+      },
+      { incoming: { socket: {} } },
+    );
+    expect(claim.status).toBe(200);
+    await expect(claim.json()).resolves.toMatchObject({
+      outbox: { id: pending!.id, claimOwner: "internal-source-sync" },
+    });
+    await runWithOrgScope(appPool, ORG_A, (client) =>
+      SourceSyncOutboxStore.release(client, { orgId: ORG_A, id: pending!.id, workerId: "internal-source-sync" }),
+    );
+    const redrive = await routes.request(
+      `/internal/source-sync/${pending!.id}/redrive`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ orgId: ORG_A }),
+      },
+      { incoming: { socket: {} } },
+    );
+    expect(redrive.status).toBe(200);
+    await expect(redrive.json()).resolves.toMatchObject({ outbox: { id: pending!.id, claimOwner: null } });
   });
 
   it("keeps issue loops, findings, outbox rows, and events isolated by org", async () => {

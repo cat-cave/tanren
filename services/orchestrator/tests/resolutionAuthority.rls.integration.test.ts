@@ -350,7 +350,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     await walk("rjob_authority_real_fix");
 
     const rows = await runWithOrgScope(app, ORG_ID, async (client) => {
-      const [decisions, events, loop] = await Promise.all([
+      const [decisions, events, loop, outbox] = await Promise.all([
         client.query(
           `SELECT resolution_job_id, decision, decision_reasons, authority_version, contract_id,
                   release_instance_id, verification_run_id, input_snapshot_hash
@@ -363,8 +363,14 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
           ORG_ID,
         ]),
         client.query("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]),
+        client.query(
+          `SELECT operation, state, resolution_decision_id
+             FROM source_sync_outbox
+            WHERE org_id = $1 AND issue_loop_id = $2`,
+          [ORG_ID, LOOP_ID],
+        ),
       ]);
-      return { decisions: decisions.rows, events: events.rows, loop: loop.rows[0] };
+      return { decisions: decisions.rows, events: events.rows, loop: loop.rows[0], outbox: outbox.rows };
     });
     expect(rows.decisions).toEqual([
       {
@@ -397,6 +403,9 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       ]),
     );
     expect(repairs.rows).toEqual([{ spec_id: expect.stringMatching(/^spec_/u) }]);
+    expect(rows.outbox).toEqual([
+      { operation: "close", state: "pending", resolution_decision_id: expect.stringMatching(/^rdec_/u) },
+    ]);
     expect(artifactDigest).toMatch(/^sha256:/u);
   });
 

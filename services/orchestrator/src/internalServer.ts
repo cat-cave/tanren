@@ -16,19 +16,14 @@
 
 import { createServer } from "node:https";
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
 import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
 import type { MtlsPeerVerifier } from "./engine/contracts/mtlsChannel.js";
-import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
-import { createInternalFixtureLeaseRoutes } from "./routes/internal/fixtureLeases.js";
-import { createInternalResolutionJobRoutes } from "./routes/internal/resolutionJobs.js";
-import { createInternalResolutionAuthorityRoutes } from "./routes/internal/resolutionAuthority.js";
-import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
-import { BaselineReproductionStage, type BaselineProbe } from "./engine/verification/resolutionStages/index.js";
+import type { BaselineProbe } from "./engine/verification/resolutionStages/index.js";
 import type { ResolutionJobStore } from "./engine/repositories/resolutionJobs.js";
 import { parsedEnv } from "./envSchema.js";
 import { createLogger } from "./engine/observability/logger.js";
+import { buildInternalControlApp } from "./routes/internal/controlApp.js";
 
 const log = createLogger("internal-mtls");
 
@@ -57,31 +52,17 @@ export interface InternalAppDependencies {
 }
 
 /** Build the internal control-plane Hono app (the `/internal/*` surface). */
-export function buildInternalApp(deps: InternalAppDependencies): Hono {
-  const app = new Hono();
+export function buildInternalApp(deps: InternalAppDependencies): ReturnType<typeof buildInternalControlApp> {
   // The Node verifier reads the TLS-validated client cert off the inbound
   // socket; the mTLS server below already rejected an untrusted cert at the
   // handshake, so this is defense-in-depth + the peer-identity surface.
   const verifier = deps.verifier ?? new NodeMtlsPeerVerifier();
-  app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier }));
-  app.route("/", createInternalFixtureLeaseRoutes({ pool: deps.pool, verifier }));
-  app.route(
-    "/",
-    createInternalResolutionJobRoutes({
-      pool: deps.pool,
-      verifier,
-      ...(deps.resolutionJobStore === undefined ? {} : { store: deps.resolutionJobStore }),
-      baselineStage: new BaselineReproductionStage({
-        pool: deps.pool,
-        ...(deps.baselineProbe === undefined ? {} : { probe: deps.baselineProbe }),
-      }),
-    }),
-  );
-  app.route("/", createInternalResolutionAuthorityRoutes({ pool: deps.pool, verifier }));
-  // The run-state WRITE endpoints (append-event / record-cost /
-  // finalize-run) the remote-writes worker posts its tenant writes to.
-  app.route("/", createInternalRunStateWriteRoutes({ pool: deps.pool, verifier }));
-  return app;
+  return buildInternalControlApp({
+    pool: deps.pool,
+    verifier,
+    ...(deps.baselineProbe === undefined ? {} : { baselineProbe: deps.baselineProbe }),
+    ...(deps.resolutionJobStore === undefined ? {} : { resolutionJobStore: deps.resolutionJobStore }),
+  });
 }
 
 /**

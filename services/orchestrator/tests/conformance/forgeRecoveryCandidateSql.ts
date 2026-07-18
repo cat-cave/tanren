@@ -295,14 +295,22 @@ export function sourceSyncOutboxSql(
   params: readonly unknown[],
 ): QueryResult | undefined {
   const visible = (): SourceSyncOutboxRec[] => db.sourceSyncOutbox.filter((row) => row.org_id === orgId);
+  if (sql.startsWith("SELECT 1 FROM resolution_decisions AS decision")) {
+    const [decisionOrgId, decisionId, issueLoopId, sourceId] = params as [string, string, string, string];
+    const authorized =
+      decisionOrgId === orgId && decisionId === "rdec_authorized" && issueLoopId === "loop_a" && sourceId === "src_a";
+    return authorized ? { rows: [{ "?column?": 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+  }
   if (sql.startsWith("INSERT INTO source_sync_outbox")) {
-    const [ownOrgId, id, issueLoopId, sourceId, operation, payloadHash] = params as [
+    const [ownOrgId, id, issueLoopId, sourceId, operation, payload, payloadHash, resolutionDecisionId] = params as [
       string,
       string,
       string,
       string,
       string,
       string,
+      string,
+      string | null,
     ];
     if (db.sourceSyncOutbox.some((row) => row.org_id === ownOrgId && row.id === id)) {
       return { rows: [], rowCount: 0 };
@@ -314,17 +322,25 @@ export function sourceSyncOutboxSql(
       source_id: sourceId,
       operation,
       state: "pending",
+      payload: JSON.parse(payload),
       payload_hash: payloadHash,
+      resolution_decision_id: resolutionDecisionId,
+      attempt: 0,
+      next_attempt_at: new Date("2026-03-01T00:00:00.000Z"),
+      provider_receipt: null,
+      readback: null,
+      last_error: null,
       claim_owner: null,
       claim_expires_at: null,
       created_at: new Date("2026-03-01T00:00:00.000Z"),
+      updated_at: new Date("2026-03-01T00:00:00.000Z"),
       seq: ++db.seq,
     };
     db.sourceSyncOutbox.push(rec);
     return { rows: [sourceSyncOutboxCols(rec)], rowCount: 1 };
   }
-  if (sql.startsWith("SELECT org_id, id, issue_loop_id, source_id, operation, state, payload_hash")) {
-    const row = visible().find((candidate) => candidate.id === params[0]);
+  if (sql.startsWith("SELECT org_id, id, issue_loop_id, source_id, operation, state, payload, payload_hash")) {
+    const row = visible().find((candidate) => candidate.id === params[1]);
     return row === undefined ? { rows: [], rowCount: 0 } : { rows: [sourceSyncOutboxCols(row)], rowCount: 1 };
   }
   if (/^SELECT .* FROM source_sync_outbox WHERE state IN \('pending','sent'\)/u.test(sql)) {
@@ -333,6 +349,7 @@ export function sourceSyncOutboxSql(
       .filter(
         (row) =>
           ["pending", "sent"].includes(row.state) &&
+          new Date(row.next_attempt_at).getTime() <= Date.now() &&
           (row.claim_owner === null ||
             (row.claim_expires_at !== null && new Date(row.claim_expires_at).getTime() <= Date.now())),
       )
@@ -341,51 +358,90 @@ export function sourceSyncOutboxSql(
       .map((row) => sourceSyncOutboxCols(row));
     return { rows, rowCount: rows.length };
   }
-  if (sql === "SELECT DISTINCT org_id FROM source_sync_outbox WHERE state IN ('pending','sent')") {
-    const rows = [...new Set(visible().map((row) => row.org_id))].map((id) => ({ org_id: id }));
+  if (
+    sql ===
+    "SELECT DISTINCT org_id FROM source_sync_outbox WHERE state IN ('pending','sent') AND next_attempt_at <= now()"
+  ) {
+    const rows = [
+      ...new Set(
+        visible()
+          .filter((row) => new Date(row.next_attempt_at).getTime() <= Date.now())
+          .map((row) => row.org_id),
+      ),
+    ].map((id) => ({ org_id: id }));
     return { rows, rowCount: rows.length };
   }
-  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET claim_owner = $2")) {
-    const row = visible().find((candidate) => candidate.id === params[0]);
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET claim_owner = $3")) {
+    const row = visible().find((candidate) => candidate.id === params[1]);
     const claimable =
       row !== undefined &&
       ["pending", "sent"].includes(row.state) &&
+      new Date(row.next_attempt_at).getTime() <= Date.now() &&
       (row.claim_owner === null ||
         (row.claim_expires_at !== null && new Date(row.claim_expires_at).getTime() <= Date.now()));
     if (!claimable || row === undefined) return { rows: [], rowCount: 0 };
-    row.claim_owner = params[1] as string;
-    row.claim_expires_at = new Date(Date.now() + Number(params[2])).toISOString();
+    row.claim_owner = params[2] as string;
+    row.claim_expires_at = new Date(Date.now() + Number(params[3])).toISOString();
     // This is the real store's RETURNING projection. Returning no row while
     // rowCount=1 makes `SourceSyncOutboxStore.claim()` report undefined.
     return { rows: [sourceSyncOutboxCols(row)], rowCount: 1 };
   }
-  if (sql.startsWith("UPDATE source_sync_outbox SET state = 'sent'")) {
+  if (sql.startsWith("WITH candidate AS") && sql.includes("UPDATE source_sync_outbox AS outbox")) {
     const row = visible().find(
-      (candidate) => candidate.id === params[0] && candidate.state === "pending" && candidate.claim_owner === params[1],
+      (candidate) =>
+        ["pending", "sent"].includes(candidate.state) &&
+        new Date(candidate.next_attempt_at).getTime() <= Date.now() &&
+        (candidate.claim_owner === null ||
+          (candidate.claim_expires_at !== null && new Date(candidate.claim_expires_at).getTime() <= Date.now())),
     );
-    if (row !== undefined) row.state = "sent";
+    if (row === undefined) return { rows: [], rowCount: 0 };
+    row.claim_owner = params[1] as string;
+    row.claim_expires_at = new Date(Date.now() + Number(params[2])).toISOString();
+    return { rows: [sourceSyncOutboxCols(row)], rowCount: 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET state = 'sent', attempt = attempt + 1")) {
+    const row = visible().find(
+      (candidate) =>
+        candidate.id === params[1] &&
+        ["pending", "sent"].includes(candidate.state) &&
+        candidate.claim_owner === params[2],
+    );
+    if (row !== undefined) {
+      row.state = "sent";
+      row.attempt += 1;
+      row.last_error = null;
+    }
+    return { rows: row === undefined ? [] : [sourceSyncOutboxCols(row)], rowCount: row === undefined ? 0 : 1 };
+  }
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET provider_receipt = $4::jsonb")) {
+    const row = visible().find(
+      (candidate) => candidate.id === params[1] && candidate.state === "sent" && candidate.claim_owner === params[2],
+    );
+    if (row !== undefined) row.provider_receipt = JSON.parse(params[3] as string);
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
   if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("state = 'verified'")) {
     const row = visible().find(
       (candidate) =>
-        candidate.id === params[0] &&
-        ["pending", "sent"].includes(candidate.state) &&
-        candidate.claim_owner === params[1],
+        candidate.id === params[1] &&
+        candidate.state === "sent" &&
+        candidate.claim_owner === params[2] &&
+        candidate.provider_receipt !== null,
     );
     if (row !== undefined) {
       row.state = "verified";
+      row.readback = JSON.parse(params[3] as string);
       row.claim_owner = null;
       row.claim_expires_at = null;
     }
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
-  if (sql.startsWith("UPDATE source_sync_outbox SET claim_owner = NULL")) {
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("SET claim_owner = NULL")) {
     const row = visible().find(
       (candidate) =>
-        candidate.id === params[0] &&
+        candidate.id === params[1] &&
         ["pending", "sent"].includes(candidate.state) &&
-        candidate.claim_owner === params[1],
+        candidate.claim_owner === params[2],
     );
     if (row !== undefined) {
       row.claim_owner = null;
@@ -393,10 +449,10 @@ export function sourceSyncOutboxSql(
     }
     return { rows: [], rowCount: row === undefined ? 0 : 1 };
   }
-  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("WHERE issue_loop_id = $1")) {
+  if (sql.startsWith("UPDATE source_sync_outbox") && sql.includes("WHERE org_id = $1 AND issue_loop_id = $2")) {
     const rows = visible().filter(
       (candidate) =>
-        candidate.issue_loop_id === params[0] &&
+        candidate.issue_loop_id === params[1] &&
         candidate.operation === "close" &&
         ["pending", "sent"].includes(candidate.state),
     );

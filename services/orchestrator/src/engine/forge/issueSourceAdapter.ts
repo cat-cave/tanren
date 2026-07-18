@@ -9,11 +9,7 @@ import {
   type IssueLoopSeverity,
   type SourceFindingRow,
 } from "../repositories/issueLoops.js";
-import {
-  SourceSyncOutboxStore,
-  sourceSyncPayloadHash,
-  type SourceSyncOutboxRow,
-} from "../repositories/sourceSyncOutbox.js";
+import { SourceSyncOutboxStore, type SourceSyncOutboxRow } from "../repositories/sourceSyncOutbox.js";
 
 export type IssueObservationStatus = "open" | "closed" | "reopened" | "edited" | "deleted" | "unknown";
 export type IssueObservationSeverity = "info" | "warn" | "fail";
@@ -51,24 +47,27 @@ export interface SourceSyncReceipt {
   providerRevision: string;
 }
 
+export interface SourceSyncReadback {
+  providerRevision: string;
+  desiredState: "open" | "closed" | "comment_recorded";
+}
+
+/** An independently recorded operator confirmation for a manual source operation. */
+export interface ManualSourceSyncConfirmation {
+  lookup(input: SourceSyncRequest): Promise<{ receipt: SourceSyncReceipt; readback: SourceSyncReadback } | null>;
+}
+
+const noManualSourceSyncConfirmation: ManualSourceSyncConfirmation = {
+  async lookup() {
+    return null;
+  },
+};
+
 export interface IssueSourceAdapter {
   readonly provider: string;
   ingest(pool: pg.Pool, observation: IssueObservation): Promise<IssueSourceIngestResult>;
   sync(input: SourceSyncRequest): Promise<SourceSyncReceipt>;
-}
-
-export interface ResolutionTransitionInput {
-  orgId: string;
-  projectId: string;
-  issueLoopId: string;
-  sourceId: string;
-  externalKey: string;
-}
-
-export interface ResolutionTransitionResult {
-  loop: IssueLoopRow;
-  outbox: SourceSyncOutboxRow;
-  changed: boolean;
+  readback(input: SourceSyncRequest): Promise<SourceSyncReadback>;
 }
 
 export class IssueSourceProjectRequiredError extends Error {
@@ -85,14 +84,6 @@ export class IssueSourceLineageError extends Error {
   }
 }
 
-/** Source closure is downstream of the immutable ResolutionAuthority ledger. */
-export class ResolutionAuthorityRequiredError extends Error {
-  constructor(issueLoopId: string) {
-    super(`issue loop ${issueLoopId} has no authorized resolution decision`);
-    this.name = "ResolutionAuthorityRequiredError";
-  }
-}
-
 function loopSeverity(severity: IssueObservationSeverity): IssueLoopSeverity {
   if (severity === "fail") return "high";
   if (severity === "warn") return "medium";
@@ -106,10 +97,6 @@ function fingerprint(input: IssueObservation): string {
 
 function sourceRevisionHash(providerRevision: string): string {
   return `sha256:${createHash("sha256").update(providerRevision, "utf8").digest("hex")}`;
-}
-
-function syncPayload(input: ResolutionTransitionInput): Record<string, string> {
-  return { externalKey: input.externalKey, desiredState: "closed" };
 }
 
 async function sourceFor(client: pg.PoolClient, input: IssueObservation): Promise<InboxSource> {
@@ -188,33 +175,63 @@ async function recordObservation(client: pg.PoolClient, source: InboxSource, inp
   let externalClose: SourceSyncOutboxRow | null = null;
   let observedLoop = loop;
   if (input.status === "closed" && append.inserted && loop.state !== "verified_closed") {
-    const payload = { externalKey: input.externalKey, observedRevision: input.providerRevision };
-    const queued = await SourceSyncOutboxStore.enqueueWithOutcome(client, {
+    const superseded = await SourceSyncOutboxStore.supersedeCloseSyncsForExternalClose(client, input.orgId, loop.id);
+    const reopenedSync = await SourceSyncOutboxStore.enqueueWithOutcome(client, {
       orgId: input.orgId,
       issueLoopId: loop.id,
       sourceId: source.id,
-      operation: "close",
-      payload,
+      operation: "reopen",
+      payload: { desiredState: "open", observedRevision: input.providerRevision },
     });
-    // A provider-side close is authoritative enough to stop EVERY live close
-    // request for this loop. In particular, an already-sent sibling must not be
-    // able to acquire/retain a lease and later transition the loop to verified.
-    // This stays in the observation transaction with the loop transition.
-    await SourceSyncOutboxStore.supersedeCloseSyncsForExternalClose(client, loop.id);
     const external = await IssueLoopStore.markExternallyClosedUnverified(client, input.orgId, projectId, loop.id);
-    observedLoop = external?.loop ?? loop;
-    externalClose = { ...queued.row, state: "externally_closed_unverified" };
-    if (external?.changed && queued.row.state !== "externally_closed_unverified") {
+    const reopened = await IssueLoopStore.transition(client, {
+      orgId: input.orgId,
+      projectId,
+      issueLoopId: loop.id,
+      toState: "open",
+      fromStates: ["externally_closed_unverified", "verified_source_sync_pending"],
+    });
+    observedLoop = reopened?.loop ?? external?.loop ?? loop;
+    externalClose = reopenedSync.row;
+    if (external?.changed) {
+      const sourceSyncOutboxId = superseded[0]?.id ?? reopenedSync.row.id;
       await events.append({
         orgId: input.orgId,
         projectId,
         eventType: "source.sync.externally_closed_unverified",
         payload: {
           issueLoopId: loop.id,
-          outboxId: queued.row.id,
+          outboxId: sourceSyncOutboxId,
           sourceId: source.id,
           observedRevision: input.providerRevision,
         },
+      });
+      await events.append({
+        orgId: input.orgId,
+        projectId,
+        eventType: "source_issue.sync.drifted",
+        payload: {
+          projectId,
+          issueLoopId: loop.id,
+          sourceSyncOutboxId,
+          observedRevisionHash: sourceRevisionHash(input.providerRevision),
+        },
+      });
+    }
+    if (reopenedSync.inserted) {
+      await events.append({
+        orgId: input.orgId,
+        projectId,
+        eventType: "source_issue.sync.enqueued",
+        payload: { projectId, issueLoopId: loop.id, sourceSyncOutboxId: reopenedSync.row.id, attempt: 0 },
+      });
+    }
+    if (reopened?.changed) {
+      await events.append({
+        orgId: input.orgId,
+        projectId,
+        eventType: "issue_loop.reopened",
+        payload: { projectId, issueLoopId: loop.id, sourceFindingId: append.finding.id },
       });
     }
   }
@@ -228,76 +245,24 @@ export async function ingestIssueObservation(pool: pg.Pool, input: IssueObservat
   });
 }
 
-export async function enqueueResolutionSync(
-  pool: pg.Pool,
-  input: ResolutionTransitionInput,
-): Promise<ResolutionTransitionResult> {
-  return runWithOrgScope(pool, input.orgId, async (client) => {
-    // bh-12 consumes this receipt. Do not let a source-sync caller recreate the
-    // authority transition: only ResolutionAuthority can authorize (or record
-    // an operator waiver for) source closure.
-    const authorization = await client.query(
-      `SELECT 1
-         FROM resolution_decisions AS decision
-         JOIN issue_loops AS loop
-           ON loop.org_id = decision.org_id AND loop.id = decision.issue_loop_id
-        WHERE decision.org_id = $1
-          AND decision.project_id = $2
-          AND decision.issue_loop_id = $3
-          AND decision.decision IN ('authorized', 'waived')
-          AND loop.state = 'verified_source_sync_pending'
-        LIMIT 1`,
-      [input.orgId, input.projectId, input.issueLoopId],
-    );
-    if (authorization.rowCount !== 1) throw new ResolutionAuthorityRequiredError(input.issueLoopId);
-    const transitioned = await IssueLoopStore.transition(client, {
-      orgId: input.orgId,
-      projectId: input.projectId,
-      issueLoopId: input.issueLoopId,
-      toState: "verified_source_sync_pending",
-    });
-    if (transitioned === undefined) throw new IssueSourceLineageError();
-    const payload = syncPayload(input);
-    const queued = await SourceSyncOutboxStore.enqueueWithOutcome(client, {
-      orgId: input.orgId,
-      issueLoopId: input.issueLoopId,
-      sourceId: input.sourceId,
-      operation: "close",
-      payload,
-    });
-    if (queued.inserted) {
-      await new PgEventStore(client).append({
-        orgId: input.orgId,
-        eventType: "source.sync.pending",
-        payload: {
-          issueLoopId: input.issueLoopId,
-          outboxId: queued.row.id,
-          sourceId: input.sourceId,
-          operation: "close",
-          payloadHash: sourceSyncPayloadHash({
-            orgId: input.orgId,
-            issueLoopId: input.issueLoopId,
-            sourceId: input.sourceId,
-            operation: "close",
-            payload,
-          }),
-        },
-      });
-    }
-    return { loop: transitioned.loop, outbox: queued.row, changed: transitioned.changed };
-  });
-}
-
 export class ManualIssueSourceAdapter implements IssueSourceAdapter {
   readonly provider = "manual";
+
+  constructor(private readonly confirmations: ManualSourceSyncConfirmation = noManualSourceSyncConfirmation) {}
 
   ingest(pool: pg.Pool, observation: IssueObservation): Promise<IssueSourceIngestResult> {
     return ingestIssueObservation(pool, observation);
   }
 
   async sync(input: SourceSyncRequest): Promise<SourceSyncReceipt> {
-    if (input.outbox.operation !== "close")
-      throw new Error(`unsupported manual source sync operation: ${input.outbox.operation}`);
-    return { providerRevision: input.outbox.payloadHash };
+    const confirmation = await this.confirmations.lookup(input);
+    if (confirmation === null) throw new Error("manual source sync requires external operator confirmation");
+    return confirmation.receipt;
+  }
+
+  async readback(input: SourceSyncRequest): Promise<SourceSyncReadback> {
+    const confirmation = await this.confirmations.lookup(input);
+    if (confirmation === null) throw new Error("manual source sync requires external operator confirmation");
+    return confirmation.readback;
   }
 }
