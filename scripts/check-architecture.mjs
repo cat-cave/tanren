@@ -135,6 +135,9 @@ function checkSingleEventWriter(projectFiles) {
       file === "services/orchestrator/src/engine/eventStore.ts" ||
       // pgAllocatorEvents.ts is the allocator's SOLE events writer (separate de-priv service).
       file === "services/allocator/src/pgAllocatorEvents.ts" ||
+      // allocatorEventStore.ts (#826) centralizes that de-priv allocator write behind
+      // appendAllocatorEvent — the single org-scoped path the allocator service uses.
+      file === "db/src/allocatorEventStore.ts" ||
       file.startsWith("db/migrations/")
     ) {
       continue;

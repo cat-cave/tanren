@@ -182,6 +182,7 @@ describe("plannerStage failure path threads the writer (task #21)", () => {
       runId: "run_1",
       specId: "spec_1",
       projectId: "proj_1",
+      orgId: "org_1",
     };
     const planner = throwingAnswerer<PlanAnswer>(
       new CodexUsageLimitError("PlanAnswer", "5-hour window exhausted mid-call"),

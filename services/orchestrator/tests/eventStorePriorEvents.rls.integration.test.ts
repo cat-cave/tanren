@@ -63,10 +63,10 @@ describeDb("PgEventStore prior events — explicit org_id under RLS", () => {
   }, 30_000);
 
   it("runs as tanren_app without superuser privileges", async () => {
-    const identity = await appPool.query<{ current_user: string; rolsuper: boolean }>(
-      "SELECT current_user, rolsuper FROM pg_roles WHERE rolname = current_user",
+    const identity = await appPool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
     );
-    expect(identity.rows[0]).toEqual({ current_user: APP_ROLE, rolsuper: false });
+    expect(identity.rows[0]).toEqual({ current_user: APP_ROLE, rolsuper: false, rolbypassrls: false });
   });
 
   it("writes a prior event with the explicit org_id and returns zero rows to a foreign org", async () => {

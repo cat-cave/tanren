@@ -111,10 +111,10 @@ describeDb("allocator service PgRunnerStore — runner row written under RLS, sw
   }, 30_000);
 
   it("uses the restricted tanren_app role rather than a superuser", async () => {
-    const identity = await appPool.query<{ current_user: string; rolsuper: boolean }>(
-      "SELECT current_user, rolsuper FROM pg_roles WHERE rolname = current_user",
+    const identity = await appPool.query<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
     );
-    expect(identity.rows[0]).toEqual({ current_user: APP_ROLE, rolsuper: false });
+    expect(identity.rows[0]).toEqual({ current_user: APP_ROLE, rolsuper: false, rolbypassrls: false });
   });
 
   it("(a) insert writes the runners row under the run's org scope; visible under ORG_A, zero under ORG_B", async () => {
