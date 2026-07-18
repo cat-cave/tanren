@@ -44,7 +44,11 @@
 // jj default. ANONYMOUS (no credential) stays a bare fetch — a genuinely public repo / the
 // conformance fixture's local-path origin needs no auth (don't break the public path).
 
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
+import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { gitTokenAuthPrelude } from "../workspace/githubPush.js";
 
 /**
@@ -86,6 +90,47 @@ export interface TrackPublishedHeadPrep {
  * `buildJjCloneCommand`), ANONYMOUS when not (a genuinely public repo / the conformance
  * fixture's local-path origin).
  */
+/**
+ * Read the sha jj FETCHED for the published head — the commit `<headBranch>@origin`
+ * (the remote-tracking bookmark) resolves to AFTER `trackPublishedHeadCommands` fetched it.
+ * This is the PRE-REBASE remote head: the local in-place rebase rewrites the LOCAL
+ * `<headBranch>` bookmark but NEVER `<headBranch>@origin`, so this stays the exact sha the
+ * forge branch pointed at when we cloned/fetched — the expected-old-sha the dependent-head
+ * publish leases against (`--force-with-lease`, #1059). A concurrent reviewer/writer commit
+ * that advanced the forge head DURING the rebase + answerer + re-gate window makes the lease
+ * stale, so the publish REJECTS rather than silently overwriting their work.
+ *
+ * FAIL-CLOSED: a non-40-hex read throws (never lease against a bogus value — that would push
+ * with `--force-with-lease=<ref>:` and degrade to an effectively-blind force).
+ */
+export async function readFetchedPublishedHeadSha(input: {
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
+  workspacePath: string;
+  headBranch: string;
+}): Promise<string> {
+  const rev = `${input.headBranch}@origin`;
+  const out = await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "published head: read fetched remote head sha (force-with-lease guard)",
+    cwd: input.workspacePath,
+    watchdog: buildActivityWatchdog({
+      substrate: input.ssh,
+      target: input.target,
+      cls: "vcs",
+      workspace: input.workspacePath,
+    }),
+    command: `jj log -r ${quoteSshShellArg(rev)} --no-graph -T 'commit_id'`,
+  });
+  const sha = out.stdout.trim();
+  if (!/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(
+      `published head ${input.headBranch}: fetched remote head (${rev}) did not resolve a commit sha ` +
+        `(force-with-lease guard) — got '${sha}'`,
+    );
+  }
+  return sha;
+}
+
 export function trackPublishedHeadCommands(
   headBranch: string,
   credential?: PublishedHeadFetchCredential,

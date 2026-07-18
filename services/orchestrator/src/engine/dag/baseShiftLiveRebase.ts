@@ -15,7 +15,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { WorkspaceHandle, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
-import { trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
+import { readFetchedPublishedHeadSha, trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
@@ -34,6 +34,13 @@ export interface LiveBaseShiftPushFacts {
   workspacePath: string;
   repoUrl: string;
   headBranch: string;
+  /**
+   * #1059 — the sha jj FETCHED for `headBranch` (`<headBranch>@origin`, the PRE-rebase remote
+   * head). The §3.1 clean-rebase publish leases against it (`--force-with-lease`): a reviewer/
+   * writer commit that moved the forge head during the rebase+re-gate window makes the lease
+   * stale → the push REJECTS → the coordinator HOLDs + re-drives (never a blind overwrite).
+   */
+  fetchedHeadSha: string;
   installation?: OrgGithubAppInstallation;
   githubCredentialRef: string;
 }
@@ -124,6 +131,16 @@ export async function openLiveBaseShiftWorkspace(input: {
     // sha; we keep `baseRevision` (the token) as the rebase target but surface `newBaseSha`
     // as the resolved sha for the event. A non-40-hex read is fail-closed (LOUD throw).
     const newBaseSha = await readJjRevSha(deps.ssh, live.target, live.workspacePath, `${baseRef}@origin`);
+    // #1059: capture the sha jj FETCHED for the dependent head (the PRE-rebase remote head) so
+    // the clean-rebase publish can lease against it — the rebase rewrites the LOCAL bookmark but
+    // never `<headBranch>@origin`, so this is the exact forge head the push must not blindly
+    // overwrite if a reviewer/writer advanced it during the window.
+    const fetchedHeadSha = await readFetchedPublishedHeadSha({
+      ssh: deps.ssh,
+      target: live.target,
+      workspacePath: live.workspacePath,
+      headBranch: ctx.headBranch,
+    });
     return {
       core: live.core,
       handle,
@@ -134,6 +151,7 @@ export async function openLiveBaseShiftWorkspace(input: {
         workspacePath: live.workspacePath,
         repoUrl: ctx.repoUrl,
         headBranch: ctx.headBranch,
+        fetchedHeadSha,
         ...(ctx.installation !== undefined && { installation: ctx.installation }),
         githubCredentialRef: ctx.githubCredentialRef,
       },
