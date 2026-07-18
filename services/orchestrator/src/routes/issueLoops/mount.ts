@@ -6,6 +6,7 @@ import { createIssueLoopRoutes } from "./index.js";
 import { createIssueLoopCommandRoutes } from "./commands.js";
 import { createProductionVerificationRoutes } from "./productionVerification.js";
 import { createResolutionProofRoutes } from "./resolutionProof.js";
+import { createSelfHealingRoutes } from "./selfHealing.js";
 
 /**
  * Mount the project work-intake surfaces on the org-scoping pool:
@@ -33,4 +34,6 @@ export function mountProjectWorkSurfaces(app: Hono<ActorContextEnv>, scopedPool:
   app.route("/v1/orgs", createProductionVerificationRoutes({ pool: scopedPool }));
   // bh-14a read-only proof surface: the sealed resolution-proof chain for a loop.
   app.route("/v1/orgs", createResolutionProofRoutes({ pool: scopedPool }));
+  // bh-14b read-only self-healing funnel: org-wide loop progression + badges.
+  app.route("/v1/orgs", createSelfHealingRoutes({ pool: scopedPool }));
 }

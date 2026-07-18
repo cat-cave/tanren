@@ -38,8 +38,10 @@ export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
  */
 export const SCREEN_MOUNTS: ScreenMount[] = [];
 
-// bh-14b reservation: replace this comment with the Self-Healing route import
-// and its single SCREEN_MOUNTS.push call; the nav row is already reserved.
+// bh-14b Self-Healing surface: org-wide resolution funnel + per-loop causal graph
+// + the six SEPARATE truth badges. Overrides the /self-healing nav placeholder.
+import { mountSelfHealingScreen } from "../routes/selfHealing/index.js";
+SCREEN_MOUNTS.push(mountSelfHealingScreen);
 
 // chat-primary project view, spec creation, routing & limits.
 import { mountProjectScreens } from "../routes/projects/index.js";
