@@ -55,10 +55,12 @@ export interface JjAuthedPushInput {
 }
 
 /**
- * Resolve the App-first/static push token, then force-push `refs/heads/<headBranch>` onto
- * the host. When NEITHER an installation nor a static ref is configured (a genuinely public
- * path) the push is anonymous (`git push --force origin ...`). The token never appears on
- * the command line — `gitTokenAuthPrelude` reads it from stdin into a 0700 temp file.
+ * Resolve the App-first/static push token, then `--force-with-lease`-push
+ * `refs/heads/<headBranch>` onto the host (#1059: the lease guards a concurrent reviewer/writer
+ * commit — see the module header). When NEITHER an installation nor a static ref is configured
+ * (a genuinely public path) the push is anonymous
+ * (`git push --force-with-lease=refs/heads/<headBranch>:<fetched-sha> origin ...`). The token
+ * never appears on the command line — `gitTokenAuthPrelude` reads it from stdin into a 0700 temp file.
  */
 export async function pushJjHead(input: JjAuthedPushInput): Promise<void> {
   const staticRef = input.githubCredentialRef.trim();
