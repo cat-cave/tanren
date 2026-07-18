@@ -10,12 +10,14 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFragmentAuthoring,
+  composeTemplate,
   type FragmentAuthoringEvents,
   type FragmentAuthorer,
   type FragmentPersistence,
   type FragmentSpec,
   loadUnifiedFragmentLibrary,
   type OrgFragmentSource,
+  selectFragmentConfig,
 } from "../src/engine/templates/index.js";
 import type { CaptureLifecycle } from "../src/engine/forge/interview/index.js";
 import { buildFakeFragmentAuthorer } from "./fixtures/fragmentAuthoring.js";
@@ -100,6 +102,65 @@ describe("buildFragmentAuthoring — happy path", () => {
     expect(kinds).toContain("fragment.authoring.succeeded");
     // The returned library includes the authored fragment under its id.
     expect(result.library.has("addon-spellcheck")).toBe(true);
+  });
+});
+
+describe("buildFragmentAuthoring — sequential derives retain prior org fragments (#1064)", () => {
+  it("authors only B on derive two, then composes B against persisted A", async () => {
+    const authorerCalls: string[] = [];
+    const fakeAuthorer = buildFakeFragmentAuthorer();
+    const authorer: FragmentAuthorer = async (input) => {
+      authorerCalls.push(input.spec.id);
+      return fakeAuthorer(input);
+    };
+    const { events } = recordingEvents();
+    const { persistence } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer, persistence, events });
+    const actor = {
+      userId: "u",
+      orgId: "org_a",
+      projectId: null,
+      scopes: ["platform:admin"] as const,
+      source: "session" as const,
+    };
+    const firstLifecycle = { ...lifecycle(), stack: "node + next", deploy: "fly deploy" };
+    const firstLibrary = await loadUnifiedFragmentLibrary("org_a", async () => []);
+    const firstDecision = selectFragmentConfig(firstLifecycle, firstLibrary);
+    expect(firstDecision.kind).toBe("missing-fragments");
+    expect(firstDecision.kind === "missing-fragments" && firstDecision.missing.map((item) => item.id)).toEqual([
+      "frontend-next",
+    ]);
+    const first = await runner({
+      orgId: "org_a",
+      actor,
+      library: firstLibrary,
+      missing: firstDecision.kind === "missing-fragments" ? firstDecision.missing : [],
+      lifecycle: firstLifecycle,
+    });
+    expect(first.failedIds).toEqual([]);
+    expect(first.library.has("frontend-next")).toBe(true);
+
+    const secondLifecycle = { ...firstLifecycle, stack: "node + next + mysql" };
+    const secondDecision = selectFragmentConfig(secondLifecycle, first.library);
+    expect(secondDecision.kind).toBe("missing-fragments");
+    expect(secondDecision.kind === "missing-fragments" && secondDecision.missing.map((item) => item.id)).toEqual([
+      "db-mysql",
+    ]);
+    const second = await runner({
+      orgId: "org_a",
+      actor,
+      library: first.library,
+      missing: secondDecision.kind === "missing-fragments" ? secondDecision.missing : [],
+      lifecycle: secondLifecycle,
+    });
+
+    expect(second.failedIds).toEqual([]);
+    expect(authorerCalls).toEqual(["frontend-next", "db-mysql"]);
+    expect(second.library.has("frontend-next")).toBe(true);
+    expect(second.library.has("db-mysql")).toBe(true);
+    const finalDecision = selectFragmentConfig(secondLifecycle, second.library);
+    expect(finalDecision.kind).toBe("ready");
+    if (finalDecision.kind === "ready") await composeTemplate(finalDecision.config, second.library);
   });
 });
 

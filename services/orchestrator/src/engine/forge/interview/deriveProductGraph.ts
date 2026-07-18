@@ -108,6 +108,7 @@ async function resolveFragmentConfig(
     actor: input.actor,
     missing: decision.missing,
     lifecycle,
+    library,
     ...(productContext === undefined ? {} : { productContext }),
   });
   if (authored.failedIds.length > 0) {
