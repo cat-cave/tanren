@@ -146,9 +146,7 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     // REJECTS the push and `pushJjHead` throws — which propagates OUT of the provider's
     // `rebaseOnto` (modelled here). The coordinator MUST map it to a fail-closed HOLD: never a
     // silent overwrite, and never a proceed-to-land on the stale head.
-    const reject = new Error(
-      "jj publish: push head failed: exit 1; stderr: ! [rejected] feat -> feat (stale info)",
-    );
+    const reject = new Error("jj publish: push head failed: exit 1; stderr: ! [rejected] feat -> feat (stale info)");
     const h = harness({ throwOnRebase: reject });
     await expect(reexec(h)).rejects.toBeInstanceOf(BaseShiftHeldError);
     // The work SURVIVES — the stale head was NEVER landed and NEVER replanned: just a loud hold.

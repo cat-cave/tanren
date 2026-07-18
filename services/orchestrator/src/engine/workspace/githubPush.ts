@@ -456,7 +456,12 @@ export function buildGitHubPushCommand(input: {
   return [
     "set -eu",
     ...gitTokenAuthPrelude(),
-    gitAuthedCommand(["push", forceArg, quoteSshShellArg(remote), quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`)]),
+    gitAuthedCommand([
+      "push",
+      forceArg,
+      quoteSshShellArg(remote),
+      quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`),
+    ]),
   ].join(" && ");
 }
 
