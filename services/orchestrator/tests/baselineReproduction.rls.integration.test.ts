@@ -60,7 +60,11 @@ async function seedTenant(owner: Pool): Promise<void> {
   );
 }
 
-async function seedVerificationRun(owner: Pool, tag: string): Promise<string> {
+async function seedVerificationRun(
+  owner: Pool,
+  tag: string,
+  binding?: { stage: string; resolutionJobId: string },
+): Promise<string> {
   const nodeId = `inode_baseline_finalize_${tag}`;
   const environmentId = `venv_baseline_finalize_${tag}`;
   const runId = `vrun_baseline_finalize_${tag}`;
@@ -86,9 +90,21 @@ async function seedVerificationRun(owner: Pool, tag: string): Promise<string> {
   await owner.query(
     `INSERT INTO behavior_verification_runs
        (org_id, id, project_id, purpose, environment_id, prepared_head_sha, jj_tree_id,
-        plan_set_hash, runtime_behavior_context_hash, artifact_digest, status, policy)
-     VALUES ($1, $2, $3, 'manual_canary', $4, $5, $6, $7, $7, $8, 'running', '{}'::jsonb)`,
-    [ORG_ID, runId, PROJECT_ID, environmentId, "a".repeat(40), `tree-${tag}`, DIGEST, artifactDigest],
+        plan_set_hash, runtime_behavior_context_hash, artifact_digest, status, policy,
+        stage, resolution_job_id)
+     VALUES ($1, $2, $3, 'manual_canary', $4, $5, $6, $7, $7, $8, 'running', '{}'::jsonb, $9, $10)`,
+    [
+      ORG_ID,
+      runId,
+      PROJECT_ID,
+      environmentId,
+      "a".repeat(40),
+      `tree-${tag}`,
+      DIGEST,
+      artifactDigest,
+      binding?.stage ?? null,
+      binding?.resolutionJobId ?? null,
+    ],
   );
   return runId;
 }
@@ -161,16 +177,14 @@ describeDb("baseline reproduction finalization predicate — RLS", () => {
     await jobs.enqueue(expectedJob);
     await jobs.enqueue(otherJob);
 
-    const wrongStageRun = await seedVerificationRun(owner, "wrong-stage");
-    const wrongJobRun = await seedVerificationRun(owner, "wrong-job");
-    await owner.query(
-      "UPDATE behavior_verification_runs SET stage = $3, resolution_job_id = $4 WHERE org_id = $1 AND id = $2",
-      [ORG_ID, wrongStageRun, "production", expectedJob.id],
-    );
-    await owner.query(
-      "UPDATE behavior_verification_runs SET stage = 'baseline', resolution_job_id = $3 WHERE org_id = $1 AND id = $2",
-      [ORG_ID, wrongJobRun, otherJob.id],
-    );
+    const wrongStageRun = await seedVerificationRun(owner, "wrong-stage", {
+      stage: "production",
+      resolutionJobId: expectedJob.id,
+    });
+    const wrongJobRun = await seedVerificationRun(owner, "wrong-job", {
+      stage: "baseline",
+      resolutionJobId: otherJob.id,
+    });
 
     const input = {
       orgId: ORG_ID,
