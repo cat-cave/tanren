@@ -92,7 +92,10 @@ function buildHarness(boundActor: ActorContext = admin, pool: RoutesPool = new R
   return { app, pool };
 }
 
-async function getJson(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
+async function getJson(
+  app: Hono<ActorContextEnv>,
+  path: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path);
   return { status: res.status, body: await res.json().catch(() => null) };
 }
@@ -101,7 +104,7 @@ async function putJson(
   app: Hono<ActorContextEnv>,
   path: string,
   payload: unknown,
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const body =
     payload !== null && typeof payload === "object" && !Array.isArray(payload)
       ? { ...(payload as Record<string, unknown>) }

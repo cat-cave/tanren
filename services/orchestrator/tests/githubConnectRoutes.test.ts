@@ -142,7 +142,7 @@ async function reqJson(
   method: string,
   path: string,
   payload?: unknown,
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path, {
     method,
     ...(payload === undefined

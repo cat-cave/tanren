@@ -47,7 +47,10 @@ function buildHarness(actor: ActorContext | undefined = alice) {
   return { app, pool };
 }
 
-async function getJson(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
+async function getJson(
+  app: Hono<ActorContextEnv>,
+  path: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path);
   return { status: res.status, body: await res.json().catch(() => null) };
 }

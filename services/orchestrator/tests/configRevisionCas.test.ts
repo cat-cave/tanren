@@ -56,7 +56,7 @@ async function json(
   app: Hono<ActorContextEnv>,
   path: string,
   init?: RequestInit,
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.request(path, init);
   return { status: res.status, body: await res.json().catch(() => null) };
 }
