@@ -150,7 +150,8 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     const h = harness({ throwOnRebase: reject });
     await expect(reexec(h)).rejects.toBeInstanceOf(BaseShiftHeldError);
     // The work SURVIVES — the stale head was NEVER landed and NEVER replanned: just a loud hold.
-    expect(h.persistence.repointStacks).toEqual([]); // no keep-run / land
+    // no keep-run / land
+    expect(h.persistence.repointStacks).toEqual([]);
     expect(h.persistence.markedInFlight).toEqual([]);
     expect(h.persistence.replanned).toEqual([]);
     // The re-gate never ran — we held BEFORE verifying/landing anything on the stale head.

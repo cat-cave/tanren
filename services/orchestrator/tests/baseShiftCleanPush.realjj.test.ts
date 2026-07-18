@@ -155,7 +155,8 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
     });
     const rebase = await core.rebaseOnto(ws, "feat", "main2@origin");
     expect(rebase.outcome).toBe("clean");
-    const rebasedHead = rebase.headSha; // H2 — local only.
+    // H2 — local only.
+    const rebasedHead = rebase.headSha;
     await core.exportCleanGitRef(ws, "feat");
 
     // CONCURRENT WRITER: a reviewer/writer commit advances the ORIGIN's `feat` to H3 while our
@@ -184,7 +185,7 @@ describe("§3.1 clean base-shift rebase is PUSHED (real jj)", () => {
         githubCredentialRef: "",
         timeoutMs: 60_000,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(Error);
 
     // THE PROOF: the reviewer's commit (H3) SURVIVES — the stale rebased head (H2) never
     // overwrote it. The base-shift coordinator now HOLDs + re-drives (re-fetch H3, re-rebase).
