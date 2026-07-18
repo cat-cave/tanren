@@ -22,6 +22,7 @@ import type {
   AuthorizedSubsetEvaluation,
   LandGroupLandOutcome,
 } from "../../../src/engine/merge/multiMemberAuthorityTypes.js";
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "../../../src/engine/merge/mergeSerializedRetry.js";
 import {
   digest,
   type IntegrationNodeMaterializationPersistence,
@@ -43,10 +44,8 @@ interface QueueRow {
   status: "queued" | "merging" | "merged" | "dequeued";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
-  /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
+  /** Last ActivityWatchdog-proven progress (ms epoch). */
   claimedAt?: number;
-  /** A process-held liveness fence; test helpers can model a crashed owner. */
-  livenessHeld?: boolean;
 }
 
 /** An in-memory native-queue model — the same observable contract as the pg impl. */
@@ -124,10 +123,10 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     return undefined;
   }
 
-  /** Test helper: model a coordinator process losing its liveness session. */
+  /** Test helper: model a coordinator that can no longer prove merge progress. */
   loseClaimLiveness(runId: string): void {
     for (const row of this.rows.values()) {
-      if (row.runId === runId) row.livenessHeld = false;
+      if (row.runId === runId) row.claimedAt = undefined;
     }
   }
 
@@ -214,7 +213,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     if (row === undefined || row.status !== "queued") return false;
     row.status = "merging";
     row.claimedAt = this.now();
-    row.livenessHeld = true;
     return true;
   }
 
@@ -223,51 +221,51 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     const row = this.rows.get(queueId);
     if (row === undefined || row.status !== "merging") return false;
     row.claimedAt = this.now();
-    row.livenessHeld = true;
     return true;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markMerged(queueId: string): Promise<void> {
+  async markMerged(queueId: string): Promise<boolean> {
     const row = this.rows.get(queueId);
-    if (row !== undefined) {
-      row.status = "merged";
-      // A merged entry's spec becomes a satisfied ancestor (the merge-stage effect).
-      this.mergedSpecs.add(row.specId);
-    }
+    if (row === undefined) return false;
+    row.status = "merged";
+    // A merged entry's spec becomes a satisfied ancestor (the merge-stage effect).
+    this.mergedSpecs.add(row.specId);
+    return true;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<boolean> {
     const row = this.rows.get(queueId);
-    if (row !== undefined) {
-      row.status = "dequeued";
-      row.dequeueReason = reason;
-    }
+    if (row === undefined) return false;
+    row.status = "dequeued";
+    row.dequeueReason = reason;
+    return true;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async releaseClaim(queueId: string): Promise<void> {
+  async releaseClaim(queueId: string): Promise<boolean> {
     const row = this.rows.get(queueId);
     // Only return a still-`merging` claim to `queued` (the transient-hold path); never
     // resurrect a settled entry.
     if (row !== undefined && row.status === "merging") {
       row.status = "queued";
       row.claimedAt = undefined;
-      row.livenessHeld = undefined;
+      return true;
     }
+    return false;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async recoverStaleClaims(_projectId: string): Promise<number> {
     let recovered = 0;
+    const staleBefore = this.now() - MERGE_QUEUE_PROGRESS_RECHECK_MS;
     for (const row of this.rows.values()) {
-      // The fake mirrors PostgreSQL's advisory fence: a claim is reclaimed only
-      // after its owning process lost the fence, never because wall-clock time passed.
-      if (row.status === "merging" && row.livenessHeld !== true) {
+      // The fake mirrors PostgreSQL's durable heartbeat: a new coordinator may
+      // reclaim only after the prior owner stopped reporting real progress.
+      if (row.status === "merging" && (row.claimedAt === undefined || row.claimedAt <= staleBefore)) {
         row.status = "queued";
         row.claimedAt = undefined;
-        row.livenessHeld = undefined;
         recovered += 1;
       }
     }

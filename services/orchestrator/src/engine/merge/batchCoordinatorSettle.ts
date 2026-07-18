@@ -378,7 +378,10 @@ export async function driveConflictCulprit(
     return outcome;
   }
   if (outcome.kind === "merged") {
-    await deps.queue.markMerged(culprit.queueId);
+    if (!(await deps.queue.markMerged(culprit.queueId))) {
+      const refreshed = await deps.queue.loadSnapshot(projectId);
+      return { projectId, holdReason: "serialized", queueDepth, retryAfterMs: serializedRetryAfterMs(refreshed) };
+    }
     return { projectId, queueDepth, mergedSpecId: culprit.specId };
   }
   const settled = await settleDriveOutcome(deps, projectId, culprit, outcome);
@@ -449,17 +452,20 @@ export async function driveClaimedMerge(
   entry: MergeQueueEntry,
 ): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
   const lease = new MergeClaimActivityLease(deps.queue, entry.queueId);
+  let outcome: MergeDriveOutcome | BatchDriveInfraHold;
   try {
-    return await deps.runner.driveMerge({
+    outcome = await deps.runner.driveMerge({
       runId: entry.runId,
       projectId,
       onWatchdogProgress: () => lease.onWatchdogProgress(),
+      claimSignal: lease.signal,
+      confirmClaimBeforeLand: () => lease.confirmBeforeLand(),
     });
   } catch (error) {
     const hold = await holdOnRetriableDriveThrow(deps, projectId, entry, error);
-    if (hold !== undefined) return hold;
-    return { kind: "blocked", message: `merge drive threw: ${String(error)}` };
-  } finally {
-    await lease.drain();
+    outcome = hold ?? { kind: "blocked", message: `merge drive threw: ${String(error)}` };
   }
+  await lease.drain();
+  if (!lease.active) return { kind: "blocked", message: "merge claim ownership was lost during the drive" };
+  return outcome;
 }

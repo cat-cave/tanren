@@ -74,8 +74,20 @@ async function landAuthorizedGroup(
       return holdResult(input, "serialized");
     }
     claimed.push(entry);
-    await input.deps.queue.renewClaim?.(entry.queueId);
+    if (input.deps.queue.renewClaim !== undefined && !(await input.deps.queue.renewClaim(entry.queueId))) {
+      await releaseClaims(input.deps, claimed);
+      return holdResult(input, "serialized");
+    }
     await input.deps.events.emitAdvanced({ projectId: input.projectId, entry, queueDepth: input.queueDepth });
+  }
+  // Re-prove every member immediately at the group-host boundary. A claim that
+  // was reclaimed while the queue-advanced events were emitted must not join a
+  // group land under its replacement owner's lease.
+  for (const entry of claimed) {
+    if (input.deps.queue.renewClaim !== undefined && !(await input.deps.queue.renewClaim(entry.queueId))) {
+      await releaseClaims(input.deps, claimed);
+      return holdResult(input, "serialized");
+    }
   }
   const landed = await input.deps.authorityEvaluator.landAuthorizedGroup!({
     projectId: input.projectId,
@@ -87,7 +99,9 @@ async function landAuthorizedGroup(
     await releaseClaims(input.deps, claimed);
     return holdResult(input, "merge_retry", AUTHORITY_RETRY_AFTER_MS);
   }
-  for (const entry of claimed) await input.deps.queue.markMerged(entry.queueId);
+  for (const entry of claimed) {
+    if (!(await input.deps.queue.markMerged(entry.queueId))) return holdResult(input, "serialized");
+  }
   await input.emitPassed(input.batch, input.integrationBranch);
   return { projectId: input.projectId, queueDepth: input.queueDepth, mergedSpecId: input.batch.at(-1)?.specId };
 }

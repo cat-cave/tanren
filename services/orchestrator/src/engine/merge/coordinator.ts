@@ -14,6 +14,8 @@ export type DriveMergeForQueuedRun = (input: {
   runId: string;
   projectId: string;
   onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+  claimSignal?: AbortSignal;
+  confirmClaimBeforeLand?: () => Promise<boolean>;
 }) => Promise<MergeDriveOutcome>;
 
 /** What the coordinator needs to emit the queue events (org-scoped, eventStore). */

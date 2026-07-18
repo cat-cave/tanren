@@ -1,9 +1,9 @@
 // (autonomy-engine.md §2d) — serialization hardening: `recoverStaleClaims` is
-// LIVENESS-GUARDED. A live `merging` claim must survive for an arbitrarily long
-// merge; only a coordinator that lost its PostgreSQL session fence is reclaimed.
+// PROGRESS-GUARDED. A merge claim survives while its ActivityWatchdog advances;
+// an unchanged heartbeat is safely reclaimed on the coordinator's next re-drive.
 //
-// Driven against the in-memory model, whose liveness-fence recovery semantics mirror
-// the pg implementation. Its heartbeat clock is injectable for deterministic progress.
+// Driven against the in-memory model, whose heartbeat recovery semantics mirror the
+// pg implementation. Its heartbeat clock is injectable for deterministic progress.
 
 import { describe, expect, it } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
@@ -17,6 +17,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "../src/engine/merge/mergeSerializedRetry.js";
 
 class ActivityControlledMergeRunner implements MergeRunner {
   readonly drives: { runId: string }[] = [];
@@ -67,7 +68,7 @@ function coordinatorFor(queue: InMemoryMergeQueueModel, runner: MergeRunner): Ba
   });
 }
 
-describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () => {
+describe("recoverStaleClaims progress heartbeat (P2d serialization hardening)", () => {
   it("a FRESH merging claim SURVIVES a concurrent coordinate pass (not reclaimed)", async () => {
     const queue = new InMemoryMergeQueueModel();
     let now = 1_000_000;
@@ -78,31 +79,31 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
     expect(claimed).toBe(true);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    // Elapsed time alone is irrelevant: the still-held process fence recovers NOTHING.
-    now += 86_400_000;
+    // A fresh heartbeat is progress evidence: another pass must not reclaim it.
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS - 1;
     const recovered = await queue.recoverStaleClaims("p");
     expect(recovered).toBe(0);
     // The fresh claim is intact — the other coordinator cannot double-drive it.
     expect(queue.statusOf("run_a")).toBe("merging");
   });
 
-  it("a merging claim whose coordinator lost its liveness fence IS reclaimed → queued", async () => {
+  it("a merging claim with no progress heartbeat IS reclaimed → queued", async () => {
     const queue = new InMemoryMergeQueueModel();
-    const now = 1_000_000;
+    let now = 1_000_000;
     queue.now = () => now;
     queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
     const snap = await queue.loadSnapshot("p");
     await queue.claim(snap.entries[0].queueId);
 
-    // A crash releases the session fence; no expiry timestamp is involved.
-    queue.loseClaimLiveness("run_a");
+    // The re-drive observes no ActivityWatchdog progress for a full cadence.
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS;
     const recovered = await queue.recoverStaleClaims("p");
     expect(recovered).toBe(1);
     // Reclaimed so the queue makes progress — a new pass can re-drive it.
     expect(queue.statusOf("run_a")).toBe("queued");
   });
 
-  it("renews a long-but-live drive only on progress and never drops its claim by elapsed time", async () => {
+  it("renews a progressing drive and reclaims a silent one", async () => {
     const progressingQueue = new InMemoryMergeQueueModel();
     const progressingRunner = new ActivityControlledMergeRunner();
     const progressingCoordinator = coordinatorFor(progressingQueue, progressingRunner);
@@ -112,12 +113,14 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
 
     const progressingDrive = progressingCoordinator.coordinate("p");
     await progressingRunner.firstDriveStarted;
-    // Each real watchdog signal renews the durable heartbeat. The wall clock can
-    // advance far beyond the old 15-minute cap between arbitrary merge steps;
-    // while this process remains live it is never reclaimed.
+    // Each real watchdog signal renews the durable heartbeat. The elapsed time
+    // between steps is irrelevant because each signal supplies fresh progress.
     for (let step = 0; step < 4; step += 1) {
       now += 60 * 60 * 1000;
       progressingRunner.signalWatchdogProgress();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
 
     const concurrent = await progressingCoordinator.coordinate("p");
@@ -136,7 +139,7 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
     silentQueue.seed({ runId: "run_silent", specId: "spec_silent", dependsOn: [], priority: "tbd" });
     const silentDrive = silentCoordinator.coordinate("p");
     await silentRunner.firstDriveStarted;
-    silentQueue.loseClaimLiveness("run_silent");
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS;
 
     const recovered = await silentCoordinator.coordinate("p");
     expect(recovered.mergedSpecId).toBe("spec_silent");
@@ -146,7 +149,33 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
     await silentDrive;
   });
 
-  it("a serialized coordinator pass re-drives on cadence and later reclaims a dead fence", async () => {
+  it("aborts an in-flight drive when a progress heartbeat loses ownership", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    queue.seed({ runId: "run_abort", specId: "spec_abort", dependsOn: [], priority: "tbd" });
+    let landCalls = 0;
+    const runner: MergeRunner = {
+      async driveMerge(input) {
+        input.onWatchdogProgress?.({ outputBytesAdvanced: 1, workSignatureAdvanced: true });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (input.claimSignal?.aborted === true) return { kind: "blocked", message: "claim lost" };
+        if (input.confirmClaimBeforeLand !== undefined && !(await input.confirmClaimBeforeLand())) {
+          return { kind: "blocked", message: "claim land fence lost" };
+        }
+        landCalls += 1;
+        return { kind: "merged", mergeSha: "sha_abort" };
+      },
+    };
+    queue.renewClaim = async () => false;
+
+    const result = await coordinatorFor(queue, runner).coordinate("p");
+
+    expect(landCalls).toBe(0);
+    expect(result.mergedSpecId).toBeUndefined();
+  });
+
+  it("a serialized coordinator pass re-drives on cadence and reclaims no-progress work", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -161,7 +190,7 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
       events,
       escalator: new RecordingSpecEscalator(),
     });
-    const now = 1_000_000;
+    let now = 1_000_000;
     queue.now = () => now;
     queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
     const snap = await queue.loadSnapshot("p");
@@ -174,7 +203,7 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
     expect(runner.drives).toEqual([]);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    queue.loseClaimLiveness("run_a");
+    now += serialized.retryAfterMs!;
     const recovered = await coordinator.coordinate("p");
 
     expect(recovered.mergedSpecId).toBe("spec_a");
@@ -197,7 +226,7 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
       events,
       escalator: new RecordingSpecEscalator(),
     });
-    const now = 1_000_000;
+    let now = 1_000_000;
     queue.now = () => now;
     queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
     const originalClaim = queue.claim.bind(queue);
@@ -218,7 +247,7 @@ describe("recoverStaleClaims liveness fence (P2d serialization hardening)", () =
     expect(runner.drives).toEqual([]);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    queue.loseClaimLiveness("run_a");
+    now += serialized.retryAfterMs!;
     const recovered = await coordinator.coordinate("p");
 
     expect(recovered.mergedSpecId).toBe("spec_a");

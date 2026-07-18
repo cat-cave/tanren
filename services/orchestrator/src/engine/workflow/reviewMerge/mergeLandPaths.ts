@@ -51,6 +51,10 @@ export interface LandOps {
   emitReGatePending(message: string): Promise<MergeForRunResult>;
 }
 
+function claimWasLost(deps: DispatcherDeps): boolean {
+  return deps.input.claimSignal?.aborted === true;
+}
+
 /**
  * COMMIT-BINDING RE-GATE on a gated-vs-current HEAD MISMATCH (§5; the v42 strand-the-dependents
  * finding). The authority lands ONLY when `gatedHeadSha` EQUALS the live head (the §5 "never land
@@ -171,6 +175,9 @@ async function landViaAuthorityAttempt(
   casHistory: ReadonlyArray<string>,
 ): Promise<MergeForRunResult> {
   const { context, pr } = deps;
+  if (claimWasLost(deps)) {
+    return ops.result("blocked", { message: "native merge claim ownership was lost before land authorization" });
+  }
   // §5h: the freshness signal the authority gates on is the `CodeHost`-derived ancestry
   // (`clean`/`behind`/`unknown`) — never the GitHub `mergeable_state`. Only `clean` clears.
   const mergeability = await deps.probe.readFreshness();
@@ -184,6 +191,12 @@ async function landViaAuthorityAttempt(
     return reGated.result;
   }
   const landBundle = reGated.bundle;
+  if (claimWasLost(deps)) {
+    return ops.result("blocked", { message: "native merge claim ownership was lost before host land" });
+  }
+  if (deps.input.confirmClaimBeforeLand !== undefined && !(await deps.input.confirmClaimBeforeLand())) {
+    return ops.result("blocked", { message: "native merge claim ownership was lost at the host land fence" });
+  }
   const disposition = await runAuthorityLand({
     bundle: landBundle,
     mergeability,

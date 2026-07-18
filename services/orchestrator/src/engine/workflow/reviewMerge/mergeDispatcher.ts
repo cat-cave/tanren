@@ -155,6 +155,9 @@ export class MergeDispatcher implements LandOps {
    */
   async directMerge(): Promise<MergeForRunResult> {
     const { eventStore } = this.deps;
+    if (this.deps.input.claimSignal?.aborted === true) {
+      return this.result("blocked", { message: "native merge claim ownership was lost before the drive started" });
+    }
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
@@ -178,6 +181,9 @@ export class MergeDispatcher implements LandOps {
    */
   private async driveLand(): Promise<MergeForRunResult> {
     const { input } = this.deps;
+    if (input.claimSignal?.aborted === true) {
+      return this.result("blocked", { message: "native merge claim ownership was lost before land" });
+    }
     // The bundle is pre-supplied (a test/out-of-band caller) OR built HERE — only now
     // that the branch is settled, so a conflict-out path never paid for it.
     const bundle = input.mergeAuthority ?? (await input.buildMergeAuthority?.());

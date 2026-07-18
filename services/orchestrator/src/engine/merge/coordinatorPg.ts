@@ -16,8 +16,8 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 import { type DriveMergeForQueuedRun, type MergeQueueEventEmitter } from "./coordinator.js";
-import { PgMergeClaimLiveness, type MergeClaimLivenessSession } from "./mergeClaimLiveness.js";
 import { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "./mergeSerializedRetry.js";
 
 /** Resolve a project's org (the system-scoped bootstrap before any tenant work). */
 async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
@@ -59,15 +59,13 @@ function asStringArray(value: unknown): string[] {
  */
 export class PgMergeQueueModel implements MergeQueueModel {
   private readonly partitions: PgMergeQueuePartitionStore;
-  private readonly liveness: PgMergeClaimLiveness;
-  private readonly leaseOwners = new Map<string, { leaseOwner: string; session: MergeClaimLivenessSession }>();
+  private readonly leaseOwners = new Map<string, { leaseOwner: string; leaseEpoch: number }>();
 
   constructor(
     private readonly pool: pg.Pool,
     events?: MergeQueueEventEmitter,
   ) {
     this.partitions = new PgMergeQueuePartitionStore(events);
-    this.liveness = new PgMergeClaimLiveness(pool);
   }
 
   async enqueue(input: {
@@ -235,20 +233,10 @@ export class PgMergeQueueModel implements MergeQueueModel {
   async claim(queueId: string): Promise<boolean> {
     const orgId = await this.resolveQueueOrg(queueId);
     if (orgId === null) return false;
-    const session = await this.liveness.tryAcquire(queueId);
-    if (session === null) return false;
-    let retained = false;
-    try {
-      const lease = await runWithOrgScope(this.pool, orgId, (client) =>
-        this.partitions.acquireOnClient(client, queueId),
-      );
-      if (lease === null) return false;
-      this.leaseOwners.set(queueId, { leaseOwner: lease.leaseOwner, session });
-      retained = true;
-      return true;
-    } finally {
-      if (!retained) await session.release();
-    }
+    const lease = await runWithOrgScope(this.pool, orgId, (client) => this.partitions.acquireOnClient(client, queueId));
+    if (lease === null) return false;
+    this.leaseOwners.set(queueId, { leaseOwner: lease.leaseOwner, leaseEpoch: lease.leaseEpoch });
+    return true;
   }
 
   async renewClaim(queueId: string): Promise<boolean> {
@@ -256,25 +244,31 @@ export class PgMergeQueueModel implements MergeQueueModel {
     const orgId = await this.resolveQueueOrg(queueId);
     if (held === undefined || orgId === null) return false;
     const renewed = await runWithOrgScope(this.pool, orgId, async (client) => {
-      return (await this.partitions.renewOnClient(client, { queueId, leaseOwner: held.leaseOwner })) !== null;
+      return (
+        (await this.partitions.renewOnClient(client, {
+          queueId,
+          leaseOwner: held.leaseOwner,
+          leaseEpoch: held.leaseEpoch,
+        })) !== null
+      );
     });
-    if (!renewed) await this.releaseLocalClaim(queueId);
+    if (!renewed) this.releaseLocalClaim(queueId);
     return renewed;
   }
 
-  async markMerged(queueId: string): Promise<void> {
-    await this.release(queueId, { nextStatus: "merged" });
+  async markMerged(queueId: string): Promise<boolean> {
+    return this.release(queueId, { nextStatus: "merged" });
   }
 
-  async releaseClaim(queueId: string): Promise<void> {
+  async releaseClaim(queueId: string): Promise<boolean> {
     // Return a claimed entry to `queued` WITHOUT settling it (the entry stays in the
     // queue) — the transient-merge-drive hold path. Only flips a STILL-`merging` row
     // so it cannot resurrect a settled (merged/dequeued) entry.
-    await this.release(queueId, { nextStatus: "queued" });
+    return this.release(queueId, { nextStatus: "queued" });
   }
 
-  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
-    await this.release(queueId, { nextStatus: "dequeued", reason });
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<boolean> {
+    return this.release(queueId, { nextStatus: "dequeued", reason });
   }
 
   async recoverStaleClaims(projectId: string): Promise<number> {
@@ -285,19 +279,13 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
     let recovered = 0;
     for (const candidate of candidates) {
-      // A held session fence is a genuine sign of life. If it can be acquired,
-      // the former coordinator has lost its connection and the claim is safe to
-      // requeue — no elapsed-time threshold is consulted.
-      const session = await this.liveness.tryAcquire(candidate.queueId);
-      if (session === null) continue;
-      try {
-        const reclaimed = await runWithOrgScope(this.pool, orgId, (client) =>
-          this.partitions.reclaimAbsentOwnerOnClient(client, candidate),
-        );
-        if (reclaimed) recovered += 1;
-      } finally {
-        await session.release();
-      }
+      const reclaimed = await runWithOrgScope(this.pool, orgId, (client) =>
+        this.partitions.reclaimStaleProgressOnClient(client, {
+          ...candidate,
+          progressStaleAfterMs: MERGE_QUEUE_PROGRESS_RECHECK_MS,
+        }),
+      );
+      if (reclaimed) recovered += 1;
     }
     return recovered;
   }
@@ -314,27 +302,26 @@ export class PgMergeQueueModel implements MergeQueueModel {
     const isolated = await runWithOrgScope(this.pool, orgId, (client) =>
       this.partitions.isolateOnClient(client, input),
     );
-    if (isolated) await this.releaseLocalClaim(input.queueId);
+    if (isolated) this.releaseLocalClaim(input.queueId);
     return isolated;
   }
 
   private async release(
     queueId: string,
     input: { nextStatus: "queued" | "merged" | "dequeued"; reason?: DequeueReason },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const orgId = await this.resolveQueueOrg(queueId);
-    if (orgId === null) return;
-    await runWithOrgScope(this.pool, orgId, async (client) => {
-      await this.partitions.releaseOnClient(client, { queueId, ...input });
+    const held = this.leaseOwners.get(queueId);
+    if (orgId === null || held === undefined) return false;
+    const released = await runWithOrgScope(this.pool, orgId, async (client) => {
+      return this.partitions.releaseOnClient(client, { queueId, ...held, ...input });
     });
-    await this.releaseLocalClaim(queueId);
+    this.releaseLocalClaim(queueId);
+    return released;
   }
 
-  private async releaseLocalClaim(queueId: string): Promise<void> {
-    const held = this.leaseOwners.get(queueId);
-    if (held === undefined) return;
+  private releaseLocalClaim(queueId: string): void {
     this.leaseOwners.delete(queueId);
-    await held.session.release();
   }
 
   /** Resolve a queue entry's org (system-scoped) so the scoped write hits its row. */
@@ -363,6 +350,8 @@ export class PgMergeRunner implements MergeRunner {
     runId: string;
     projectId: string;
     onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+    claimSignal?: AbortSignal;
+    confirmClaimBeforeLand?: () => Promise<boolean>;
   }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }

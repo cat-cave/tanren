@@ -153,11 +153,10 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
  * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
-  return async ({ runId, onWatchdogProgress }): Promise<MergeDriveOutcome> => {
+  return async ({ runId, onWatchdogProgress, claimSignal, confirmClaimBeforeLand }): Promise<MergeDriveOutcome> => {
     // A queued merge may run indefinitely while its ActivityWatchdogs keep finding
     // real work. Their progress events renew this entry's heartbeat; a fixed-point
-    // drive emits none and is surfaced by its watchdog, while a crashed coordinator
-    // loses the claim's session liveness fence.
+    // drive emits none and becomes safely reclaimable by a later queue pass.
     const ssh =
       onWatchdogProgress === undefined ? deps.ssh : withMergeDriveWatchdogProgress(deps.ssh, onWatchdogProgress);
     // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
@@ -245,6 +244,8 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // run-loop pass already ENQUEUED — this is the
           // coordinator's actual merge.
           queueDrive: true,
+          ...(claimSignal === undefined ? {} : { claimSignal }),
+          ...(confirmClaimBeforeLand === undefined ? {} : { confirmClaimBeforeLand }),
           // on the drive pass: the REAL intent-preserving conflict resolver. It
           // provisions a short-lived runner (the original run's is gone), clones
           // head+base, runs the same resolver the in-loop direct_merge path runs, and
