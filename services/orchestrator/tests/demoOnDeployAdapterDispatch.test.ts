@@ -19,7 +19,6 @@ import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { DemoWebProbe } from "../src/engine/demo/demoEvidence.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import type { DeployHttpTransport } from "../src/engine/provisioners/deployTransport.js";
@@ -218,13 +217,6 @@ const NULL_TRANSPORT: DeployHttpTransport = {
   },
 };
 
-const stubWebProbe: DemoWebProbe = {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async reach() {
-    throw new Error("web probe should not be called on a non-web surface");
-  },
-};
-
 describe("adapterKindForProviderKind — provider → adapter class mapping (Bug 2)", () => {
   it("maps direct_api providers to the `direct_api` adapter class", () => {
     expect(adapterKindForProviderKind("deploy.vercel")).toBe("direct_api");
@@ -271,7 +263,6 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       secrets: secrets(),
       transport: NULL_TRANSPORT,
       eventStore: events,
-      webProbe: stubWebProbe,
     });
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/no registered DeployAdapter class/u);
     const failed = events.appends.find((a) => a.eventType === "demo.failed");
@@ -282,7 +273,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
     expect(JSON.stringify(events.appends)).not.toContain("deploy_token");
   });
 
-  it("routes a manual_external verified deploy through the `manual_external` adapter + web arm", async () => {
+  it("dispatches a manual_external verified deploy to its adapter (web_url surface) then fails CLOSED — no release-instance binding, never a fabricated pass (rv-18 follow-up)", async () => {
     const attestations = new InMemoryManualAttestationStore();
     // The operator's out-of-band attestation the manual_external adapter's demoSurface
     // reads back. Same handle the adapter's deploy() would have stamped.
@@ -304,14 +295,6 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       orgId: "org_demo",
       confirmedBy: "user_demo_operator",
     });
-    let webProbeUrl = "";
-    const webProbe: DemoWebProbe = {
-      // eslint-disable-next-line @typescript-eslint/require-await
-      async reach(url) {
-        webProbeUrl = url;
-        return 200;
-      },
-    };
     const events = new RecordingEventStore();
     const state: PoolState = {
       verified: true,
@@ -330,16 +313,21 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       secrets: secrets(),
       transport: NULL_TRANSPORT,
       eventStore: events,
-      webProbe,
       manualAttestations: attestations,
     });
-    await watcher.check(RUN_ID);
-    // The manual_external adapter's demoSurface resolved to the attested URL; the web
-    // arm probed it — dispatch reached the RIGHT adapter class.
-    expect(webProbeUrl).toBe("https://attested.example.dev/");
-    const summary = events.appends.find((a) => a.eventType === "demo.completed");
-    expect(summary!.payload).toMatchObject({ surfaceKind: "web_url", passed: 1 });
-    expect(events.appends.find((a) => a.eventType === "demo.failed")).toBeUndefined();
+    // rv-18: a `web_url` surface is demoed PROOF-BACKED (real behaviors against the release
+    // URL). manual_external resolves the attested web_url surface (dispatch reached the RIGHT
+    // adapter — surfaceKind is web_url), but it records no `release_instances` row with the
+    // deployed behavior revisions, so the proof-backed demo has no binding to prove against
+    // and fails CLOSED — never the old `/`-reachability green. (A manual_external release
+    // binding / attestation-URL proof driver is a follow-up.)
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/no probeable release instance/u);
+    expect(events.appends.find((a) => a.eventType === "demo.completed")).toBeUndefined();
+    const failed = events.appends.find((a) => a.eventType === "demo.failed");
+    expect(failed).toBeDefined();
+    expect(failed!.payload["reason"]).toBe("exercise_failed");
+    expect(failed!.payload["surfaceKind"]).toBe("web_url");
+    expect(failed!.payload["provider"]).toBe(MANUAL_EXTERNAL_PROVIDER_KIND);
   });
 
   it("records a demo.failed with reason 'resolve_surface_failed' for an unknown provider (dispatch fails LOUD)", async () => {
@@ -361,7 +349,6 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       secrets: secrets(),
       transport: NULL_TRANSPORT,
       eventStore: events,
-      webProbe: stubWebProbe,
     });
     // Unknown provider kinds fail closed at authorizeOperation (no fabricated lease).
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/deploy grant ineligible|unknown_provider_kind/u);

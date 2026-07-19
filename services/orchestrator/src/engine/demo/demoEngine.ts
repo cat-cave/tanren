@@ -32,7 +32,7 @@
 import { runWithJobOrgId } from "@tanren/db";
 import type { DemoSurface } from "../contracts/deployAdapter.js";
 import type { EventStore } from "../eventStore.js";
-import { type BehaviorEvidence, type DemoWebProbe, exerciseWebBehavior } from "./demoEvidence.js";
+import { type BehaviorEvidence } from "./demoEvidence.js";
 import { type DemoPackageProbe, exercisePackageBehavior } from "./demoPackageArm.js";
 import { type DemoDownloadProbe, exerciseDownloadBehavior } from "./demoDownloadArm.js";
 import { type DemoAppChannelProbe, exerciseAppChannelBehavior } from "./demoAppChannelArm.js";
@@ -57,8 +57,6 @@ export interface DemoTarget {
 export interface DemoEngineDeps {
   /** The event store the per-behavior evidence + the demo summary are appended through. */
   events: EventStore;
-  /** The HTTP reach probe a `web_url` surface is exercised over (scripted in tests). */
-  webProbe: DemoWebProbe;
   /**
    * The registry-metadata probe a `package` surface is exercised over. Optional at the
    * type level for tests that never encounter a package surface; missing at runtime
@@ -161,7 +159,13 @@ export class DemoEngine {
   private async exerciseOne(surface: DemoSurface, behavior: DemoBehavior): Promise<BehaviorEvidence> {
     switch (surface.kind) {
       case "web_url":
-        return exerciseWebBehavior(this.deps.webProbe, surface.url, behavior);
+        // rv-18: a `web_url` surface is demoed PROOF-BACKED (the acceptance orchestrator
+        // executes the product's declared behaviors against the real release URL), routed by
+        // the DemoOnDeployWatcher BEFORE the engine. Reaching the engine with a web surface is
+        // a wiring bug — never the superseded `/`-reachability probe.
+        throw new Error(
+          "demoEngine: no exercise for surface kind 'web_url' — web demos are proof-backed (ProofBackedWebDemo)",
+        );
       case "package": {
         if (this.deps.packageProbe === undefined) throw new DemoProbeMissingError("package");
         return exercisePackageBehavior(this.deps.packageProbe, surface, behavior);

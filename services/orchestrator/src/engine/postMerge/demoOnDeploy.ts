@@ -34,12 +34,20 @@ import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
 import { DemoEngine, type DemoBehavior } from "../demo/demoEngine.js";
-import { fetchDemoWebProbe } from "../demo/demoWebProbe.js";
-import type { DemoWebProbe } from "../demo/demoEvidence.js";
 import { type DemoPackageProbe, fetchDemoPackageProbe } from "../demo/demoPackageArm.js";
 import { type DemoDownloadProbe, fetchDemoDownloadProbe } from "../demo/demoDownloadArm.js";
 import { type DemoAppChannelProbe, surfaceDescriptorAppChannelProbe } from "../demo/demoAppChannelArm.js";
-import { loadVerifiedDeploy, loadSpecBehaviors, type VerifiedDeploy } from "./demoOnDeployReads.js";
+import {
+  buildProofBackedWebDemo,
+  isProofBackedLoadFailure,
+  type ProofBackedWebDemo,
+} from "../demo/proofBackedWebDemo.js";
+import {
+  loadRunReleaseInstance,
+  loadVerifiedDeploy,
+  loadSpecBehaviors,
+  type VerifiedDeploy,
+} from "./demoOnDeployReads.js";
 
 /** The phase a demo failed in — drives the fixed, machine-parseable `demo.failed.reason`. */
 type DemoFailPhase = "resolve_surface_failed" | "load_behaviors_failed" | "exercise_failed";
@@ -79,10 +87,13 @@ export interface DemoOnDeployWatcherDeps {
    */
   runStateWriter?: RunStateWriter;
   /**
-   * The HTTP reach probe a `web_url` surface is exercised over. Injectable for tests
-   * (a scripted probe); defaults to the production fetch probe when absent.
+   * rv-18: the PROOF-BACKED web demo a `web_url` surface is exercised through — it DRIVES
+   * the rv-11 acceptance orchestrator (rv-6 HTTP driver against the run's real release URL)
+   * to execute the product's declared behaviors and derive a REAL per-behavior verdict,
+   * replacing the naive `/`-reachability probe. Injectable for tests; defaults to a real
+   * acceptance-driven demo over `pool` when absent.
    */
-  webProbe?: DemoWebProbe;
+  proofBackedWebDemo?: ProofBackedWebDemo;
   /**
    * The registry-metadata probe a `package` surface is exercised over. Injectable for
    * tests; defaults to the production `fetch`-backed probe when absent.
@@ -121,16 +132,22 @@ export interface DemoOnDeployWatcherDeps {
 export class DemoOnDeployWatcher {
   private readonly eventStore: EventStore;
   private readonly engine: DemoEngine;
+  private readonly proofBackedWebDemo: ProofBackedWebDemo;
 
   constructor(private readonly deps: DemoOnDeployWatcherDeps) {
     this.eventStore = deps.eventStore ?? deps.runStateWriter ?? new PgEventStore(deps.pool);
+    // rv-18: the NON-WEB arms (package / download / app_channel) keep their real per-behavior
+    // exercises; the `web_url` arm is SUPERSEDED by the proof-backed demo below (no `/`-probe).
     this.engine = new DemoEngine({
       events: this.eventStore,
-      webProbe: deps.webProbe ?? fetchDemoWebProbe(),
       packageProbe: deps.packageProbe ?? fetchDemoPackageProbe(),
       downloadProbe: deps.downloadProbe ?? fetchDemoDownloadProbe(),
       appChannelProbe: deps.appChannelProbe ?? surfaceDescriptorAppChannelProbe(),
     });
+    // rv-18: the `web_url` arm drives the real rv-11 acceptance orchestrator over the run's
+    // real release URL (built by the factory; the verdict lands as append-only `demo.*`
+    // evidence, not the pre-merge `behavior_verdicts` ledger — see proofBackedWebDemo.ts).
+    this.proofBackedWebDemo = deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, this.eventStore);
   }
 
   /**
@@ -166,26 +183,32 @@ export class DemoOnDeployWatcher {
     try {
       const surface = await this.resolveSurface(verified);
       surfaceKind = surface.kind;
-      phase = "load_behaviors_failed";
-      const behaviors = await runWithSystemScope(this.deps.pool, (client) =>
-        loadSpecBehaviors(client, verified.specId, verified.orgId, verified.projectId),
-      );
+      const target = { runId, specId: verified.specId, projectId: verified.projectId, orgId: verified.orgId };
 
-      phase = "exercise_failed";
-      await this.engine.exercise(
-        { runId, specId: verified.specId, projectId: verified.projectId, orgId: verified.orgId },
-        surface,
-        behaviors satisfies ReadonlyArray<DemoBehavior>,
-      );
+      // rv-18: a deployed WEB product is demoed PROOF-BACKED — the acceptance orchestrator
+      // executes its declared behaviors against the REAL release URL and the demo verdict is
+      // the real per-behavior verdict, NOT a `/`-reachability check. The non-web arms keep
+      // their existing real per-behavior exercises.
+      if (surface.kind === "web_url") {
+        phase = "exercise_failed";
+        const release = await loadRunReleaseInstance(this.deps.pool, verified.orgId, verified.projectId, runId);
+        if (release === undefined) {
+          throw new Error(
+            `demoOnDeploy: run '${runId}' has a verified web deploy but no probeable release instance to demo`,
+          );
+        }
+        await this.proofBackedWebDemo.demo(target, release);
+      } else {
+        phase = "load_behaviors_failed";
+        const behaviors = await runWithSystemScope(this.deps.pool, (client) =>
+          loadSpecBehaviors(client, verified.specId, verified.orgId, verified.projectId),
+        );
+        phase = "exercise_failed";
+        await this.engine.exercise(target, surface, behaviors satisfies ReadonlyArray<DemoBehavior>);
+      }
     } catch (error) {
-      // The engine's unsupported-surface-kind exhaustive throw fires DURING exercise but
-      // is a distinct operator-diagnosis (the surface DID resolve — the kind just has no
-      // arm yet). Refine the reason so the operator sees "unsupported_surface_kind" rather
-      // than the generic exercise_failed.
-      const isUnsupportedKind = phase === "exercise_failed" && isUnsupportedSurfaceKindError(error);
-      const reason = isUnsupportedKind ? "unsupported_surface_kind" : phase;
-      const detail = isUnsupportedKind ? UNSUPPORTED_SURFACE_DETAIL : DEMO_FAILED_DETAIL[phase];
-      await this.appendDemoFailed(runId, verified, { reason, detail, surfaceKind });
+      const refined = refineDemoFailure(error, phase);
+      await this.appendDemoFailed(runId, verified, { reason: refined.reason, detail: refined.detail, surfaceKind });
       throw error;
     }
   }
@@ -317,6 +340,32 @@ export function buildDemoOnDeployWatcher(deps: {
  * perspective (the surface resolved; the demo could not exercise it), so we map both
  * to the same refined reason.
  */
+/**
+ * Refine the durable `demo.failed` reason + detail from the caught error + the coarse phase.
+ * An unsupported non-web surface kind (rv nothing to exercise), a proof-backed web demo with
+ * no declared behaviors, or an unreadable/malformed stored acceptance spec map to the precise
+ * operator-facing reason; everything else falls back to the phase. All detail strings are
+ * FIXED + non-secret (the raw error stays in the run logs via the re-throw).
+ */
+function refineDemoFailure(
+  error: unknown,
+  phase: DemoFailPhase,
+): {
+  reason: "resolve_surface_failed" | "load_behaviors_failed" | "unsupported_surface_kind" | "exercise_failed";
+  detail: string;
+} {
+  if (phase === "exercise_failed" && isUnsupportedSurfaceKindError(error)) {
+    return { reason: "unsupported_surface_kind", detail: UNSUPPORTED_SURFACE_DETAIL };
+  }
+  // rv-18 proof-backed web demo: a release with no declared behaviors OR an unreadable /
+  // malformed stored acceptance spec is a LOAD failure (nothing to prove), regardless of
+  // the coarse phase.
+  if (isProofBackedLoadFailure(error)) {
+    return { reason: "load_behaviors_failed", detail: DEMO_FAILED_DETAIL.load_behaviors_failed };
+  }
+  return { reason: phase, detail: DEMO_FAILED_DETAIL[phase] };
+}
+
 function isUnsupportedSurfaceKindError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (

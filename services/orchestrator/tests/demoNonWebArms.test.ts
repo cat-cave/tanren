@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { getJobOrgId } from "@tanren/db";
 import { DemoEngine, type DemoBehavior } from "../src/engine/demo/demoEngine.js";
-import type { DemoWebProbe, BehaviorEvidence } from "../src/engine/demo/demoEvidence.js";
+import type { BehaviorEvidence } from "../src/engine/demo/demoEvidence.js";
 import {
   type DemoPackageProbe,
   exercisePackageBehavior,
@@ -43,13 +43,6 @@ class RecordingEventStore implements EventStore {
     });
   }
 }
-
-const stubWebProbe: DemoWebProbe = {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async reach(): Promise<number> {
-    throw new Error("web probe should not be called on a non-web surface");
-  },
-};
 
 const behavior = (id: string, title: string, metadata: Record<string, unknown> = {}): DemoBehavior => ({
   behaviorId: id,
@@ -97,7 +90,7 @@ describe("demoPackageArm — package coordinate registry-metadata resolve", () =
         return { status: 200, url: `https://mock/${registry}/${coordinate}` };
       },
     };
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe, packageProbe: probe });
+    const engine = new DemoEngine({ events, packageProbe: probe });
     const surface: DemoSurface = { kind: "package", registry: "npm", coordinate: "@acme/web@1.2.3" };
     const result = await engine.exercise(TARGET, surface, [
       behavior("beh_install", "install the CLI", { invocation: "acme --version" }),
@@ -318,7 +311,7 @@ describe("DemoEngine — dispatch across ALL four surface kinds (Codex H3 #23)",
         return { status: 200, url: "https://mock" };
       },
     };
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe, packageProbe });
+    const engine = new DemoEngine({ events, packageProbe });
     const surface: DemoSurface = { kind: "package", registry: "npm", coordinate: "@a/b@1.0.0" };
     await engine.exercise(TARGET, surface, [behavior("b", "install")]);
     const summary = events.appends.find((a) => a.eventType === "demo.completed");
@@ -333,7 +326,7 @@ describe("DemoEngine — dispatch across ALL four surface kinds (Codex H3 #23)",
         return { status: 200, sha256Hex: "aa".repeat(32), sizeBytes: 4 };
       },
     };
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe, downloadProbe });
+    const engine = new DemoEngine({ events, downloadProbe });
     const surface: DemoSurface = { kind: "download", artifactUrl: "https://example.dev/x.bin" };
     await engine.exercise(TARGET, surface, [behavior("b", "download")]);
     const summary = events.appends.find((a) => a.eventType === "demo.completed");
@@ -348,7 +341,7 @@ describe("DemoEngine — dispatch across ALL four surface kinds (Codex H3 #23)",
         return { available: true, state: "available", channelHandle: "" };
       },
     };
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe, appChannelProbe });
+    const engine = new DemoEngine({ events, appChannelProbe });
     const surface: DemoSurface = {
       kind: "app_channel",
       platform: "android",
@@ -363,7 +356,7 @@ describe("DemoEngine — dispatch across ALL four surface kinds (Codex H3 #23)",
   it("throws a LOUD DemoProbeMissingError when a surface arm's probe is not wired", async () => {
     const events = new RecordingEventStore();
     // packageProbe intentionally omitted — the engine should reject the exercise.
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe });
+    const engine = new DemoEngine({ events });
     const surface: DemoSurface = { kind: "package", registry: "npm", coordinate: "@a/b@1.0.0" };
     await expect(engine.exercise(TARGET, surface, [behavior("b", "install")])).rejects.toThrow(
       /probe for surface kind 'package' is not wired/u,
@@ -381,7 +374,7 @@ describe("DemoEngine — dispatch across ALL four surface kinds (Codex H3 #23)",
       },
     };
     const surface: DemoSurface = { kind: "package", registry: "npm", coordinate: "@a/b@1.0.0" };
-    const engine = new DemoEngine({ events, webProbe: stubWebProbe, packageProbe });
+    const engine = new DemoEngine({ events, packageProbe });
     await engine.exercise(TARGET, surface, [behavior("b", "install")]);
     expect(JSON.stringify(events.appends)).not.toMatch(/token|secret|bearer/iu);
   });
