@@ -251,6 +251,28 @@ describeDb("pre-merge behavior gate — production resolution, real-node binding
     expect(await resolveLandTimeBehaviorGate(app, ORG, mergeRunId)).toEqual({ kind: "passed", passedBlockingCount: 1 });
   });
 
+  it("(A) PARTIAL coverage: a 2nd declared behavior with NO active revision → blocked (real resolver drops it)", async () => {
+    // A second declared behavior whose ONLY revision is superseded (no active) — the real
+    // PgBehaviorRevisionResolver returns only the first behavior's revision, so the producer
+    // must BLOCK on the shortfall rather than pass on the 1-of-2 subset.
+    await owner.query(
+      `INSERT INTO behaviors (id, persona_id, title, given, "when", "then") VALUES ('beh2', 'persona_pm', 'b2', 'g', 'w', 't')`,
+    );
+    await owner.query(
+      `INSERT INTO behavior_revisions (id, org_id, project_id, behavior_id, persona_revision_id, revision_number, title, given, "when", "then", content_digest, acceptance, status)
+       VALUES ('br2_superseded', $1, $2, 'beh2', $3, 1, 'b2', 'g', 'w', 't', $4, $5::jsonb, 'superseded')`,
+      [ORG, PROJECT, PERSONA_REVISION, D, JSON.stringify(ACCEPTANCE)],
+    );
+    const mergeRunId = "run_premerge_partial";
+    await seedMergeRun(owner, mergeRunId);
+    const input = { ...gateInput(mergeRunId), behaviorIds: [BEHAVIOR_ID, "beh2"] };
+    const outcome = await buildProducer(app, 200, fixedProvisioner()).produce(input);
+    expect(outcome.kind).toBe("blocked");
+    // Nothing was verified/recorded — the land gate stays not_applicable (the producer BLOCKS
+    // in-band; the caller halts on it).
+    expect(await resolveLandTimeBehaviorGate(app, ORG, mergeRunId)).toEqual({ kind: "not_applicable" });
+  });
+
   it("(B) ensurePreMergePreviewNode mints a REAL node (not the runId) the preview env FKs", async () => {
     const runId = "run_node_bind";
     const nodeId = await runWithOrgScope(app, ORG, (client) =>

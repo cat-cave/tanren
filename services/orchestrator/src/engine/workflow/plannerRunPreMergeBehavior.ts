@@ -14,11 +14,29 @@ import { createLogger } from "../observability/logger.js";
 const log = createLogger("gate");
 
 /**
+ * The project opted INTO the pre-merge behavior gate (`preMergeBehaviorGate: true`) but no
+ * producer is wired for the run — a wiring/config gap. FAIL-CLOSED (never a silent proceed): the
+ * operator asked for the gate, so if it cannot run the merge must NOT pass. Thrown LOUD so the
+ * run's error boundary finalizes it failed rather than merging an unverified candidate.
+ */
+export class PreMergeBehaviorGateMisconfiguredError extends Error {
+  public override readonly name = "PreMergeBehaviorGateMisconfiguredError";
+  public constructor(public readonly runId: string) {
+    super(
+      `pre-merge behavior gate is ON for run '${runId}' but no producer is wired — fail-closed ` +
+        "(the opted-in gate cannot be silently bypassed)",
+    );
+  }
+}
+
+/**
  * Run the pre-merge behavior gate for a passing-CI merge candidate. A failing / inconclusive /
  * could-not-complete verification FAILS CLOSED — the run finalizes halted (`halt`) so the merge
  * never proceeds; the land-time `resolveLandTimeBehaviorGate` ALSO blocks on any recorded verdict
- * (defense in depth). `not_applicable` (non-web / no behaviors) and `passed` ⇒ `proceed`. No knob
- * / no producer ⇒ `proceed` immediately (NO preview deploy — the default-off zero-cost no-op).
+ * (defense in depth). `not_applicable` (non-web / no behaviors) and `passed` ⇒ `proceed`. Knob OFF
+ * ⇒ `proceed` immediately (NO preview deploy — the default-off zero-cost no-op). Knob ON but the
+ * producer is UNWIRED ⇒ a fail-closed {@link PreMergeBehaviorGateMisconfiguredError} (never a
+ * silent bypass of the gate the operator opted into).
  */
 export async function runPreMergeBehaviorGate(
   input: RunPlannerLoopInput,
@@ -30,8 +48,17 @@ export async function runPreMergeBehaviorGate(
   headSha: string,
 ): Promise<"proceed" | "halt"> {
   const producer = input.preMergeBehaviorProducer;
-  if (context.preMergeBehaviorGate !== true || producer === undefined) {
+  // Knob OFF ⇒ zero-cost no-op (no preview deploy), regardless of whether a producer is wired.
+  if (context.preMergeBehaviorGate !== true) {
     return "proceed";
+  }
+  // Knob ON but no producer ⇒ MISCONFIGURATION. Fail-closed LOUD — never proceed past an
+  // opted-in gate that cannot run.
+  if (producer === undefined) {
+    log.error("pre-merge behavior gate is ON but no producer is wired — failing closed", {
+      runId: context.runId,
+    });
+    throw new PreMergeBehaviorGateMisconfiguredError(context.runId);
   }
   const outcome = await producer.produce({
     orgId: context.orgId,

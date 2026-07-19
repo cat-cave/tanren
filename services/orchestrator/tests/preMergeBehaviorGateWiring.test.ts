@@ -4,7 +4,10 @@
 // producer's `passed`/`not_applicable` as `proceed` and only `blocked` would halt.
 
 import { describe, expect, it, vi } from "vitest";
-import { runPreMergeBehaviorGate } from "../src/engine/workflow/plannerRunPreMergeBehavior.js";
+import {
+  PreMergeBehaviorGateMisconfiguredError,
+  runPreMergeBehaviorGate,
+} from "../src/engine/workflow/plannerRunPreMergeBehavior.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 import type {
   PreMergeBehaviorGateOutcome,
@@ -60,8 +63,10 @@ describe("runPreMergeBehaviorGate — opt-in, default-off wiring", () => {
     expect(produce).not.toHaveBeenCalled();
   });
 
-  it("knob ON but NO producer wired → proceed (no deploy possible)", async () => {
-    expect(await runPreMergeBehaviorGate(inputWith(), ctx(true), STAGE, "deadbeef")).toBe("proceed");
+  it("knob ON but NO producer wired → FAIL-CLOSED (misconfiguration throws, never a silent proceed)", async () => {
+    await expect(runPreMergeBehaviorGate(inputWith(), ctx(true), STAGE, "deadbeef")).rejects.toThrow(
+      PreMergeBehaviorGateMisconfiguredError,
+    );
   });
 
   it("knob ON + producer passes → proceed, produce called with the run + head bindings", async () => {

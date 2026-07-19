@@ -200,12 +200,15 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
   }
 
   /**
-   * Resolve the declared behaviors to ACTIVE revisions and compile their acceptance plans. A
-   * run that HAS declared behaviors but resolves to zero active revisions / zero plans — or
-   * whose spec fails to compile — is unverifiable ⇒ fail-closed BLOCK (never a pass), all
-   * BEFORE paying any preview-deploy cost.
+   * Resolve the declared behaviors to ACTIVE revisions and compile their acceptance plans, with
+   * FULL COVERAGE required: EVERY declared behavior must resolve to an active revision AND
+   * compile to a plan. A declared behavior that resolves to no active revision — or does not
+   * compile — is unverifiable and is NEVER silently dropped: any shortfall is a fail-closed
+   * BLOCK (a run with 3 declared behaviors where only 2 resolve can NEVER return `passed`). All
+   * checked BEFORE paying any preview-deploy cost.
    */
   private async resolvePlans(input: PreMergeBehaviorGateInput): Promise<PlanResolution> {
+    const declaredCount = new Set(input.behaviorIds).size;
     let revisionIds: readonly BehaviorRevisionId[];
     try {
       revisionIds = await this.deps.behaviorRevisions.resolveActive({
@@ -216,10 +219,13 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
     } catch (error) {
       return { kind: "blocked", reason: `pre-merge behavior revision resolution failed: ${messageOf(error)}` };
     }
-    if (revisionIds.length === 0) {
+    if (revisionIds.length < declaredCount) {
+      // A declared behavior with NO active revision must BLOCK, never be dropped from the gate.
       return {
         kind: "blocked",
-        reason: "run's declared behaviors resolve to no active behavior revision — unverifiable pre-merge",
+        reason:
+          `only ${revisionIds.length} of ${declaredCount} declared behaviors resolve to an active behavior ` +
+          "revision — an unverifiable declared behavior blocks, it is never silently dropped",
       };
     }
     let plans: readonly AcceptancePlan[];
@@ -228,10 +234,13 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
     } catch (error) {
       return { kind: "blocked", reason: `pre-merge acceptance plan load failed: ${messageOf(error)}` };
     }
-    if (plans.length === 0) {
+    // Every active revision MUST compile to exactly one plan — a shortfall is unverifiable.
+    if (plans.length < revisionIds.length) {
       return {
         kind: "blocked",
-        reason: "run's declared behaviors compiled to no acceptance plans — unverifiable pre-merge",
+        reason:
+          `only ${plans.length} of ${revisionIds.length} behavior revisions compiled to an acceptance plan — ` +
+          "unverifiable pre-merge",
       };
     }
     return { kind: "resolved", revisionIds, plans };

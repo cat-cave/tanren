@@ -151,6 +151,32 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     expect(provision).not.toHaveBeenCalled();
   });
 
+  it("PARTIAL resolution (2 declared, only 1 active revision) → blocked, never a partial pass", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    // Two declared behaviors, but only ONE resolves to an active revision — the other is
+    // unverifiable and must BLOCK, never be silently dropped so the run "passes" on a subset.
+    const producer = buildProducer({
+      provisioner,
+      behaviorRevisions: resolverReturning(["br1"]),
+      planLoader: planLoaderReturning([fakePlan()]),
+    });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
+    expect(outcome.kind).toBe("blocked");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("PARTIAL plan compilation (2 revisions, only 1 plan) → blocked", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const producer = buildProducer({
+      provisioner,
+      behaviorRevisions: resolverReturning(["br1", "br2"]),
+      planLoader: planLoaderReturning([fakePlan()]),
+    });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
+    expect(outcome.kind).toBe("blocked");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("revision resolution THROWS → blocked, no preview deployed", async () => {
     const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
     const producer = buildProducer({ provisioner, behaviorRevisions: resolverThrowing() });
