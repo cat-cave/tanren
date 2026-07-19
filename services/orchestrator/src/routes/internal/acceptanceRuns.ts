@@ -9,9 +9,14 @@ import {
   AcceptanceOrchestrator,
   PgAcceptanceEventSink,
   PgAcceptanceRunStore,
+  type AcceptanceAssertion,
+  type AcceptanceCauseDriver,
   type AcceptancePlan,
   type AcceptanceSurfaceDriver,
+  type CausalEffectReader,
+  type CauseSpec,
 } from "../../engine/verification/acceptance/index.js";
+import { PgCausalEffectReader } from "../../engine/verification/effectObserver/pgCausalEffectReader.js";
 import { verifyInternalPeer } from "./internalWriteShared.js";
 
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
@@ -45,11 +50,24 @@ const canonical: z.ZodType<CanonicalBody> = z.lazy(() =>
   z.union([z.null(), z.boolean(), z.number(), z.string(), z.array(canonical), z.record(z.string(), canonical)]),
 );
 
+const correlationSchema = z.object({
+  causeId: z.string().min(1),
+  observer: z.string().min(1),
+  provider: z.string().min(1),
+  requireCorrelationId: z.boolean(),
+});
 const assertionSchema = z.object({
   assertionId: z.string().min(1),
   subject: z.string().min(1),
   comparisonOperator,
   expected: canonical,
+  // rv-12: present ⇒ a causal cardinality assertion over correlated rv-8 effects.
+  correlation: correlationSchema.optional(),
+});
+const causeSchema = z.object({
+  causeId: z.string().min(1),
+  surface,
+  action: z.string().min(1),
 });
 const exampleSchema = z.object({
   values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])),
@@ -66,15 +84,22 @@ const matrixSchema = z
     device: z.array(z.string()).optional(),
   })
   .default({});
-const planSchema = z.object({
-  planId: z.string().min(1),
-  behaviorRevisionId: z.string().min(1),
-  requiredSurfaces: z.array(surface).min(1),
-  assertions: z.array(assertionSchema),
-  fixtures: z.array(z.unknown()).default([]),
-  examples: z.array(exampleSchema).default([]),
-  executionMatrix: matrixSchema,
-});
+const planSchema = z
+  .object({
+    planId: z.string().min(1),
+    behaviorRevisionId: z.string().min(1),
+    // rv-12: a purely causal plan drives its causes (not surface drivers), so
+    // requiredSurfaces may be empty when `causes` carry the work.
+    requiredSurfaces: z.array(surface).default([]),
+    assertions: z.array(assertionSchema),
+    fixtures: z.array(z.unknown()).default([]),
+    examples: z.array(exampleSchema).default([]),
+    executionMatrix: matrixSchema,
+    causes: z.array(causeSchema).default([]),
+  })
+  .refine((plan) => plan.requiredSurfaces.length > 0 || plan.causes.length > 0, {
+    message: "a plan must declare at least one required surface or one cause",
+  });
 const executeSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
@@ -105,20 +130,26 @@ function toExecutionMatrix(raw: z.infer<typeof matrixSchema>): ExecutionMatrix {
   };
 }
 
+function toAssertion(raw: z.infer<typeof assertionSchema>): AcceptanceAssertion {
+  return {
+    assertionId: raw.assertionId,
+    subject: raw.subject,
+    comparisonOperator: raw.comparisonOperator,
+    expected: raw.expected,
+    ...(raw.correlation === undefined ? {} : { correlation: raw.correlation }),
+  };
+}
+
 function toPlan(raw: z.infer<typeof planSchema>): AcceptancePlan {
   return {
     planId: raw.planId,
     behaviorRevisionId: raw.behaviorRevisionId,
     requiredSurfaces: raw.requiredSurfaces as readonly RequiredSurface[],
-    assertions: raw.assertions.map((assertion) => ({
-      assertionId: assertion.assertionId,
-      subject: assertion.subject,
-      comparisonOperator: assertion.comparisonOperator,
-      expected: assertion.expected,
-    })),
+    assertions: raw.assertions.map(toAssertion),
     fixtures: raw.fixtures,
     examples: raw.examples.map((example) => ({ values: example.values, rowHash: example.rowHash as Digest })),
     executionMatrix: toExecutionMatrix(raw.executionMatrix),
+    causes: raw.causes as readonly CauseSpec[],
   };
 }
 
@@ -127,6 +158,10 @@ export interface AcceptanceRunRouteDeps {
   readonly verifier: MtlsPeerVerifier;
   /** rv-6 surface drivers; empty until a real driver lands (runs fail-closed). */
   readonly drivers?: readonly AcceptanceSurfaceDriver[];
+  /** rv-12 cause drivers; empty ⇒ causal assertions fail closed (no cause fired). */
+  readonly causeDrivers?: readonly AcceptanceCauseDriver[];
+  /** rv-12 effect reader; defaults to the rv-8 Postgres evidence over deps.pool. */
+  readonly effectReader?: CausalEffectReader;
 }
 
 /** mTLS-only surface to trigger an A1 acceptance run and read its recorded verdicts. */
@@ -137,6 +172,8 @@ export function createInternalAcceptanceRunRoutes(deps: AcceptanceRunRouteDeps):
     events: new PgAcceptanceEventSink(deps.pool),
     fixtureLease: new PgFixtureLeaseAdapter(deps.pool),
     ...(deps.drivers === undefined ? {} : { drivers: deps.drivers }),
+    ...(deps.causeDrivers === undefined ? {} : { causeDrivers: deps.causeDrivers }),
+    effectReader: deps.effectReader ?? new PgCausalEffectReader(deps.pool),
   });
   const app = new Hono();
 

@@ -2,4 +2,6 @@
 export * from "./assertionEvaluator.js";
 export * from "./verdictStore.js";
 export * from "./eventSink.js";
+export * from "./causalCorrelation.js";
+export * from "./causalStage.js";
 export * from "./orchestrator.js";
