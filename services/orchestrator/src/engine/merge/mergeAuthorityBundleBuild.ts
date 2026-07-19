@@ -17,7 +17,12 @@ import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { recordEffectivePolicySnapshot } from "../governance/effectivePolicySnapshotStore.js";
 import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
-import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
+import {
+  resolveLandTimeReviewGate,
+  resolveLandTimeSignals,
+  resolveLandTimeFindings,
+  type GovernanceReviewGate,
+} from "./landSignals.js";
 import {
   resolveDesignRenderGate,
   resolveLandTimeBehaviorGate,
@@ -88,6 +93,8 @@ export interface BuildMergeAuthorityBundleInput {
   reviewedHeadSha: string | undefined;
   /** True only for reviewPolicy=simulated; missing receipt must block land. */
   requiresExactReviewReceipt: boolean;
+  /** Immutable review rules compiled from the active governance policy. */
+  reviewGate: GovernanceReviewGate;
   /**
    * The REAL audit findings the auditor emitted on the run's latest `auditor.verdict`
    * (read fresh at land time; §4). `decideFromFindings(findings, auditPosture)` in the
@@ -210,6 +217,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     gatedHeadSha: input.gatedHeadSha,
     reviewedHeadSha: input.reviewedHeadSha,
     requiresExactReviewReceipt: input.requiresExactReviewReceipt,
+    reviewGate: input.reviewGate,
     findings: input.findings,
     auditPosture: resolveAuditPosture(input.projectConfigRaw),
     reviewVerdict: input.reviewVerdict,
@@ -306,6 +314,12 @@ export async function buildBundleForMergeStage(
       createdBy: "system:merge-authority",
     }),
   );
+  const reviewGate = await resolveLandTimeReviewGate(
+    pool,
+    row.org_id,
+    context.runId,
+    effectivePolicySnapshot.compiledBody,
+  );
   return buildMergeAuthorityBundle({
     pool,
     // PLANE-SPLIT (REQUIRED — audit D-R3.2): the durable land finalize routes through the
@@ -321,7 +335,8 @@ export async function buildBundleForMergeStage(
     gateOutcome: landSignals.gateOutcome,
     gatedHeadSha: landSignals.gatedHeadSha,
     reviewedHeadSha: landSignals.reviewedHeadSha,
-    requiresExactReviewReceipt: migrateProjectConfig(row.project_config).reviewPolicy === "simulated",
+    requiresExactReviewReceipt: reviewGate.rules.kind === "resolved" && reviewGate.rules.mode === "simulated",
+    reviewGate,
     findings,
     reviewVerdict: landSignals.reviewVerdict,
     budgetState,

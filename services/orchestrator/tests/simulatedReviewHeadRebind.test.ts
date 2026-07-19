@@ -18,6 +18,7 @@ import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 import { markReviewTaskDoneWithEvent } from "../src/engine/workflow/reviewMerge/reviewTaskTerminal.js";
 import type { ForgeReviewPublication } from "../src/engine/workflow/reviewMerge/simulatedReviewPublication.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 const REPO = { owner: "o", name: "r" };
 const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
@@ -67,6 +68,7 @@ function landInput(host: InMemoryCodeHost, landingHead: string, reviewedHeadSha:
     gatedHeadSha: landingHead,
     reviewedHeadSha,
     requiresExactReviewReceipt: true,
+    reviewGate: noRequiredReviewGate(),
     behaviorGate: { kind: "not_applicable" },
     designRenderGate: { kind: "not_applicable" },
     store: STORE,

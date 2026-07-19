@@ -25,6 +25,7 @@ import type { CodeHost } from "../src/engine/contracts/codeHost.js";
 import type pg from "pg";
 import type { RunStateWriter } from "../src/engine/contracts/runStateWriter.js";
 import type { ReviewMergeRunContext } from "../src/engine/workflow/reviewMerge/context.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 // A minimal valid `.tanren/ci.yml` (block style — the scoped parser is block-only): a
 // per-iteration `fast` tier and a `pre_merge`-covering `slow` tier with junit evidence.
@@ -131,6 +132,7 @@ describe("gv-3 buildMergeAuthorityBundle — stamps the real hashes it is handed
       gatedHeadSha: undefined,
       reviewedHeadSha: undefined,
       requiresExactReviewReceipt: false,
+      reviewGate: noRequiredReviewGate(),
       findings: [],
       reviewVerdict: undefined,
       budgetState: { ceilingUsd: undefined, spentUsd: 0 },
