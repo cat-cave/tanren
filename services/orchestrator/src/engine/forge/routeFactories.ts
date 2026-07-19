@@ -17,7 +17,9 @@ import {
   type ForgeAnswererTarget,
 } from "./providerFactory.js";
 import { buildForgeDesignAgentFactory } from "./designAgentFactory.js";
+import { buildForgeDesignSystemComposerFactory } from "./designSystemComposerFactory.js";
 import { buildForgeFragmentAuthorerFactory } from "./fragmentAuthorerFactory.js";
+import type { ComposeDesignSystemCallback } from "./interview/index.js";
 import type { DesignAgent } from "../design/designAgent.js";
 import type { InterviewAnswerer } from "./interview/index.js";
 import type { DiscoveryAnswerer } from "./discovery/index.js";
@@ -42,6 +44,9 @@ export interface ForgeRouteAnswererFactories {
   /** F2 — per-fragment authoring (docs/roadmap/templating-system.md): a real
    * LLM-backed authorer that produces a Fragment body for a missing slot. */
   fragmentAuthorer: (target: ForgeAnswererTarget) => FragmentAuthorer;
+  /** ds-composer — the DESIGN-SYSTEM COMPOSITION seam: compose+publish the project's
+   * web design system during derive (authoring the missing ds-3 fragments via F2D). */
+  designSystemComposer: () => ComposeDesignSystemCallback;
   /**
    * Build the REAL scheduled-audit pass runner (the audit route's production
    * runner: it indexes the project's repo READ-ONLY and has the audit answerer
@@ -66,6 +71,7 @@ export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): For
     audit,
     conversation: buildForgeConversationAnswererFactory(infra),
     fragmentAuthorer: buildForgeFragmentAuthorerFactory(infra),
+    designSystemComposer: buildForgeDesignSystemComposerFactory(infra),
     auditPassRunnerFor: (github) =>
       createAnswererPassRunner({
         pool: infra.pool,

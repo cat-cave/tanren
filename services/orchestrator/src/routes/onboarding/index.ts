@@ -45,6 +45,7 @@ import {
   ProjectDesignElaborationStateUnknownError,
   runRound,
   UnresolvableLifecycleError,
+  type ComposeDesignSystemCallback,
   type DeployPreflightCallback,
   type InterviewAnswerer,
   type PersistDeploySelectionCallback,
@@ -115,6 +116,10 @@ export interface OnboardingRoutesOptions {
   /** UNIFIED LIBRARY LOADER (F2): combines bundled core + org-authored
    * fragments (the per-org `fragments` table). */
   loadFragmentLibrary?: (orgId: string) => Promise<FragmentLibrary>;
+  /** ds-composer — the DESIGN-SYSTEM COMPOSITION seam. Called per-request with the
+   * request's org so the composer resolves the org's default LLM credential (the F2D
+   * writer) + org-scoped stores; the derive runs it once the HEAD contract exists. */
+  composeDesignSystem?: (ctx: { orgId: string; actor: ActorContext }) => ComposeDesignSystemCallback;
   /** Test seam; production omits this and executes the real bootstrap. */
   bootstrapProject?: NonNullable<Parameters<typeof deriveFromCapture>[1]["bootstrapProject"]>;
 }
@@ -260,6 +265,10 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           ...(options.loadFragmentLibrary === undefined
             ? {}
             : { fragmentLibrary: await options.loadFragmentLibrary(orgId) }),
+          // ds-composer — compose+publish the web design system during derive (F2D fires).
+          ...(options.composeDesignSystem === undefined
+            ? {}
+            : { composeDesignSystem: options.composeDesignSystem({ orgId, actor: { ...actor, orgId } }) }),
           ...(options.bootstrapProject === undefined ? {} : { bootstrapProject: options.bootstrapProject }),
         },
       );

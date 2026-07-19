@@ -180,6 +180,10 @@ export interface DeriveFromCaptureInput {
   // WS-D3 (native-design-subsystem.md): the DESIGN AGENT that elaborates the captured
   // design intent into the designed HEAD `DesignContract`.
   designAgent?: DesignAgent;
+  // ds-composer — the DESIGN-SYSTEM COMPOSITION seam. Threaded into
+  // `deriveProductGraph` so it composes+publishes the project's web design system
+  // (authoring the missing ds-3 fragments) once the HEAD contract exists.
+  composeDesignSystem?: DeriveInput["composeDesignSystem"];
   bootstrapProject?: DeriveInput["bootstrapProject"];
 }
 
@@ -209,6 +213,7 @@ export async function deriveFromCapture(
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
     ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
     ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent }),
+    ...(input.composeDesignSystem === undefined ? {} : { composeDesignSystem: input.composeDesignSystem }),
     ...(input.bootstrapProject === undefined ? {} : { bootstrapProject: input.bootstrapProject }),
   });
 }
