@@ -200,4 +200,78 @@ describe("ResolutionDagWalker", () => {
     await walker.tick();
     expect(calls).toEqual(["production-stage", "authority:rjob_production", "repair:rdec_blocked", "complete"]);
   });
+
+  it("wires a bound production product_failure through the rv-19 deploy-side settlement", async () => {
+    const settles: { releaseInstanceId: string; outcome: string }[] = [];
+    const boundJob = { ...job, id: "rjob_reproof", stage: "production" as const, releaseInstanceId: "release_bound" };
+    const store = {
+      async recoverExpiredLeases() {
+        return [];
+      },
+      async claimNext() {
+        return boundJob;
+      },
+      async verifyActiveLease() {
+        return boundJob;
+      },
+      async heartbeat() {
+        return true;
+      },
+      async complete() {
+        return true;
+      },
+      async release() {
+        return true;
+      },
+    } as unknown as ResolutionJobStore;
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => [boundJob.orgId],
+      stages: new Map<"production", ResolutionStage>([
+        [
+          "production",
+          {
+            kind: "production",
+            async run() {
+              return {
+                outcome: "failed" as const,
+                classification: "product_failure" as const,
+                proofGrade: "active_causal" as const,
+                verificationRunId: "vrun_bound",
+                assertionIds: ["vassert_symptom"],
+                evidenceRefs: [],
+              };
+            },
+          },
+        ],
+      ]),
+      authority: {
+        async authorize() {
+          return {
+            id: "rdec_ok",
+            decision: "authorized",
+            inputSnapshotHash: "sha256:" + "d".repeat(64),
+            reasons: [],
+            created: true,
+          };
+        },
+        async waive() {
+          throw new Error("walker cannot waive");
+        },
+      },
+      reproofCoordinator: {
+        async alreadyApplied() {
+          return false;
+        },
+        settle(input) {
+          settles.push({ releaseInstanceId: input.releaseInstanceId, outcome: input.result.outcome });
+          return Promise.resolve("rolled_back");
+        },
+      },
+      leaseOwner: "walker_a",
+    });
+
+    await walker.tick();
+    expect(settles).toEqual([{ releaseInstanceId: "release_bound", outcome: "failed" }]);
+  });
 });

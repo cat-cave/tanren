@@ -2,12 +2,24 @@ import type { ResolutionAuthority } from "../contracts/resolutionAuthority.js";
 import type { ResolutionJob } from "../contracts/resolutionStage.js";
 import type pg from "pg";
 import { PgRepairRouter, type RepairRouter } from "../workflow/repairRouting.js";
+import { PostMergeReproofCoordinator } from "../verification/postMergeReproof/coordinator.js";
 
 export type { RepairRouter } from "../workflow/repairRouting.js";
+// rv-19 deploy-side settlement, re-exported through the SAME production-resolution seam the
+// walker + retry route already import from, so neither adds a fresh module dependency.
+export {
+  applyReproofDeployOutcome,
+  PostMergeReproofCoordinator,
+} from "../verification/postMergeReproof/coordinator.js";
 
 /** Production composition keeps the fail-closed blocked-decision seam together. */
 export function buildProductionRepairRouter(pool: pg.Pool): RepairRouter {
   return new PgRepairRouter(pool);
+}
+
+/** The live rv-19 deploy-side settlement coordinator over the control pool. */
+export function buildPostMergeReproofCoordinator(pool: pg.Pool): PostMergeReproofCoordinator {
+  return new PostMergeReproofCoordinator({ pool });
 }
 
 /**

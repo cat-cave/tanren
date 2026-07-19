@@ -11,8 +11,11 @@ import type {
 } from "../../engine/contracts/resolutionStage.js";
 import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
 import {
+  applyReproofDeployOutcome,
   authorizeProductionResolution,
+  buildPostMergeReproofCoordinator,
   buildProductionRepairRouter,
+  type PostMergeReproofCoordinator,
   type RepairRouter,
 } from "../../engine/dag/productionResolutionAuthorization.js";
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
@@ -43,6 +46,13 @@ export interface ProductionVerificationRoutesOptions {
   readonly authority?: Pick<ResolutionAuthority, "authorize">;
   /** Required for blocked decisions; defaults to the live deterministic router. */
   readonly repairRouter?: RepairRouter;
+  /**
+   * rv-19 deploy-side settlement of the operator-retry production verdict — promotes a
+   * `product_resolved` re-proof or rolls the live release pointer back on a
+   * `product_failure`. Defaults to the live coordinator so this manual path can NEVER
+   * complete a `product_failure` with the broken release left live (the walker's guarantee).
+   */
+  readonly reproofCoordinator?: Pick<PostMergeReproofCoordinator, "settle">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -79,6 +89,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
   const authority = options.authority ?? buildResolutionAuthority(options.pool);
   const repairRouter = options.repairRouter ?? buildProductionRepairRouter(options.pool);
+  const reproofCoordinator = options.reproofCoordinator ?? buildPostMergeReproofCoordinator(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -151,6 +162,10 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       // stage has written immutable production evidence, but this lease must not
       // become completed until the authority records its decision and event.
       await authorizeProductionResolution(authority, job, repairRouter);
+      // rv-19: the SAME deploy-side settlement the walker applies — promote the proven
+      // release, or roll the live pointer back on a product_failure. Without it this
+      // manual retry path would complete a failed re-proof with the broken release LIVE.
+      await applyReproofDeployOutcome(reproofCoordinator, job, verdict);
     } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;

@@ -9,7 +9,17 @@ import type {
 } from "../src/engine/contracts/resolutionStage.js";
 import type { SymptomContractRow } from "../src/engine/repositories/symptomContracts.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
+import type { SettleReproofInput } from "../src/engine/verification/postMergeReproof/coordinator.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
+
+const FAILURE_VERDICT = {
+  outcome: "failed" as const,
+  classification: "product_failure" as const,
+  proofGrade: "active_causal" as const,
+  verificationRunId: "vrun_failure",
+  assertionIds: ["assertion_1"],
+  evidenceRefs: ["evidence_1"],
+};
 
 const ACTOR: ActorContext = {
   userId: "user_admin",
@@ -50,6 +60,7 @@ function appFor(
   released: unknown[] = [],
   verdict: ResolutionStageResult = VERDICT,
   authorizations: string[] = [],
+  reproofSettles: SettleReproofInput[] = [],
 ) {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
@@ -60,6 +71,12 @@ function appFor(
     "/v1/orgs",
     createProductionVerificationRoutes({
       pool: {} as never,
+      reproofCoordinator: {
+        settle(input) {
+          reproofSettles.push(input);
+          return Promise.resolve("held");
+        },
+      },
       contracts: {
         async get() {
           return contract;
@@ -217,5 +234,33 @@ describe("production verification retry route", () => {
     expect(completed).toEqual([]);
     expect(released).toEqual([expect.objectContaining({ id: "rjob_manual_1", state: "retryable" })]);
     expect(authorizations).toEqual(["rjob_manual_1"]);
+  });
+
+  it("routes a product_failure retry through the rv-19 deploy-side rollback settlement", async () => {
+    const reproofSettles: SettleReproofInput[] = [];
+    const response = await appFor([], [], [], [], FAILURE_VERDICT, [], reproofSettles).request(
+      "/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          contractId: "contract_1",
+          releaseInstanceId: "release_1",
+          idempotencyKey: "operator-retry-failure",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    // The retry path MUST invoke the same deploy-side settlement the walker does — a
+    // product_failure here can never complete with the broken release left live.
+    expect(reproofSettles).toEqual([
+      expect.objectContaining({
+        orgId: "org_acme",
+        projectId: "project_1",
+        releaseInstanceId: "release_1",
+        result: FAILURE_VERDICT,
+      }),
+    ]);
   });
 });

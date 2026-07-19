@@ -5,6 +5,11 @@ import type { RepairRouter } from "../workflow/repairRouting.js";
 import { createLogger } from "../observability/logger.js";
 import { authorizeProductionResolution } from "./productionResolutionAuthorization.js";
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
+import {
+  applyReproofDeployOutcome,
+  reproofAlreadySettled,
+  type PostMergeReproofCoordinator,
+} from "../verification/postMergeReproof/coordinator.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -26,6 +31,12 @@ export interface ResolutionDagWalkerDeps {
   readonly authority?: ResolutionAuthority;
   /** Required for a blocked production decision; absent routing fails closed. */
   readonly repairRouter?: RepairRouter;
+  /**
+   * rv-19 post-merge re-proof settlement: promotes a `product_resolved` production
+   * verdict or rolls the live release pointer back on a `product_failure`. Wired in
+   * the production composition; a `production` stage settles its deploy side through it.
+   */
+  readonly reproofCoordinator?: Pick<PostMergeReproofCoordinator, "settle" | "alreadyApplied">;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -130,6 +141,18 @@ export class ResolutionDagWalker {
       return;
     }
 
+    // rv-19 idempotent crash-replay: a recovered production job whose deploy re-proof was
+    // already applied (promoted/rolled_back) must NOT re-run the stage — after a rollback
+    // its bound release is demoted, so bh-10's live-binding would throw and loop forever.
+    // Settle it completed exactly once under the held lease and skip the stage.
+    if (await reproofAlreadySettled(this.deps.reproofCoordinator, job)) {
+      const completed = await this.deps.store.complete({ orgId: job.orgId, id: job.id, leaseOwner: job.leaseOwner });
+      if (!completed) {
+        throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before idempotent settlement`);
+      }
+      return;
+    }
+
     const heartbeatEveryMs = Math.max(1, Math.floor(claim.leaseMs / 3));
     let stopped = false;
     let heartbeatError: Error | undefined;
@@ -162,6 +185,13 @@ export class ResolutionDagWalker {
       // only evidence: the separate ResolutionAuthority is the sole component
       // allowed to declare an internal resolution / source-closure eligibility.
       await authorizeProductionResolution(this.deps.authority, job, this.deps.repairRouter);
+
+      // rv-19 deploy-side settlement of the same production verdict: promote the
+      // proven release, or roll the live pointer back to the prior known-good
+      // release when the symptom is STILL present in production. A no-op for every
+      // non-production stage. Runs before lease settlement so a throw releases the
+      // lease (retryable) rather than completing a decision-less rollback.
+      await applyReproofDeployOutcome(this.deps.reproofCoordinator, job, result);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {
