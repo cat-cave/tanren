@@ -101,6 +101,11 @@ const matrixSchema = z
   })
   .default({});
 
+const visualVerificationSchema = z.object({
+  required: z.boolean(),
+  accessibilityStandard: z.string().min(1).optional(),
+});
+
 const acceptanceSpecSchema = z.object({
   version: z.literal("v1").optional(),
   requiredSurfaces: z.array(surface).default([]),
@@ -110,6 +115,9 @@ const acceptanceSpecSchema = z.object({
   examples: z.array(exampleSchema).default([]),
   executionMatrix: matrixSchema,
   causes: z.array(causeSchema).default([]),
+  // rv-13 A4: an OPTIONAL rendered-visual requirement — when `required`, the behavior
+  // demands a passing ds-4 design-render verdict on top of its functional assertions.
+  visualVerification: visualVerificationSchema.optional(),
 });
 
 type AcceptanceSpecV1 = z.infer<typeof acceptanceSpecSchema>;
@@ -204,5 +212,6 @@ export function compileAcceptancePlan(revision: Pick<BehaviorRevision, "id" | "a
     executionMatrix: toExecutionMatrix(spec.executionMatrix),
     causes,
     httpProbes,
+    ...(spec.visualVerification === undefined ? {} : { visualVerification: spec.visualVerification }),
   };
 }
