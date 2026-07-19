@@ -102,6 +102,88 @@ describeDb("DesignSystemReleaseStore RLS (ds-0 design foundation)", () => {
     expect(latest?.releaseId).toBe("release_a1");
   });
 
+  it("publishRelease — transitions a draft to published (provenance + canonical artifact) org-scoped", async () => {
+    const store = new DesignSystemReleaseStore(runtimePool);
+    await store.createSystem({ orgId: ORG_A, id: "system_pub", slug: "pub", name: "Publishable DS" });
+    await store.createRelease({
+      orgId: ORG_A,
+      id: "release_pub1",
+      designSystemId: "system_pub",
+      version: 1,
+      contractId: "contract_pub",
+      contractVersion: contract.version,
+      contractDigest,
+      manifestSchemaVersion: 1,
+      createdBy: "actor_a",
+    });
+    const artifactDigest = `sha256:${"c".repeat(64)}`;
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      client.query(
+        `INSERT INTO design_artifacts
+           (org_id, id, design_system_id, digest, media_type, manifest_version, object_store_key, byte_size)
+         VALUES ($1, $2, $3, $4, 'application/vnd.tanren.design.manifest+json', 1, $5, 128)`,
+        [ORG_A, "artifact_pub1", "system_pub", artifactDigest, `objects/${artifactDigest.slice(7)}`],
+      ),
+    );
+
+    const published = await store.publishRelease({
+      orgId: ORG_A,
+      releaseId: "release_pub1",
+      canonicalArtifactId: "artifact_pub1",
+      publishedBy: "operator_pub",
+    });
+    expect(published.state).toBe("published");
+    expect(published.canonicalArtifactId).toBe("artifact_pub1");
+
+    // Provenance columns satisfy the `_published_check` invariant.
+    const row = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      client.query<{ state: string; published_by: string | null; published_at: Date | null }>(
+        "SELECT state, published_by, published_at FROM design_system_releases WHERE id = $1",
+        ["release_pub1"],
+      ),
+    );
+    expect(row.rows[0]?.state).toBe("published");
+    expect(row.rows[0]?.published_by).toBe("operator_pub");
+    expect(row.rows[0]?.published_at).not.toBeNull();
+
+    // A second publish is not a legal source (already published) — never re-stamps.
+    await expect(
+      store.publishRelease({
+        orgId: ORG_A,
+        releaseId: "release_pub1",
+        canonicalArtifactId: "artifact_pub1",
+        publishedBy: "operator_pub",
+      }),
+    ).rejects.toBeInstanceOf(DesignSystemNotFoundError);
+  });
+
+  it("publishRelease NEGATIVE CONTROL — org B cannot publish org A's release (RLS hides the row)", async () => {
+    const store = new DesignSystemReleaseStore(runtimePool);
+    await store.createSystem({ orgId: ORG_A, id: "system_pub2", slug: "pub2", name: "Publishable DS 2" });
+    await store.createRelease({
+      orgId: ORG_A,
+      id: "release_pub2",
+      designSystemId: "system_pub2",
+      version: 1,
+      contractId: "contract_pub2",
+      contractVersion: contract.version,
+      contractDigest,
+      manifestSchemaVersion: 1,
+      createdBy: "actor_a",
+    });
+    await expect(
+      store.publishRelease({
+        orgId: ORG_B,
+        releaseId: "release_pub2",
+        canonicalArtifactId: "artifact_pub1",
+        publishedBy: "attacker",
+      }),
+    ).rejects.toBeInstanceOf(DesignSystemNotFoundError);
+    // Org A's release is untouched — still a draft.
+    const still = await store.getRelease(ORG_A, "release_pub2");
+    expect(still.state).toBe("draft");
+  });
+
   it("NEGATIVE CONTROL — org B and the unscoped runtime pool see ZERO of org A's rows", async () => {
     const store = new DesignSystemReleaseStore(runtimePool);
     // Cross-org read via the store surfaces as not-found (RLS hides the row).

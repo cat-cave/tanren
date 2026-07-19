@@ -54,6 +54,15 @@ export interface CreateDesignReleaseInput {
   readonly parentReleaseId?: string | null;
 }
 
+/** Input to publish a draft/validated release: bind its canonical artifact + stamp
+ * publication provenance (the `_published_check` invariant). */
+export interface PublishDesignReleaseInput {
+  readonly orgId: string;
+  readonly releaseId: string;
+  readonly canonicalArtifactId: string;
+  readonly publishedBy: string;
+}
+
 /** Raised when a requested design system / release is absent under the org scope. */
 export class DesignSystemNotFoundError extends Error {
   constructor(
@@ -238,6 +247,37 @@ export class DesignSystemReleaseStore {
       const row = rows.rows[0];
       if (row === undefined) {
         throw new DesignSystemNotFoundError(input.orgId, "release", input.id);
+      }
+      return rowToRelease(row);
+    });
+  }
+
+  /**
+   * PUBLISH a draft/validated release: transition it to `published`, binding the
+   * canonical artifact it resolves to and stamping `published_at`/`published_by`.
+   * This satisfies the `design_system_releases_published_check` invariant (a
+   * published release MUST carry all three). Only a non-published release is a
+   * legal source (the `state IN ('draft','validated')` guard), so a second publish
+   * of the same release is a no-op that surfaces as `DesignSystemNotFoundError`
+   * rather than silently re-stamping an immutable published row — the caller owns
+   * idempotency (compose short-circuits on an already-published lineage). Org-scoped
+   * under RLS, exactly like every other write on this store.
+   */
+  async publishRelease(input: PublishDesignReleaseInput): Promise<DesignSystemReleaseV1> {
+    return runWithOrgScope(this.pool, input.orgId, async (client) => {
+      const rows = await client.query<DesignReleaseDbRow>(
+        `UPDATE design_system_releases
+            SET state = 'published',
+                canonical_artifact_id = $1,
+                published_at = now(),
+                published_by = $2
+          WHERE org_id = $3 AND id = $4 AND state IN ('draft', 'validated')
+        RETURNING ${RELEASE_COLUMNS}`,
+        [input.canonicalArtifactId, input.publishedBy, input.orgId, input.releaseId],
+      );
+      const row = rows.rows[0];
+      if (row === undefined) {
+        throw new DesignSystemNotFoundError(input.orgId, "publishable release", input.releaseId);
       }
       return rowToRelease(row);
     });
