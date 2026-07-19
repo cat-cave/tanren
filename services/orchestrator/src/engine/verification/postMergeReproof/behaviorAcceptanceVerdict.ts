@@ -102,6 +102,12 @@ export interface PostMergeBehaviorVerifyResult {
   readonly passed: number;
   readonly failed: number;
   readonly verdicts: readonly PostMergeBehaviorVerdict[];
+  /**
+   * mq-7 — the observed epoch: the artifact_digest these verdicts were recorded at. Present on a
+   * `recorded` result; the downstream regression bisection uses it to EPOCH-SCOPE the quarantine
+   * masking check (a stale-epoch quarantine never masks this new-epoch regression).
+   */
+  readonly artifactDigest?: string;
 }
 
 export interface VerifyPostMergeBehaviorInput {
@@ -161,6 +167,9 @@ export class PostMergeBehaviorAcceptanceVerifier {
       passed,
       failed: verdicts.length - passed,
       verdicts,
+      // mq-7: the observed epoch these verdicts were recorded at, so downstream bisection can
+      // epoch-scope the quarantine masking check (a stale-epoch quarantine never masks this).
+      artifactDigest: release.artifactDigest,
     };
   }
 
@@ -230,10 +239,20 @@ export class PostMergeBehaviorAcceptanceVerifier {
   }
 
   /**
-   * rv-17 — the LIVE flake-quarantine writer. For each behavior just verified in production,
-   * classify from its recorded `post_merge_production` verdicts (same artifact + purpose) and, on a
-   * decisive flaky conflict, persist a quarantine. Best-effort + non-fatal: a classification/write
-   * failure is logged and swallowed so it can never destabilize the already-settled deploy decision.
+   * rv-17 / mq-7 — the LIVE flake-quarantine writer + epoch re-evaluator. For each behavior just
+   * verified in production, classify from its recorded `post_merge_production` verdicts (same
+   * artifact + purpose) and either open a quarantine on a decisive flaky conflict or RE-EVALUATE an
+   * existing quarantine against this new epoch (release on a new-epoch regression / recovery).
+   *
+   * Best-effort + non-fatal by DESIGN: a failure here must never throw. Throwing would leave the
+   * settled run recorded but re-drive `verify()` on retry, where `alreadyRecorded()` short-circuits
+   * to `already_recorded` — which stops the regression bisection from ever running (a NEW masking
+   * path). It is SAFE to swallow because the mq-7 anti-masking invariant no longer depends on this
+   * write: the regression bisection masking check is EPOCH-SCOPED (`isQuarantinedInEpoch`), so a
+   * new-epoch consistent_failure is NEVER masked by a stale quarantine even when this actuation
+   * throws or is skipped and the `release` row is never written. But the failure is NOT silent
+   * success: it is surfaced at ERROR so the (now-stale-until-next-observation) quarantine ledger is
+   * visible for repair, rather than buried as an expected "diagnostic only" event.
    */
   private async actuateFlakeQuarantines(release: ReleaseInstanceRecord, runResult: AcceptanceRunResult): Promise<void> {
     const store = this.deps.quarantineStore;
@@ -250,9 +269,12 @@ export class PostMergeBehaviorAcceptanceVerifier {
           actor: FLAKE_CLASSIFIER_ACTOR,
         });
       } catch (error) {
-        log.warn(
-          "rv-17 flake quarantine actuation failed; diagnostic only",
-          { behaviorRevisionId: behavior.behaviorRevisionId },
+        log.error(
+          "rv-17/mq-7 flake quarantine actuation FAILED — the epoch re-evaluation/release write did " +
+            "not persist. Anti-masking is UPHELD by epoch-scoped bisection consumption " +
+            "(isQuarantinedInEpoch), NOT by this write, so a new-epoch regression is NOT masked; the " +
+            "quarantine ledger may be stale for this behavior until the next successful actuation.",
+          { behaviorRevisionId: behavior.behaviorRevisionId, artifactDigest: release.artifactDigest },
           error,
         );
       }
