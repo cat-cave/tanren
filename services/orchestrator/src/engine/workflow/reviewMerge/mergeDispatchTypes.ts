@@ -19,6 +19,7 @@ import type { GateOutcome } from "../gate/index.js";
 import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
 import type { BehaviorLandGate } from "../../merge/behaviorLandGate.js";
+import type { DesignRenderGate } from "../../merge/designRenderLandGate.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
 import type {
@@ -102,6 +103,15 @@ export interface MergeAuthorityBundle {
    * `resolveLandTimeBehaviorGate` (the SAME freshness the gate/review/findings reads apply).
    */
   behaviorGate: BehaviorLandGate;
+  /**
+   * ds-4 — the run's DESIGN-RENDER (a11y) acceptance outcome at land time. `not_applicable`
+   * when the run's project has no composed design system or an advisory posture ("none") —
+   * it NEVER blocks those. When required, only `passed` clears; a `failed` (real axe
+   * violation at/above the posture bar) OR an `inconclusive` (verification inconclusive, or a
+   * published system with no verdict — required-but-absent) fails closed. Resolved fresh at
+   * land time by `resolveDesignRenderGate`.
+   */
+  designRenderGate: DesignRenderGate;
 }
 
 /**

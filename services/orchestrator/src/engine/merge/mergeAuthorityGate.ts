@@ -29,6 +29,7 @@ import type { Digest } from "../contracts/cas.js";
 import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { BehaviorLandGate } from "./behaviorLandGate.js";
+import type { DesignRenderGate } from "./designRenderLandGate.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import { evaluateExactReviewReceiptHead } from "./landSignals.js";
@@ -91,6 +92,14 @@ export interface MergeAuthorityGateInput {
    * `not_applicable` never blocks; `failed`/`inconclusive` fail closed.
    */
   behaviorGate: BehaviorLandGate;
+  /**
+   * ds-4 — the run's DESIGN-RENDER (a11y) acceptance outcome. Held as a SIBLING of `signals`
+   * (NOT inside the frozen `AuthorizeLandInput`, per mergeAuthority.ts reconciliation rule 2:
+   * SP-5 EMITS evidence, it never bolts a field onto the decision input). Enforced as a
+   * PRE-AUTHORIZE guard here (mirroring the behavior / gate↔land / review↔land guards):
+   * `not_applicable` never blocks; `failed`/`inconclusive` fail closed.
+   */
+  designRenderGate: DesignRenderGate;
   /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
   store: AuthorityLandStore;
 }
@@ -175,6 +184,7 @@ export async function runAuthorityLand(input: {
     requiresExactReviewReceipt: bundle.requiresExactReviewReceipt,
     signals,
     behaviorGate: bundle.behaviorGate,
+    designRenderGate: bundle.designRenderGate,
     store,
   });
 }
@@ -304,6 +314,33 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
       reasons: [
         `runtimeBehavior: ${behavior.reason} — fail closed ` +
           `(a required-but-not-green behavior verdict never authorizes; inconclusive ≠ passed)`,
+      ],
+    };
+  }
+
+  // DESIGN-RENDER GATE (ds-4): when a run REQUIRED design-render acceptance (its project has a
+  // composed design system with a real, non-"none" accessibility posture), that render/a11y
+  // verification must be a decisive PASS. Fail-closed: a `failed` (real axe violation at/above
+  // the posture bar) OR an `inconclusive`/required-but-absent verdict NEVER authorizes
+  // (inconclusive ≠ passed). `not_applicable` (no design system / posture "none" — most runs)
+  // NEVER blocks: the design_render section only gates when there is a required design to gate on.
+  const designRender = input.designRenderGate;
+  if (designRender.kind === "failed") {
+    return {
+      kind: "blocked",
+      reasons: [
+        `design_render: required design scenario '${designRender.failingScenarioKey}' failed accessibility ` +
+          `(${designRender.failingRuleIds.join(", ") || "a11y violation"}) — fail closed ` +
+          `(a required design-render failure never authorizes)`,
+      ],
+    };
+  }
+  if (designRender.kind === "inconclusive") {
+    return {
+      kind: "blocked",
+      reasons: [
+        `design_render: ${designRender.reason} — fail closed ` +
+          `(a required-but-not-green design-render verdict never authorizes; inconclusive ≠ passed)`,
       ],
     };
   }

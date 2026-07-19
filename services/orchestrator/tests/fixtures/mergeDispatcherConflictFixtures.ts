@@ -137,6 +137,7 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
     demo: "not_required",
     hitlSignoff: "not_required",
     behaviorGate: { kind: "not_applicable" },
+    designRenderGate: { kind: "not_applicable" },
   };
 }
 

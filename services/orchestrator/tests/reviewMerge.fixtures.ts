@@ -82,8 +82,7 @@ export function approvingReviewProbe(): ReviewProbe & { markedReady: boolean } {
  * `merge()`: the land is the unconditional `MergeAuthority` (a test that expects a land
  * supplies an `authorityBundle` + `authorityHost` and asserts the landed ref — see
  * below). This probe only scripts the mergeability reads + the server-side branch ops
- * (update / retarget / delete) the dispatcher still drives, and records their calls so
- * the freshness / speculative-retarget behaviors stay fully asserted.
+ * (update / retarget / delete) the dispatcher drives, recording their calls for assertions.
  */
 export function recordingMergeProbe(
   // by default the probe reports the branch CLEAN + up to date, so existing
@@ -219,6 +218,7 @@ export function authorityBundle(
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: AUTHORITY_HEAD_SHA,
     behaviorGate: { kind: "not_applicable" },
+    designRenderGate: { kind: "not_applicable" },
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

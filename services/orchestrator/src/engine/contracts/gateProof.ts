@@ -75,7 +75,10 @@ export const DesignRenderBodySchema = z
         .object({
           checkpointId: z.string().min(1),
           verdict: z.enum(["passed", "failed", "unknown"]),
-          diffRatio: z.number().min(0),
+          // OPTIONAL: the browser-free a11y/DOM verdict (ds-4 sub-node #3) carries NO pixel
+          // diff — it is omitted, never faked. The render-worker (browser) sub-node sets it
+          // for the pixel path. A present value is a real, nonnegative diff ratio.
+          diffRatio: z.number().min(0).optional(),
         })
         .strict(),
     ),

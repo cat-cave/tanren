@@ -18,7 +18,12 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import { recordEffectivePolicySnapshot } from "../governance/effectivePolicySnapshotStore.js";
 import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
-import { resolveLandTimeBehaviorGate, type BehaviorLandGate } from "./behaviorLandGate.js";
+import {
+  resolveDesignRenderGate,
+  resolveLandTimeBehaviorGate,
+  type BehaviorLandGate,
+  type DesignRenderGate,
+} from "./landGates.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
@@ -115,6 +120,12 @@ export interface BuildMergeAuthorityBundleInput {
    * blocked by it; a required-and-failing/inconclusive outcome fails closed in the gate.
    */
   behaviorGate: BehaviorLandGate;
+  /**
+   * ds-4 — the run's DESIGN-RENDER (a11y) acceptance outcome, read fresh at land time. Most
+   * runs resolve `not_applicable` (no composed design system / posture "none") and are never
+   * blocked by it; a required-and-failing/inconclusive outcome fails closed in the gate.
+   */
+  designRenderGate: DesignRenderGate;
 }
 
 /**
@@ -206,6 +217,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     demo: input.demo,
     hitlSignoff: input.hitlSignoff,
     behaviorGate: input.behaviorGate,
+    designRenderGate: input.designRenderGate,
   };
 }
 
@@ -264,6 +276,11 @@ export async function buildBundleForMergeStage(
   // for a run with no pre-merge behavior verification (most runs) — never blocks it; a
   // required-and-failing/inconclusive behavior verdict fails closed in `authorizeAndLand`.
   const behaviorGate = await resolveLandTimeBehaviorGate(pool, row.org_id, context.runId);
+  // ds-4 — the run's DESIGN-RENDER outcome, read fresh at land time. `not_applicable` for a
+  // run whose project has no composed design system / posture "none" (most runs) — never
+  // blocks it; a required-and-failing/inconclusive design-render verdict fails closed in
+  // `authorizeAndLand`.
+  const designRenderGate = await resolveDesignRenderGate(pool, row.org_id, context.runId);
   // Build the land `CodeHost` ONCE over the run's shared HTTP client + token; it both lands
   // the authorized commit AND (gv-3) resolves the candidate's `.tanren/ci.yml` for the real
   // gate-config hash — one host, one config identity shared by land + proof key.
@@ -316,5 +333,7 @@ export async function buildBundleForMergeStage(
     hitlSignoff: "not_required",
     // rv-gate — the fresh behavior-acceptance outcome (fail-closed when required).
     behaviorGate,
+    // ds-4 — the fresh design-render acceptance outcome (fail-closed when required).
+    designRenderGate,
   });
 }
