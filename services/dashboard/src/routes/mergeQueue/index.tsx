@@ -23,6 +23,10 @@ import {
   MergeQueueAuthoritySignalsClient,
   type MergeQueueAuthoritySignalsListResponse,
 } from "../../api/mergeQueueAuthoritySignals.js";
+import {
+  MergeQueueRepairRoutesClient,
+  type MergeQueueRepairRoutesListResponse,
+} from "../../api/mergeQueueRepairRoutes.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
 
@@ -45,6 +49,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let stats: QueueStats | undefined;
     let authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
     let authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
+    let repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -58,11 +63,16 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats, authoritySignals, authorityEvaluations] = await Promise.all([
+      const repairClient = new MergeQueueRepairRoutesClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
         signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
         evaluationClient.listAuthorityEvaluations(ctx.org.id, project.projectId),
+        repairClient.listRepairRoutes(ctx.org.id, project.projectId),
       ]);
     }
 
@@ -75,6 +85,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         stats={stats}
         authoritySignals={authoritySignals}
         authorityEvaluations={authorityEvaluations}
+        repairRoutes={repairRoutes}
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}

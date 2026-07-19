@@ -5,12 +5,26 @@
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { CoordinateResult, MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { settleFailedDrive, type BatchSettleDeps } from "./batchCoordinatorSettle.js";
-import type { BatchAuthorityEvaluator, MultiMemberAuthorityEvaluation } from "./multiMemberAuthorityTypes.js";
+import { markDequeuedAfterEvent } from "./coordinator.js";
+import { settleFromParkOutcome } from "./parkSettle.js";
+import type {
+  BatchAuthorityEvaluator,
+  MultiMemberAuthorityEvaluation,
+  MultiMemberAuthorityMemberOutcome,
+} from "./multiMemberAuthorityTypes.js";
+import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
 
 const AUTHORITY_RETRY_AFTER_MS = 3000;
 
 export interface MultiMemberEmbarkDeps extends BatchSettleDeps {
   authorityEvaluator: BatchAuthorityEvaluator;
+  /**
+   * mq-10 autonomous-repair router. When wired, an isolated deterministic-policy member is
+   * classified: an in-place-repairable member goes to the existing writer rework; a member at a
+   * PROVEN fixed point emits a RespecPacketV1 (re-drives spec authoring on a different agent) and
+   * is retired as superseded; an unclassifiable failure fails closed to needs-attention.
+   */
+  repairRouter?: AutonomousRepairRouter;
 }
 
 export type MultiMemberEmbarkDecision =
@@ -220,7 +234,7 @@ async function settleMemberFailure(
     const detail =
       `mq-2 member policy evaluation ${evaluation.evaluationId}: ` +
       `findings=${findingIds.join(",") || "unavailable"}`;
-    const settled = await settleFailedDrive(input.deps, input.projectId, entry, detail);
+    const settled = await routeAndSettleMember(input, evaluation, entry, member, findingIds, detail);
     if (settled === "retained") return hold(input, "merge_retry", evaluation, AUTHORITY_RETRY_AFTER_MS);
     dequeuedSpecId = entry.specId;
   }
@@ -234,6 +248,79 @@ async function settleMemberFailure(
     evaluation,
     ...(dequeuedSpecId !== undefined && { dequeuedSpecId }),
   };
+}
+
+/**
+ * mq-10: consult the autonomous-repair router (when wired), then retire the isolated member per
+ * its decision. `repair_in_place` uses the existing writer-rework path (re-authors the SAME
+ * spec); a `respec` or `blocked_needs_attention` routing already recorded its lineage + emitted
+ * its event, so the failing member is retired as superseded/needs-attention WITHOUT another
+ * in-place rework (the respec's replacement spec drives fresh; a blocked member awaits a human).
+ * With no router wired, behavior is unchanged (writer rework).
+ */
+async function routeAndSettleMember(
+  input: { readonly deps: MultiMemberEmbarkDeps; readonly projectId: string },
+  evaluation: Extract<MultiMemberAuthorityEvaluation, { kind: "member_failure" }>,
+  entry: MergeQueueEntry,
+  member: MultiMemberAuthorityMemberOutcome | undefined,
+  findingIds: ReadonlyArray<string>,
+  detail: string,
+): Promise<"dequeued" | "retained"> {
+  if (input.deps.repairRouter === undefined) {
+    return settleFailedDrive(input.deps, input.projectId, entry, detail);
+  }
+  const outcome = await input.deps.repairRouter.routeMemberFailure({
+    projectId: input.projectId,
+    groupId: evaluation.groupId,
+    evaluationId: evaluation.evaluationId,
+    sourceSpecId: entry.specId,
+    runId: entry.runId,
+    // A `member_failure`'s W0 is deterministic policy; the router fails closed on anything else.
+    classification: evaluation.w0.classification,
+    findingIds,
+    reasonCodes: member?.reasonCodes ?? [],
+  });
+  if (outcome.kind === "repair_in_place") {
+    return settleFailedDrive(input.deps, input.projectId, entry, detail);
+  }
+  const retireMessage =
+    outcome.kind === "respec"
+      ? `mq-10 respec routed (${detail}); superseded by ${outcome.replacementSpecIds.join(",") || "replacement"}`
+      : `mq-10 blocked needs attention (${outcome.reason}): ${detail}`;
+  return retireRoutedMember(input.deps, input.projectId, entry, retireMessage);
+}
+
+/**
+ * mq-10: retire an isolated member the autonomous-repair router routed to `respec` or
+ * `blocked_needs_attention`. Unlike {@link settleFailedDrive}, this does NOT hand the member to
+ * the writer for another in-place rework — a respec already materialized a replacement spec and a
+ * blocked member awaits a human. The member is parked (superseded/needs-attention) and dequeued
+ * atomically; a park failure retains the entry (fail-closed, never a silent drop).
+ */
+async function retireRoutedMember(
+  deps: BatchSettleDeps,
+  projectId: string,
+  entry: MergeQueueEntry,
+  message: string,
+): Promise<"dequeued" | "retained"> {
+  const park = await deps.escalator.escalate({ projectId, entry, message });
+  const settled = settleFromParkOutcome(park, message);
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(entry.queueId);
+    return "retained";
+  }
+  if (!settled.alreadyDequeued) {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: settled.reason,
+      message: settled.message,
+    });
+  }
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
+  return "dequeued";
 }
 
 function isolationReason(

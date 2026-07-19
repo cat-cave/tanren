@@ -307,8 +307,60 @@ export const MergePartitionReleasedPayload = z
   })
   .strict();
 
+// mq-10 — the autonomous-repair router's decision on an isolated member. EVERY routing
+// emits `merge.repair.routed` (the exhaustive decision record); a `respec` ALSO emits
+// `merge.member.respec_routed` (the apex-proof chain's event) carrying the RespecPacketV1
+// lineage. `disposition` is exhaustive + fail-closed: an unclassifiable failure routes to
+// `blocked_needs_attention`, never a silent drop.
+export const MergeRepairRoutedPayload = z
+  .object({
+    projectId: z.string().min(1),
+    sourceSpecId: z.string().min(1),
+    groupId: z.string().min(1),
+    evaluationId: z.string().min(1),
+    disposition: z.enum(["repair_in_place", "respec", "blocked_needs_attention"]),
+    failureClass: z.enum([
+      "deterministic_policy",
+      "needs_product_decision",
+      "unknown_fail_closed",
+      "transient_infrastructure",
+    ]),
+    failureSignature: z.string().min(1),
+    /** The non-shrinking finding count (a DIAGNOSTIC of the fixed point, never a retry cap). */
+    magnitude: z.number().int().nonnegative(),
+    /** Why a `blocked_needs_attention` routing fell closed (empty otherwise). */
+    blockedReason: z.string().optional(),
+  })
+  .strict();
+
+export const MergeMemberRespecRoutedPayload = z
+  .object({
+    projectId: z.string().min(1),
+    sourceSpecId: z.string().min(1),
+    groupId: z.string().min(1),
+    evaluationId: z.string().min(1),
+    /** The RespecPacketV1 content hash (= `respec_routes.packet_hash`). */
+    packetHash: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    /** The route that reached the fixed point in place. */
+    priorAgentRoute: z.string().min(1),
+    /** The DIFFERENT agent the respec routes to (never equal to `priorAgentRoute`). */
+    nextAgentRoute: z.string().min(1),
+    /** The respec generation this packet minted (>= 1). */
+    generation: z.number().int().positive(),
+    /** The replacement spec(s) the re-drive materialized (>= 1: the intent survives). */
+    replacementSpecIds: z.array(z.string().min(1)).min(1),
+  })
+  .strict()
+  .superRefine((p, ctx) => {
+    if (p.priorAgentRoute === p.nextAgentRoute) {
+      ctx.addIssue({ code: "custom", path: ["nextAgentRoute"], message: "respec must route to a DIFFERENT agent" });
+    }
+  });
+
 export const mergeQueueWave3EventRegistry = {
   "merge.member.isolated": MergeMemberIsolatedPayload,
   "merge.partition.leased": MergePartitionLeasedPayload,
   "merge.partition.released": MergePartitionReleasedPayload,
+  "merge.repair.routed": MergeRepairRoutedPayload,
+  "merge.member.respec_routed": MergeMemberRespecRoutedPayload,
 } as const;
