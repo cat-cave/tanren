@@ -1,6 +1,6 @@
 {
-  "id": "324a3016-d609-41fd-a195-2688563b5ca2",
-  "prevId": "e355546a-ff6a-407a-bcbd-d04cbb561a03",
+  "id": "6822f391-3643-42c7-a4b2-b010d0cadbe7",
+  "prevId": "af99090a-22c9-44a8-8c37-9a98e8c7c889",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7329,6 +7329,225 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.behavior_regression_bisections": {
+      "name": "behavior_regression_bisections",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "behavior_revision_id": {
+          "name": "behavior_revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "failing_release_instance_id": {
+          "name": "failing_release_instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "failing_verdict_id": {
+          "name": "failing_verdict_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "baseline_release_instance_id": {
+          "name": "baseline_release_instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "artifact_digest": {
+          "name": "artifact_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "integration_node_id": {
+          "name": "integration_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "culprit_release_instance_id": {
+          "name": "culprit_release_instance_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "culprit_integration_node_id": {
+          "name": "culprit_integration_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "inconclusive_reason": {
+          "name": "inconclusive_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "candidate_count": {
+          "name": "candidate_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "probe_count": {
+          "name": "probe_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "probe_trail": {
+          "name": "probe_trail",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "behavior_regression_bisections_org_id": {
+          "name": "behavior_regression_bisections_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "behavior_regression_bisections_verdict_unique": {
+          "name": "behavior_regression_bisections_verdict_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "failing_verdict_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "behavior_regression_bisections_org_id_organizations_id_fk": {
+          "name": "behavior_regression_bisections_org_id_organizations_id_fk",
+          "tableFrom": "behavior_regression_bisections",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "behavior_regression_bisections_project_fk": {
+          "name": "behavior_regression_bisections_project_fk",
+          "tableFrom": "behavior_regression_bisections",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "behavior_regression_bisections_org_id_id_pk": {
+          "name": "behavior_regression_bisections_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"behavior_regression_bisections\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"behavior_regression_bisections\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "behavior_regression_bisections_status_check": {
+          "name": "behavior_regression_bisections_status_check",
+          "value": "\"behavior_regression_bisections\".\"status\" IN ('localized','inconclusive')"
+        },
+        "behavior_regression_bisections_artifact_digest_check": {
+          "name": "behavior_regression_bisections_artifact_digest_check",
+          "value": "\"behavior_regression_bisections\".\"artifact_digest\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "behavior_regression_bisections_counts_check": {
+          "name": "behavior_regression_bisections_counts_check",
+          "value": "\"behavior_regression_bisections\".\"candidate_count\" >= 0 AND \"behavior_regression_bisections\".\"probe_count\" >= 0"
+        },
+        "behavior_regression_bisections_outcome_shape_check": {
+          "name": "behavior_regression_bisections_outcome_shape_check",
+          "value": "(\n        \"behavior_regression_bisections\".\"status\" = 'localized'\n          AND \"behavior_regression_bisections\".\"culprit_release_instance_id\" IS NOT NULL\n          AND \"behavior_regression_bisections\".\"culprit_integration_node_id\" IS NOT NULL\n          AND \"behavior_regression_bisections\".\"inconclusive_reason\" IS NULL\n      ) OR (\n        \"behavior_regression_bisections\".\"status\" = 'inconclusive'\n          AND \"behavior_regression_bisections\".\"culprit_release_instance_id\" IS NULL\n          AND \"behavior_regression_bisections\".\"culprit_integration_node_id\" IS NULL\n          AND \"behavior_regression_bisections\".\"inconclusive_reason\" IS NOT NULL\n      )"
+        }
+      },
+      "isRLSEnabled": true
     },
     "public.runners": {
       "name": "runners",

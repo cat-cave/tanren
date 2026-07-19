@@ -32,7 +32,7 @@ ALTER TABLE "design_fragments" ENABLE ROW LEVEL SECURITY;--> statement-breakpoin
 ALTER TABLE "design_fragments" ADD CONSTRAINT "design_fragments_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "design_fragments_org_klv_unique" ON "design_fragments" USING btree ("org_id","kind","label","version");--> statement-breakpoint
 CREATE INDEX "design_fragments_org_kind_label" ON "design_fragments" USING btree ("org_id","kind","label");--> statement-breakpoint
-CREATE POLICY "rls_org_isolation" ON "design_fragments" AS PERMISSIVE FOR ALL TO public USING ("design_fragments"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("design_fragments"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
+CREATE POLICY "rls_org_isolation" ON "design_fragments" AS PERMISSIVE FOR ALL TO public USING ("design_fragments"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("design_fragments"."org_id" = current_setting('app.current_org_id', true));
 -- ===========================================================================
 -- FORCE ROW LEVEL SECURITY on the design-fragment registry (mirrors migrations
 -- 0043 / 0050): even the table OWNER is subject to the org-isolation policy, so a
