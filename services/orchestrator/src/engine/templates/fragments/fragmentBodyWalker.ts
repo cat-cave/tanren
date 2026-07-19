@@ -57,6 +57,7 @@ export const NO_APPLY_BLOCK_MESSAGE =
 
 const IDENTIFIER_CHAR_RE = /[a-zA-Z0-9_$]/u;
 const WHITESPACE_RE = /\s/u;
+const UNTERMINATED_BLOCK_COMMENT_MESSAGE = "unterminated block comment in fragment body";
 
 type CloseChar = "}" | ")" | "]";
 
@@ -151,6 +152,9 @@ export function findMatchingClose(source: string, openIdx: number, unbalancedMes
       continue;
     }
     i += 1;
+  }
+  if (stack.at(-1)?.kind === "bc") {
+    throw new FragmentBodyParseError(UNTERMINATED_BLOCK_COMMENT_MESSAGE);
   }
   throw new FragmentBodyParseError(unbalancedMessage);
 }
@@ -279,6 +283,9 @@ function walkVfsStatements(body: string, onStatement?: (start: number, end: numb
     if (ch === "/" && body[i + 1] === "*") {
       i += 2;
       while (i + 1 < body.length && !(body[i] === "*" && body[i + 1] === "/")) i += 1;
+      if (i + 1 >= body.length) {
+        throw new FragmentBodyParseError(UNTERMINATED_BLOCK_COMMENT_MESSAGE);
+      }
       // Skip past the closing `*/`.
       i += 2;
       continue;
