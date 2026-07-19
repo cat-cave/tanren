@@ -6,9 +6,11 @@ import {
   DESIGN_CONTRACT_V2_VERSION,
   DesignContractV2CorruptError,
   canonicalDesignContractV2Json,
+  deriveDesiredSurfaces,
   designContractV2Digest,
   migrateDesignContractV1ToV2,
   parseDesignContractV2,
+  withDerivedDesiredSurfaces,
 } from "../src/engine/design/system/designContractV2.js";
 
 const v1 = normalizeDesignContract({
@@ -80,6 +82,41 @@ describe("DesignContractV2", () => {
     expect(designContractV2Digest(a)).toMatch(/^sha256:[0-9a-f]{64}$/u);
     const b = { ...a, acceptanceIntent: "changed" };
     expect(designContractV2Digest(b)).not.toBe(designContractV2Digest(a));
+  });
+
+  it("deriveDesiredSurfaces — projects each authored dimension into a persona/behavior-bound surface", () => {
+    const v2 = migrateDesignContractV1ToV2(v1);
+    const surfaces = deriveDesiredSurfaces(v2);
+    expect(surfaces).toHaveLength(1);
+    expect(surfaces[0]?.key).toBe("tokens");
+    expect(surfaces[0]?.label).toBe("Design tokens");
+    // The dimension's own persona scope is carried; the contract's behaviors bind.
+    expect(surfaces[0]?.personaRefs).toEqual(["persona_admin"]);
+    expect(surfaces[0]?.behaviorRefs).toEqual(["behavior_login"]);
+  });
+
+  it("deriveDesiredSurfaces — a dimension with no persona scope inherits the contract's persona set", () => {
+    const v2 = migrateDesignContractV1ToV2(
+      normalizeDesignContract({
+        version: 1,
+        domain: "saas-web",
+        identity: "id",
+        intent: "intent",
+        personaRefs: ["persona_a", "persona_b"],
+        dimensions: [{ key: "layout", label: "Layout", intent: "grid", guidance: "", personaRefs: [] }],
+      }),
+    );
+    expect(deriveDesiredSurfaces(v2)[0]?.personaRefs).toEqual(["persona_a", "persona_b"]);
+    // No dimensions ⇒ no surfaces (a real empty state, never a fabricated stub).
+    expect(deriveDesiredSurfaces(migrateDesignContractV1ToV2({ ...v1, dimensions: [] }))).toEqual([]);
+  });
+
+  it("withDerivedDesiredSurfaces — the composer's V2 carries real surfaces + the web target profile", () => {
+    const composed = withDerivedDesiredSurfaces(migrateDesignContractV1ToV2(v1));
+    expect(composed.desiredSurfaces.map((s) => s.key)).toEqual(["tokens"]);
+    expect(composed.targetProfiles).toEqual([{ target: "web-react", capabilities: [], required: true }]);
+    // Re-parses clean (round-trips through the strict schema).
+    expect(() => parseDesignContractV2(composed)).not.toThrow();
   });
 
   it("NEGATIVE CONTROL — a corrupt contract fails closed with a typed error", () => {
