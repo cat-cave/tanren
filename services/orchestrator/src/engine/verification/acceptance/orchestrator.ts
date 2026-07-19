@@ -53,6 +53,21 @@ export interface AcceptanceAssertion {
   readonly correlation?: EffectCorrelation;
 }
 
+/**
+ * rv-6: a single REAL HTTP request the api surface driver fires against the
+ * deployed product. Its observations feed assertions whose subject is
+ * `<probeId>.<selector>` (e.g. `p1.status`, `p1.body.count`). The narrow plan
+ * carries the request spec so the driver knows WHAT to send; the assertion
+ * algebra stays subject-keyed and unchanged.
+ */
+export interface HttpProbeSpec {
+  readonly probeId: string;
+  readonly method: string;
+  readonly path: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly body?: CanonicalBody;
+}
+
 /** The narrow view of a compiled ExecutableBehaviorPlanV1 the orchestrator reads. */
 export interface AcceptancePlan {
   readonly planId: string;
@@ -64,11 +79,15 @@ export interface AcceptancePlan {
   readonly executionMatrix: ExecutionMatrix;
   /** rv-12: the causes a plan's causal assertions drive + correlate effects to. */
   readonly causes?: readonly CauseSpec[];
+  /** rv-6: the HTTP requests the api surface driver fires to observe subjects. */
+  readonly httpProbes?: readonly HttpProbeSpec[];
 }
 
 export interface AcceptanceDriveInput {
   readonly orgId: string;
   readonly projectId: string;
+  /** rv-6: the run's integration node — binds a driver to THIS run's release. */
+  readonly integrationNodeId: string;
   readonly plan: AcceptancePlan;
   readonly example: ExampleRow | undefined;
   readonly matrixKey: string;
@@ -453,6 +472,7 @@ export class AcceptanceOrchestrator {
       const result = await driver.drive({
         orgId: request.orgId,
         projectId: request.projectId,
+        integrationNodeId: request.integrationNodeId,
         plan,
         example,
         matrixKey,
