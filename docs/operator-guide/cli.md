@@ -148,3 +148,28 @@ worker dequeue→execute path (it does not execute runs itself). `report` and
 `compare` of two cells that differ in more than one frozen-config dimension is
 **refused** server-side (the §3.3 one-knob invariant) and the CLI surfaces the
 `one_knob_violation` error as a non-zero exit.
+
+## Proof bundles (`tanren proof verify`) — rv-24
+
+A **proof bundle** is a self-contained, tamper-evident export of the persisted
+acceptance evidence for one behavior-verification run: the run row, the
+deploy-created verification-environment binding, the append-only `behavior_verdicts`,
+and (when the run came from an issue-loop resolution) the bh-14a sealed resolution
+proofs — all behind a sha256 hash-chain (`tanren-proof-bundle.v1`). Export it
+read-only, org-scoped, from the orchestrator:
+
+```
+GET /v1/orgs/:orgId/projects/:projectId/verification-runs/:runId/proof-bundle
+```
+
+`tanren proof verify <bundle.json>` validates a bundle **fully offline** — it never
+phones home. It RECOMPUTES the hash-chain from the bundle's own contents (never
+trusting a stored hash or a `valid` flag), re-checks the domain invariant (a `passed`
+verdict is impossible unless executed ≥ required ≥ 1), and self-verifies each embedded
+resolution proof. Editing any verdict/evidence/hash makes it report `valid: false`
+and names the diverging section. Exit code is non-zero on an invalid bundle.
+
+```sh
+tanren proof verify ./tanren-proof-bundle.json      # positional path
+tanren proof verify --bundle ./tanren-proof-bundle.json
+```

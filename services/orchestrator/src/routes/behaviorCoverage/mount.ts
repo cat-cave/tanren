@@ -4,6 +4,7 @@ import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createBehaviorRoutes } from "../behaviors/index.js";
 import { createBehaviorCoverageRoutes } from "./index.js";
+import { createProofBundleRoutes } from "./proofBundle.js";
 
 /**
  * Mount the runtime-verification behavior surfaces on the org-scoping pool:
@@ -26,4 +27,6 @@ import { createBehaviorCoverageRoutes } from "./index.js";
 export function mountBehaviorSurfaces(app: Hono<ActorContextEnv>, scopedPool: pg.Pool): void {
   app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));
   app.route("/orgs", createBehaviorCoverageRoutes({ pool: scopedPool, cas: new PgCasByteStore(scopedPool) }));
+  // rv-24 read-only exportable proof bundle for one acceptance run.
+  app.route("/v1/orgs", createProofBundleRoutes({ pool: scopedPool }));
 }

@@ -17,6 +17,7 @@ import {
 import { milestonesCreate, milestonesGet, milestonesList } from "./milestones/index.js";
 import { orgsConfigSet, orgsGet, orgsList } from "./orgs/index.js";
 import { personasCreate, personasGet, personasList } from "./personas/index.js";
+import { proofVerify } from "./proof/index.js";
 import { projectsCreate, projectsGet, projectsLink, projectsList } from "./projects/index.js";
 import { specsCreate, specsGet, specsList, specsRun } from "./specs/index.js";
 
@@ -53,6 +54,7 @@ const HANDLERS: Record<string, (rest: string[]) => Promise<void>> = {
   "experiments compare": experimentsCompare,
   "cells create": cellsCreate,
   "cells list": cellsList,
+  "proof verify": proofVerify,
 };
 
 export function findProductHandler(
