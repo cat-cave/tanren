@@ -11,15 +11,17 @@ export {
   type DemoTarget,
   type DemoResult,
 } from "./demoEngine.js";
+export { type BehaviorEvidence, type BehaviorEvidenceOutcome } from "./demoEvidence.js";
 export {
-  type BehaviorEvidence,
-  type BehaviorEvidenceOutcome,
-  type DemoWebProbe,
-  exerciseWebBehavior,
-  resolveBehaviorSurfacePath,
-  joinSurfaceUrl,
-} from "./demoEvidence.js";
-export { fetchDemoWebProbe } from "./demoWebProbe.js";
+  ProofBackedWebDemo,
+  ProofBackedDemoNoBehaviorsError,
+  ProofBackedDemoUnobservableError,
+  EphemeralAcceptanceRunStore,
+  EphemeralAcceptanceEventSink,
+  type AcceptanceExecutor,
+  type ProofBackedWebDemoDeps,
+  type ProofBackedDemoResult,
+} from "./proofBackedWebDemo.js";
 export {
   type DemoPackageProbe,
   type PackageResolveResult,

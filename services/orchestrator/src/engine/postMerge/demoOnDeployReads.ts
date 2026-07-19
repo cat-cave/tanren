@@ -3,14 +3,22 @@
 // under the watcher's system scope (the de-privileged data plane re-reads the runtime
 // tables); they are read-only and carry no secret material.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import { BehaviorStore } from "../entities/behaviors.js";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { ReleaseInstanceRecord } from "../contracts/deployAdapter.js";
 import type { DemoBehavior } from "../demo/demoEngine.js";
+import { ReleaseInstancesStore } from "../repositories/releaseInstances.js";
 import { loadValidatedRunEvent } from "./runLineage.js";
 
 type ReadClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// The freshest deploy states a live release can be probed/demoed in (mirrors the rv-6
+// PgReleaseInstanceBaseUrlResolver): superseded / torn-down / rolled-back / failed are
+// never demoed.
+const PROBEABLE_STATES = new Set(["built", "preview", "promoting", "live"]);
 const DeployVerifiedPayload = z.object({ provider: z.string(), appId: z.string(), deploymentId: z.string() });
 
 /**
@@ -80,6 +88,35 @@ export async function loadVerifiedDeploy(client: ReadClient, runId: string): Pro
  * platform-admin actor carrying the run's org — the SAME pattern the conflict resolver
  * / DagWalker use to admit org-scoped rows while the client stays RLS-scoped.
  */
+/**
+ * Load the run's deployed release instance — the one built for THIS run's integration
+ * node (rv-6 binds `integration_node_id == runId`; see deployOnMerge). Returns the
+ * FRESHEST probeable release with a non-empty URL (org-scoped via the existing
+ * RLS-proven {@link ReleaseInstancesStore}; no new tenant SQL), or `undefined` when the
+ * run has no probeable release to demo. The proof-backed web demo reads its
+ * `behaviorRevisionIds` (which declared behaviors the release delivers) from this row; the
+ * rv-6 resolver independently binds the same integration node's URL for the HTTP driver.
+ */
+export async function loadRunReleaseInstance(
+  pool: pg.Pool,
+  orgId: string,
+  projectId: string,
+  runId: string,
+): Promise<ReleaseInstanceRecord | undefined> {
+  const instances = await runWithOrgScope(pool, orgId, (client) =>
+    ReleaseInstancesStore.listForProject(client, orgId, projectId),
+  );
+  // listForProject orders oldest→newest, so the LAST match is the freshest deploy for
+  // this run's integration node.
+  let release: ReleaseInstanceRecord | undefined;
+  for (const instance of instances) {
+    if (instance.integrationNodeId === runId && instance.url !== "" && PROBEABLE_STATES.has(instance.state)) {
+      release = instance;
+    }
+  }
+  return release;
+}
+
 export async function loadSpecBehaviors(
   client: ReadClient,
   specId: string,

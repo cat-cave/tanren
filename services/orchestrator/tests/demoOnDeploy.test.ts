@@ -11,7 +11,9 @@ import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { DemoWebProbe } from "../src/engine/demo/demoEvidence.js";
+import { ProofBackedWebDemo, type AcceptanceExecutor } from "../src/engine/demo/proofBackedWebDemo.js";
+import type { AcceptancePlanLoader } from "../src/engine/verification/acceptance/index.js";
+import type { BehaviorVerdictOutcome } from "../src/engine/contracts/runtimeVerificationAdapters.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
@@ -182,6 +184,35 @@ function fakePool(state: PoolState): pg.Pool {
         rowCount: 1,
       };
     }
+    // ReleaseInstancesStore.listForProject — the run's deployed release, carrying the
+    // behavior revisions the proof-backed web demo proves + the live URL. Bound to the
+    // run's integration node (rv-6 binds `integration_node_id == runId`).
+    if (/FROM release_instances ri/u.test(sql)) {
+      return {
+        rows: [
+          {
+            org_id: ORG_ID,
+            id: "ri_demo",
+            project_id: PROJECT_ID,
+            provider: "deploy.vercel",
+            app_id: APP_ID,
+            environment: "production",
+            deployment_id: DEPLOYMENT_ID,
+            source_ref: "abcdef",
+            artifact_digest: `sha256:${"a".repeat(64)}`,
+            provider_checksum: null,
+            integration_node_id: RUN_ID,
+            url: `https://${DEPLOYMENT_ID}.vercel.app`,
+            region: null,
+            previous_release_instance_id: null,
+            state: "live",
+            created_at: new Date(),
+            behavior_revision_ids: state.behaviors.map((b) => b.id),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     // BehaviorStore.listForSpec join.
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {
       return {
@@ -226,23 +257,67 @@ function secrets(): InMemorySecretStore {
   return store;
 }
 
-// A web probe scripted per path: each behavior's resolved route gets a fixed status.
-function scriptedProbe(byPath: Record<string, number>): DemoWebProbe & { probed: string[] } {
-  const probed: string[] = [];
-  return {
-    probed,
+// A scripted PROOF-BACKED web demo: the real ProofBackedWebDemo mapping over a scripted
+// acceptance executor (returns a per-behavior acceptance verdict keyed by behavior-revision
+// id) + a plan loader that mints one plan per behavior revision. Exercises the real
+// classify → evidence → demo.* event mapping without a live orchestrator/HTTP/Postgres.
+function scriptedProofBackedDemo(
+  events: EventStore,
+  outcomeById: Record<string, BehaviorVerdictOutcome>,
+): ProofBackedWebDemo {
+  const planLoader: AcceptancePlanLoader = {
     // eslint-disable-next-line @typescript-eslint/require-await
-    async reach(url: string): Promise<number> {
-      probed.push(url);
-      return byPath[new URL(url).pathname] ?? 200;
+    async loadPlans({ behaviorRevisionIds }) {
+      return behaviorRevisionIds.map((id) => ({
+        planId: `plan_${id}`,
+        behaviorRevisionId: id,
+        requiredSurfaces: ["api"] as const,
+        assertions: [],
+        fixtures: [],
+        examples: [],
+        executionMatrix: {
+          browser: [],
+          viewport: [],
+          locale: [],
+          theme: [],
+          motion: [],
+          contrast: [],
+          device: [],
+        },
+        httpProbes: [],
+      }));
     },
   };
+  const orchestrator: AcceptanceExecutor = {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async execute(request) {
+      const behaviors = request.plans.map((plan) => {
+        const outcome = outcomeById[plan.behaviorRevisionId] ?? "passed";
+        return {
+          behaviorRevisionId: plan.behaviorRevisionId,
+          planId: plan.planId,
+          verdictId: `verdict_${plan.behaviorRevisionId}`,
+          outcome,
+          requiredAssertionCount: 1,
+          executedAssertionCount: outcome === "inconclusive_infrastructure" ? 0 : 1,
+          passedAssertionCount: outcome === "passed" ? 1 : 0,
+        };
+      });
+      return {
+        runId: "acceptance_run",
+        requiredVerdictCount: behaviors.length,
+        passedVerdictCount: behaviors.filter((b) => b.outcome === "passed").length,
+        behaviors,
+      };
+    },
+  };
+  return new ProofBackedWebDemo({ events, planLoader, orchestrator });
 }
 
 async function run(
   state: PoolState,
-  probe: DemoWebProbe,
   events: RecordingEventStore,
+  proofBackedWebDemo?: ProofBackedWebDemo,
   transport = scriptedDeployTransport("vercel", ["acme-web"]),
 ): Promise<void> {
   const watcher = new DemoOnDeployWatcher({
@@ -250,38 +325,36 @@ async function run(
     secrets: secrets(),
     transport,
     eventStore: events,
-    webProbe: probe,
+    ...(proofBackedWebDemo !== undefined && { proofBackedWebDemo }),
   });
   await watcher.check(RUN_ID);
 }
 
-describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
-  it("exercises the spec's behaviors against the verified deploy surface + records evidence", async () => {
-    const probe = scriptedProbe({ "/links": 200, "/admin": 503 });
+describe("DemoOnDeployWatcher (proof-backed demos-as-evidence wiring)", () => {
+  it("PROOF-BACKED: routes the web deploy to the acceptance-driven demo + records the real per-behavior verdict", async () => {
     const events = new RecordingEventStore();
+    // The release delivers two behaviors; acceptance PASSES one and reports a
+    // `failed_product` for the other (its declared behavior failed on the live surface).
+    const demo = scriptedProofBackedDemo(events, { beh_links: "passed", beh_admin: "failed_product" });
     await run(
       {
         verified: true,
         grant: VERCEL_GRANT,
         behaviors: [
-          { id: "beh_links", title: "Create a short link", surfacePath: "/links" },
-          { id: "beh_admin", title: "View the admin dashboard", surfacePath: "/admin" },
+          { id: "beh_links", title: "Create a short link" },
+          { id: "beh_admin", title: "View the admin dashboard" },
         ],
       },
-      probe,
       events,
+      demo,
     );
 
-    // The demo resolved the live surface (the scripted transport's vercel URL, shaped
-    // from the deployment id) + probed each behavior's route on it.
-    expect(probe.probed).toEqual([
-      `https://${DEPLOYMENT_ID}.vercel.app/links`,
-      `https://${DEPLOYMENT_ID}.vercel.app/admin`,
-    ]);
-    // One evidence event per behavior, org-scoped, + a demo.completed summary.
+    // One evidence event per behavior, org-scoped, + a demo.completed summary. The demo
+    // verdict is the REAL acceptance verdict (1 passed, 1 failed_product) — not a `/`-probe.
     const recorded = events.appends.filter((a) => a.eventType === "demo.evidence.recorded");
     expect(recorded).toHaveLength(2);
     expect(recorded.every((a) => a.ambientOrgId === ORG_ID)).toBe(true);
+    expect(JSON.stringify(recorded)).toContain("failed_product");
     const summary = events.appends.find((a) => a.eventType === "demo.completed");
     expect(summary!.payload).toMatchObject({ surfaceKind: "web_url", behaviorCount: 2, passed: 1, failed: 1 });
     expect(JSON.stringify(events.appends)).not.toContain("deploy_token");
@@ -289,25 +362,22 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
 
   it("is a clean NO-OP when the run has no verified deploy (no demo, no error)", async () => {
     const events = new RecordingEventStore();
-    await run({ verified: false, behaviors: [] }, scriptedProbe({}), events);
+    await run({ verified: false, behaviors: [] }, events);
     expect(events.appends).toEqual([]);
   });
 
   it("is idempotent on demo.completed: a re-check after a prior successful demo records nothing new", async () => {
-    const probe = scriptedProbe({ "/x": 200 });
     const events = new RecordingEventStore();
     await run(
       {
         verified: true,
         alreadyTerminalDemo: true,
         grant: VERCEL_GRANT,
-        behaviors: [{ id: "beh_x", title: "X", surfacePath: "/x" }],
+        behaviors: [{ id: "beh_x", title: "X" }],
       },
-      probe,
       events,
     );
     expect(events.appends).toEqual([]);
-    expect(probe.probed).toEqual([]);
   });
 
   // A demo.failed append fires a `tanren_run` NOTIFY that wakes the post-merge
@@ -319,7 +389,6 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
   // (mirrors deployOnMerge's alreadyTerminal unification of verified/failed/
   // skipped).
   it("is TERMINAL on demo.failed: a re-check after a prior failure is a no-op (no self-loop storm)", async () => {
-    const probe = scriptedProbe({ "/x": 200 });
     const events = new RecordingEventStore();
     await run(
       {
@@ -328,29 +397,31 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
         // demo.completed. No grant seeded either: without the terminal gate the
         // watcher would throw "no matching grant" again + re-append demo.failed.
         alreadyTerminalDemo: true,
-        behaviors: [{ id: "beh_x", title: "X", surfacePath: "/x" }],
+        behaviors: [{ id: "beh_x", title: "X" }],
       },
-      probe,
       events,
     );
     // The terminal gate held — no new demo.failed (and no demo.completed either).
     expect(events.appends).toEqual([]);
-    expect(probe.probed).toEqual([]);
   });
 
-  it("records a demo.completed with zero counts when the spec has no behaviors (never silent)", async () => {
+  it("fails LOUD (proof-backed) when the release delivered no declared behaviors — nothing to prove, never a fabricated pass", async () => {
     const events = new RecordingEventStore();
-    await run({ verified: true, grant: VERCEL_GRANT, behaviors: [] }, scriptedProbe({}), events);
-    expect(events.appends.filter((a) => a.eventType === "demo.evidence.recorded")).toEqual([]);
-    const summary = events.appends.find((a) => a.eventType === "demo.completed");
-    expect(summary!.payload).toMatchObject({ behaviorCount: 0, passed: 0, failed: 0 });
+    const demo = scriptedProofBackedDemo(events, {});
+    await expect(run({ verified: true, grant: VERCEL_GRANT, behaviors: [] }, events, demo)).rejects.toThrow(
+      /delivered no behavior revisions/u,
+    );
+    expect(events.appends.filter((a) => a.eventType === "demo.completed")).toEqual([]);
+    const failed = events.appends.find((a) => a.eventType === "demo.failed");
+    expect(failed!.payload["reason"]).toBe("load_behaviors_failed");
+    expect(failed!.payload["surfaceKind"]).toBe("web_url");
   });
 
   it("fails LOUD when the verified deploy's org grant has gone missing (never a silent skip)", async () => {
     const events = new RecordingEventStore();
-    await expect(
-      run({ verified: true, behaviors: [{ id: "b", title: "B", surfacePath: "/b" }] }, scriptedProbe({}), events),
-    ).rejects.toThrow(/no matching grant/u);
+    await expect(run({ verified: true, behaviors: [{ id: "b", title: "B" }] }, events)).rejects.toThrow(
+      /no matching grant/u,
+    );
   });
 
   it("records a DURABLE demo.failed when resolveSurface throws (grant lost mid-flight)", async () => {
@@ -360,9 +431,9 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
     // + run timeline SEE the demo failure rather than a subscriber-swallowed log.error.
     // (No grant seeded → resolveSurface throws the "no matching grant" hard error.)
     const events = new RecordingEventStore();
-    await expect(
-      run({ verified: true, behaviors: [{ id: "b", title: "B", surfacePath: "/b" }] }, scriptedProbe({}), events),
-    ).rejects.toThrow(/no matching grant/u);
+    await expect(run({ verified: true, behaviors: [{ id: "b", title: "B" }] }, events)).rejects.toThrow(
+      /no matching grant/u,
+    );
     const failed = events.appends.find((a) => a.eventType === "demo.failed");
     expect(failed).toBeDefined();
     expect(failed!.ambientOrgId).toBe(ORG_ID);
@@ -384,8 +455,8 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
     await expect(
       run(
         { verified: true, behaviors: [], projectOwnerOrgId: "org_foreign", authorityReads },
-        scriptedProbe({}),
         events,
+        undefined,
         transport,
       ),
     ).rejects.toThrow(/run lineage mismatch.*does not own its project/u);
