@@ -10,6 +10,7 @@ import type {
 import type { SymptomContractRow } from "../src/engine/repositories/symptomContracts.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import type { SettleReproofInput } from "../src/engine/verification/postMergeReproof/coordinator.js";
+import type { BisectionResult } from "../src/engine/verification/postMergeReproof/regressionBisection.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
 
 const FAILURE_VERDICT = {
@@ -269,5 +270,123 @@ describe("production verification retry route", () => {
         result: FAILURE_VERDICT,
       }),
     ]);
+  });
+});
+
+// rv-17: the operator-retry route is the SECOND production bisection call site. It must consult the
+// quarantine reader too so a quarantined (flaky) behavior's regressed verdict is never bisected here.
+function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }) {
+  const app = new Hono<ActorContextEnv>();
+  app.use("*", async (c, next) => {
+    c.set("actor", ACTOR);
+    await next();
+  });
+  const job = {
+    orgId: "org_acme",
+    projectId: "project_1",
+    issueLoopId: "loop_1",
+    contractId: "contract_1",
+    releaseInstanceId: "release_1",
+    stage: "production" as const,
+    state: "running" as const,
+    leaseOwner: "route_lease_1",
+    leaseExpiry: "2026-07-17T19:00:00.000Z",
+    idempotencyKey: "operator-retry-quarantine",
+    attempt: 1,
+  };
+  app.route(
+    "/v1/orgs",
+    createProductionVerificationRoutes({
+      pool: {} as never,
+      reproofCoordinator: { settle: () => Promise.resolve("held") },
+      // A REGRESSED post-merge behavior verdict — without the quarantine guard this WOULD bisect.
+      behaviorVerifier: {
+        verify() {
+          return Promise.resolve({
+            decision: "recorded" as const,
+            passed: 0,
+            failed: 1,
+            verdicts: [{ behaviorRevisionId: "br_flaky", verdictId: "v_reg", outcome: "failed_product" as const }],
+          });
+        },
+      },
+      regressionBisector: {
+        bisect(trigger) {
+          opts.bisectCalls.push(trigger.behaviorRevisionId);
+          return Promise.resolve({ status: "inconclusive" } as BisectionResult);
+        },
+      },
+      behaviorQuarantineReader: { isQuarantined: () => Promise.resolve(opts.isQuarantined) },
+      contracts: {
+        async get() {
+          return contract;
+        },
+      },
+      releaseById: async () => ({ projectId: "project_1", environment: "production", state: "live" }),
+      enqueue: {
+        async enqueue() {
+          return { id: "rjob_manual_1", created: true };
+        },
+      },
+      jobId: () => "rjob_manual_1",
+      executionLeaseOwner: () => "route_lease_1",
+      authority: {
+        async authorize() {
+          return {
+            id: "rdec_retry",
+            decision: "authorized" as const,
+            inputSnapshotHash: "sha256:" + "a".repeat(64),
+            reasons: [],
+            created: true,
+          };
+        },
+      },
+      jobs: {
+        async claimById(input) {
+          return { ...job, id: input.id, orgId: input.orgId, leaseOwner: input.leaseOwner };
+        },
+        async verifyActiveLease(input) {
+          return { ...job, id: input.id, orgId: input.orgId, leaseOwner: input.leaseOwner };
+        },
+        async complete() {
+          return true;
+        },
+        async release() {
+          return true;
+        },
+      },
+      stages: new Map<ResolutionStageKind, ResolutionStage>([
+        ["production", { kind: "production", run: () => Promise.resolve(VERDICT) }],
+      ]),
+    }),
+  );
+  return app;
+}
+
+async function retryBisection(app: Hono<ActorContextEnv>) {
+  return app.request("/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      contractId: "contract_1",
+      releaseInstanceId: "release_1",
+      idempotencyKey: "operator-retry-quarantine",
+    }),
+  });
+}
+
+describe("production verification retry route — rv-17 quarantine-aware bisection", () => {
+  it("DECISIVE: a QUARANTINED behavior's regressed verdict is NOT bisected on the operator-retry path", async () => {
+    const bisectCalls: string[] = [];
+    const response = await retryBisection(appForBisection({ isQuarantined: true, bisectCalls }));
+    expect(response.status).toBe(200);
+    expect(bisectCalls).toEqual([]);
+  });
+
+  it("a NON-quarantined regressed behavior IS bisected on the operator-retry path", async () => {
+    const bisectCalls: string[] = [];
+    const response = await retryBisection(appForBisection({ isQuarantined: false, bisectCalls }));
+    expect(response.status).toBe(200);
+    expect(bisectCalls).toEqual(["br_flaky"]);
   });
 });

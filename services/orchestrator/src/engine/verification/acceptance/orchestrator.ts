@@ -130,6 +130,8 @@ export interface AcceptanceRunResult {
   readonly runId: string;
   readonly requiredVerdictCount: number;
   readonly passedVerdictCount: number;
+  /** The context hash every behavior verdict in this run was recorded under (rv-17 flake window). */
+  readonly runtimeBehaviorContextHash: Digest;
   readonly behaviors: readonly AcceptanceBehaviorResult[];
 }
 
@@ -299,7 +301,13 @@ export class AcceptanceOrchestrator {
       },
     });
 
-    return { runId, requiredVerdictCount: request.plans.length, passedVerdictCount, behaviors };
+    return {
+      runId,
+      requiredVerdictCount: request.plans.length,
+      passedVerdictCount,
+      runtimeBehaviorContextHash: contextHash,
+      behaviors,
+    };
   }
 
   private async runBehavior(

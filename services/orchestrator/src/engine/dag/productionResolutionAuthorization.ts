@@ -25,6 +25,7 @@ export {
   type RegressionBisector,
 } from "../verification/postMergeReproof/regressionBisection.js";
 export { buildRegressionBisector } from "../verification/postMergeReproof/regressionBisectionBuild.js";
+export { PgBehaviorQuarantineStore } from "../repositories/behaviorQuarantines.js";
 
 /** Production composition keeps the fail-closed blocked-decision seam together. */
 export function buildProductionRepairRouter(pool: pg.Pool): RepairRouter {
