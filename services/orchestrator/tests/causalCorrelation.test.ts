@@ -127,6 +127,32 @@ describe("rv-12 causal-correlation core", () => {
     expect(correlated.map((e) => e.observationId)).toEqual(["in"]);
   });
 
+  it("DECISIVE: a DISTINCT sibling at the SAME cursor bounds the window (no infinite-window leak) — Finding 2", () => {
+    // Two causes fired at the exact same instant "1000". A later effect at "1500"
+    // cannot be attributed to either without ambiguity — the same-cursor sibling
+    // sets upper == lower, collapsing the window to empty (fail-closed). Without
+    // this the window ran to infinity and the effect leaked into BOTH causes.
+    const correlated = correlateEffects({
+      cause: { causeId: "c1", firedAtCursor: "1000" },
+      siblingFiredCursors: ["1000"],
+      effects: [effect({ cursor: "1500", observationId: "ambiguous" })],
+      requireCorrelationId: false,
+    });
+    expect(correlated).toHaveLength(0);
+  });
+
+  it("a sibling strictly BEFORE this cause does not spuriously bound the window", () => {
+    // A sibling that fired earlier ("500") is irrelevant to THIS cause's upper
+    // bound; an in-window effect at "1500" with no later sibling still correlates.
+    const correlated = correlateEffects({
+      cause: { causeId: "c1", firedAtCursor: "1000" },
+      siblingFiredCursors: ["500"],
+      effects: [effect({ cursor: "1500", observationId: "in" })],
+      requireCorrelationId: false,
+    });
+    expect(correlated.map((e) => e.observationId)).toEqual(["in"]);
+  });
+
   it("requireCorrelationId=false correlates by WINDOW alone (no id demanded)", () => {
     // An in-window effect with NO trigger id still counts when id-correlation is
     // not required — the window (cause..next-sibling) is the sole gate.
