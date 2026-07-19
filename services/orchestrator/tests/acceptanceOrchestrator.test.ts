@@ -312,6 +312,14 @@ describe("AcceptanceOrchestrator — executable acceptance A1", () => {
         gateEffect: "blocking",
         artifactDigest: ARTIFACT,
         runtimeBehaviorContextHash: ARTIFACT,
+        assertionEvidence: [
+          { assertionId: "a1", executed: true, passed: true },
+          { assertionId: "a2", executed: true, passed: true },
+          { assertionId: "a3", executed: false },
+          { assertionId: "a4", executed: false },
+          { assertionId: "a5", executed: false },
+        ],
+        attemptEvidence: [{ attemptOrdinal: 1, outcome: "passed" }],
       }),
     ).toThrow(InsufficientAssertionCoverageError);
   });

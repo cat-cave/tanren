@@ -93,18 +93,18 @@ const STATE_STAGE_INDEX: Readonly<Record<IssueLoopState, number>> = {
 };
 
 /**
- * The badge-implied furthest stage. Each badge only ever ADDS a reached stage
- * when it is positive — a FAILED symptom never yields `symptom_verified`, so a
- * cosmetic fix cannot false-green its way past the symptom stage.
+ * The badge-implied furthest stage. A later positive badge is credible only
+ * when every evidence-bearing predecessor in the badge chain is also present:
+ * deployed requires a proved merge, symptom verification requires both, and
+ * source-close requires all three. This prevents a malformed or partial sealed
+ * proof from stage-jumping the funnel by presenting a lone late badge.
  */
 function badgeStageIndex(badges: SelfHealingBadges | null): number {
   if (badges === null) return -1;
-  let index = -1;
-  if (badges.merged === "passed") index = Math.max(index, 3);
-  if (badges.deploy === "bound") index = Math.max(index, 4);
-  if (badges.symptom === "passed") index = Math.max(index, 5);
-  if (badges.source === "verified_closed") index = Math.max(index, 6);
-  return index;
+  if (badges.merged !== "passed") return -1;
+  if (badges.deploy !== "bound") return 3;
+  if (badges.symptom !== "passed") return 4;
+  return badges.source === "verified_closed" ? 6 : 5;
 }
 
 function furthestStageIndex(loop: SelfHealingLoopInput): number {

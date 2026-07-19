@@ -610,6 +610,13 @@
       "when": 1784480949901,
       "tag": "0088_design_render_verdict_contract_digest",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1784483831386,
+      "tag": "0089_verdict_count_evidence",
+      "breakpoints": true
     }
   ]
 }

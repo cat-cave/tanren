@@ -13,6 +13,14 @@ import {
 const D = `sha256:${"c".repeat(64)}`;
 const CAS = `sha256:${"a".repeat(64)}`;
 
+function assertionEvidence(required: number, executed: number) {
+  return Array.from({ length: required }, (_, index) => ({
+    assertionId: `assertion_${String(index + 1)}`,
+    executed: index < executed,
+    passed: index < executed ? true : null,
+  }));
+}
+
 function resolutionEvidence(): ResolutionProofEvidence {
   return {
     orgId: "org_pb",
@@ -69,6 +77,8 @@ function verdict(overrides: Partial<BundleVerdictSection> = {}): BundleVerdictSe
     artifactDigest: CAS,
     proofUnitDigest: null,
     runtimeBehaviorContextHash: D,
+    assertionEvidence: assertionEvidence(12, 12),
+    attemptEvidence: [{ attemptOrdinal: 1, outcome: "passed" }],
     ...overrides,
   };
 }
@@ -152,7 +162,14 @@ describe("rv-24 proof bundle — build + offline verify", () => {
   it("a FAILED verdict is exported as failed — the bundle cannot launder it to passed", () => {
     const bundle = buildProofBundle(
       evidence({
-        verdicts: [verdict({ outcome: "failed_product", executedAssertionCount: 0, requiredAssertionCount: 12 })],
+        verdicts: [
+          verdict({
+            outcome: "failed_product",
+            executedAssertionCount: 0,
+            requiredAssertionCount: 12,
+            assertionEvidence: assertionEvidence(12, 0),
+          }),
+        ],
       }),
     );
     expect(bundle.evidence.verdicts[0]?.outcome).toBe("failed_product");
@@ -163,7 +180,15 @@ describe("rv-24 proof bundle — build + offline verify", () => {
   it("DECISIVE: a re-chained bundle claiming passed with executed < required is INVALID via the invariant recheck", () => {
     // A sophisticated tamper rebuilds the chain so hashes are internally consistent...
     const bad = buildProofBundle(
-      evidence({ verdicts: [verdict({ outcome: "passed", requiredAssertionCount: 12, executedAssertionCount: 1 })] }),
+      evidence({
+        verdicts: [
+          verdict({
+            requiredAssertionCount: 12,
+            executedAssertionCount: 1,
+            assertionEvidence: assertionEvidence(12, 1),
+          }),
+        ],
+      }),
     );
     const result = verifyProofBundle(bad);
     // ...but the chain is consistent (divergedAt null) while the domain invariant fails.
@@ -174,11 +199,27 @@ describe("rv-24 proof bundle — build + offline verify", () => {
 
   it("passed with a zero coverage floor (required < 1) is INVALID", () => {
     const bad = buildProofBundle(
-      evidence({ verdicts: [verdict({ outcome: "passed", requiredAssertionCount: 0, executedAssertionCount: 0 })] }),
+      evidence({
+        verdicts: [
+          verdict({
+            requiredAssertionCount: 0,
+            executedAssertionCount: 0,
+            assertionEvidence: assertionEvidence(0, 0),
+          }),
+        ],
+      }),
     );
     const result = verifyProofBundle(bad);
     expect(result.valid).toBe(false);
     expect(result.invariantViolations[0]).toMatch(/required_assertion_count < 1/u);
+  });
+
+  it("DECISIVE: a re-chained bundle with scalar counts detached from its assertion rows is INVALID", () => {
+    const bad = buildProofBundle(evidence({ verdicts: [verdict({ executedAssertionCount: 11 })] }));
+    const result = verifyProofBundle(bad);
+    expect(result.divergedAt).toBeNull();
+    expect(result.valid).toBe(false);
+    expect(result.invariantViolations).toContainEqual(expect.stringMatching(/count evidence mismatch/u));
   });
 
   it("tampering an embedded resolution proof's evidence surfaces as an invalid sub-proof", () => {

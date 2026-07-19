@@ -129,8 +129,8 @@ async function seedVerdict(
 ): Promise<void> {
   const required = fields.required ?? (fields.outcome === "passed" ? 1 : 0);
   const executed = fields.executed ?? (fields.outcome === "passed" ? 1 : 0);
-  await runWithOrgScope(app, ORG, (client) =>
-    client.query(
+  await runWithOrgScope(app, ORG, async (client) => {
+    await client.query(
       `INSERT INTO behavior_verdicts
          (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
           required_assertion_count, executed_assertion_count, outcome, attempt_count,
@@ -150,8 +150,70 @@ async function seedVerdict(
         fields.gateEffect,
         CAS,
       ],
-    ),
-  );
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       VALUES ($1, $2, 1, $3)`,
+      [ORG, verdictId, fields.outcome],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       SELECT $1, $2, 'assertion_' || series::text, series <= $4,
+              CASE WHEN series <= $4 THEN true ELSE NULL END
+         FROM generate_series(1, $3) AS series`,
+      [ORG, verdictId, required, executed],
+    );
+  });
+}
+
+/**
+ * Seed a verdict whose RECORDED counts DIVERGE from its FK-bound evidence rows — a
+ * fabricated / historical unverifiable verdict. The deferred count-integrity triggers
+ * (migration 0089) REJECT such a row at commit, so a real write can NEVER create one; this
+ * simulates the pre-trigger HISTORICAL row (recorded counts with NO evidence) by bypassing
+ * triggers as the superuser owner. It records required/executed/attempt = 1/1/1 but inserts
+ * ZERO assertion and ZERO attempt rows → `count_inconsistent` is true. The land gate must
+ * fail the WHOLE run closed on it, NEVER silently drop it so a consistent sibling authorizes.
+ */
+async function seedMismatchedVerdict(
+  owner: Pool,
+  verificationRunId: string,
+  verdictId: string,
+  fields: { outcome: string; gateEffect: "blocking" | "advisory" },
+): Promise<void> {
+  const client = await owner.connect();
+  try {
+    await client.query("BEGIN");
+    // `replica` role skips the origin-firing deferred constraint triggers, letting us persist the
+    // unverifiable historical row the readers must fail closed on. Superuser-only + LOCAL to the tx.
+    await client.query("SET LOCAL session_replication_role = 'replica'");
+    await client.query(
+      `INSERT INTO behavior_verdicts
+         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+          required_assertion_count, executed_assertion_count, outcome, attempt_count,
+          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 1, 1, $7, 1, 'stable', $8, $9, $6)`,
+      [
+        ORG,
+        verdictId,
+        PROJECT,
+        verificationRunId,
+        BEHAVIOR_REVISION,
+        digest(verdictId),
+        fields.outcome,
+        fields.gateEffect,
+        CAS,
+      ],
+    );
+    // Deliberately NO behavior_verdict_assertions / behavior_verdict_attempts rows: recorded
+    // counts (1/1/1) ≠ FK-bound tallies (0/0/0).
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {
@@ -248,6 +310,32 @@ describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {
     const bvr = await seedPreMergeVerification(app, "run_advisory", "completed");
     await seedVerdict(app, bvr, "v_adv", { outcome: "failed_product", gateEffect: "advisory" });
     expect((await resolveLandTimeBehaviorGate(app, ORG, "run_advisory")).kind).toBe("inconclusive");
+  });
+
+  it("THE FAIL-OPEN CLOSED: a count-INCONSISTENT failing verdict + a count-consistent PASSING sibling → BLOCKED (never silently dropped)", async () => {
+    // The exact land-authority fail-open: an exclude-then-evaluate WHERE would DROP the
+    // fabricated-count blocking FAILURE and let the count-consistent passing sibling authorize
+    // the merge. The gate must instead fail the WHOLE run closed → inconclusive (→ blocked).
+    await seedMergeRun(owner, "run_count_mismatch");
+    const bvr = await seedPreMergeVerification(app, "run_count_mismatch", "completed");
+    await seedVerdict(app, bvr, "v_cm_pass", { outcome: "passed", gateEffect: "blocking" });
+    await seedMismatchedVerdict(owner, bvr, "v_cm_fabricated_fail", {
+      outcome: "failed_product",
+      gateEffect: "blocking",
+    });
+    const gate = await resolveLandTimeBehaviorGate(app, ORG, "run_count_mismatch");
+    expect(gate.kind).toBe("inconclusive");
+  });
+
+  it("no-regression: a run where ALL verdicts have consistent evidence + a real blocking pass → passed", async () => {
+    await seedMergeRun(owner, "run_all_consistent");
+    const bvr = await seedPreMergeVerification(app, "run_all_consistent", "completed");
+    await seedVerdict(app, bvr, "v_ac_1", { outcome: "passed", gateEffect: "blocking" });
+    await seedVerdict(app, bvr, "v_ac_2", { outcome: "passed", gateEffect: "blocking" });
+    expect(await resolveLandTimeBehaviorGate(app, ORG, "run_all_consistent")).toEqual({
+      kind: "passed",
+      passedBlockingCount: 2,
+    });
   });
 
   it("the read is org-scoped — a foreign org sees no verdicts (not_applicable)", async () => {

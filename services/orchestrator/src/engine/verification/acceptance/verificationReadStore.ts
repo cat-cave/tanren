@@ -55,13 +55,26 @@ function toDate(value: unknown): Date {
 }
 
 function verdictView(row: Row): VerificationVerdictView {
+  const requiredAssertionCount = toInt(row["required_assertion_count"]);
+  const executedAssertionCount = toInt(row["executed_assertion_count"]);
+  const attemptCount = toInt(row["attempt_count"]);
+  const evidenceRequiredAssertionCount = toInt(row["evidence_required_assertion_count"]);
+  const evidenceExecutedAssertionCount = toInt(row["evidence_executed_assertion_count"]);
+  const evidenceAttemptCount = toInt(row["evidence_attempt_count"]);
+  if (
+    requiredAssertionCount !== evidenceRequiredAssertionCount ||
+    executedAssertionCount !== evidenceExecutedAssertionCount ||
+    attemptCount !== evidenceAttemptCount
+  ) {
+    throw new Error(`verification read found unverifiable counts for verdict ${text(row["id"])}`);
+  }
   return {
     verdictId: text(row["id"]),
     behaviorRevisionId: text(row["behavior_revision_id"]),
     outcome: text(row["outcome"]) as VerificationVerdictView["outcome"],
-    requiredAssertionCount: toInt(row["required_assertion_count"]),
-    executedAssertionCount: toInt(row["executed_assertion_count"]),
-    attemptCount: toInt(row["attempt_count"]),
+    requiredAssertionCount,
+    executedAssertionCount,
+    attemptCount,
     flakeState: text(row["flake_state"]) as VerificationVerdictView["flakeState"],
     gateEffect: text(row["gate_effect"]) as VerificationVerdictView["gateEffect"],
     artifactDigest: text(row["artifact_digest"]),
@@ -69,6 +82,17 @@ function verdictView(row: Row): VerificationVerdictView {
     runtimeBehaviorContextHash: text(row["runtime_behavior_context_hash"]),
   };
 }
+
+// Counts in behavior_verdicts are a convenient immutable projection, not a
+// source of truth. Every read carries the real FK-bound evidence tally and the
+// decoder above rejects a mismatch rather than presenting a confident lie.
+const VERDICT_COUNT_EVIDENCE_SELECT = `
+  (SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+    WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_required_assertion_count,
+  (SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+    WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_executed_assertion_count,
+  (SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+    WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_attempt_count`;
 
 function environmentBinding(row: Row | undefined): VerificationEnvironmentBinding | null {
   if (row === undefined) return null;
@@ -85,6 +109,9 @@ function environmentBinding(row: Row | undefined): VerificationEnvironmentBindin
 
 /** A run-header row already joined with its verdict tally + latest outcome. */
 function runHeader(row: Row): VerificationRunHeader {
+  if (toInt(row["unverifiable_verdict_count"]) > 0) {
+    throw new Error(`verification run ${text(row["id"])} contains unverifiable verdict counts`);
+  }
   return {
     runId: text(row["id"]),
     projectId: text(row["project_id"]),
@@ -107,12 +134,27 @@ const RUN_HEADER_SELECT = `
   SELECT r.id, r.project_id, r.purpose, r.status, r.spec_id, r.integration_node_id,
          r.environment_id, r.artifact_digest, r.created_at,
          COALESCE(v.verdict_count, 0) AS verdict_count,
+         COALESCE(v.unverifiable_verdict_count, 0) AS unverifiable_verdict_count,
          latest.outcome AS latest_outcome
     FROM behavior_verification_runs r
     LEFT JOIN (
-      SELECT run_id, COUNT(*)::int AS verdict_count
-        FROM behavior_verdicts
-       WHERE org_id = $1
+      SELECT v.run_id, COUNT(*)::int AS verdict_count,
+             (COUNT(*) FILTER (WHERE
+                v.required_assertion_count <> (
+                  SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+                   WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                )
+                OR v.executed_assertion_count <> (
+                  SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+                   WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                )
+                OR v.attempt_count <> (
+                  SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+                   WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                )
+              ))::int AS unverifiable_verdict_count
+        FROM behavior_verdicts v
+       WHERE v.org_id = $1
        GROUP BY run_id
     ) v ON v.run_id = r.id
     LEFT JOIN LATERAL (
@@ -174,12 +216,13 @@ export class VerificationReadStore {
 
         const verdictRows = (
           await client.query<Row>(
-            `SELECT id, behavior_revision_id, outcome, required_assertion_count, executed_assertion_count,
-                  attempt_count, flake_state, gate_effect, artifact_digest, proof_unit_digest,
+            `SELECT v.id, v.behavior_revision_id, v.outcome, v.required_assertion_count, v.executed_assertion_count,
+                  v.attempt_count, v.flake_state, v.gate_effect, v.artifact_digest, v.proof_unit_digest,
                   runtime_behavior_context_hash
-             FROM behavior_verdicts
-            WHERE org_id = $1 AND run_id = $2
-            ORDER BY created_at ASC, id ASC`,
+                  , ${VERDICT_COUNT_EVIDENCE_SELECT}
+             FROM behavior_verdicts v
+            WHERE v.org_id = $1 AND v.run_id = $2
+            ORDER BY v.created_at ASC, v.id ASC`,
             [scope.orgId, runId],
           )
         ).rows;
@@ -203,7 +246,7 @@ export class VerificationReadStore {
         await client.query<Row>(
           `SELECT v.id, v.behavior_revision_id, v.outcome, v.required_assertion_count, v.executed_assertion_count,
                   v.attempt_count, v.flake_state, v.gate_effect, v.artifact_digest, v.proof_unit_digest,
-                  v.runtime_behavior_context_hash, v.created_at,
+                  v.runtime_behavior_context_hash, v.created_at, ${VERDICT_COUNT_EVIDENCE_SELECT},
                   r.id AS run_id, r.purpose AS run_purpose, r.status AS run_status
              FROM behavior_verdicts v
              JOIN behavior_verification_runs r ON r.org_id = v.org_id AND r.id = v.run_id

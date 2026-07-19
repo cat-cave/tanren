@@ -69,14 +69,36 @@ async function seedVerdict(
   required: number,
   executed: number,
 ): Promise<void> {
-  await owner.query(
-    `INSERT INTO behavior_verdicts
-       (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
-        required_assertion_count, executed_assertion_count, outcome, attempt_count,
-        flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
-     VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, 1, 'stable', 'blocking', $10, $6)`,
-    [org, id, PROJECT, runId, BEHAVIOR_REVISION, D, required, executed, outcome, CAS],
-  );
+  const client = await owner.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO behavior_verdicts
+         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+          required_assertion_count, executed_assertion_count, outcome, attempt_count,
+          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, 1, 'stable', 'blocking', $10, $6)`,
+      [org, id, PROJECT, runId, BEHAVIOR_REVISION, D, required, executed, outcome, CAS],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       VALUES ($1, $2, 1, $3)`,
+      [org, id, outcome],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       SELECT $1, $2, 'assertion_' || series::text, series <= $4,
+              CASE WHEN series <= $4 THEN true ELSE NULL END
+         FROM generate_series(1, $3) AS series`,
+      [org, id, required, executed],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function seedTenant(owner: Pool): Promise<void> {

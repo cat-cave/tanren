@@ -62,7 +62,20 @@ export type BundleEnvironmentSection = {
   readonly lifecycleStatus: string;
 };
 
-/** One immutable per-behavior verdict from the 0079-hardened `behavior_verdicts` ledger. */
+/** One FK-bound assertion row backing a verdict's required/executed counts. */
+export type BundleVerdictAssertionEvidence = {
+  readonly assertionId: string;
+  readonly executed: boolean;
+  readonly passed: boolean | null;
+};
+
+/** One FK-bound execution-attempt row backing a verdict's retry count. */
+export type BundleVerdictAttemptEvidence = {
+  readonly attemptOrdinal: number;
+  readonly outcome: string;
+};
+
+/** One immutable per-behavior verdict from the hardened acceptance ledger. */
 export type BundleVerdictSection = {
   readonly verdictId: string;
   readonly behaviorRevisionId: string;
@@ -77,6 +90,8 @@ export type BundleVerdictSection = {
   readonly artifactDigest: string;
   readonly proofUnitDigest: string | null;
   readonly runtimeBehaviorContextHash: string;
+  readonly assertionEvidence: readonly BundleVerdictAssertionEvidence[];
+  readonly attemptEvidence: readonly BundleVerdictAttemptEvidence[];
 };
 
 /**
@@ -182,12 +197,53 @@ export function buildProofBundle(evidence: ProofBundleEvidence): ProofBundle {
 
 /**
  * The 0079 substrate invariant, re-checked at verify time so a re-chained bundle can
- * never launder a `passed` verdict that never earned it: a passed verdict demands
- * executed >= required >= 1. Returns one human-readable message per breach.
+ * never launder a count detached from its FK-bound evidence. A re-chained bundle
+ * still fails when a scalar differs from the embedded rows, and a passed verdict
+ * additionally demands executed >= required >= 1.
  */
 export function bundleInvariantViolations(evidence: ProofBundleEvidence): string[] {
   const violations: string[] = [];
   for (const verdict of evidence.verdicts) {
+    const assertionIds = new Set<string>();
+    let executed = 0;
+    for (const assertion of verdict.assertionEvidence) {
+      if (assertion.assertionId.length === 0 || assertionIds.has(assertion.assertionId)) {
+        violations.push(`verdict ${verdict.verdictId} has a missing or duplicate assertion evidence id`);
+        continue;
+      }
+      assertionIds.add(assertion.assertionId);
+      if (assertion.executed) {
+        if (typeof assertion.passed !== "boolean") {
+          violations.push(`verdict ${verdict.verdictId} has an executed assertion without an outcome`);
+        }
+        executed += 1;
+      } else if (assertion.passed !== null) {
+        violations.push(`verdict ${verdict.verdictId} has an unexecuted assertion with an outcome`);
+      }
+    }
+    const attemptOrdinals = new Set<number>();
+    for (const attempt of verdict.attemptEvidence) {
+      if (
+        !Number.isInteger(attempt.attemptOrdinal) ||
+        attempt.attemptOrdinal < 1 ||
+        attemptOrdinals.has(attempt.attemptOrdinal)
+      ) {
+        violations.push(`verdict ${verdict.verdictId} has an invalid or duplicate attempt evidence ordinal`);
+        continue;
+      }
+      attemptOrdinals.add(attempt.attemptOrdinal);
+    }
+    if (
+      verdict.requiredAssertionCount !== verdict.assertionEvidence.length ||
+      verdict.executedAssertionCount !== executed ||
+      verdict.attemptCount !== verdict.attemptEvidence.length
+    ) {
+      violations.push(
+        `verdict ${verdict.verdictId} count evidence mismatch: stored required/executed/attempt=` +
+          `${verdict.requiredAssertionCount}/${verdict.executedAssertionCount}/${verdict.attemptCount}, evidence=` +
+          `${verdict.assertionEvidence.length}/${executed}/${verdict.attemptEvidence.length}`,
+      );
+    }
     if (verdict.outcome !== "passed") continue;
     if (verdict.requiredAssertionCount < 1) {
       violations.push(`verdict ${verdict.verdictId} passed with required_assertion_count < 1`);

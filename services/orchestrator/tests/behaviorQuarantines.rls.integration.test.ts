@@ -96,11 +96,19 @@ async function seedTenant(owner: Pool): Promise<void> {
     ["verdict_bq_fail", "failed_product"],
   ] as const) {
     await owner.query(
-      `INSERT INTO behavior_verdicts
-         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
-          required_assertion_count, executed_assertion_count, outcome, attempt_count,
-          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
-       VALUES ($1, $2, $3, 'vrun_bq', $4, 'ex', 'mx', 1, 1, $5, 1, 'stable', 'blocking', $6, $7)`,
+      `WITH verdict AS (
+         INSERT INTO behavior_verdicts
+           (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+            required_assertion_count, executed_assertion_count, outcome, attempt_count,
+            flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+         VALUES ($1, $2, $3, 'vrun_bq', $4, 'ex', 'mx', 1, 1, $5, 1, 'stable', 'blocking', $6, $7)
+         RETURNING org_id, id
+       ), attempt AS (
+         INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+         SELECT org_id, id, 1, $5 FROM verdict
+       )
+       INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       SELECT org_id, id, 'assertion_seed', true, $5 = 'passed' FROM verdict`,
       [ORG, id, PROJECT, BEHAVIOR, outcome, DIGEST, CTX],
     );
   }
