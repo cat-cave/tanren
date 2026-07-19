@@ -32,6 +32,8 @@ export interface AcceptancePlanLoader {
 
 interface AcceptanceRow {
   readonly id: string;
+  readonly persona_revision_id: string;
+  readonly content_digest: string;
   readonly acceptance: unknown;
 }
 
@@ -47,7 +49,7 @@ export class PgAcceptancePlanLoader implements AcceptancePlanLoader {
       for (const rawId of input.behaviorRevisionIds) {
         const behaviorRevisionId: BehaviorRevisionId = parseBehaviorRevisionId(rawId);
         const result = await client.query<AcceptanceRow>(
-          "SELECT id, acceptance FROM behavior_revisions WHERE org_id = $1 AND id = $2",
+          "SELECT id, persona_revision_id, content_digest, acceptance FROM behavior_revisions WHERE org_id = $1 AND id = $2",
           [input.orgId, behaviorRevisionId],
         );
         const row = result.rows[0];
@@ -55,6 +57,8 @@ export class PgAcceptancePlanLoader implements AcceptancePlanLoader {
         plans.push(
           compileAcceptancePlan({
             id: behaviorRevisionId,
+            personaRevisionId: row.persona_revision_id,
+            behaviorRevisionHash: row.content_digest,
             acceptance: (row.acceptance ?? {}) as Readonly<Record<string, unknown>>,
           }),
         );

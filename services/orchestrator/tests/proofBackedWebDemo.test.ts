@@ -86,6 +86,8 @@ function release(behaviorRevisionIds: readonly string[]): ReleaseInstanceRecord 
 function healthPlan(): AcceptancePlan {
   return compileAcceptancePlan({
     id: BR,
+    personaRevisionId: "persona_revision_demo",
+    behaviorRevisionHash: `sha256:${"a".repeat(64)}`,
     acceptance: {
       requiredSurfaces: ["api"],
       httpProbes: [{ probeId: "p1", method: "GET", path: "/health" }],
