@@ -170,6 +170,13 @@ export class PgVerificationCaptureStore implements VerificationCaptureStore {
     //    identical content of the same kind onto one address via the PK.
     return this.withOrgScope(input.orgId, async (client) => {
       await this.assertProject(client, input.orgId, input.projectId);
+      // `proof_unit_digest` and `producing_attempt_id` are NULL BY DESIGN on the acceptance-run
+      // path: both are FK-bound (→ proof_units / behavior_verification_attempts), and an
+      // acceptance run materializes NEITHER referent — it records a behavior_verdict, not a
+      // behavior_verification_attempts row, and compiles no proof unit. Fabricating an id would
+      // violate the FK (fail-closed), so these stay NULL. The DURABLE verdict→capture linkage
+      // does NOT live here; it lives in `behavior_verdict_evidence`, written by the verdict store
+      // in the same run, so a later proof resolves this artifact from the ledger by verdict id.
       const inserted = await client.query(
         `INSERT INTO verification_artifacts
            (org_id, id, project_id, cas_digest, proof_unit_digest, kind, media_type,
