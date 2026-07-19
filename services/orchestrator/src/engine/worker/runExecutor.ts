@@ -32,7 +32,7 @@ import {
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
-  buildPreMergeBehaviorGateProducer,
+  buildPreMergeProducerWithFragmentF2,
   buildRedriveHistoryReader,
   buildTriageNewSpecsMaterializer,
   DirectRunStateWriter,
@@ -335,8 +335,8 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
           runStateWriter: writer,
           resolveActor: triageMaterializerSystemActor,
         }),
-        // rv-premerge: OPT-IN pre-merge behavior-gate producer (runs only when the knob is on).
-        preMergeBehaviorProducer: buildPreMergeBehaviorGateProducer(deps.pool, deps.secrets),
+        // rv-premerge + rv-3: OPT-IN pre-merge behavior gate threaded with the F2 verification-fragment authoring seam.
+        preMergeBehaviorProducer: buildPreMergeProducerWithFragmentF2(deps, { orgId, projectId: context.projectId }),
       }),
     );
     await deps.jobQueue.complete(job.id);
