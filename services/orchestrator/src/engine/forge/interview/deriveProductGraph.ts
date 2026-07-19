@@ -439,9 +439,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       // on an already-published lineage), so re-running it on a durable resume is safe;
       // fail-closed (an authoring failure propagates into the catch → recordFailure →
       // rethrow, blocking activation rather than shipping a design-less product).
-      if (input.composeDesignSystem !== undefined) {
-        await input.composeDesignSystem({ orgId: input.orgId, projectId: project.projectId });
+      // LOUD, never a silent skip: an absent `composeDesignSystem` is a dropped
+      // production wiring (mountFeatureRoutes always supplies it), not a legitimate
+      // "no design system" state — mirror the `materializeTemplate` guard so a broken
+      // wire fails the derive rather than shipping a design-less product. Tests keep
+      // the seam optional on the type and wire it explicitly.
+      if (input.composeDesignSystem === undefined) {
+        throw new Error("greenfield derive requires `composeDesignSystem`; an absent seam is a wiring bug");
       }
+      await input.composeDesignSystem({ orgId: input.orgId, projectId: project.projectId });
 
       if (state.results.bootstrap === undefined) {
         const bootstrap = await (input.bootstrapProject ?? provisionAutonomousProject)({

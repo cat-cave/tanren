@@ -214,6 +214,61 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(resolved?.artifactId).toBe(result!.artifactId);
   });
 
+  it("catches a NEW fragment colliding with an EXISTING persisted fragment (batch gate over the REAL registry)", async () => {
+    // The org already carries the `surface/components / Components` fragment (persisted
+    // by the first test) whose file is `components/Components.tsx`. A SECOND project
+    // declares a DIFFERENT surface — `surface/console` — that still labels "Components",
+    // so the fixture authors it to the SAME path `components/Components.tsx`. It is a
+    // genuinely MISSING slot (different kind), so F2D authors it; the batch gate then
+    // composes it AGAINST the org's real present files (`loadPresentFiles` →
+    // `listPresentFilesByOrg`) and MUST catch the cross-registry path collision. With
+    // the old empty-stub `loadPresentFiles` this collision went undetected.
+    const COLLIDING_PROJECT = "project_ds_composer_collide";
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ($1, 'DS Composer Collide', 'https://example.test/ds-composer-collide.git', 'main', 'runner:test', $2, '{"version":1}'::jsonb)`,
+      [COLLIDING_PROJECT, ORG_ID],
+    );
+    const contract = parseDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "a second console",
+      intent: "a surface whose authored file path collides with the org's existing registry",
+      dimensions: [{ key: "console", label: "Components", intent: "collide on path", guidance: "", personaRefs: [] }],
+    });
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_ID, projectId: COLLIDING_PROJECT, contract },
+        { kind: "operator" },
+      ),
+    );
+
+    await expect(
+      composeProjectWebDesignSystem(
+        {
+          pool: runtimePool,
+          artifactStore: new FilesystemArtifactStore(artifactRoot),
+          fragmentAnswerer: fixtureFragmentAnswerer(),
+          eventStore: new CapturingEventStore(),
+          createdBy: "tanren.ds-composer.test",
+        },
+        { orgId: ORG_ID, projectId: COLLIDING_PROJECT },
+      ),
+    ).rejects.toThrow(/design fragment authoring failed/u);
+
+    // Fail-closed: the colliding NEW fragment was RETRACTED — no `surface/console` row
+    // survives, and no release was published for the second project.
+    const consoleRows = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query("SELECT id FROM design_fragments WHERE org_id = $1 AND kind = $2", [ORG_ID, "surface/console"]),
+    );
+    expect(consoleRows.rows).toHaveLength(0);
+    const resolved = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      resolveProjectWebDesignSystem(client, { orgId: ORG_ID, projectId: COLLIDING_PROJECT }),
+    );
+    expect(resolved).toBeUndefined();
+  });
+
   it("is idempotent — a second compose short-circuits on the published lineage (no re-author)", async () => {
     const events = new CapturingEventStore();
     const result = await composeProjectWebDesignSystem(

@@ -75,6 +75,7 @@ export function appWithGreenfieldRoutes(
       | "runFragmentAuthoring"
       | "bootstrapProject"
       | "designAgentFactory"
+      | "composeDesignSystem"
     >
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
@@ -127,6 +128,11 @@ export function appWithGreenfieldRoutes(
       // fragment-based template; the stub returns a fixture seed without
       // touching GitHub. Overridable per test.
       materializeTemplate: () => stubMaterialize(),
+      // ds-composer — production ALWAYS wires this (mountFeatureRoutes) and the
+      // derive now fails loud on its absence, so the shared helper supplies a no-op
+      // by default (the real producer is covered by its own integration suite). A
+      // caller may override it, e.g. to inject a `DesignFragmentAuthoringFailedError`.
+      composeDesignSystem: () => async () => {},
       ...onboardingOverrides,
       bootstrapProject,
     }),

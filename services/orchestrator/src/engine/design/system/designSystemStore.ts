@@ -15,10 +15,16 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import { DesignReleaseState, type DesignSystemReleaseV1, parseDesignSystemRelease } from "./designArtifactSchemas.js";
 import { parseWebDesignWriterContext, type WebDesignWriterContext } from "./webWriterContext.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+/** The `design_systems.lifecycle` domain (mirrors the `design_systems_lifecycle_check`
+ * DB constraint). Decoded through this zod boundary — an unknown value fails LOUD
+ * rather than being cast (the no-`as Enum` posture the sibling stores hold). */
+const DesignSystemLifecycle = z.enum(["draft", "active", "archived"]);
 
 /** A design-system family row as stored. */
 export interface DesignSystemRow {
@@ -215,7 +221,7 @@ export class DesignSystemReleaseStore {
         slug: row.slug,
         name: row.name,
         description: row.description,
-        lifecycle: row.lifecycle as DesignSystemRow["lifecycle"],
+        lifecycle: DesignSystemLifecycle.parse(row.lifecycle),
         defaultChannel: row.default_channel,
       };
     });

@@ -12,7 +12,7 @@ import {
   type PreparedGreenfieldDeploy,
 } from "../src/engine/forge/interview/index.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
-import { stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
+import { stubPool, noopComposeDesignSystem, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -141,6 +141,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         deploy: { providerKind: "deploy.flyio" },
         materializeTemplate: recordingMaterialize(rec),
         bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
         createRepository: async (input) => {
           rec.reposCreated.push({ owner: input.owner, name: input.name });
           return {
@@ -179,6 +180,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
       deploy: { providerKind: "deploy.flyio" as const, connectionId: "connection_1", grantId: "grant_1" },
       materializeTemplate: recordingMaterialize(rec),
       bootstrapProject: successfulBootstrapProject,
+      composeDesignSystem: noopComposeDesignSystem,
       createRepository: async (repository: { owner: string; name: string }) => {
         rec.reposCreated.push({ owner: repository.owner, name: repository.name });
         return {
@@ -264,6 +266,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           deploy: { providerKind: "deploy.flyio", connectionId: "connection_1", grantId: "grant_1" },
           materializeTemplate: recordingMaterialize(rec),
           bootstrapProject: successfulBootstrapProject,
+          composeDesignSystem: noopComposeDesignSystem,
           createRepository: async (input) => {
             rec.reposCreated.push({ owner: input.owner, name: input.name });
             return {
@@ -305,6 +308,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         deploy: { providerKind: "deploy.flyio", connectionId: "connection_1", grantId: "grant_1" },
         materializeTemplate: recordingMaterialize(rec),
         bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
         createRepository: async () => {
           throw new Error("replay must not recreate the repository");
         },
@@ -343,6 +347,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           deploy: { providerKind: "deploy.flyio" },
           materializeTemplate: recordingMaterialize(rec),
           bootstrapProject: successfulBootstrapProject,
+          composeDesignSystem: noopComposeDesignSystem,
           createRepository: async (input) => {
             rec.reposCreated.push({ owner: input.owner, name: input.name });
             return {
@@ -385,6 +390,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         deploy: { providerKind: "deploy.flyio" },
         materializeTemplate: recordingMaterialize(rec),
         bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
         createRepository: async (input) => {
           rec.reposCreated.push({ owner: input.owner, name: input.name });
           return {

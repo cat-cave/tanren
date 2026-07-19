@@ -17,7 +17,12 @@ import {
 } from "../src/engine/forge/interview/index.js";
 import type { MaterializeTemplate } from "../src/engine/templates/index.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
-import { preparedDeploy, stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
+import {
+  preparedDeploy,
+  stubPool,
+  noopComposeDesignSystem,
+  successfulBootstrapProject,
+} from "./fixtures/forge/interviewDeriveStub.js";
 
 // PR-G (task #77) — opaque composed-template identifier; no GitHub repo at this ref.
 const stubMaterialize = (): MaterializeTemplate => async (input) => ({
@@ -119,6 +124,7 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
         deploy: { providerKind: "deploy.vercel" },
         materializeTemplate: stubMaterialize(),
         bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
       },
     );
     expect(derived.designContract.id).toBeDefined();
