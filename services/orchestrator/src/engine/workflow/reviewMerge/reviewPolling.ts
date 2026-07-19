@@ -43,6 +43,7 @@ import {
   type SimulatedReviewPublishFence,
 } from "./simulatedReviewPublishFence.js";
 import { runSimulatedReviewStage, type SimulatedReviewSpec } from "./simulatedReviewStage.js";
+import { simulatedReviewerPrincipal, type ReviewPrincipal } from "../../governance/reviewRules.js";
 
 export type { ReviewProbe };
 
@@ -124,6 +125,8 @@ export interface PollReviewForRunResult {
   prNumber: number;
   /** Reviewer login that produced the verdict, when known. */
   reviewer?: string;
+  /** Governance actor that produced the verdict, when observable. */
+  reviewerPrincipal?: ReviewPrincipal;
   /** changes_requested feedback body, used as writer-rework steering. */
   feedback?: string;
   /** Strict simulated-review forge receipt, when published. */
@@ -318,6 +321,9 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     prUrl: context.prUrl,
     prNumber: pr.pullNumber,
     reviewer: initialVerdict.latest?.reviewer,
+    ...(initialVerdict.latest?.reviewer === undefined
+      ? {}
+      : { reviewerPrincipal: { kind: "user" as const, name: initialVerdict.latest.reviewer } }),
     feedback: initialVerdict.latest?.body,
   };
   await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
@@ -359,6 +365,7 @@ async function runSimulatedReviewPath(args: {
     prUrl: stage.prUrl,
     prNumber: stage.prNumber,
     reviewer: stage.reviewer,
+    reviewerPrincipal: simulatedReviewerPrincipal(),
     feedback: stage.feedback,
     forgePublication: stage.forgePublication,
   };
@@ -414,6 +421,7 @@ async function finalizeReviewTask(
       prUrl: result.prUrl,
       prNumber: result.prNumber,
       ...(result.reviewer !== undefined && { reviewer: result.reviewer }),
+      ...(result.reviewerPrincipal !== undefined && { reviewerPrincipal: result.reviewerPrincipal }),
       ...(result.feedback !== undefined && { feedback: result.feedback }),
       ...(result.forgePublication !== undefined && { forgePublication: result.forgePublication }),
     });

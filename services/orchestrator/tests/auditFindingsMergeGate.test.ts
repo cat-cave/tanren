@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
 import { auditMissingFinding } from "../src/engine/merge/landSignals.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 import { decideFromFindings, type AuditPosture } from "../src/engine/contracts/auditPosture.js";
 import { evaluatePostureGate } from "../src/engine/forge/audits/postureGate.js";
 import type { Finding } from "../src/engine/contracts/findings.js";
@@ -47,6 +48,9 @@ function landInput(host: InMemoryCodeHost, findings: ReadonlyArray<Finding>, pos
     gateConfigHash: "gc",
     policyVersion: "pv",
     gatedHeadSha: "sha-feat",
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     behaviorGate: { kind: "not_applicable" },
     designRenderGate: { kind: "not_applicable" },
     store: STORE,

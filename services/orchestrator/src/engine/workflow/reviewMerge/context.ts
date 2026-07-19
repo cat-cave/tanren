@@ -19,6 +19,8 @@ import {
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
 import { normalizeStaticGithubRef } from "../../credentials/githubToken.js";
 import { canonicalOrgGithubCredentialRef } from "../../credentials/refNamespace.js";
+import { compilePolicy } from "../../governance/policyCompiler.js";
+import { reviewRulesFromCompiledPolicy } from "../../governance/reviewRules.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -81,11 +83,7 @@ export interface ReviewMergeRunContext {
    * fabricated constant.
    */
   policyIdentity: string;
-  /**
-   * Whether the review stage requires a human verdict before merge (project
-   * config). `auto` short-circuits the review poll to an approved verdict;
-   * `human` (the default) preserves the GitHub-polling behavior.
-   */
+  /** Active governance policy decides the review DAG; config is fallback only before binding. */
   reviewPolicy: ReviewPolicy;
   /**
    * GitHub logins that represent Tanren's own pushes on this repo.
@@ -169,11 +167,19 @@ export async function loadReviewMergeRunContext(
     `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch,
             p.config, p.default_branch, p.org_id AS project_org_id,
             s.org_id AS spec_org_id, s.project_id AS spec_project_id,
-            o.config AS org_config
+            o.config AS org_config, active_policy.tier_json AS active_policy_document
      FROM runs r
      LEFT JOIN projects p ON p.project_id = r.project_id
      LEFT JOIN specs s ON s.spec_id = r.spec_id
      LEFT JOIN organizations o ON o.id = r.org_id
+     LEFT JOIN LATERAL (
+       SELECT t.tier_json
+         FROM policy_bindings b
+         JOIN governance_tiers t
+           ON t.org_id = b.org_id AND t.project_id = b.project_id AND t.id = b.tier_id
+        WHERE b.org_id = r.org_id AND b.project_id = r.project_id AND b.is_active
+        LIMIT 1
+     ) active_policy ON true
      WHERE r.run_id = $1`,
     [runId],
   );
@@ -210,12 +216,31 @@ export async function loadReviewMergeRunContext(
     governancePosture: projectConfig.governancePosture,
     policyVersion: projectConfig.version,
     policyIdentity: computeMergePolicyIdentity(projectConfig),
-    reviewPolicy: projectConfig.reviewPolicy,
+    reviewPolicy: reviewPolicyForActiveGovernance(row.active_policy_document, projectConfig.reviewPolicy),
     tanrenLogins: tanrenLoginsFor(projectConfig.governanceTanrenLogins),
     platformLogins: projectConfig.governancePlatformLogins ?? [],
     installation,
     ...(staticCredentialRef !== undefined && { staticCredentialRef }),
   };
+}
+
+/**
+ * The active immutable policy, when bound, owns the review DAG selection. A
+ * project-config setting remains only as the pre-binding fallback; it cannot
+ * weaken a bound policy. Invalid bound review rules throw before an auto review
+ * can be emitted, and the land authority independently re-evaluates them.
+ */
+function reviewPolicyForActiveGovernance(activePolicyDocument: unknown, fallback: ReviewPolicy): ReviewPolicy {
+  if (activePolicyDocument === null || activePolicyDocument === undefined) return fallback;
+  const compiled = compilePolicy(activePolicyDocument);
+  if (compiled.status !== "compiled") {
+    throw new Error("active governance policy has contradictory review rules — fail closed");
+  }
+  const rules = reviewRulesFromCompiledPolicy(compiled.ast);
+  if (rules.kind === "unresolved") {
+    throw new Error(`active governance policy review rules are unresolved: ${rules.reason}`);
+  }
+  return rules.mode;
 }
 
 /**
@@ -299,4 +324,5 @@ const ReviewMergeRunRow = z.object({
   config: z.unknown(),
   default_branch: z.string().nullable(),
   org_config: z.unknown(),
+  active_policy_document: z.unknown().nullish(),
 });
