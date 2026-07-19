@@ -63,6 +63,25 @@ describe("computeSelfHealingFunnel", () => {
     expect(funnel.loops[0]?.furthestStage).toBe("source_closed");
   });
 
+  it("DECISIVE: a lone late proof badge cannot stage-jump or inflate every earlier funnel count", () => {
+    const malformedLateBadge: SelfHealingBadges = {
+      gate: "absent",
+      merged: "absent",
+      deploy: "absent",
+      demo: "absent",
+      symptom: "absent",
+      source: "verified_closed",
+    };
+    const funnel = computeSelfHealingFunnel([loop("open", malformedLateBadge)]);
+    expect(funnel.counts.opened).toBe(1);
+    expect(funnel.counts.reproduced).toBe(0);
+    expect(funnel.counts.merged).toBe(0);
+    expect(funnel.counts.deployed).toBe(0);
+    expect(funnel.counts.symptom_verified).toBe(0);
+    expect(funnel.counts.source_closed).toBe(0);
+    expect(funnel.loops[0]?.furthestStage).toBe("opened");
+  });
+
   it("in-flight verifying loops reach deployed from state alone (no sealed proof yet)", () => {
     const funnel = computeSelfHealingFunnel([loop("verifying", null)]);
     expect(funnel.counts.deployed).toBe(1);

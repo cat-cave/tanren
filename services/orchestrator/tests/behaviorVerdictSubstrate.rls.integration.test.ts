@@ -106,6 +106,37 @@ async function insertVerdict(
   );
 }
 
+async function insertVerdictWithEvidence(
+  app: Pool,
+  id: string,
+  required: number,
+  executed: number,
+  outcome: string,
+): Promise<void> {
+  await runWithOrgScope(app, ORG, async (client) => {
+    await client.query(
+      `INSERT INTO behavior_verdicts
+         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+          required_assertion_count, executed_assertion_count, outcome, attempt_count,
+          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, 1, 'stable', 'blocking', $10, $6)`,
+      [ORG, id, PROJECT, RUN_ID, BEHAVIOR_REVISION, D, required, executed, outcome, CAS],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       VALUES ($1, $2, 1, $3)`,
+      [ORG, id, outcome],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       SELECT $1, $2, 'assertion_' || series::text, series <= $4,
+              CASE WHEN series <= $4 THEN true ELSE NULL END
+         FROM generate_series(1, $3) AS series`,
+      [ORG, id, required, executed],
+    );
+  });
+}
+
 describeDb("rv-substrate hardening (0079) — false-green + tamper conformance", () => {
   const database = databaseName();
   let owner: Pool;
@@ -153,7 +184,7 @@ describeDb("rv-substrate hardening (0079) — false-green + tamper conformance",
   });
 
   it("accepts a passed verdict that executed every required assertion", async () => {
-    await expect(insertVerdict(app, "verdict_accepted", 12, 12, "passed")).resolves.toBeUndefined();
+    await expect(insertVerdictWithEvidence(app, "verdict_accepted", 12, 12, "passed")).resolves.toBeUndefined();
     const stored = await runWithOrgScope(app, ORG, (client) =>
       client.query<{ outcome: string }>("SELECT outcome FROM behavior_verdicts WHERE org_id = $1 AND id = $2", [
         ORG,
@@ -161,6 +192,33 @@ describeDb("rv-substrate hardening (0079) — false-green + tamper conformance",
       ]),
     );
     expect(stored.rows[0]?.outcome).toBe("passed");
+  });
+
+  it("Follow-up A DECISIVE: FK-bound attempt/assertion rows must exactly match every stored count", async () => {
+    await expect(
+      runWithOrgScope(app, ORG, async (client) => {
+        await client.query(
+          `INSERT INTO behavior_verdicts
+             (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+              required_assertion_count, executed_assertion_count, outcome, attempt_count,
+              flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+           VALUES ($1, 'verdict_count_drift', $2, $3, $4, $5, $5, 2, 2, 'passed', 1,
+                   'stable', 'blocking', $6, $5)`,
+          [ORG, PROJECT, RUN_ID, BEHAVIOR_REVISION, D, CAS],
+        );
+        await client.query(
+          `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+           VALUES ($1, 'verdict_count_drift', 1, 'passed')`,
+          [ORG],
+        );
+        // Only one actual assertion row backs stored required/executed=2.
+        await client.query(
+          `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+           VALUES ($1, 'verdict_count_drift', 'assertion_1', true, true)`,
+          [ORG],
+        );
+      }),
+    ).rejects.toThrow(/count integrity failed/u);
   });
 
   it("Defect C: an accepted verdict is append-only — UPDATE and DELETE are rejected", async () => {

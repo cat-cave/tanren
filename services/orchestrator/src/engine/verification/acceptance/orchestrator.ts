@@ -39,6 +39,7 @@ import {
 } from "./causalStage.js";
 import type { AcceptanceEventSink } from "./eventSink.js";
 import type { AcceptanceRunStore } from "./verdictStore.js";
+import { verdictAssertionEvidence } from "./verdictEvidence.js";
 
 export interface AcceptanceAssertion {
   readonly assertionId: string;
@@ -371,6 +372,8 @@ export class AcceptanceOrchestrator {
       gateEffect: "blocking",
       artifactDigest: request.artifactDigest,
       runtimeBehaviorContextHash: contextHash,
+      assertionEvidence: verdictAssertionEvidence(plan.assertions, evaluation.observed),
+      attemptEvidence: [{ attemptOrdinal: 1, outcome }],
     });
     await this.events.append({
       orgId: request.orgId,

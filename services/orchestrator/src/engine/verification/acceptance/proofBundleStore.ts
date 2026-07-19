@@ -13,6 +13,8 @@ import {
   buildProofBundle,
   type BundleEnvironmentSection,
   type BundleRunSection,
+  type BundleVerdictAssertionEvidence,
+  type BundleVerdictAttemptEvidence,
   type BundleVerdictSection,
   type ProofBundle,
   type ProofBundleEvidence,
@@ -45,6 +47,11 @@ function toInt(value: unknown): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   throw new Error(`proof bundle evidence expected an integer, got ${String(value)}`);
+}
+
+function bool(value: unknown, field: string): boolean {
+  if (typeof value === "boolean") return value;
+  throw new Error(`proof bundle evidence expected ${field} to be boolean, got ${String(value)}`);
 }
 
 function runSection(row: Row): BundleRunSection {
@@ -80,8 +87,12 @@ function environmentSection(row: Row | undefined): BundleEnvironmentSection | nu
   };
 }
 
-function verdictSection(row: Row): BundleVerdictSection {
-  return {
+function verdictSection(
+  row: Row,
+  assertionEvidence: readonly BundleVerdictAssertionEvidence[],
+  attemptEvidence: readonly BundleVerdictAttemptEvidence[],
+): BundleVerdictSection {
+  const section: BundleVerdictSection = {
     verdictId: requireText(row["id"], "behavior_verdicts.id"),
     behaviorRevisionId: requireText(row["behavior_revision_id"], "behavior_revision_id"),
     outcome: requireText(row["outcome"], "behavior_verdicts.outcome"),
@@ -95,7 +106,18 @@ function verdictSection(row: Row): BundleVerdictSection {
     artifactDigest: requireText(row["artifact_digest"], "behavior_verdicts.artifact_digest"),
     proofUnitDigest: textOrNull(row["proof_unit_digest"]),
     runtimeBehaviorContextHash: requireText(row["runtime_behavior_context_hash"], "runtime_behavior_context_hash"),
+    assertionEvidence,
+    attemptEvidence,
   };
+  const executed = assertionEvidence.filter((assertion) => assertion.executed).length;
+  if (
+    section.requiredAssertionCount !== assertionEvidence.length ||
+    section.executedAssertionCount !== executed ||
+    section.attemptCount !== attemptEvidence.length
+  ) {
+    throw new Error(`proof bundle cannot export unverifiable counts for verdict ${section.verdictId}`);
+  }
+  return section;
 }
 
 /**
@@ -142,6 +164,47 @@ export async function collectBundleEvidence(
       [orgId, runId],
     )
   ).rows;
+  const assertionRows = (
+    await client.query<Row>(
+      `SELECT verdict_id, assertion_id, executed, passed
+         FROM behavior_verdict_assertions
+        WHERE org_id = $1
+          AND verdict_id IN (SELECT id FROM behavior_verdicts WHERE org_id = $1 AND run_id = $2)
+        ORDER BY verdict_id ASC, assertion_id ASC`,
+      [orgId, runId],
+    )
+  ).rows;
+  const attemptRows = (
+    await client.query<Row>(
+      `SELECT verdict_id, attempt_ordinal, outcome
+         FROM behavior_verdict_attempts
+        WHERE org_id = $1
+          AND verdict_id IN (SELECT id FROM behavior_verdicts WHERE org_id = $1 AND run_id = $2)
+        ORDER BY verdict_id ASC, attempt_ordinal ASC`,
+      [orgId, runId],
+    )
+  ).rows;
+  const assertionsByVerdict = new Map<string, BundleVerdictAssertionEvidence[]>();
+  for (const row of assertionRows) {
+    const verdictId = requireText(row["verdict_id"], "behavior_verdict_assertions.verdict_id");
+    const evidence = assertionsByVerdict.get(verdictId) ?? [];
+    evidence.push({
+      assertionId: requireText(row["assertion_id"], "behavior_verdict_assertions.assertion_id"),
+      executed: bool(row["executed"], "behavior_verdict_assertions.executed"),
+      passed: row["passed"] === null ? null : bool(row["passed"], "behavior_verdict_assertions.passed"),
+    });
+    assertionsByVerdict.set(verdictId, evidence);
+  }
+  const attemptsByVerdict = new Map<string, BundleVerdictAttemptEvidence[]>();
+  for (const row of attemptRows) {
+    const verdictId = requireText(row["verdict_id"], "behavior_verdict_attempts.verdict_id");
+    const evidence = attemptsByVerdict.get(verdictId) ?? [];
+    evidence.push({
+      attemptOrdinal: toInt(row["attempt_ordinal"]),
+      outcome: requireText(row["outcome"], "behavior_verdict_attempts.outcome"),
+    });
+    attemptsByVerdict.set(verdictId, evidence);
+  }
 
   // A run born of an issue-loop resolution carries the bh-14a resolution proofs — the
   // sealed chain is stored as the full SealedResolutionProof JSON, self-verifiable.
@@ -161,7 +224,10 @@ export async function collectBundleEvidence(
     runId,
     run: runSection(runRow),
     environment: environmentSection(environmentRow),
-    verdicts: verdictRows.map((row) => verdictSection(row)),
+    verdicts: verdictRows.map((row) => {
+      const verdictId = requireText(row["id"], "behavior_verdicts.id");
+      return verdictSection(row, assertionsByVerdict.get(verdictId) ?? [], attemptsByVerdict.get(verdictId) ?? []);
+    }),
     resolutionProofs: resolutionProofRows.map((row) => row["proof_json"] as SealedResolutionProof),
   };
 }

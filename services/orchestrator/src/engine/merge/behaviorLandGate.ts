@@ -195,9 +195,21 @@ export async function resolveLandTimeBehaviorGate(
         flake_state: string;
         gate_effect: string;
       }>(
-        `SELECT behavior_revision_id, outcome, flake_state, gate_effect
-           FROM behavior_verdicts
-          WHERE org_id = $1 AND run_id = $2`,
+        `SELECT v.behavior_revision_id, v.outcome, v.flake_state, v.gate_effect
+           FROM behavior_verdicts v
+          WHERE v.org_id = $1 AND v.run_id = $2
+            AND v.required_assertion_count = (
+              SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )
+            AND v.executed_assertion_count = (
+              SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )
+            AND v.attempt_count = (
+              SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )`,
         [orgId, runRow.id],
       )
     ).rows;

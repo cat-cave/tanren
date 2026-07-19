@@ -123,12 +123,20 @@ async function seedTenant(owner: Pool, serverUrl: string): Promise<void> {
     [ORG, PROJECT, NODE_PRIOR, GIT_SHA, PRIOR_CTX, PRIOR_CTX, CAS],
   );
   await owner.query(
-    `INSERT INTO behavior_verdicts
-       (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
-        required_assertion_count, executed_assertion_count, outcome, attempt_count,
-        flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
-     VALUES ($1, 'verdict_fq_prior', $2, 'vrun_fq_prior', $3, 'ex', 'mx', 1, 1, 'failed_product', 1,
-             'stable', 'blocking', $4, $5)`,
+    `WITH verdict AS (
+       INSERT INTO behavior_verdicts
+         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+          required_assertion_count, executed_assertion_count, outcome, attempt_count,
+          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+       VALUES ($1, 'verdict_fq_prior', $2, 'vrun_fq_prior', $3, 'ex', 'mx', 1, 1, 'failed_product', 1,
+               'stable', 'blocking', $4, $5)
+       RETURNING org_id, id
+     ), attempt AS (
+       INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       SELECT org_id, id, 1, 'failed_product' FROM verdict
+     )
+     INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+     SELECT org_id, id, 'assertion_seed', true, false FROM verdict`,
     [ORG, PROJECT, FLAKY_BR, CAS, PRIOR_CTX],
   );
 }

@@ -129,8 +129,8 @@ async function seedVerdict(
 ): Promise<void> {
   const required = fields.required ?? (fields.outcome === "passed" ? 1 : 0);
   const executed = fields.executed ?? (fields.outcome === "passed" ? 1 : 0);
-  await runWithOrgScope(app, ORG, (client) =>
-    client.query(
+  await runWithOrgScope(app, ORG, async (client) => {
+    await client.query(
       `INSERT INTO behavior_verdicts
          (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
           required_assertion_count, executed_assertion_count, outcome, attempt_count,
@@ -150,8 +150,20 @@ async function seedVerdict(
         fields.gateEffect,
         CAS,
       ],
-    ),
-  );
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       VALUES ($1, $2, 1, $3)`,
+      [ORG, verdictId, fields.outcome],
+    );
+    await client.query(
+      `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       SELECT $1, $2, 'assertion_' || series::text, series <= $4,
+              CASE WHEN series <= $4 THEN true ELSE NULL END
+         FROM generate_series(1, $3) AS series`,
+      [ORG, verdictId, required, executed],
+    );
+  });
 }
 
 describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {

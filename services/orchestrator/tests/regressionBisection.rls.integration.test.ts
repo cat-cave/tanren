@@ -132,15 +132,35 @@ async function seedTenant(owner: Pool, serverUrl: string): Promise<void> {
      VALUES ($1, 'vrun_rb_base', $2, 'post_merge_production', $3, 'verenv_rb_base', $4, $4, $5, $6, $7, 'completed', '{}'::jsonb)`,
     [ORG, PROJECT, RELEASES[0].node, `${RELEASES[0].key}-sha`, CTX, CTX, RELEASES[0].digest],
   );
-  await owner.query(
-    `INSERT INTO behavior_verdicts
-       (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
-        required_assertion_count, executed_assertion_count, outcome, attempt_count,
-        flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
-     VALUES ($1, 'verdict_rb_base', $2, 'vrun_rb_base', $3, 'ex', 'mx', 1, 1, 'passed', 1,
-             'stable', 'blocking', $4, $5)`,
-    [ORG, PROJECT, BEHAVIOR, RELEASES[0].digest, CTX],
-  );
+  const evidenceClient = await owner.connect();
+  try {
+    await evidenceClient.query("BEGIN");
+    await evidenceClient.query(
+      `INSERT INTO behavior_verdicts
+         (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
+          required_assertion_count, executed_assertion_count, outcome, attempt_count,
+          flake_state, gate_effect, artifact_digest, runtime_behavior_context_hash)
+       VALUES ($1, 'verdict_rb_base', $2, 'vrun_rb_base', $3, 'ex', 'mx', 1, 1, 'passed', 1,
+               'stable', 'blocking', $4, $5)`,
+      [ORG, PROJECT, BEHAVIOR, RELEASES[0].digest, CTX],
+    );
+    await evidenceClient.query(
+      `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+       VALUES ($1, 'verdict_rb_base', 1, 'passed')`,
+      [ORG],
+    );
+    await evidenceClient.query(
+      `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+       VALUES ($1, 'verdict_rb_base', 'assertion_1', true, true)`,
+      [ORG],
+    );
+    await evidenceClient.query("COMMIT");
+  } catch (error) {
+    await evidenceClient.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    evidenceClient.release();
+  }
 }
 
 describeDb("rv-16b regression bisection — real Postgres + HTTP, localizes the culprit release", () => {

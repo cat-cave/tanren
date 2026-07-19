@@ -44,6 +44,19 @@ export interface CompleteAcceptanceRunInput {
   readonly status: "completed" | "failed" | "cancelled";
 }
 
+/** One required assertion and, where it ran, its actual pass/fail observation. */
+export interface VerdictAssertionEvidence {
+  readonly assertionId: string;
+  readonly executed: boolean;
+  readonly passed?: boolean;
+}
+
+/** One real execution attempt contributing to a verdict's retry tally. */
+export interface VerdictAttemptEvidence {
+  readonly attemptOrdinal: number;
+  readonly outcome: BehaviorVerdictOutcome;
+}
+
 export interface RecordAcceptanceVerdictInput {
   readonly orgId: string;
   readonly projectId: string;
@@ -60,6 +73,10 @@ export interface RecordAcceptanceVerdictInput {
   readonly artifactDigest: Digest;
   readonly runtimeBehaviorContextHash: Digest;
   readonly proofUnitDigest?: Digest;
+  /** Complete per-required-assertion evidence; this, not a caller scalar, backs the counts. */
+  readonly assertionEvidence: readonly VerdictAssertionEvidence[];
+  /** Every actual execution attempt; this, not a caller scalar, backs attemptCount. */
+  readonly attemptEvidence: readonly VerdictAttemptEvidence[];
 }
 
 export interface StoredAcceptanceVerdict {
@@ -89,6 +106,50 @@ const OUTCOMES = new Set<BehaviorVerdictOutcome>([
   "cancelled_superseded",
 ]);
 const FLAKE_STATES = new Set<FlakeState>(["stable", "suspected", "confirmed", "quarantined_fragment"]);
+
+function assertVerdictCountEvidence(input: RecordAcceptanceVerdictInput): void {
+  const assertionIds = new Set<string>();
+  let executed = 0;
+  for (const assertion of input.assertionEvidence) {
+    if (assertion.assertionId.length === 0 || assertionIds.has(assertion.assertionId)) {
+      throw new TypeError(
+        `verdict assertion evidence has a missing or duplicate assertion id: ${assertion.assertionId}`,
+      );
+    }
+    assertionIds.add(assertion.assertionId);
+    if (assertion.executed) {
+      if (typeof assertion.passed !== "boolean") {
+        throw new TypeError(`executed assertion ${assertion.assertionId} has no pass/fail observation`);
+      }
+      executed += 1;
+    } else if (assertion.passed !== undefined) {
+      throw new TypeError(`unexecuted assertion ${assertion.assertionId} cannot have a pass/fail observation`);
+    }
+  }
+  const ordinals = new Set<number>();
+  for (const attempt of input.attemptEvidence) {
+    if (
+      !Number.isInteger(attempt.attemptOrdinal) ||
+      attempt.attemptOrdinal < 1 ||
+      ordinals.has(attempt.attemptOrdinal)
+    ) {
+      throw new TypeError(`verdict attempt evidence has an invalid or duplicate ordinal: ${attempt.attemptOrdinal}`);
+    }
+    if (!OUTCOMES.has(attempt.outcome)) throw new TypeError(`unknown attempt outcome: ${attempt.outcome}`);
+    ordinals.add(attempt.attemptOrdinal);
+  }
+  if (
+    input.requiredAssertionCount !== input.assertionEvidence.length ||
+    input.executedAssertionCount !== executed ||
+    input.attemptCount !== input.attemptEvidence.length
+  ) {
+    throw new TypeError(
+      `verdict count evidence mismatch: stored required/executed/attempt=${input.requiredAssertionCount}/` +
+        `${input.executedAssertionCount}/${input.attemptCount}, evidence=${input.assertionEvidence.length}/` +
+        `${executed}/${input.attemptEvidence.length}`,
+    );
+  }
+}
 
 export interface PgAcceptanceRunStoreDependencies {
   /** Test seam; production always runs on runWithOrgScope over the control pool. */
@@ -155,6 +216,7 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
     assertVerdictAssertionCoverage(input);
     if (!OUTCOMES.has(input.outcome)) throw new TypeError(`unknown behavior verdict outcome: ${input.outcome}`);
     if (!FLAKE_STATES.has(input.flakeState)) throw new TypeError(`unknown flake state: ${input.flakeState}`);
+    assertVerdictCountEvidence(input);
     const id = this.newVerdictId();
     return this.withOrgScope(input.orgId, async (client) => {
       await client.query(
@@ -182,6 +244,20 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
           input.runtimeBehaviorContextHash,
         ],
       );
+      for (const attempt of input.attemptEvidence) {
+        await client.query(
+          `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
+           VALUES ($1, $2, $3, $4)`,
+          [input.orgId, id, attempt.attemptOrdinal, attempt.outcome],
+        );
+      }
+      for (const assertion of input.assertionEvidence) {
+        await client.query(
+          `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [input.orgId, id, assertion.assertionId, assertion.executed, assertion.passed ?? null],
+        );
+      }
       return id;
     });
   }
@@ -197,12 +273,23 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
         outcome: string;
         required_assertion_count: number;
         executed_assertion_count: number;
+        attempt_count: number;
+        evidence_required_assertion_count: number;
+        evidence_executed_assertion_count: number;
+        evidence_attempt_count: number;
         flake_state: string;
       }>(
-        `SELECT id, behavior_revision_id, outcome, required_assertion_count, executed_assertion_count, flake_state
-           FROM behavior_verdicts
+        `SELECT v.id, v.behavior_revision_id, v.outcome, v.required_assertion_count, v.executed_assertion_count,
+                v.attempt_count, v.flake_state,
+                (SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+                  WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_required_assertion_count,
+                (SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+                  WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_executed_assertion_count,
+                (SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+                  WHERE a.org_id = v.org_id AND a.verdict_id = v.id) AS evidence_attempt_count
+           FROM behavior_verdicts v
           WHERE org_id = $1 AND run_id = $2
-          ORDER BY created_at ASC, id ASC`,
+          ORDER BY v.created_at ASC, v.id ASC`,
         [input.orgId, input.runId],
       );
       return result.rows.map((row) => {
@@ -211,6 +298,13 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
         }
         if (!FLAKE_STATES.has(row.flake_state as FlakeState)) {
           throw new TypeError(`stored verdict has an unknown flake state: ${row.flake_state}`);
+        }
+        if (
+          row.required_assertion_count !== row.evidence_required_assertion_count ||
+          row.executed_assertion_count !== row.evidence_executed_assertion_count ||
+          row.attempt_count !== row.evidence_attempt_count
+        ) {
+          throw new Error(`stored verdict ${row.id} has unverifiable count evidence`);
         }
         return {
           verdictId: row.id,

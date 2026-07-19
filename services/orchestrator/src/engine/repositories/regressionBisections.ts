@@ -167,6 +167,18 @@ export class PgCandidateChainReader implements CandidateChainReader {
           WHERE v.org_id = $1 AND v.behavior_revision_id = $2 AND v.outcome = 'passed'
             AND r.purpose = 'post_merge_production'
             AND r.integration_node_id = $3 AND r.artifact_digest = $4
+            AND v.required_assertion_count = (
+              SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )
+            AND v.executed_assertion_count = (
+              SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )
+            AND v.attempt_count = (
+              SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+            )
        ) AS passed`,
       [trigger.orgId, trigger.behaviorRevisionId, release.integrationNodeId, release.artifactDigest],
     );
