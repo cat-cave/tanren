@@ -77,11 +77,14 @@ const MATRIX: ExecutionMatrix = {
   device: ["desktop"],
 };
 
-function plan(assertions: AcceptancePlan["assertions"], surface: RequiredSurface = "browser"): AcceptancePlan {
+function plan(
+  assertions: AcceptancePlan["assertions"],
+  surfaces: readonly RequiredSurface[] = ["browser"],
+): AcceptancePlan {
   return {
     planId: "plan_1",
     behaviorRevisionId: "br_1",
-    requiredSurfaces: [surface],
+    requiredSurfaces: surfaces,
     assertions,
     fixtures: [],
     examples: [],
@@ -90,16 +93,19 @@ function plan(assertions: AcceptancePlan["assertions"], surface: RequiredSurface
 }
 
 /** A conformance driver: emits REAL observations for the listed subjects only. */
-function driver(observations: readonly DriverObservation[]): AcceptanceSurfaceDriver {
+function driver(
+  observations: readonly DriverObservation[],
+  surface: RequiredSurface = "browser",
+): AcceptanceSurfaceDriver {
   return {
-    surface: "browser",
+    surface,
     drive(): Promise<DriverExecutionResult | AdapterUnavailableResult> {
       return Promise.resolve({ kind: "executed", observations, providerChecksums: [] });
     },
   };
 }
 
-function observation(subject: string, value: number): DriverObservation {
+function observation(subject: string, value: DriverObservation["value"]): DriverObservation {
   return { observationKind: "http", subject, value, observedAt: "2026-07-18T00:00:00.000Z" };
 }
 
@@ -197,6 +203,95 @@ describe("AcceptanceOrchestrator — executable acceptance A1", () => {
     const orchestrator = new AcceptanceOrchestrator({ store, events: new RecordingEventSink(), drivers: [driver([])] });
     const result = await orchestrator.execute(request([plan([])]));
     expect(result.behaviors[0]?.outcome).toBe("failed_verification_contract");
+  });
+
+  it("DECISIVE: a wrong-typed observation under not_contains never yields a passed verdict", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      // The observation for `logs` is a NUMBER — type-inapplicable for not_contains.
+      drivers: [driver([observation("logs", 42)])],
+    });
+    const result = await orchestrator.execute(
+      request([plan([{ assertionId: "a1", subject: "logs", comparisonOperator: "not_contains", expected: "secret" }])]),
+    );
+    expect(result.behaviors[0]?.outcome).not.toBe("passed");
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
+    expect(result.passedVerdictCount).toBe(0);
+  });
+
+  it("DECISIVE: a wrong-typed observation under has_no_effect never yields a passed verdict", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      // The observation for `effects` is a STRING — not the array has_no_effect needs.
+      drivers: [driver([observation("effects", "none")])],
+    });
+    const result = await orchestrator.execute(
+      request([
+        plan([{ assertionId: "a1", subject: "effects", comparisonOperator: "has_no_effect", expected: "charge" }]),
+      ]),
+    );
+    expect(result.behaviors[0]?.outcome).not.toBe("passed");
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
+  });
+
+  it("a right-typed negative assertion that genuinely holds does pass", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      drivers: [driver([observation("logs", "clean output")])],
+    });
+    const result = await orchestrator.execute(
+      request([plan([{ assertionId: "a1", subject: "logs", comparisonOperator: "not_contains", expected: "secret" }])]),
+    );
+    expect(result.behaviors[0]?.outcome).toBe("passed");
+    expect(result.behaviors[0]?.executedAssertionCount).toBe(1);
+  });
+
+  it("a multi-surface plan is not passed when a required surface has no driver", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      // Only the browser surface is wired; the required `api` surface is undriven.
+      drivers: [driver([observation("status", 200)], "browser")],
+    });
+    const result = await orchestrator.execute(
+      request([
+        plan(
+          [{ assertionId: "a1", subject: "status", comparisonOperator: "equals", expected: 200 }],
+          ["browser", "api"],
+        ),
+      ]),
+    );
+    expect(result.behaviors[0]?.outcome).toBe("inconclusive_infrastructure");
+    expect(result.passedVerdictCount).toBe(0);
+  });
+
+  it("a multi-surface plan gathers observations from every driven surface", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      drivers: [driver([observation("ui_status", 200)], "browser"), driver([observation("api_status", 201)], "api")],
+    });
+    const result = await orchestrator.execute(
+      request([
+        plan(
+          [
+            { assertionId: "a1", subject: "ui_status", comparisonOperator: "equals", expected: 200 },
+            { assertionId: "a2", subject: "api_status", comparisonOperator: "equals", expected: 201 },
+          ],
+          ["browser", "api"],
+        ),
+      ]),
+    );
+    expect(result.behaviors[0]?.outcome).toBe("passed");
+    expect(result.behaviors[0]?.executedAssertionCount).toBe(2);
   });
 
   it("recordVerdict's coverage guard rejects a passed verdict with under-coverage", () => {

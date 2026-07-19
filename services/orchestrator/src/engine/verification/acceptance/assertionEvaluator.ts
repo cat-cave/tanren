@@ -5,6 +5,14 @@
  * satisfied. It never decides whether an assertion *executed* — that is the
  * orchestrator's job (an assertion executes only when a driver observation exists
  * for its subject), so a missing observation can never be laundered into a pass.
+ *
+ * FAIL-CLOSED TYPE DISCIPLINE: every operator that needs a specific actual type
+ * returns `false` when the actual is type-inapplicable — INCLUDING the negative
+ * operators (`not_contains`, `has_no_effect`). A negative assertion may pass ONLY
+ * when the actual is the right type AND genuinely lacks the thing, never because
+ * the observed value was the wrong type. This closes the false-green launder
+ * where a wrong-typed observation "passes" a negative check without meaningfully
+ * evaluating product behavior.
  */
 
 import { canonicalJson, type CanonicalBody } from "../../contracts/cas.js";
@@ -29,13 +37,15 @@ function compareNumeric(
   return satisfied(a, e);
 }
 
+/** True only when this actual/expected pair is a type the containment check can evaluate. */
+function containmentApplicable(actual: CanonicalBody, expected: CanonicalBody): boolean {
+  if (typeof actual === "string") return typeof expected === "string";
+  return Array.isArray(actual);
+}
+
 function containsValue(actual: CanonicalBody, expected: CanonicalBody): boolean {
-  if (typeof actual === "string") {
-    return typeof expected === "string" && actual.includes(expected);
-  }
-  if (Array.isArray(actual)) {
-    return actual.some((item) => deepEqual(item, expected));
-  }
+  if (typeof actual === "string") return typeof expected === "string" && actual.includes(expected);
+  if (Array.isArray(actual)) return actual.some((item) => deepEqual(item, expected));
   return false;
 }
 
@@ -64,15 +74,15 @@ function isUnique(actual: CanonicalBody): boolean {
   return true;
 }
 
-function occurrenceCount(actual: CanonicalBody, expected: CanonicalBody): number {
-  if (!Array.isArray(actual)) return 0;
+function occurrenceCount(actual: readonly CanonicalBody[], expected: CanonicalBody): number {
   return actual.filter((item) => deepEqual(item, expected)).length;
 }
 
 /**
  * Evaluate one assertion's observed value against its expectation. This is only
  * called for assertions that genuinely executed (a driver observation exists);
- * the caller counts executions independently.
+ * the caller counts executions independently. Every branch is fail-closed: an
+ * actual of the wrong type never satisfies, so no assertion is laundered green.
  */
 export function evaluateAssertion(
   operator: ComparisonOperator,
@@ -95,9 +105,10 @@ export function evaluateAssertion(
     case "greater_than_or_equal":
       return compareNumeric(actual, expected, (a, e) => a >= e);
     case "contains":
-      return containsValue(actual, expected);
+      return containmentApplicable(actual, expected) && containsValue(actual, expected);
     case "not_contains":
-      return !containsValue(actual, expected);
+      // Negative + fail-closed: must be a containable type that genuinely lacks it.
+      return containmentApplicable(actual, expected) && !containsValue(actual, expected);
     case "matches":
       return matchesRegex(actual, expected);
     case "has_cardinality":
@@ -105,9 +116,10 @@ export function evaluateAssertion(
     case "is_unique":
       return isUnique(actual);
     case "exactly_once":
-      return occurrenceCount(actual, expected) === 1;
+      return Array.isArray(actual) && occurrenceCount(actual, expected) === 1;
     case "has_no_effect":
-      return occurrenceCount(actual, expected) === 0;
+      // Negative + fail-closed: must be an array that genuinely has no occurrence.
+      return Array.isArray(actual) && occurrenceCount(actual, expected) === 0;
     default:
       // between / matches_schema / satisfies_predicate / eventually / before /
       // after — no richer evaluator here yet, so require canonical equality

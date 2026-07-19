@@ -15,6 +15,8 @@ import type {
   DriverObservation,
 } from "../src/engine/contracts/runtimeVerificationAdapters.js";
 import type { ExecutionMatrix } from "../src/engine/contracts/runtimeVerificationPlan.js";
+import { AllowAllPeerVerifier } from "../src/engine/contracts/index.js";
+import { createInternalAcceptanceRunRoutes } from "../src/routes/internal/acceptanceRuns.js";
 import { PgFixtureLeaseAdapter } from "../src/engine/verification/fixtureLease/index.js";
 import {
   AcceptanceOrchestrator,
@@ -246,5 +248,57 @@ describeDb("rv-11 A1 acceptance orchestrator — real Postgres end-to-end", () =
     );
     const crossOrg = await store.listVerdicts({ orgId: OTHER_ORG, runId: result.runId });
     expect(crossOrg).toHaveLength(0);
+  });
+
+  it("drives the full HTTP surface: POST /execute → orchestrator → recorded verdict → GET", async () => {
+    const routes = createInternalAcceptanceRunRoutes({
+      pool: app,
+      verifier: new AllowAllPeerVerifier(),
+      drivers: [driver([observation("status", 200), observation("count", 3)])],
+    });
+    const body = {
+      orgId: ORG,
+      projectId: PROJECT,
+      integrationNodeId: NODE_ID,
+      environmentId: ENV_ID,
+      preparedHeadSha: "abcdef",
+      jjTreeId: "tree_1",
+      artifactDigest: CAS,
+      deploymentFingerprint: D,
+      plans: [
+        {
+          planId: "plan_http_rv11",
+          behaviorRevisionId: BEHAVIOR_REVISION,
+          requiredSurfaces: ["browser"],
+          fixtures: [{ id: "fixture_1" }],
+          assertions: [
+            { assertionId: "a1", subject: "status", comparisonOperator: "equals", expected: 200 },
+            { assertionId: "a2", subject: "count", comparisonOperator: "greater_than", expected: 1 },
+          ],
+        },
+      ],
+    };
+    const executeResponse = await routes.request(
+      "/internal/acceptance-runs/execute",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+      { incoming: { socket: {} } },
+    );
+    expect(executeResponse.status).toBe(201);
+    const executed = (await executeResponse.json()) as {
+      result: { runId: string; passedVerdictCount: number; behaviors: { outcome: string }[] };
+    };
+    expect(executed.result.behaviors[0]?.outcome).toBe("passed");
+    expect(executed.result.passedVerdictCount).toBe(1);
+
+    const readResponse = await routes.request(
+      `/internal/acceptance-runs/${ORG}/${executed.result.runId}`,
+      { method: "GET" },
+      { incoming: { socket: {} } },
+    );
+    expect(readResponse.status).toBe(200);
+    const read = (await readResponse.json()) as { verdicts: { outcome: string; executedAssertionCount: number }[] };
+    expect(read.verdicts).toHaveLength(1);
+    expect(read.verdicts[0]?.outcome).toBe("passed");
+    expect(read.verdicts[0]?.executedAssertionCount).toBe(2);
   });
 });

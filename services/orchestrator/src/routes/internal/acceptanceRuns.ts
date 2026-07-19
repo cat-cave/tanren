@@ -3,11 +3,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { CanonicalBody, Digest } from "../../engine/contracts/cas.js";
 import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
-import type {
-  ComparisonOperator,
-  ExecutionMatrix,
-  RequiredSurface,
-} from "../../engine/contracts/runtimeVerificationPlan.js";
+import type { ExecutionMatrix, RequiredSurface } from "../../engine/contracts/runtimeVerificationPlan.js";
 import { PgFixtureLeaseAdapter } from "../../engine/verification/fixtureLease/index.js";
 import {
   AcceptanceOrchestrator,
@@ -20,6 +16,31 @@ import { verifyInternalPeer } from "./internalWriteShared.js";
 
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const surface = z.enum(["browser", "api", "cli", "package", "app_channel", "external_integration", "mobile"]);
+// The full ComparisonOperator algebra — an UNKNOWN operator is rejected (400) at
+// the boundary rather than silently falling through to a deepEqual default.
+const comparisonOperator = z.enum([
+  "equals",
+  "not_equals",
+  "less_than",
+  "less_than_or_equal",
+  "greater_than",
+  "greater_than_or_equal",
+  "between",
+  "matches_schema",
+  "satisfies_predicate",
+  "contains",
+  "not_contains",
+  "has_cardinality",
+  "is_unique",
+  "exactly_once",
+  "eventually",
+  "before",
+  "after",
+  "causes",
+  "responds_with",
+  "matches",
+  "has_no_effect",
+]);
 const canonical: z.ZodType<CanonicalBody> = z.lazy(() =>
   z.union([z.null(), z.boolean(), z.number(), z.string(), z.array(canonical), z.record(z.string(), canonical)]),
 );
@@ -27,7 +48,7 @@ const canonical: z.ZodType<CanonicalBody> = z.lazy(() =>
 const assertionSchema = z.object({
   assertionId: z.string().min(1),
   subject: z.string().min(1),
-  comparisonOperator: z.string().min(1),
+  comparisonOperator,
   expected: canonical,
 });
 const exampleSchema = z.object({
@@ -92,7 +113,7 @@ function toPlan(raw: z.infer<typeof planSchema>): AcceptancePlan {
     assertions: raw.assertions.map((assertion) => ({
       assertionId: assertion.assertionId,
       subject: assertion.subject,
-      comparisonOperator: assertion.comparisonOperator as ComparisonOperator,
+      comparisonOperator: assertion.comparisonOperator,
       expected: assertion.expected,
     })),
     fixtures: raw.fixtures,
