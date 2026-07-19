@@ -4,6 +4,7 @@ import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createBehaviorRoutes } from "../behaviors/index.js";
 import { createVerificationReadRoutes } from "../runtimeVerification/reads.js";
+import { createProofDashboardReadRoutes } from "../proofDashboard/reads.js";
 import { createBehaviorCoverageRoutes } from "./index.js";
 import { createProofBundleRoutes } from "./proofBundle.js";
 
@@ -35,4 +36,9 @@ export function mountBehaviorSurfaces(app: Hono<ActorContextEnv>, scopedPool: pg
   // the same `/v1/orgs` sub-mount — consolidates with, does not fork, the proof
   // bundle route (its run detail links to that bundle via `proofBundleHref`).
   app.route("/v1/orgs", createVerificationReadRoutes({ pool: scopedPool }));
+  // rv-23 read-only, versioned runtime-verification DASHBOARD read surface (the
+  // Behavior Proof Matrix aggregate + the effect-causality, design-render,
+  // regression-bisection, and flake-quarantine surfaces rv-22 does not cover) on
+  // the same `/v1/orgs` sub-mount.
+  app.route("/v1/orgs", createProofDashboardReadRoutes({ pool: scopedPool }));
 }
