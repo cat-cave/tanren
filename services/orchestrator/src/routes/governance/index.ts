@@ -16,6 +16,7 @@ import {
 } from "../../engine/governance/policyRevisionStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
+import { createGovernanceAdminRoutes } from "./admin.js";
 import { createEffectivePolicyRoutes } from "./effectivePolicy.js";
 import { createPolicyAnalysisRoutes } from "./policyAnalysis.js";
 import { createGovernanceTierRoutes } from "./tiers.js";
@@ -49,6 +50,7 @@ export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
   app.route("/", createGovernanceTierRoutes(options));
   app.route("/", createEffectivePolicyRoutes(options));
   app.route("/", createPolicyAnalysisRoutes(options));
+  app.route("/", createGovernanceAdminRoutes(options));
 
   app.post("/:orgId/projects/:projectId/governance/revisions", async (c) => {
     const authorized = await authorizeProject(c, options.pool, true);
