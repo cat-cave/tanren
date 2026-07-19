@@ -12,6 +12,12 @@ export type ContradictionWitness =
       ruleIndexes: readonly number[];
       mode: "auto";
       minimumApprovals: number;
+    }
+  | {
+      kind: "automatic_review_forbids_required_principal";
+      ruleIndexes: readonly number[];
+      mode: "auto";
+      principals: readonly { kind: "agent_profile" | "user" | "team"; name: string }[];
     };
 
 function rulesOf(ast: PolicyAst, layer: PolicyLayerName): readonly PolicyRule[] {
@@ -72,6 +78,26 @@ export function findContradictionWitnesses(ast: PolicyAst): readonly Contradicti
       ],
       mode: "auto",
       minimumApprovals,
+    });
+  }
+
+  // Automatic review records zero approver principals, so a required principal it
+  // can never surface is unsatisfiable — the same class as the approval witness.
+  const requiredPrincipals = allRules.filter(
+    (
+      entry,
+    ): entry is {
+      layer: PolicyLayerName;
+      index: number;
+      rule: Extract<PolicyRule, { key: "review.required_principal" }>;
+    } => entry.rule.key === "review.required_principal",
+  );
+  if (mode?.rule.value === "auto" && requiredPrincipals.length > 0) {
+    witnesses.push({
+      kind: "automatic_review_forbids_required_principal",
+      ruleIndexes: [mode.index, ...requiredPrincipals.map((entry) => entry.index)],
+      mode: "auto",
+      principals: requiredPrincipals.map((entry) => ({ kind: entry.rule.value.kind, name: entry.rule.value.name })),
     });
   }
 
