@@ -31,7 +31,13 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { DesignDimension, normalizeDesignContract } from "../designContract.js";
+import { DesignAccessibilityPosture, DesignDimension, normalizeDesignContract } from "../designContract.js";
+
+// Re-exported so the ds-4 render seam (renderVerdictOracle / composeDesignRenderVerification /
+// designSystemRenderVerification) reaches the posture type through the V2 module it already
+// imports — the schema itself is now DEFINED on V1 (designContract.ts) so a persisted V1 blob
+// CARRIES the real posture across the round-trip (never re-defaulted at migration time).
+export { DesignAccessibilityPosture } from "../designContract.js";
 
 export const DESIGN_CONTRACT_V2_VERSION = 2 as const;
 
@@ -66,19 +72,6 @@ export const DesignTargetProfileIntent = z
   })
   .strict();
 export type DesignTargetProfileIntent = z.infer<typeof DesignTargetProfileIntent>;
-
-// ---- Accessibility posture -------------------------------------------------
-
-export const DesignAccessibilityPosture = z
-  .object({
-    // The a11y standard the design targets (free string — "wcag-2.2-aa",
-    // "apple-hig", "none"). Descriptive; the ds-4 oracle reads it, Tanren does
-    // not branch on it.
-    standard: z.string().min(1).max(120).default("none"),
-    notes: z.string().max(2000).default(""),
-  })
-  .strict();
-export type DesignAccessibilityPosture = z.infer<typeof DesignAccessibilityPosture>;
 
 // ---- Contract --------------------------------------------------------------
 
@@ -191,7 +184,10 @@ export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
     dimensions: v1.dimensions,
     desiredSurfaces: [],
     targetProfiles: [],
-    accessibilityPosture: { standard: "none", notes: "" },
+    // Carry the REAL posture the design agent captured (persisted on V1). A V1 that
+    // declared no a11y bar carries an honest `none` (advisory) — this is NOT a
+    // hardcoded migration default; the value round-trips from `design_contracts`.
+    accessibilityPosture: v1.accessibilityPosture,
     exportRequirements: [],
     acceptanceIntent: "",
   });

@@ -229,6 +229,77 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(resolved?.artifactId).toBe(result!.artifactId);
   });
 
+  it("ENFORCES a project whose persisted contract declares wcag-aa (persist→read→migrate→gate, NOT not_applicable)", async () => {
+    // The complement of the `none → not_applicable` case above: a project whose HEAD
+    // V1 contract DECLARES a real WCAG bar (the design agent inferred it, persisted on
+    // the `design_contracts` jsonb) must round-trip that posture through
+    // `migrateDesignContractV1ToV2` so the render verification ENFORCES (renders +
+    // axe-judges) rather than short-circuiting to `not_applicable`. This is the proof
+    // that the gate now FIRES in production for a project that declares an a11y bar.
+    const ENFORCED_PROJECT = "project_ds_composer_wcag";
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ($1, 'DS Composer WCAG', 'https://example.test/ds-composer-wcag.git', 'main', 'runner:test', $2, '{"version":1}'::jsonb)`,
+      [ENFORCED_PROJECT, ORG_ID],
+    );
+    const contract = parseDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "a public link console",
+      intent: "a consumer surface that must be accessible",
+      // The REAL posture the design agent inferred from the product intent — persisted
+      // on V1 (NOT invented at migration time).
+      accessibilityPosture: { standard: "wcag-2.2-aa", notes: "public consumer surface — AA baseline" },
+      // A unique dimension key so this project's authored surface fragment does not
+      // collide with the other tests' org-registry expectations (`surface/components`,
+      // `surface/console`).
+      dimensions: [
+        { key: "metrics", label: "Metrics", intent: "composable primitives", guidance: "", personaRefs: [] },
+      ],
+    });
+    // Round-trip proof at the store seam: the persisted contract reads back with the
+    // REAL posture (not the hardcoded `none` the migration used to inject).
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_ID, projectId: ENFORCED_PROJECT, contract },
+        { kind: "operator" },
+      ),
+    );
+    const readBack = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      DesignContractStore.getLatest(client, ENFORCED_PROJECT, { kind: "operator" }),
+    );
+    expect(readBack?.contract.accessibilityPosture).toEqual({
+      standard: "wcag-2.2-aa",
+      notes: "public consumer surface — AA baseline",
+    });
+
+    const result = await composeProjectWebDesignSystem(
+      {
+        pool: runtimePool,
+        artifactStore: new FilesystemArtifactStore(artifactRoot),
+        fragmentAnswerer: fixtureFragmentAnswerer(),
+        eventStore: new CapturingEventStore(),
+        createdBy: "tanren.ds-composer.test",
+      },
+      { orgId: ORG_ID, projectId: ENFORCED_PROJECT },
+    );
+    expect(result?.alreadyPublished).toBe(false);
+
+    // The persisted design-render verdict ENFORCES: the real posture reached the oracle,
+    // so the verification rendered + judged (NOT the advisory not_applicable short-circuit).
+    const designVerdict = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query<{ outcome: string; accessibility_standard: string }>(
+        "SELECT outcome, accessibility_standard FROM design_render_land_verdicts WHERE org_id = $1 AND project_id = $2",
+        [ORG_ID, ENFORCED_PROJECT],
+      ),
+    );
+    expect(designVerdict.rows).toHaveLength(1);
+    expect(designVerdict.rows[0]?.accessibility_standard).toBe("wcag-2.2-aa");
+    expect(designVerdict.rows[0]?.outcome).not.toBe("not_applicable");
+    expect(["passed", "failed_visual", "inconclusive_infrastructure"]).toContain(designVerdict.rows[0]?.outcome);
+  });
+
   it("catches a NEW fragment colliding with an EXISTING persisted fragment (batch gate over the REAL registry)", async () => {
     // The org already carries the `surface/components / Components` fragment (persisted
     // by the first test) whose file is `components/Components.tsx`. A SECOND project

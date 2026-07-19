@@ -105,6 +105,33 @@ export const DesignAgentDimension = z
   .strict();
 export type DesignAgentDimension = z.infer<typeof DesignAgentDimension>;
 
+// The a11y bar the agent ELICITS/INFERS from the product intent + constraints —
+// the genuine source of the project's accessibility posture (the same way the
+// agent infers the `domain` and chooses the `dimensions`). This is what makes the
+// ds-4 design-render gate FIRE: a WCAG standard here is persisted onto the contract
+// and ENFORCES (render + axe-judge + gate); an HONEST `none` stays advisory
+// (not_applicable). The agent MUST NOT invent an a11y requirement — it picks `none`
+// when the product declares/implies no accessibility bar, and a real WCAG level
+// only when the intent/audience/constraints genuinely call for it.
+export const DesignAgentAccessibilityPosture = z
+  .object({
+    standard: z
+      .string()
+      .min(1)
+      .max(120)
+      .describe(
+        "The a11y standard you INFER from the product intent/audience/constraints " +
+          '(e.g. "wcag-2.2-aa", "wcag-a", "apple-hig"). Use "none" HONESTLY when the ' +
+          "product declares or implies no accessibility bar — never invent a requirement.",
+      ),
+    notes: z
+      .string()
+      .max(2000)
+      .describe("Why this posture (the signal you read from the intent). Empty string if none."),
+  })
+  .strict();
+export type DesignAgentAccessibilityPosture = z.infer<typeof DesignAgentAccessibilityPosture>;
+
 export const DesignAgentAnswer = z
   .object({
     // The descriptive design DOMAIN label the agent DERIVED from the intent (e.g.
@@ -125,6 +152,13 @@ export const DesignAgentAnswer = z
     constraints: z
       .array(z.string().min(1).max(400))
       .describe("Hard design constraints / non-negotiables (accessibility, platform HIG, register). May be empty."),
+    // The a11y bar the design targets — INFERRED from the product intent (see the
+    // schema header). Persisted onto the contract; the ds-4 render oracle enforces it.
+    accessibilityPosture: DesignAgentAccessibilityPosture.describe(
+      "The accessibility posture you infer from the product intent — a WCAG standard when the " +
+        'product calls for one, else "none" (honest advisory). This is persisted and ENFORCED by the ' +
+        "design-render gate; do not fabricate an a11y requirement.",
+    ),
     // The domain-derived dimension set the agent CHOSE (web → tokens/components; game
     // → art-direction/feel; novel → typography/voice). Tanren names none.
     dimensions: z

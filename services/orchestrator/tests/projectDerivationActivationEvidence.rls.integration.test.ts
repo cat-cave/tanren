@@ -351,6 +351,7 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       intent: "make status legible",
       principles: [],
       constraints: [],
+      accessibilityPosture: { standard: "none", notes: "" },
       dimensions: [{ key: "status", label: "Status", intent: "Legible state", guidance: "", personaIds: [persona.id] }],
       coverage: [{ behaviorId: behavior.id, personaId: persona.id, dimensionKey: "status", surface: "status console" }],
     };

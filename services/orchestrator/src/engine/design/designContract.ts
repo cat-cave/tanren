@@ -97,6 +97,28 @@ export const DesignDimension = z
   .strict();
 export type DesignDimension = z.infer<typeof DesignDimension>;
 
+// ---- Accessibility posture -------------------------------------------------
+
+// The a11y bar the design targets — a DOMAIN-GENERAL, first-class field of the
+// design contract (a web dashboard declares "wcag-2.2-aa"; a novel declares
+// "none"; a native app "apple-hig"). It is the durable signal the design-render
+// oracle (ds-4) judges the composed system against: a WCAG level ENFORCES (the
+// render is rendered + axe-judged + gated), while "none" is advisory
+// (not_applicable — the land decides on CI alone). It is carried on V1 (persisted
+// in the `design_contracts` jsonb) so it survives the round-trip the executable
+// V2 pipeline reads — NOT invented at migration time. `standard` is descriptive
+// and free-string (Tanren never branches on it, exactly like the `domain` label);
+// the ds-4 oracle maps a WCAG level to an axe impact bar and treats an
+// unrecognized standard as fail-closed inconclusive. A contract with NO declared
+// a11y bar is an HONEST `none` (advisory) — never a forced enforcement default.
+export const DesignAccessibilityPosture = z
+  .object({
+    standard: z.string().min(1).max(120).default("none"),
+    notes: z.string().max(2000).default(""),
+  })
+  .strict();
+export type DesignAccessibilityPosture = z.infer<typeof DesignAccessibilityPosture>;
+
 // ---- Core ------------------------------------------------------------------
 
 // The universal, domain-INDEPENDENT core every design contract carries, whatever
@@ -125,6 +147,12 @@ const DesignContractCore = {
   principles: z.array(z.string().min(1).max(400)).default([]),
   // Hard design constraints / non-negotiables. May be empty.
   constraints: z.array(z.string().min(1).max(400)).default([]),
+  // The a11y bar the design targets (domain-general). Defaults to advisory
+  // `none` when absent from the persisted jsonb (a legacy row / a genuinely
+  // a11y-light project) — an HONEST empty state, never a forced enforcement
+  // default. The design agent (WS-D3) elicits/infers a real standard from the
+  // product intent; the ds-4 render oracle judges the composed system against it.
+  accessibilityPosture: DesignAccessibilityPosture.default({ standard: "none", notes: "" }),
 } as const;
 
 // ---- Contract --------------------------------------------------------------
@@ -175,6 +203,10 @@ export function normalizeDesignContract(value: unknown): DesignContractV1 {
     intent: parsed.intent,
     principles: [...parsed.principles],
     constraints: [...parsed.constraints],
+    accessibilityPosture: {
+      standard: parsed.accessibilityPosture.standard,
+      notes: parsed.accessibilityPosture.notes,
+    },
     personaRefs: [...parsed.personaRefs],
     behaviorRefs: [...parsed.behaviorRefs],
     dimensions: parsed.dimensions.map((dimension) => ({

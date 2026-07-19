@@ -175,6 +175,7 @@ const saasAnswer: DesignAgentAnswer = {
   intent: "an information-dense control surface an operator trusts at a glance",
   principles: ["two accent colors max"],
   constraints: ["WCAG AA"],
+  accessibilityPosture: { standard: "wcag-2.2-aa", notes: "operator console — AA" },
   dimensions: [
     {
       key: "tokens",
@@ -216,6 +217,8 @@ const novelAnswer: DesignAgentAnswer = {
   intent: "a faithful, voice-consistent rendering of the source work",
   principles: ["keep the translator's voice consistent"],
   constraints: ["preserve the source register"],
+  // A print-style novel declares no web a11y bar — honest advisory `none`.
+  accessibilityPosture: { standard: "none", notes: "" },
   dimensions: [
     {
       key: "typography",
