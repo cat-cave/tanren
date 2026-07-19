@@ -58,6 +58,8 @@ export class WorkerPool {
   // run absent from it surfaces the JobOrgContextLostError branch.
   forcedProjectOrgId: string | null = null;
   orgVisibleRunIds: Set<string> | null = null;
+  // gv-11 / #25: DECLARED repo visibility for the run-admission `getProject` readback.
+  declaredRepoVisibility: "public" | "private" | null = null;
   // Records the eventType (params[3]) of every event PgEventStore writes through
   // the pool, so the finalize-path event emission is observable without a real
   // DB. The single-event-writer architecture check ignores this router (the
@@ -100,6 +102,12 @@ export class WorkerPool {
     }
     if (trimmed.startsWith("SELECT project_id FROM projects")) {
       return single(this.projects.has(String(params[0])) ? { project_id: String(params[0]) } : undefined);
+    }
+    // gv-11 / #25: run-admission project readback (getProject, project_id=$2).
+    if (trimmed.startsWith("SELECT repo_url, repo_visibility")) {
+      const p = this.projects.get(String(params[1]));
+      if (p === undefined) return { rows: [], rowCount: 0 };
+      return single({ repo_url: p.repo_url, repo_visibility: this.declaredRepoVisibility });
     }
     // v68 fix: createSpec calls loadProjectOrgId to stamp the spec's NOT NULL org_id.
     if (trimmed.startsWith("SELECT org_id FROM projects")) {

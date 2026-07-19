@@ -161,6 +161,9 @@ describeDb("RLS early-failure finalize — a pre-scope throw still finalizes the
       githubHttp: INERT_GITHUB,
       identitySecretRef: "runner/test/identity",
       runStateWriter: new DirectRunStateWriter(appPool),
+      // gv-11 / #25: required run-admission visibility predicate (passing — no
+      // declared visibility on this seed).
+      repositoryVisibilityAdmission: { admit: async () => {} },
       // No heartbeat noise; the job finishes in one synchronous pass.
       heartbeatIntervalMs: 1_000_000,
     });

@@ -90,7 +90,7 @@ export interface RunExecutorDeps {
   // workflow so the App-first CLONE token reuses the same minted/cached token as
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
   githubAppMinter?: GithubAppTokenMinter;
-  repositoryVisibilityAdmission?: RepositoryVisibilityAdmission;
+  repositoryVisibilityAdmission: RepositoryVisibilityAdmission;
   identitySecretRef: string;
   ciPollDelayMs?: number;
   // lease tuning. `leaseMs` is the lease window stamped on claim and on
@@ -219,7 +219,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // admits the run's own rows. There is no null-org BYPASSRLS hydration path.
     const { context, orgId, projectConfig } = await loadRunContextScoped(deps, runId, claimedOrgId);
     resolvedOrgId = orgId;
-    await deps.repositoryVisibilityAdmission?.admit({ orgId, projectId: context.projectId });
+    await deps.repositoryVisibilityAdmission.admit({ orgId, projectId: context.projectId });
 
     // Environment management (env-management.md §4 + §7 P4): JIT env-image creation at
     // the no-match path. `loadRunContextScoped` already ran P3's resolution

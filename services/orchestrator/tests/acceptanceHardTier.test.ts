@@ -82,6 +82,9 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       githubHttp: github,
       identitySecretRef,
       runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
+      // gv-11 / #25: the run-admission visibility predicate is a required dep; this
+      // hard-tier seed declares no repo visibility, so a passing admission is injected.
+      repositoryVisibilityAdmission: { admit: async () => {} },
       // Budgets generous enough that the scripted loops stay well within them.
       runWorkflow: hardTierWorkflowRunner(github, trace),
     });
@@ -140,6 +143,9 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       githubHttp: github,
       identitySecretRef,
       runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
+      // gv-11 / #25: the run-admission visibility predicate is a required dep; this
+      // hard-tier seed declares no repo visibility, so a passing admission is injected.
+      repositoryVisibilityAdmission: { admit: async () => {} },
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
@@ -212,6 +218,9 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       githubHttp: hardTierGitHub(),
       identitySecretRef,
       runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
+      // gv-11 / #25: the run-admission visibility predicate is a required dep; this
+      // hard-tier seed declares no repo visibility, so a passing admission is injected.
+      repositoryVisibilityAdmission: { admit: async () => {} },
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,

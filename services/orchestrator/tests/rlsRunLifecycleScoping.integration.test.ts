@@ -210,6 +210,9 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
       githubHttp: passingGitHub(),
       identitySecretRef: "runner/test/identity",
       runStateWriter: new DirectRunStateWriter(appPool),
+      // gv-11 / #25: required run-admission visibility predicate (passing — no
+      // declared visibility on this seed).
+      repositoryVisibilityAdmission: { admit: async () => {} },
       heartbeatIntervalMs: 1_000_000,
       // Drive the REAL workflow with the deterministic fake harness + stubbed
       // transports. `executeNextPlanJob` wraps this in `runWithJobOrgId(ORG)` and
