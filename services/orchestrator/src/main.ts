@@ -24,7 +24,6 @@ import { startInternalMtlsServer } from "./internalServer.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
 import { SecretStoreCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
-import { createGovernanceRoutes } from "./routes/governance/index.js";
 import { mountFeatureRoutes } from "./mountFeatureRoutes.js";
 import { mountRootApiRoutes } from "./mountRootApiRoutes.js";
 import { parsedEnv } from "./envSchema.js";
@@ -213,8 +212,6 @@ export async function buildApp(input: {
     ...(input.auth?.publicBaseUrl === undefined ? {} : { publicBaseUrl: input.auth.publicBaseUrl }),
     benchmark,
   });
-  app.route("/orgs", createGovernanceRoutes({ pool: input.pool }));
-
   app.get("/healthz", async (c) => {
     const dbResult = await input.pool.query("SELECT 1 AS ok");
     const vault = await vaultHealthCheck();

@@ -3,7 +3,20 @@ import { Hono, type Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { AuthoringAuthorer } from "../../engine/contracts/authoringKernel.js";
+import type { AppendEventInput, EventStore } from "../../engine/eventStore.js";
+import type { EventName } from "../../engine/events/index.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
+import {
+  GovernanceFragmentSnapshotEntrySchema,
+  GovernanceFragmentAuthoringFailedError,
+  GovernanceFragmentStore,
+  resolveGovernanceFragmentConfig,
+  type GovernanceFragmentDraft,
+  type GovernanceFragmentSpec,
+} from "../../engine/governance/fragments/index.js";
+import { PgEventStore } from "../../engine/eventStore.js";
 import {
   activatePolicyRevision,
   compilePolicyRevision,
@@ -22,19 +35,24 @@ import { createGovernanceTierRoutes } from "./tiers.js";
 
 const CreateRevisionBodySchema = z
   .object({
-    sourceDocument: z.unknown(),
+    fragmentConfig: z.unknown(),
+    previousFragmentSnapshot: z.array(GovernanceFragmentSnapshotEntrySchema).max(65).optional(),
     parentRevisionId: z.string().min(1).max(256).optional(),
   })
   .strict();
 
 const ValidateRevisionBodySchema = z
   .object({
-    sourceDocument: z.unknown(),
+    fragmentConfig: z.unknown(),
+    previousFragmentSnapshot: z.array(GovernanceFragmentSnapshotEntrySchema).max(65).optional(),
   })
   .strict();
 
 export interface GovernanceRoutesOptions {
   readonly pool: pg.Pool;
+  readonly governanceFragmentAuthorer: (
+    target: ForgeAnswererTarget,
+  ) => AuthoringAuthorer<GovernanceFragmentSpec, GovernanceFragmentDraft>;
 }
 
 interface AuthorizedProject {
@@ -46,7 +64,7 @@ interface AuthorizedProject {
 export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
 
-  app.route("/", createGovernanceTierRoutes(options));
+  app.route("/", createGovernanceTierRoutes({ pool: options.pool }));
   app.route("/", createEffectivePolicyRoutes(options));
   app.route("/", createPolicyAnalysisRoutes(options));
 
@@ -56,16 +74,26 @@ export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
     const parsed = CreateRevisionBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return invalidBody(c, parsed.error);
     try {
+      const composed = await composePolicy(
+        options,
+        authorized,
+        parsed.data.fragmentConfig,
+        true,
+        parsed.data.previousFragmentSnapshot,
+      );
       const revision = await runWithOrgScope(options.pool, authorized.orgId, (client) =>
         createPolicyRevision(client, {
           orgId: authorized.orgId,
           projectId: authorized.projectId,
-          sourceDocument: parsed.data.sourceDocument,
+          sourceDocument: composed.policy,
           ...(parsed.data.parentRevisionId === undefined ? {} : { parentRevisionId: parsed.data.parentRevisionId }),
           createdBy: authorized.actor.userId,
         }),
       );
-      return c.json({ revision }, 201);
+      return c.json(
+        { revision, fragmentSnapshot: composed.snapshot, fragmentSnapshotDiff: composed.snapshotDiff },
+        201,
+      );
     } catch (error) {
       return handlePolicyError(c, error, "governance_policy_create_failed");
     }
@@ -76,7 +104,13 @@ export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
     if (isResponse(authorized)) return authorized;
     const parsed = ValidateRevisionBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return invalidBody(c, parsed.error);
-    return validateDocument(c, parsed.data.sourceDocument);
+    return validateFragmentConfig(
+      c,
+      options,
+      authorized,
+      parsed.data.fragmentConfig,
+      parsed.data.previousFragmentSnapshot,
+    );
   });
 
   app.get("/:orgId/projects/:projectId/governance/revisions/:revision", async (c) => {
@@ -89,17 +123,6 @@ export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
       return c.json({ revision });
     } catch (error) {
       return handlePolicyError(c, error, "governance_policy_read_failed");
-    }
-  });
-
-  app.post("/:orgId/projects/:projectId/governance/revisions/:revision/validate", async (c) => {
-    const authorized = await authorizeProject(c, options.pool, false);
-    if (isResponse(authorized)) return authorized;
-    try {
-      const revision = await readRevision(options.pool, authorized, c.req.param("revision"));
-      return validateDocument(c, revision.sourceDocument);
-    } catch (error) {
-      return handlePolicyError(c, error, "governance_policy_validate_failed");
     }
   });
 
@@ -140,15 +163,61 @@ async function readRevision(pool: pg.Pool, authorized: AuthorizedProject, revisi
   );
 }
 
-async function validateDocument(c: Context<ActorContextEnv>, sourceDocument: unknown): Promise<Response> {
+async function validateFragmentConfig(
+  c: Context<ActorContextEnv>,
+  options: GovernanceRoutesOptions,
+  authorized: AuthorizedProject,
+  fragmentConfig: unknown,
+  previousFragmentSnapshot: readonly z.infer<typeof GovernanceFragmentSnapshotEntrySchema>[] | undefined,
+): Promise<Response> {
   try {
-    const result = await validatePolicyRevision(sourceDocument);
-    return c.json({ ok: true, policyHash: result.policyHash, compiledAst: result.ast, ruleCount: result.ruleCount });
+    const composed = await composePolicy(options, authorized, fragmentConfig, false, previousFragmentSnapshot);
+    const result = await validatePolicyRevision(composed.policy);
+    return c.json({
+      ok: true,
+      policyHash: result.policyHash,
+      compiledAst: result.ast,
+      ruleCount: result.ruleCount,
+      fragmentSnapshot: composed.snapshot,
+      fragmentSnapshotDiff: composed.snapshotDiff,
+    });
   } catch (error) {
     if (error instanceof PolicyContradictionError) {
       return c.json({ ok: false, contradictionWitnesses: error.witnesses }, 422);
     }
     return handlePolicyError(c, error, "governance_policy_validate_failed");
+  }
+}
+
+async function composePolicy(
+  options: GovernanceRoutesOptions,
+  authorized: AuthorizedProject,
+  fragmentConfig: unknown,
+  authorMissing: boolean,
+  previousSnapshot?: readonly z.infer<typeof GovernanceFragmentSnapshotEntrySchema>[],
+) {
+  return resolveGovernanceFragmentConfig({
+    config: fragmentConfig,
+    context: { orgId: authorized.orgId, projectId: authorized.projectId, createdBy: authorized.actor.userId },
+    ...(authorMissing
+      ? { authorer: options.governanceFragmentAuthorer({ orgId: authorized.orgId, projectId: authorized.projectId }) }
+      : {}),
+    store: new GovernanceFragmentStore(options.pool),
+    eventStore: new OrgScopedEventStore(options.pool, authorized.orgId),
+    previousSnapshot,
+  });
+}
+
+/** EventStore has no ambient scope during an F2 provider call; scope each append
+ * independently so a long writer call never holds a database transaction open. */
+class OrgScopedEventStore implements Pick<EventStore, "append"> {
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly orgId: string,
+  ) {}
+
+  append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    return runWithOrgScope(this.pool, this.orgId, (client) => new PgEventStore(client).append(input));
   }
 }
 
@@ -193,5 +262,11 @@ function handlePolicyError(c: Context<ActorContextEnv>, error: unknown, fallback
   }
   if (error instanceof PolicyRevisionNotFoundError) return c.json({ error: "policy_revision_not_found" }, 404);
   if (error instanceof PolicyRevisionIntegrityError) return c.json({ error: "policy_revision_integrity_failed" }, 409);
+  if (error instanceof GovernanceFragmentAuthoringFailedError) {
+    return c.json(
+      { error: "governance_fragment_authoring_failed", failedIds: error.failedIds, reasons: error.failureReasons },
+      409,
+    );
+  }
   return c.json({ error: fallback, message: error instanceof Error ? error.message : String(error) }, 500);
 }

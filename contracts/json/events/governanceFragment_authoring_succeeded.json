@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "fragmentDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "fragmentId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "fragmentId",
+    "version",
+    "fragmentDigest"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.governanceFragment.authoring.succeeded"
+}

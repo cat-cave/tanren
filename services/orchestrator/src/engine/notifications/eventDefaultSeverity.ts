@@ -444,6 +444,10 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "governance.policy.created": "info",
   "governance.policy.compiled": "info",
   "governance.policy.activated": "info",
+  "governanceFragment.authoring.started": "info",
+  "governanceFragment.authoring.attempt": "info",
+  "governanceFragment.authoring.succeeded": "info",
+  "governanceFragment.authoring.failed": "fail",
   "integration.proof.invalidated": "warn",
   // ds-0 design-system vocabulary (§7). Trajectory/progress + digests are `info`;
   // the loud operator-actionable failures are `warn` (F2D authoring failure and a
