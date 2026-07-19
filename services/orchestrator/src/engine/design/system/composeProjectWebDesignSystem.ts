@@ -21,20 +21,22 @@ import type pg from "pg";
 import type { EventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
+import { verifyAndRecordDesignRender } from "../render/composeDesignRenderVerification.js";
 import type { ArtifactStore } from "./artifactStore.js";
 import { designContractV2Digest, migrateDesignContractV1ToV2, withDerivedDesiredSurfaces } from "./designContractV2.js";
 import { DesignSystemReleaseStore, resolveProjectWebDesignSystem } from "./designSystemStore.js";
 import { resolveDtcgTokens } from "./dtcgResolver.js";
 import { WEB_DESIGN_TARGET, WebDesignTargetAdapter } from "./webAdapter.js";
-import type { DesignFragmentDraftV1 } from "./authoring/designFragmentDraft.js";
-import { wrapProviderDesignFragmentAuthorer } from "./authoring/designFragmentAuthorer.js";
-import { DesignFragmentAuthoringFailedError, runDesignFragmentAuthoring } from "./authoring/designFragmentAuthoring.js";
-import { createDesignFragmentAuthoringEvents } from "./authoring/designFragmentEvents.js";
 import {
+  createDesignFragmentAuthoringEvents,
+  DesignFragmentAuthoringFailedError,
+  DesignFragmentStore,
   requiredDesignFragmentsFromSurfaces,
+  runDesignFragmentAuthoring,
   selectMissingDesignFragments,
-} from "./authoring/designFragmentSelector.js";
-import { DesignFragmentStore } from "./authoring/designFragmentStore.js";
+  wrapProviderDesignFragmentAuthorer,
+  type DesignFragmentDraftV1,
+} from "./authoring/index.js";
 
 // The deliberately-PLAIN base token set the web system bootstraps from (design bucket
 // §1 "plain base"). A neutral, resolvable DTCG document — the honest starting substrate
@@ -194,8 +196,9 @@ export async function composeProjectWebDesignSystem(
   const adapter = buildWebAdapter(designSystemId, releaseId);
   // Bootstrap the plain base + materialize the required composition graph (capability
   // check) so the pipeline runs the full ds-2 seam before building the artifact bytes.
-  const plain = await adapter.bootstrapPlainSystem({ target: WEB_DESIGN_TARGET, capabilities: [] });
-  await adapter.materialize(required, plain);
+  const profile = { target: WEB_DESIGN_TARGET, capabilities: [] };
+  const plain = await adapter.bootstrapPlainSystem(profile);
+  const materialized = await adapter.materialize(required, plain);
 
   const plainReleaseDigest = digestOf(["tanren.ds-composer.plain.v1", PLAIN_BASE_TOKENS]);
   const polishedReleaseDigest = digestOf([
@@ -221,6 +224,32 @@ export async function composeProjectWebDesignSystem(
     releaseId,
     canonicalArtifactId: artifactId,
     publishedBy: deps.createdBy,
+  });
+
+  // 5) ds-4 sub-node #3 — VERIFY the published system's render/a11y and persist ONE
+  // run-level design-render verdict the native land gate binds. This is what makes
+  // design verification FIRE in a real run: the harness renders the catalog browser-free,
+  // the oracle judges it against the project's `accessibilityPosture`, and the outcome
+  // (passed / failed_visual / inconclusive_infrastructure / not_applicable) is persisted
+  // keyed to this release. FAIL-CLOSED: an unexpected verification fault persists an
+  // `inconclusive_infrastructure` verdict (which BLOCKS at land time) rather than leaving
+  // the published system unverified — a published system ALWAYS carries a verdict.
+  await verifyAndRecordDesignRender({
+    pool: deps.pool,
+    orgId,
+    projectId,
+    designSystemId,
+    releaseId,
+    artifactId,
+    contractDigest,
+    plainReleaseDigest,
+    polishedReleaseDigest,
+    fragmentLineage: [...authoredIds].sort(),
+    designContractVersion: String(head.version),
+    accessibilityPosture: contractV2.accessibilityPosture,
+    adapter,
+    materialized,
+    profile,
   });
 
   return { designSystemId, releaseId, artifactId, authoredFragmentIds: authoredIds, alreadyPublished: false };

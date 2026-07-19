@@ -18,6 +18,7 @@ import {
 } from "../src/engine/merge/mergeAuthorityInputs.js";
 import type { AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import type { BehaviorLandGate } from "../src/engine/merge/behaviorLandGate.js";
+import type { DesignRenderGate } from "../src/engine/merge/designRenderLandGate.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 
@@ -82,6 +83,9 @@ function gateInput(host: InMemoryCodeHost) {
     // Default: no pre-merge behavior verification was required (most runs) — the behavior
     // section is not-applicable and NEVER blocks. Behavior tests below override this.
     behaviorGate: { kind: "not_applicable" as const },
+    // ds-4: no composed design system / advisory posture by default — the design_render
+    // section is not-applicable and NEVER blocks. Design tests below override this.
+    designRenderGate: { kind: "not_applicable" as const },
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
@@ -277,6 +281,54 @@ describe("authorizeAndLand — the rv-gate runtime BEHAVIOR verdict gates the RE
 
   it("NO behavior requirement (not_applicable) → authorized on CI alone (non-behavior runs still merge)", async () => {
     const { host, disposition } = await landWithBehavior({ kind: "not_applicable" });
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+  });
+});
+
+describe("authorizeAndLand — the ds-4 DESIGN-RENDER verdict gates the REAL land decision", () => {
+  async function landWithDesignRender(designRenderGate: DesignRenderGate) {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // Every OTHER signal clears (CI passed, review approved, clean, behavior n/a): the design
+    // verdict is the ONLY variable, so the land decision changes iff the design gate does —
+    // proving REAL production consumption on the live land path.
+    const disposition = await authorizeAndLand({ ...gateInput(host), designRenderGate });
+    return { host, disposition };
+  }
+
+  it("REQUIRED + FAILING design render (failed_visual) → NOT authorized (blocked); main untouched", async () => {
+    const { host, disposition } = await landWithDesignRender({
+      kind: "failed",
+      failingScenarioKey: "button:dark:mobile:en-US",
+      failingRuleIds: ["button-name"],
+    });
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/design_render.*button-name/u);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("REQUIRED but INCONCLUSIVE/absent design verdict → NOT authorized (fail-closed; inconclusive ≠ passed)", async () => {
+    const { host, disposition } = await landWithDesignRender({
+      kind: "inconclusive",
+      reason: "the project has a published design system but no design-render verdict (required-but-absent)",
+    });
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/design_render.*inconclusive ≠ passed/u);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("REQUIRED + PASSING design render (+ CI passing) → authorized; main advances to the PR head", async () => {
+    const { host, disposition } = await landWithDesignRender({ kind: "passed", passedCheckpointCount: 4 });
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+  });
+
+  it("NO design requirement (not_applicable) → authorized on CI alone (no-design-system runs still merge)", async () => {
+    const { host, disposition } = await landWithDesignRender({ kind: "not_applicable" });
     expect(disposition.kind).toBe("merged");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });

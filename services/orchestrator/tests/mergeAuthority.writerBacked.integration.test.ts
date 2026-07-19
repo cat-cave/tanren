@@ -242,6 +242,7 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
       policyVersion: "pv",
       gatedHeadSha: signals.gatedHeadSha,
       behaviorGate: { kind: "not_applicable" },
+      designRenderGate: { kind: "not_applicable" },
       store: {
         persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
         recordLandReceipt: async () => ({ auditId: "a" }),

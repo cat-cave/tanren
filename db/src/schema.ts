@@ -488,6 +488,7 @@ export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";
 export * from "./schemaDesignSystems.js";
 export { designFragments } from "./schemaDesignFragments.js";
+export { designRenderLandVerdicts } from "./schemaDesignRender.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
 export { governancePolicyRevisions } from "./schemaGovernance.js";
 export * from "./schemaEffectivePolicySnapshots.js";

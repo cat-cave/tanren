@@ -204,6 +204,21 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(release.rows[0]?.state).toBe("published");
     expect(release.rows[0]?.canonical_artifact_id).toBe(result!.artifactId);
 
+    // ds-4 sub-node #3 — the producer PERSISTED a run-level design-render verdict for the
+    // composed release (the gate-binding data). This project's V1 contract carries posture
+    // "none", so the verification short-circuits to `not_applicable` — the design gate will
+    // NOT block runs for a project that never declared an a11y bar (correct not-required).
+    const designVerdict = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query<{ outcome: string; release_id: string; accessibility_standard: string }>(
+        "SELECT outcome, release_id, accessibility_standard FROM design_render_land_verdicts WHERE org_id = $1 AND project_id = $2",
+        [ORG_ID, PROJECT_ID],
+      ),
+    );
+    expect(designVerdict.rows).toHaveLength(1);
+    expect(designVerdict.rows[0]?.outcome).toBe("not_applicable");
+    expect(designVerdict.rows[0]?.release_id).toBe(result!.releaseId);
+    expect(designVerdict.rows[0]?.accessibility_standard).toBe("none");
+
     // THE READER LIGHTS UP — the exact run-context resolver now resolves a context.
     const resolved = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
       resolveProjectWebDesignSystem(client, { orgId: ORG_ID, projectId: PROJECT_ID }),

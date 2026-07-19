@@ -16,7 +16,10 @@ import {
   SubjectEqualityRevalidator,
   type AuthorityLandStore,
 } from "../src/engine/merge/mergeAuthorityV2Impl.js";
-import { gateVerdictWithBehaviorGates } from "../src/engine/merge/multiMemberAuthorityPgState.js";
+import {
+  gateVerdictWithBehaviorGates,
+  gateVerdictWithDesignRenderGates,
+} from "../src/engine/merge/multiMemberAuthorityPgState.js";
 import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
 import { batchArtifactDigest, batchProofRoot } from "../src/engine/merge/multiMemberAuthorityTypes.js";
 
@@ -114,6 +117,32 @@ describe("gateVerdictWithBehaviorGates — the MQ-2 per-member behavior fold", (
 
   it("ANY member inconclusive → the batch gate verdict is forced to failed (fail closed)", () => {
     expect(gateVerdictWithBehaviorGates("passed", [{ kind: "inconclusive", reason: "still running" }])).toBe("failed");
+  });
+});
+
+describe("gateVerdictWithDesignRenderGates — the MQ-2 per-member design-render fold", () => {
+  it("all members not_applicable / passed → passes the persisted gate verdict through unchanged", () => {
+    expect(
+      gateVerdictWithDesignRenderGates("passed", [
+        { kind: "not_applicable" },
+        { kind: "passed", passedCheckpointCount: 2 },
+      ]),
+    ).toBe("passed");
+  });
+
+  it("ANY member failed design render → the batch gate verdict is forced to failed (fail closed)", () => {
+    expect(
+      gateVerdictWithDesignRenderGates("passed", [
+        { kind: "not_applicable" },
+        { kind: "failed", failingScenarioKey: "button:dark:mobile:en-US", failingRuleIds: ["button-name"] },
+      ]),
+    ).toBe("failed");
+  });
+
+  it("ANY member inconclusive design render → the batch gate verdict is forced to failed (fail closed)", () => {
+    expect(gateVerdictWithDesignRenderGates("passed", [{ kind: "inconclusive", reason: "required-but-absent" }])).toBe(
+      "failed",
+    );
   });
 });
 

@@ -68,6 +68,7 @@ function landInput(host: InMemoryCodeHost, landingHead: string, reviewedHeadSha:
     reviewedHeadSha,
     requiresExactReviewReceipt: true,
     behaviorGate: { kind: "not_applicable" },
+    designRenderGate: { kind: "not_applicable" },
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,

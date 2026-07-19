@@ -415,5 +415,6 @@ export function hardTierAuthorityBundle(): MergeAuthorityBundle {
     demo: "not_required",
     hitlSignoff: "not_required",
     behaviorGate: { kind: "not_applicable" },
+    designRenderGate: { kind: "not_applicable" },
   };
 }
