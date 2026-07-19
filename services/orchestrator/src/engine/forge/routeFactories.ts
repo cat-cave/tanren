@@ -16,6 +16,7 @@ import {
   type ForgeAnswererInfra,
   type ForgeAnswererTarget,
 } from "./providerFactory.js";
+import type { Hono } from "hono";
 import { buildForgeDesignAgentFactory } from "./designAgentFactory.js";
 import { buildForgeDesignSystemComposerFactory } from "./designSystemComposerFactory.js";
 import { buildForgeFragmentAuthorerFactory } from "./fragmentAuthorerFactory.js";
@@ -30,6 +31,8 @@ import type { ForgeConversationAnswerer } from "./conversation/index.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { FragmentAuthorer } from "../templates/index.js";
+import type { ActorContextEnv } from "../../middleware/auth.js";
+import { mountGovernanceRoutes } from "../../routes/governance/mount.js";
 
 export interface ForgeRouteAnswererFactories {
   interview: (target: ForgeAnswererTarget) => InterviewAnswerer;
@@ -57,6 +60,7 @@ export interface ForgeRouteAnswererFactories {
     githubHttp: GitHubHttpClient;
     githubAppMinter?: GithubAppTokenMinter;
   }) => AuditPassRunner;
+  mountGovernanceRoutes: (app: Hono<ActorContextEnv>) => void;
 }
 
 /** Build every per-surface Forge answerer factory from the shared infra. */
@@ -72,6 +76,7 @@ export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): For
     conversation: buildForgeConversationAnswererFactory(infra),
     fragmentAuthorer: buildForgeFragmentAuthorerFactory(infra),
     designSystemComposer: buildForgeDesignSystemComposerFactory(infra),
+    mountGovernanceRoutes: (app) => mountGovernanceRoutes(app, infra),
     auditPassRunnerFor: (github) =>
       createAnswererPassRunner({
         pool: infra.pool,

@@ -95,3 +95,31 @@ export const governancePolicyRevisions = pgTable(
     governanceOrgIsolationPolicy(table.orgId),
   ],
 ).enableRLS();
+
+// gv-10 — org-private, validated-only declarative fragments. Generated fragments
+// carry policy data and conformance artifacts, never executable enforcement code.
+export const governanceFragments = pgTable(
+  "governance_fragments",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    id: text("id").notNull(),
+    fragmentId: text("fragment_id").notNull(),
+    version: text("version").notNull(),
+    dependsOn: jsonb("depends_on").notNull(),
+    body: jsonb("body").notNull(),
+    digest: text("digest").notNull(),
+    status: text("status").notNull(),
+    createdBy: text("created_by").notNull(),
+    validatedAt: timestamp("validated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.orgId, table.id] }),
+    uniqueIndex("governance_fragments_org_fragment_version_unique").on(table.orgId, table.fragmentId, table.version),
+    index("governance_fragments_org_id").on(table.orgId),
+    check("governance_fragments_status_check", sql`${table.status} = 'validated'`),
+    check("governance_fragments_digest_check", sql`${table.digest} ~ ${digestPattern}`),
+    governanceOrgIsolationPolicy(table.orgId),
+  ],
+).enableRLS();

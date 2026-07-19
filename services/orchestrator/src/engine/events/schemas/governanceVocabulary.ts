@@ -58,6 +58,20 @@ export const GovernancePolicyActivatedPayload = z
   })
   .strict();
 
+// gv-10 — governance fragments own a distinct F2 lifecycle. Payloads expose
+// stable ids, bounded diagnostics, and digests only; policy bodies stay in the
+// org-scoped registry and never cross the event boundary.
+export const GovernanceFragmentAuthoringStartedPayload = z.object({ fragmentId: Id, version: Id }).strict();
+export const GovernanceFragmentAuthoringAttemptPayload = z
+  .object({ fragmentId: Id, attempt: z.number().int().min(1), signature: Id, rejection: Id.nullable() })
+  .strict();
+export const GovernanceFragmentAuthoringSucceededPayload = z
+  .object({ fragmentId: Id, version: Id, fragmentDigest: Sha256Digest })
+  .strict();
+export const GovernanceFragmentAuthoringFailedPayload = z
+  .object({ fragmentId: Id, attempts: z.number().int().min(0), reason: Id })
+  .strict();
+
 // ---------------------------------------------------------------------------
 // integration.proof.invalidated — policy-drift / base-shift proof invalidation.
 // ---------------------------------------------------------------------------
@@ -75,5 +89,9 @@ export const governanceVocabularyRegistry = {
   "governance.policy.created": GovernancePolicyCreatedPayload,
   "governance.policy.compiled": GovernancePolicyCompiledPayload,
   "governance.policy.activated": GovernancePolicyActivatedPayload,
+  "governanceFragment.authoring.started": GovernanceFragmentAuthoringStartedPayload,
+  "governanceFragment.authoring.attempt": GovernanceFragmentAuthoringAttemptPayload,
+  "governanceFragment.authoring.succeeded": GovernanceFragmentAuthoringSucceededPayload,
+  "governanceFragment.authoring.failed": GovernanceFragmentAuthoringFailedPayload,
   "integration.proof.invalidated": IntegrationProofInvalidatedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
