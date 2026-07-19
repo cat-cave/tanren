@@ -116,7 +116,7 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
     entry: MergeQueueEntry;
     partitionId: string;
     leaseOwner: string;
-    leaseExpiresAt: Date;
+    leaseHeartbeatAt: Date;
     generation: number;
     scopeFingerprint?: string;
   }): Promise<void> {
@@ -130,7 +130,7 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
         projectId: input.projectId,
         partitionId: input.partitionId,
         leaseOwner: input.leaseOwner,
-        leaseExpiresAt: input.leaseExpiresAt.toISOString(),
+        leaseHeartbeatAt: input.leaseHeartbeatAt.toISOString(),
         generation: input.generation,
         ...(input.scopeFingerprint === undefined ? {} : { scopeFingerprint: input.scopeFingerprint }),
       },
@@ -248,7 +248,7 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
     entry: MergeQueueEntry;
     partitionId: string;
     leaseOwner: string;
-    leaseExpiresAt: Date;
+    leaseHeartbeatAt: Date;
     generation: number;
     scopeFingerprint?: string;
   }): Promise<void> {

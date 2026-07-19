@@ -17,7 +17,7 @@ import {
 import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 import { type DriveMergeForQueuedRun, type MergeQueueEventEmitter } from "./coordinator.js";
 import { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
-import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "./mergeSerializedRetry.js";
 
 /** Resolve a project's org (the system-scoped bootstrap before any tenant work). */
 async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
@@ -59,7 +59,7 @@ function asStringArray(value: unknown): string[] {
  */
 export class PgMergeQueueModel implements MergeQueueModel {
   private readonly partitions: PgMergeQueuePartitionStore;
-  private readonly leaseOwners = new Map<string, string>();
+  private readonly leaseOwners = new Map<string, { leaseOwner: string; leaseEpoch: number }>();
 
   constructor(
     private readonly pool: pg.Pool,
@@ -162,7 +162,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
                WHERE held.org_id = mq.org_id
                  AND held.partition_id IS NOT DISTINCT FROM mq.partition_id
                  AND held.status = 'merging'
-                 AND held.lease_expires_at > now()
+                 AND held.lease_owner IS NOT NULL
             )`,
         [projectId],
       );
@@ -181,18 +181,16 @@ export class PgMergeQueueModel implements MergeQueueModel {
         ...(row.scope_fingerprint === null ? {} : { scopeFingerprint: row.scope_fingerprint }),
       }));
 
-      const merging = await client.query<{ count: string; retry_after_ms: string | null }>(
-        `SELECT count(*)::text AS count,
-                ceil(greatest(0, extract(epoch from (min(lease_expires_at) - now())) * 1000))::text AS retry_after_ms
+      const merging = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
            FROM merge_queue
           WHERE project_id = $1
             AND status = 'merging'
-            AND lease_expires_at > now()`,
+            AND lease_owner IS NOT NULL`,
         [projectId],
       );
       const mergingRow = merging.rows[0];
       const mergingInFlight = entries.length === 0 && Number(mergingRow?.count ?? "0") > 0;
-      const serializedRetryAfterMs = parseSerializedRetryAfterMs(mergingRow?.retry_after_ms);
 
       // The specs that have GENUINELY merged — satisfied ancestors. An unresolved
       // speculative hold is not merged for dependency eligibility, even if a stale
@@ -228,7 +226,6 @@ export class PgMergeQueueModel implements MergeQueueModel {
         entries,
         mergedSpecIds,
         mergingInFlight,
-        ...(mergingInFlight && serializedRetryAfterMs !== undefined && { serializedRetryAfterMs }),
       };
     });
   }
@@ -238,40 +235,59 @@ export class PgMergeQueueModel implements MergeQueueModel {
     if (orgId === null) return false;
     const lease = await runWithOrgScope(this.pool, orgId, (client) => this.partitions.acquireOnClient(client, queueId));
     if (lease === null) return false;
-    this.leaseOwners.set(queueId, lease.leaseOwner);
+    this.leaseOwners.set(queueId, { leaseOwner: lease.leaseOwner, leaseEpoch: lease.leaseEpoch });
     return true;
   }
 
   async renewClaim(queueId: string): Promise<boolean> {
-    const leaseOwner = this.leaseOwners.get(queueId);
+    const held = this.leaseOwners.get(queueId);
     const orgId = await this.resolveQueueOrg(queueId);
-    if (leaseOwner === undefined || orgId === null) return false;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
-      return (await this.partitions.renewOnClient(client, { queueId, leaseOwner })) !== null;
+    if (held === undefined || orgId === null) return false;
+    const renewed = await runWithOrgScope(this.pool, orgId, async (client) => {
+      return (
+        (await this.partitions.renewOnClient(client, {
+          queueId,
+          leaseOwner: held.leaseOwner,
+          leaseEpoch: held.leaseEpoch,
+        })) !== null
+      );
     });
+    if (!renewed) this.releaseLocalClaim(queueId);
+    return renewed;
   }
 
-  async markMerged(queueId: string): Promise<void> {
-    await this.release(queueId, { nextStatus: "merged" });
+  async markMerged(queueId: string): Promise<boolean> {
+    return this.release(queueId, { nextStatus: "merged" });
   }
 
-  async releaseClaim(queueId: string): Promise<void> {
+  async releaseClaim(queueId: string): Promise<boolean> {
     // Return a claimed entry to `queued` WITHOUT settling it (the entry stays in the
     // queue) — the transient-merge-drive hold path. Only flips a STILL-`merging` row
     // so it cannot resurrect a settled (merged/dequeued) entry.
-    await this.release(queueId, { nextStatus: "queued" });
+    return this.release(queueId, { nextStatus: "queued" });
   }
 
-  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
-    await this.release(queueId, { nextStatus: "dequeued", reason });
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<boolean> {
+    return this.release(queueId, { nextStatus: "dequeued", reason });
   }
 
   async recoverStaleClaims(projectId: string): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, projectId);
     if (orgId === null) return 0;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
-      return this.partitions.reclaimExpiredOnClient(client, projectId);
-    });
+    const candidates = await runWithOrgScope(this.pool, orgId, (client) =>
+      this.partitions.claimedOnClient(client, projectId),
+    );
+    let recovered = 0;
+    for (const candidate of candidates) {
+      const reclaimed = await runWithOrgScope(this.pool, orgId, (client) =>
+        this.partitions.reclaimStaleProgressOnClient(client, {
+          ...candidate,
+          progressStaleAfterMs: MERGE_QUEUE_PROGRESS_RECHECK_MS,
+        }),
+      );
+      if (reclaimed) recovered += 1;
+    }
+    return recovered;
   }
 
   async isolateMember(input: {
@@ -286,19 +302,25 @@ export class PgMergeQueueModel implements MergeQueueModel {
     const isolated = await runWithOrgScope(this.pool, orgId, (client) =>
       this.partitions.isolateOnClient(client, input),
     );
-    if (isolated) this.leaseOwners.delete(input.queueId);
+    if (isolated) this.releaseLocalClaim(input.queueId);
     return isolated;
   }
 
   private async release(
     queueId: string,
     input: { nextStatus: "queued" | "merged" | "dequeued"; reason?: DequeueReason },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const orgId = await this.resolveQueueOrg(queueId);
-    if (orgId === null) return;
-    await runWithOrgScope(this.pool, orgId, async (client) => {
-      await this.partitions.releaseOnClient(client, { queueId, ...input });
+    const held = this.leaseOwners.get(queueId);
+    if (orgId === null || held === undefined) return false;
+    const released = await runWithOrgScope(this.pool, orgId, async (client) => {
+      return this.partitions.releaseOnClient(client, { queueId, ...held, ...input });
     });
+    this.releaseLocalClaim(queueId);
+    return released;
+  }
+
+  private releaseLocalClaim(queueId: string): void {
     this.leaseOwners.delete(queueId);
   }
 
@@ -328,6 +350,8 @@ export class PgMergeRunner implements MergeRunner {
     runId: string;
     projectId: string;
     onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+    claimSignal?: AbortSignal;
+    confirmClaimBeforeLand?: () => Promise<boolean>;
   }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }

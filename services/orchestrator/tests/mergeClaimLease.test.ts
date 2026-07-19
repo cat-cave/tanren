@@ -1,17 +1,14 @@
 // (autonomy-engine.md §2d) — serialization hardening: `recoverStaleClaims` is
-// LEASE-GUARDED. A FRESH `merging` claim (a coordinator actively driving a merge)
-// must SURVIVE a concurrent coordinate pass — only a STALE claim (a coordinator
-// that genuinely crashed, claim older than the lease) is reclaimed. Without the
-// lease, a second coordinator would reset + DOUBLE-DRIVE an in-flight merge.
+// PROGRESS-GUARDED. A merge claim survives while its ActivityWatchdog advances;
+// an unchanged heartbeat is safely reclaimed on the coordinator's next re-drive.
 //
-// Driven against the in-memory model (whose recovery semantics mirror the pg impl's
-// lease query). The clock is injectable so the lease boundary is deterministic.
+// Driven against the in-memory model, whose heartbeat recovery semantics mirror the
+// pg implementation. Its heartbeat clock is injectable for deterministic progress.
 
 import { describe, expect, it } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
-import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
@@ -20,8 +17,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
-
-const LEASE_MS = MERGE_CLAIM_LEASE_MS;
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "../src/engine/merge/mergeSerializedRetry.js";
 
 class ActivityControlledMergeRunner implements MergeRunner {
   readonly drives: { runId: string }[] = [];
@@ -72,7 +68,7 @@ function coordinatorFor(queue: InMemoryMergeQueueModel, runner: MergeRunner): Ba
   });
 }
 
-describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
+describe("recoverStaleClaims progress heartbeat (P2d serialization hardening)", () => {
   it("a FRESH merging claim SURVIVES a concurrent coordinate pass (not reclaimed)", async () => {
     const queue = new InMemoryMergeQueueModel();
     let now = 1_000_000;
@@ -83,15 +79,15 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     expect(claimed).toBe(true);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    // A concurrent pass a few seconds later (well within the lease) recovers NOTHING.
-    now += 5_000;
+    // A fresh heartbeat is progress evidence: another pass must not reclaim it.
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS - 1;
     const recovered = await queue.recoverStaleClaims("p");
     expect(recovered).toBe(0);
     // The fresh claim is intact — the other coordinator cannot double-drive it.
     expect(queue.statusOf("run_a")).toBe("merging");
   });
 
-  it("a STALE merging claim (older than the lease) IS reclaimed → queued", async () => {
+  it("a merging claim with no progress heartbeat IS reclaimed → queued", async () => {
     const queue = new InMemoryMergeQueueModel();
     let now = 1_000_000;
     queue.now = () => now;
@@ -99,15 +95,15 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     const snap = await queue.loadSnapshot("p");
     await queue.claim(snap.entries[0].queueId);
 
-    // Advance past the lease (the driving coordinator is presumed crashed).
-    now += LEASE_MS + 1;
+    // The re-drive observes no ActivityWatchdog progress for a full cadence.
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS;
     const recovered = await queue.recoverStaleClaims("p");
     expect(recovered).toBe(1);
     // Reclaimed so the queue makes progress — a new pass can re-drive it.
     expect(queue.statusOf("run_a")).toBe("queued");
   });
 
-  it("renews a progressing drive past the lease, but reclaims a silent drive", async () => {
+  it("renews a progressing drive and reclaims a silent one", async () => {
     const progressingQueue = new InMemoryMergeQueueModel();
     const progressingRunner = new ActivityControlledMergeRunner();
     const progressingCoordinator = coordinatorFor(progressingQueue, progressingRunner);
@@ -117,9 +113,15 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
 
     const progressingDrive = progressingCoordinator.coordinate("p");
     await progressingRunner.firstDriveStarted;
-    now += Math.floor(LEASE_MS / 2);
-    progressingRunner.signalWatchdogProgress();
-    now += Math.ceil(LEASE_MS / 2) + 1;
+    // Each real watchdog signal renews the durable heartbeat. The elapsed time
+    // between steps is irrelevant because each signal supplies fresh progress.
+    for (let step = 0; step < 4; step += 1) {
+      now += 60 * 60 * 1000;
+      progressingRunner.signalWatchdogProgress();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
 
     const concurrent = await progressingCoordinator.coordinate("p");
     expect(concurrent.holdReason).toBe("serialized");
@@ -137,7 +139,7 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     silentQueue.seed({ runId: "run_silent", specId: "spec_silent", dependsOn: [], priority: "tbd" });
     const silentDrive = silentCoordinator.coordinate("p");
     await silentRunner.firstDriveStarted;
-    now += LEASE_MS + 1;
+    now += MERGE_QUEUE_PROGRESS_RECHECK_MS;
 
     const recovered = await silentCoordinator.coordinate("p");
     expect(recovered.mergedSpecId).toBe("spec_silent");
@@ -147,7 +149,33 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     await silentDrive;
   });
 
-  it("a serialized coordinator pass arms a lease-bound re-drive that later reclaims and merges", async () => {
+  it("aborts an in-flight drive when a progress heartbeat loses ownership", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    queue.seed({ runId: "run_abort", specId: "spec_abort", dependsOn: [], priority: "tbd" });
+    let landCalls = 0;
+    const runner: MergeRunner = {
+      async driveMerge(input) {
+        input.onWatchdogProgress?.({ outputBytesAdvanced: 1, workSignatureAdvanced: true });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (input.claimSignal?.aborted === true) return { kind: "blocked", message: "claim lost" };
+        if (input.confirmClaimBeforeLand !== undefined && !(await input.confirmClaimBeforeLand())) {
+          return { kind: "blocked", message: "claim land fence lost" };
+        }
+        landCalls += 1;
+        return { kind: "merged", mergeSha: "sha_abort" };
+      },
+    };
+    queue.renewClaim = async () => false;
+
+    const result = await coordinatorFor(queue, runner).coordinate("p");
+
+    expect(landCalls).toBe(0);
+    expect(result.mergedSpecId).toBeUndefined();
+  });
+
+  it("a serialized coordinator pass re-drives on cadence and reclaims no-progress work", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -171,11 +199,11 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     const serialized = await coordinator.coordinate("p");
 
     expect(serialized.holdReason).toBe("serialized");
-    expect(serialized.retryAfterMs).toBeGreaterThan(LEASE_MS);
+    expect(serialized.retryAfterMs).toBeGreaterThan(0);
     expect(runner.drives).toEqual([]);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    now += serialized.retryAfterMs ?? 0;
+    now += serialized.retryAfterMs!;
     const recovered = await coordinator.coordinate("p");
 
     expect(recovered.mergedSpecId).toBe("spec_a");
@@ -183,7 +211,7 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     expect(runner.drives).toEqual([{ runId: "run_a" }]);
   });
 
-  it("a lost claim arms a lease-bound re-drive for the winning claim", async () => {
+  it("a lost claim arms a cadence re-drive for the winning claim", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -215,11 +243,11 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     const serialized = await coordinator.coordinate("p");
 
     expect(serialized.holdReason).toBe("serialized");
-    expect(serialized.retryAfterMs).toBeGreaterThan(LEASE_MS);
+    expect(serialized.retryAfterMs).toBeGreaterThan(0);
     expect(runner.drives).toEqual([]);
     expect(queue.statusOf("run_a")).toBe("merging");
 
-    now += serialized.retryAfterMs ?? 0;
+    now += serialized.retryAfterMs!;
     const recovered = await coordinator.coordinate("p");
 
     expect(recovered.mergedSpecId).toBe("spec_a");

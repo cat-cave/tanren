@@ -232,6 +232,10 @@ export interface MergeForRunInput {
    * coordinator reuses the per-run merge path without a second merge impl.
    */
   queueDrive?: boolean;
+  /** Native-queue ownership fence. An aborted claim may never reach the host land call. */
+  claimSignal?: AbortSignal;
+  /** Re-confirms the native-queue owner/epoch fence immediately before host land. */
+  confirmClaimBeforeLand?: () => Promise<boolean>;
   /**
    * The pre-built `MergeAuthority` bundle (§5) — present when an out-of-band caller
    * constructs it directly OR a test injects a fake, bypassing the lazy build.

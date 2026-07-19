@@ -369,7 +369,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       }
       if (outcome.kind === "merged") {
         await this.deps.recoverableDriveHolds?.reset(entry.queueId);
-        await this.deps.queue.markMerged(entry.queueId);
+        if (!(await this.deps.queue.markMerged(entry.queueId))) {
+          const refreshed = await this.deps.queue.loadSnapshot(projectId);
+          return {
+            projectId,
+            queueDepth,
+            holdReason: "serialized",
+            retryAfterMs: serializedRetryAfterMs(refreshed),
+          };
+        }
         mergedSpecId = entry.specId;
         continue;
       }

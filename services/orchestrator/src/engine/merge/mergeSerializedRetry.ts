@@ -1,15 +1,11 @@
-import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
-
-const SERIALIZED_RETRY_BUFFER_MS = 1_000;
+// A coordinator re-observes an unchanged progress heartbeat at this cadence. It
+// is not a total-operation deadline: only an absent ActivityWatchdog progress
+// signal makes a claimed entry eligible for recovery.
+export const MERGE_QUEUE_PROGRESS_RECHECK_MS = 1_000;
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
-export function serializedRetryAfterMs(snapshot: { serializedRetryAfterMs?: number }): number {
-  return boundedRetryDelayMs((snapshot.serializedRetryAfterMs ?? MERGE_CLAIM_LEASE_MS) + SERIALIZED_RETRY_BUFFER_MS);
-}
-
-export function parseSerializedRetryAfterMs(value: string | null | undefined): number | undefined {
-  const parsed = value === null || value === undefined ? undefined : Number(value);
-  return parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined;
+export function serializedRetryAfterMs(_snapshot?: unknown): number {
+  return MERGE_QUEUE_PROGRESS_RECHECK_MS;
 }
 
 export function boundedRetryDelayMs(delayMs: number): number {

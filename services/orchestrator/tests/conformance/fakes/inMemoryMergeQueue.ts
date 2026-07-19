@@ -17,12 +17,12 @@ import type {
 import type { BatchAuthorityBinding } from "../../../src/engine/contracts/batchMergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
 import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
-import { MERGE_CLAIM_LEASE_MS } from "../../../src/engine/merge/mergeClaimLease.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
 import type {
   AuthorizedSubsetEvaluation,
   LandGroupLandOutcome,
 } from "../../../src/engine/merge/multiMemberAuthorityTypes.js";
+import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "../../../src/engine/merge/mergeSerializedRetry.js";
 import {
   digest,
   type IntegrationNodeMaterializationPersistence,
@@ -44,23 +44,16 @@ interface QueueRow {
   status: "queued" | "merging" | "merged" | "dequeued";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
-  /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
+  /** Last ActivityWatchdog-proven progress (ms epoch). */
   claimedAt?: number;
 }
-
-/**
- * The merge-claim lease the fake models: a
- * `merging` claim newer than this survives `recoverStaleClaims`; an older one is
- * reclaimed. Shared with pg so fake recovery semantics cannot drift.
- */
-const FAKE_CLAIM_LEASE_MS = MERGE_CLAIM_LEASE_MS;
 
 /** An in-memory native-queue model — the same observable contract as the pg impl. */
 export class InMemoryMergeQueueModel implements MergeQueueModel {
   private readonly rows = new Map<string, QueueRow>();
   private readonly mergedSpecs = new Set<string>();
   private order = 0;
-  /** Injectable clock so a test can advance time past the lease deterministically. */
+  /** Injectable heartbeat timestamp for deterministic progress assertions. */
   now: () => number = () => Date.now();
 
   /** Test helper: seed a queued entry directly (an already-enqueued ready run). */
@@ -130,6 +123,13 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     return undefined;
   }
 
+  /** Test helper: model a coordinator that can no longer prove merge progress. */
+  loseClaimLiveness(runId: string): void {
+    for (const row of this.rows.values()) {
+      if (row.runId === runId) row.claimedAt = undefined;
+    }
+  }
+
   /** Test helper: exact queue identity/status for the in-memory atomic settler. */
   entryForQueueId(projectId: string, queueId: string): (MergeQueueEntry & { status: QueueRow["status"] }) | undefined {
     const row = this.rows.get(queueId);
@@ -181,15 +181,9 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   async loadSnapshot(projectId: string): Promise<MergeQueueSnapshot> {
     const entries: MergeQueueEntry[] = [];
     let mergingInFlight = false;
-    let serializedRetryAfterMs: number | undefined;
-    const now = this.now();
     for (const row of this.rows.values()) {
       if (row.status === "merging") {
         mergingInFlight = true;
-        const remaining =
-          row.claimedAt === undefined ? FAKE_CLAIM_LEASE_MS : Math.max(0, FAKE_CLAIM_LEASE_MS - (now - row.claimedAt));
-        serializedRetryAfterMs =
-          serializedRetryAfterMs === undefined ? remaining : Math.min(serializedRetryAfterMs, remaining);
       }
       if (row.status !== "queued") continue;
       entries.push({
@@ -210,7 +204,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       entries,
       mergedSpecIds: new Set(this.mergedSpecs),
       mergingInFlight,
-      ...(mergingInFlight && serializedRetryAfterMs !== undefined && { serializedRetryAfterMs }),
     };
   }
 
@@ -232,43 +225,45 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markMerged(queueId: string): Promise<void> {
+  async markMerged(queueId: string): Promise<boolean> {
     const row = this.rows.get(queueId);
-    if (row !== undefined) {
-      row.status = "merged";
-      // A merged entry's spec becomes a satisfied ancestor (the merge-stage effect).
-      this.mergedSpecs.add(row.specId);
-    }
+    if (row === undefined) return false;
+    row.status = "merged";
+    // A merged entry's spec becomes a satisfied ancestor (the merge-stage effect).
+    this.mergedSpecs.add(row.specId);
+    return true;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<boolean> {
     const row = this.rows.get(queueId);
-    if (row !== undefined) {
-      row.status = "dequeued";
-      row.dequeueReason = reason;
-    }
+    if (row === undefined) return false;
+    row.status = "dequeued";
+    row.dequeueReason = reason;
+    return true;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async releaseClaim(queueId: string): Promise<void> {
+  async releaseClaim(queueId: string): Promise<boolean> {
     const row = this.rows.get(queueId);
     // Only return a still-`merging` claim to `queued` (the transient-hold path); never
     // resurrect a settled entry.
     if (row !== undefined && row.status === "merging") {
       row.status = "queued";
       row.claimedAt = undefined;
+      return true;
     }
+    return false;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async recoverStaleClaims(_projectId: string): Promise<number> {
     let recovered = 0;
-    const cutoff = this.now() - FAKE_CLAIM_LEASE_MS;
+    const staleBefore = this.now() - MERGE_QUEUE_PROGRESS_RECHECK_MS;
     for (const row of this.rows.values()) {
-      // Only reclaim STALE claims: a fresh `merging` claim (claimed within the
-      // lease) survives so a concurrent coordinate pass never double-drives it.
-      if (row.status === "merging" && (row.claimedAt === undefined || row.claimedAt < cutoff)) {
+      // The fake mirrors PostgreSQL's durable heartbeat: a new coordinator may
+      // reclaim only after the prior owner stopped reporting real progress.
+      if (row.status === "merging" && (row.claimedAt === undefined || row.claimedAt <= staleBefore)) {
         row.status = "queued";
         row.claimedAt = undefined;
         recovered += 1;

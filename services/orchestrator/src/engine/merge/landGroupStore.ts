@@ -8,8 +8,7 @@ import { memberKey } from "../contracts/integrationNodes.js";
 import type { LandAuthorization, LandBindingMember } from "../contracts/mergeAuthority.js";
 import { PgEventStore } from "../eventStore.js";
 import { serviceAuditActor } from "../events/schemas/audit.js";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { authorityDecisionIdFor } from "./mergeAuthorityLandFinalizer.js";
+import { applyFinalizeLand, authorityDecisionIdFor } from "./mergeAuthorityLandFinalizer.js";
 import type { AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
 
 export interface LandGroupMemberContext extends Omit<LandBindingMember, "disposition"> {
@@ -21,7 +20,6 @@ export interface LandGroupMemberContext extends Omit<LandBindingMember, "disposi
 
 export interface PgLandGroupStoreInput {
   readonly pool: pg.Pool;
-  readonly writer: RunStateWriter;
   readonly orgId: string;
   readonly projectId: string;
   readonly groupId: string;
@@ -100,35 +98,52 @@ export class PgLandGroupStore implements AuthorityLandStore {
   }): Promise<{ auditId: string }> {
     if (input.effectIntentId !== this.reconcileToken) throw new Error("land group reconcile token mismatch");
     this.assertMembers(input.authorization);
-    const existing = await this.completedReceipt();
-    if (existing !== null) return existing;
+    // Finalize the WHOLE group on one client/transaction. The former per-member
+    // writer calls committed member A before member B could fail, leaving an
+    // externally-landed group half-finalized after a crash. The group-row lock
+    // serializes replay, and a rollback leaves every member + receipt untouched.
+    return runWithOrgScope(this.input.pool, this.input.orgId, async (client) => {
+      const group = await client.query<GroupRow>(
+        "SELECT state, main_sha FROM land_groups WHERE org_id = $1 AND id = $2 FOR UPDATE",
+        [this.input.orgId, this.input.groupId],
+      );
+      const groupRow = group.rows[0];
+      if (groupRow === undefined) throw new Error(`land group ${this.input.groupId} is missing`);
+      if (groupRow.state === "completed") return this.receiptForCompleted(client, groupRow);
 
-    const outcomes = await this.memberOutcomes();
-    for (const member of this.input.members) {
-      const key = memberIdentity(input.authorization.envelope.expectedMainSha, member);
-      if (outcomes.get(key) === "landed") continue;
-      await this.input.writer.finalizeLand({
-        orgId: this.input.orgId,
-        runId: member.runId,
-        specId: member.specId,
-        projectId: member.projectId,
-        taskId: member.taskId,
-        prUrl: member.prUrl,
-        prNumber: member.prNumber,
-        integration: "native_queue",
-        mergeSha: input.mainSha,
-        authorityDecisionId: authorityDecisionIdFor(input.authorization),
-        auditEnvelope: { policyVersion: this.input.policyVersion, initiatingActor: serviceAuditActor },
-      });
-      await runWithOrgScope(this.input.pool, this.input.orgId, (client) =>
-        client.query(
+      const memberRows = await client.query<{ member_key: string; outcome: string | null }>(
+        `SELECT member_key, outcome FROM land_group_members
+          WHERE org_id = $1 AND land_group_id = $2
+          FOR UPDATE`,
+        [this.input.orgId, this.input.groupId],
+      );
+      const outcomes = new Map(memberRows.rows.map((row) => [row.member_key, row.outcome]));
+      for (const member of this.input.members) {
+        const key = memberIdentity(input.authorization.envelope.expectedMainSha, member);
+        // Resumes a legacy partial group exactly once; every group created by this
+        // version commits all following writes together.
+        if (outcomes.get(key) === "landed") continue;
+        await applyFinalizeLand(client, {
+          orgId: this.input.orgId,
+          runId: member.runId,
+          specId: member.specId,
+          projectId: member.projectId,
+          taskId: member.taskId,
+          prUrl: member.prUrl,
+          prNumber: member.prNumber,
+          integration: "native_queue",
+          mergeSha: input.mainSha,
+          authorityDecisionId: authorityDecisionIdFor(input.authorization),
+          auditEnvelope: { policyVersion: this.input.policyVersion, initiatingActor: serviceAuditActor },
+        });
+        await client.query(
           `UPDATE land_group_members SET outcome = 'landed'
             WHERE org_id = $1 AND land_group_id = $2 AND member_key = $3`,
           [this.input.orgId, this.input.groupId, key],
-        ),
-      );
-    }
-    return this.complete(input.authorization, input.mainSha);
+        );
+      }
+      return this.completeOnClient(client, input.authorization, input.mainSha);
+    });
   }
 
   private async persistDecision(client: pg.PoolClient, auth: LandAuthorization, decisionId: string): Promise<void> {
@@ -212,67 +227,44 @@ export class PgLandGroupStore implements AuthorityLandStore {
     });
   }
 
-  private async memberOutcomes(): Promise<Map<string, string | null>> {
-    return runWithOrgScope(this.input.pool, this.input.orgId, async (client) => {
-      const rows = await client.query<{ member_key: string; outcome: string | null }>(
-        "SELECT member_key, outcome FROM land_group_members WHERE org_id = $1 AND land_group_id = $2",
-        [this.input.orgId, this.input.groupId],
-      );
-      return new Map(rows.rows.map((row) => [row.member_key, row.outcome]));
-    });
+  private async receiptForCompleted(client: pg.PoolClient, group: GroupRow): Promise<{ auditId: string }> {
+    if (group.main_sha === null) throw new Error(`completed land group ${this.input.groupId} has no main sha`);
+    const receipt = await client.query<ReceiptRow>(
+      "SELECT audit_id FROM authority_land_receipts WHERE org_id = $1 AND effect_intent_id = $2",
+      [this.input.orgId, this.reconcileToken],
+    );
+    const auditId = receipt.rows[0]?.audit_id;
+    if (auditId === undefined) throw new Error(`completed land group ${this.input.groupId} has no receipt`);
+    return { auditId };
   }
 
-  private async completedReceipt(): Promise<{ auditId: string } | null> {
-    return runWithOrgScope(this.input.pool, this.input.orgId, async (client) => {
-      const group = await client.query<GroupRow>(
-        "SELECT state, main_sha FROM land_groups WHERE org_id = $1 AND id = $2",
-        [this.input.orgId, this.input.groupId],
-      );
-      const row = group.rows[0];
-      if (row?.state !== "completed" || row.main_sha === null) return null;
-      const receipt = await client.query<ReceiptRow>(
-        "SELECT audit_id FROM authority_land_receipts WHERE org_id = $1 AND effect_intent_id = $2",
-        [this.input.orgId, this.reconcileToken],
-      );
-      const auditId = receipt.rows[0]?.audit_id;
-      if (auditId === undefined) throw new Error(`completed land group ${this.input.groupId} has no receipt`);
-      return { auditId };
-    });
-  }
-
-  private async complete(auth: LandAuthorization, mainSha: string): Promise<{ auditId: string }> {
-    return runWithOrgScope(this.input.pool, this.input.orgId, async (client) => {
-      const unfinished = await client.query<{ count: string }>(
-        `SELECT count(*)::text AS count FROM land_group_members
+  private async completeOnClient(
+    client: pg.PoolClient,
+    auth: LandAuthorization,
+    mainSha: string,
+  ): Promise<{ auditId: string }> {
+    const unfinished = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM land_group_members
           WHERE org_id = $1 AND land_group_id = $2 AND outcome IS DISTINCT FROM 'landed'`,
-        [this.input.orgId, this.input.groupId],
-      );
-      if (Number(unfinished.rows[0]?.count ?? "0") !== 0)
-        throw new Error("land group members are not fully reconciled");
-      const auditId = this.input.members.at(-1)?.runId;
-      if (auditId === undefined) throw new Error("a land group requires at least two members");
-      await client.query(
-        `INSERT INTO authority_land_receipts (org_id, project_id, id, effect_intent_id, main_sha, audit_id)
+      [this.input.orgId, this.input.groupId],
+    );
+    if (Number(unfinished.rows[0]?.count ?? "0") !== 0) throw new Error("land group members are not fully reconciled");
+    const auditId = this.input.members.at(-1)?.runId;
+    if (auditId === undefined) throw new Error("a land group requires at least two members");
+    await client.query(
+      `INSERT INTO authority_land_receipts (org_id, project_id, id, effect_intent_id, main_sha, audit_id)
          VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT (org_id, effect_intent_id) DO NOTHING`,
-        [
-          this.input.orgId,
-          this.input.projectId,
-          `receipt-${this.reconcileToken}`,
-          this.reconcileToken,
-          mainSha,
-          auditId,
-        ],
-      );
-      const completed = await client.query<{ id: string }>(
-        `UPDATE land_groups SET state = 'completed', main_sha = $3
+      [this.input.orgId, this.input.projectId, `receipt-${this.reconcileToken}`, this.reconcileToken, mainSha, auditId],
+    );
+    const completed = await client.query<{ id: string }>(
+      `UPDATE land_groups SET state = 'completed', main_sha = $3
           WHERE org_id = $1 AND id = $2 AND state <> 'completed'
           RETURNING id`,
-        [this.input.orgId, this.input.groupId, mainSha],
-      );
-      if (completed.rows[0] !== undefined) await this.appendCompleted(client, auth, mainSha);
-      return { auditId };
-    });
+      [this.input.orgId, this.input.groupId, mainSha],
+    );
+    if (completed.rows[0] !== undefined) await this.appendCompleted(client, auth, mainSha);
+    return { auditId };
   }
 
   private async appendCompleted(client: pg.PoolClient, auth: LandAuthorization, mainSha: string): Promise<void> {

@@ -95,8 +95,8 @@ export interface MergeQueueEntry {
  * coordinator needs to order it, loaded under RLS. `mergedSpecIds` is the set of
  * specs that have GENUINELY merged (status done/merged) — used to test whether an
  * entry's ancestors are satisfied. `mergingInFlight` means every queued candidate
- * is held behind an unexpired lease in its own partition; it is not a project-wide
- * merge lock.
+ * is held behind a current progress heartbeat in its own partition; it is not a
+ * project-wide merge lock.
  */
 export interface MergeQueueSnapshot {
   projectId: string;
@@ -104,15 +104,8 @@ export interface MergeQueueSnapshot {
   entries: MergeQueueEntry[];
   /** Spec ids that have genuinely merged (done/merged) — satisfied ancestors. */
   mergedSpecIds: Set<string>;
-  /** True only when no candidate can acquire its own partition lease this pass. */
+  /** True only when no candidate can acquire its own live partition claim this pass. */
   mergingInFlight: boolean;
-  /**
-   * When `mergingInFlight` is true, the time until a fresh partition lease can
-   * be considered stale. Coordinators surface this as a serialized retry so a
-   * restarted worker wakes itself after the lease instead of waiting for an
-   * unrelated notification.
-   */
-  serializedRetryAfterMs?: number;
 }
 
 // ---- The pure selection core ----------------------------------------------
@@ -243,11 +236,15 @@ export interface MergeQueueModel {
    */
   claim(queueId: string): Promise<boolean>;
 
-  /** Renew this process's current partition lease before a live merge drive. */
+  /** Record an ActivityWatchdog-proven progress heartbeat for this process's live claim. */
   renewClaim?(queueId: string): Promise<boolean>;
 
-  /** Mark a claimed entry as terminally MERGED (merging → merged). */
-  markMerged(queueId: string): Promise<void>;
+  /**
+   * Mark this process's claimed entry as terminally MERGED (merging → merged).
+   * `false` means its lease-owner/epoch fence was lost, so it must not report a
+   * completed land or perform any further claim-owned work.
+   */
+  markMerged(queueId: string): Promise<boolean>;
 
   /**
    * GitHub-5xx resilience: RELEASE a claimed entry back to `queued` (merging →
@@ -256,10 +253,10 @@ export interface MergeQueueModel {
    * or dequeued (a terminal run would never re-ready, so retiring the candidate
    * would STRAND a clean PR); instead the claim is released so the subscriber's
    * delayed re-drive re-picks it once the gateway recovers. Distinct from
-   * `recoverStaleClaims` (which only fires after the 15-min lease) — this releases
+   * `recoverStaleClaims` (which only fires after the owner stops reporting progress) — this releases
    * IMMEDIATELY. Idempotent: a no-longer-`merging` row is left untouched.
    */
-  releaseClaim(queueId: string): Promise<void>;
+  releaseClaim(queueId: string): Promise<boolean>;
 
   /**
    * Mark an entry as DEQUEUED (left the queue without merging) with the reason.
@@ -272,12 +269,12 @@ export interface MergeQueueModel {
    * `releaseClaim` so the candidate stays active. `conflict` still dequeues because
    * it usually hands off to autonomous re-plan/re-execution.
    */
-  markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
+  markDequeued(queueId: string, reason: DequeueReason): Promise<boolean>;
 
   /**
-   * Crash recovery: return any entries left `merging` (a coordinator died
-   * mid-merge) back to `queued` so the queue is recoverable on restart. Returns the
-   * count recovered. Idempotent (no stale claims ⇒ 0). The actual GitHub merge is
+   * Crash recovery: return entries left `merging` only after their durable
+   * ActivityWatchdog progress heartbeat becomes stale. Returns the count recovered.
+   * Idempotent (no dead claims ⇒ 0). The actual GitHub merge is
    * itself idempotent (a re-driven already-merged PR is a no-op), so re-queuing is
    * safe.
    */
@@ -306,6 +303,10 @@ export interface MergeRunner {
     projectId: string;
     /** Fires only when the merge drive's ActivityWatchdog observes real work advancement. */
     onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+    /** Aborts a drive that no longer owns its durable merge claim. */
+    claimSignal?: AbortSignal;
+    /** Re-confirms the owner/epoch fence immediately before each host land attempt. */
+    confirmClaimBeforeLand?: () => Promise<boolean>;
   }): Promise<MergeDriveOutcome>;
 }
 

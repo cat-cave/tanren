@@ -33,6 +33,18 @@ type LandQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
  * The caller owns the org scope (`runWithOrgScope`).
  */
 export async function applyFinalizeLand(client: LandQueryClient, input: FinalizeLandInput): Promise<void> {
+  // A delivery retry may arrive after the original transaction committed but before
+  // its caller observed the response. Lock the governing spec FIRST: its `merged`
+  // transition is the durable once-only gate for this run/spec land. Appending the
+  // event before this guard used to make a replay emit a second `merge.completed`.
+  const spec = await client.query<{ status: string }>(
+    "SELECT status FROM specs WHERE org_id = $1 AND spec_id = $2 FOR UPDATE",
+    [input.orgId, input.specId],
+  );
+  const status = spec.rows[0]?.status;
+  if (status === undefined) throw new Error(`cannot finalize land: spec ${input.specId} is missing`);
+  if (status === "merged") return;
+
   const events = new PgEventStore(client);
   await events.append({
     runId: input.runId,

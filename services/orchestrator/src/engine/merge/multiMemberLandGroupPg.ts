@@ -46,7 +46,6 @@ export async function landAuthorizedGroupPg(
   ]);
   const landStore = new PgLandGroupStore({
     pool: deps.pool,
-    writer: deps.runStateWriter,
     orgId: gathered.orgId,
     projectId: input.projectId,
     groupId: input.evaluation.groupId,

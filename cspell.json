@@ -398,6 +398,7 @@
     "pipenv",
     "pipx",
     "pkey",
+    "plpgsql",
     "pnpm",
     "pollable",
     "pooler",

@@ -326,6 +326,8 @@ export const mergeQueue = pgTable(
       .references(() => organizations.id),
     partitionId: text("partition_id"),
     leaseOwner: text("lease_owner"),
+    /** Monotonic fencing generation; incremented for every successful claim. */
+    leaseEpoch: integer("lease_epoch").notNull().default(0),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     scopeFingerprint: text("scope_fingerprint"),
     status: text("status").notNull().default("queued"),

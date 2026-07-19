@@ -71,12 +71,14 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
        VALUES ($1, 'mq-4', 'https://example.com/mq-4.git', $2)`,
       [PROJECT, ORG],
     );
-    for (const member of ["a", "b", "poison", "sibling"]) await seedMember(ownerPool, member);
+    for (const member of ["a", "b", "orphan", "fenced", "poison", "sibling"]) await seedMember(ownerPool, member);
     const events = new PgMergeQueueEventEmitter(appPool, new DirectRunStateWriter(appPool));
     queue = new PgMergeQueueModel(appPool, events);
     for (const [member, scopeFingerprint] of [
       ["a", "scope-a"],
       ["b", "scope-b"],
+      ["orphan", "scope-orphan"],
+      ["fenced", "scope-fenced"],
       ["poison", "scope-shared"],
       ["sibling", "scope-shared"],
     ] as const) {
@@ -132,9 +134,11 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
     expect(unscoped.rows[0]?.count).toBe("0");
   });
 
-  it("reclaims only an expired holder and lets a new owner acquire it", async () => {
+  it("reclaims only a stale progress heartbeat and lets a new owner acquire it", async () => {
+    // `lease_expires_at` records the last ActivityWatchdog progress. A stale
+    // heartbeat is the durable absence-of-progress proof for recovery.
     await runWithOrgScope(appPool, ORG, (client) =>
-      client.query("UPDATE merge_queue SET lease_expires_at = now() - interval '1 millisecond' WHERE queue_id = $1", [
+      client.query("UPDATE merge_queue SET lease_expires_at = now() - interval '2 seconds' WHERE queue_id = $1", [
         queueIds.get("a"),
       ]),
     );
@@ -142,6 +146,34 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
     await expect(queue.claim(queueIds.get("a")!)).resolves.toBe(true);
     expect(queue.renewClaim).toBeDefined();
     await expect(queue.renewClaim!(queueIds.get("a")!)).resolves.toBe(true);
+  });
+
+  it("fences a reclaimed owner from settlement and host land while the new owner lands once", async () => {
+    const queueId = queueIds.get("fenced")!;
+    const replacement = new PgMergeQueueModel(appPool);
+    await expect(queue.claim(queueId)).resolves.toBe(true);
+    await runWithOrgScope(appPool, ORG, (client) =>
+      client.query("UPDATE merge_queue SET lease_expires_at = now() - interval '2 seconds' WHERE queue_id = $1", [
+        queueId,
+      ]),
+    );
+    await expect(replacement.recoverStaleClaims(PROJECT)).resolves.toBe(1);
+    await expect(replacement.claim(queueId)).resolves.toBe(true);
+
+    // Original owner A cannot mutate B's epoch and must not call the host seam.
+    expect(await queue.markMerged(queueId)).toBe(false);
+    expect(await queue.releaseClaim(queueId)).toBe(false);
+    let lands = 0;
+    const landAuthorizedIntegration = async (owner: PgMergeQueueModel): Promise<boolean> => {
+      if (!(await owner.renewClaim!(queueId))) return false;
+      lands += 1;
+      return owner.markMerged(queueId);
+    };
+    expect(await landAuthorizedIntegration(queue)).toBe(false);
+    expect(lands).toBe(0);
+
+    expect(await landAuthorizedIntegration(replacement)).toBe(true);
+    expect(lands).toBe(1);
   });
 
   it("isolates a poison member, releases its shared scope, and appends the frozen event", async () => {

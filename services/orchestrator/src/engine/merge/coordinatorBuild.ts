@@ -153,10 +153,10 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
  * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
-  return async ({ runId, onWatchdogProgress }): Promise<MergeDriveOutcome> => {
+  return async ({ runId, onWatchdogProgress, claimSignal, confirmClaimBeforeLand }): Promise<MergeDriveOutcome> => {
     // A queued merge may run indefinitely while its ActivityWatchdogs keep finding
-    // real work. Their progress events renew this entry's claim; a fixed-point drive
-    // emits none and remains recoverable after the ordinary lease window.
+    // real work. Their progress events renew this entry's heartbeat; a fixed-point
+    // drive emits none and becomes safely reclaimable by a later queue pass.
     const ssh =
       onWatchdogProgress === undefined ? deps.ssh : withMergeDriveWatchdogProgress(deps.ssh, onWatchdogProgress);
     // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
@@ -244,6 +244,8 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // run-loop pass already ENQUEUED — this is the
           // coordinator's actual merge.
           queueDrive: true,
+          ...(claimSignal === undefined ? {} : { claimSignal }),
+          ...(confirmClaimBeforeLand === undefined ? {} : { confirmClaimBeforeLand }),
           // on the drive pass: the REAL intent-preserving conflict resolver. It
           // provisions a short-lived runner (the original run's is gone), clones
           // head+base, runs the same resolver the in-loop direct_merge path runs, and
@@ -378,8 +380,9 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
 
 /**
  * Forward only ActivityWatchdog-proven work advancement to this drive's lease
- * heartbeat. Plain SSH calls without a watchdog deliberately do not count as
- * progress, so elapsed time and side-effect-free transport traffic cannot refresh it.
+ * heartbeat. Every merge-drive SSH command gets a watchdog, so an advancing
+ * slow command cannot silently lose its live claim; transport traffic
+ * alone still does not count as progress.
  */
 function withMergeDriveWatchdogProgress(
   substrate: CommandSubstrate,
@@ -387,12 +390,12 @@ function withMergeDriveWatchdogProgress(
 ): CommandSubstrate {
   return {
     async run(target, command) {
-      const prior = command.watchdog?.onProgress;
-      if (command.watchdog === undefined) return substrate.run(target, command);
+      const watchdog = command.watchdog ?? { onQuiet: "surface" as const };
+      const prior = watchdog.onProgress;
       return substrate.run(target, {
         ...command,
         watchdog: {
-          ...command.watchdog,
+          ...watchdog,
           onProgress: (signal) => {
             try {
               prior?.(signal);
