@@ -6,6 +6,7 @@
 // probe — no Postgres, no real provider, no live HTTP.
 
 import { describe, expect, it } from "vitest";
+import type { Digest } from "../src/engine/contracts/cas.js";
 import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
@@ -307,6 +308,7 @@ function scriptedProofBackedDemo(
         runId: "acceptance_run",
         requiredVerdictCount: behaviors.length,
         passedVerdictCount: behaviors.filter((b) => b.outcome === "passed").length,
+        runtimeBehaviorContextHash: `sha256:${"c".repeat(64)}` as unknown as Digest,
         behaviors,
       };
     },

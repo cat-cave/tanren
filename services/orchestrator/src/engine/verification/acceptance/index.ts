@@ -9,3 +9,6 @@ export * from "./httpDriver.js";
 export * from "./planLoader.js";
 export * from "./pgAcceptancePlanLoader.js";
 export * from "./pgReleaseInstanceBaseUrlResolver.js";
+export * from "./flakeClassification.js";
+export * from "./behaviorQuarantineGovernance.js";
+export * from "./flakeQuarantineActuator.js";

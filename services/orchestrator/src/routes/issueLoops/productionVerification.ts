@@ -17,6 +17,7 @@ import {
   buildPostMergeReproofCoordinator,
   buildProductionRepairRouter,
   buildRegressionBisector,
+  PgBehaviorQuarantineStore,
   recordPostMergeBehaviorVerdict,
   recordRegressionBisections,
   type PostMergeBehaviorAcceptanceVerifier,
@@ -71,6 +72,12 @@ export interface ProductionVerificationRoutesOptions {
    * defaults to the live bisector.
    */
   readonly regressionBisector?: Pick<RegressionBisector, "bisect">;
+  /**
+   * rv-17 flake quarantine reader — consulted so a QUARANTINED (flaky) behavior's regressed verdict
+   * is NEVER used to name a bisection culprit on THIS operator-retry path too (mirrors the walker).
+   * Defaults to the live PgBehaviorQuarantineStore.
+   */
+  readonly behaviorQuarantineReader?: Pick<PgBehaviorQuarantineStore, "isQuarantined">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -110,6 +117,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const reproofCoordinator = options.reproofCoordinator ?? buildPostMergeReproofCoordinator(options.pool);
   const behaviorVerifier = options.behaviorVerifier ?? buildPostMergeBehaviorAcceptanceVerifier(options.pool);
   const regressionBisector = options.regressionBisector ?? buildRegressionBisector(options.pool);
+  const behaviorQuarantineReader = options.behaviorQuarantineReader ?? new PgBehaviorQuarantineStore(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -192,7 +200,8 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       // rv-16b: best-effort regression bisection off a regressed post-merge verdict (diagnostic;
       // never blocks settlement — a failure is swallowed so the manual retry still completes).
       try {
-        await recordRegressionBisections(regressionBisector, behaviorResult, job);
+        // rv-17: pass the quarantine reader so a quarantined behavior is not bisected here either.
+        await recordRegressionBisections(regressionBisector, behaviorResult, job, behaviorQuarantineReader);
       } catch {
         /* diagnostic only; the bisector itself fails closed to an inconclusive record */
       }

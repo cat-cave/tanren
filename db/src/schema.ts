@@ -494,3 +494,4 @@ export * from "./schemaEffectivePolicySnapshots.js";
 export * from "./schemaWave6.js";
 export * from "./schemaBhCluster.js";
 export { regressionBisections } from "./schemaRegressionBisections.js";
+export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";

@@ -8,6 +8,7 @@ import { PgRepairRouter } from "../workflow/repairRouting.js";
 import { PostMergeReproofCoordinator } from "../verification/postMergeReproof/coordinator.js";
 import { buildPostMergeBehaviorAcceptanceVerifier } from "../verification/postMergeReproof/behaviorAcceptanceVerdict.js";
 import { buildRegressionBisector } from "../verification/postMergeReproof/regressionBisectionBuild.js";
+import { PgBehaviorQuarantineStore } from "../repositories/behaviorQuarantines.js";
 import { ResolutionDagWalker } from "./resolutionDagWalker.js";
 
 /** Production composition for the durable resolution claim → stage loop. */
@@ -23,5 +24,6 @@ export function buildResolutionDagWalker(pool: pg.Pool): ResolutionDagWalker {
     reproofCoordinator: new PostMergeReproofCoordinator({ pool }),
     behaviorVerifier: buildPostMergeBehaviorAcceptanceVerifier(pool),
     regressionBisector: buildRegressionBisector(pool),
+    behaviorQuarantineReader: new PgBehaviorQuarantineStore(pool),
   });
 }

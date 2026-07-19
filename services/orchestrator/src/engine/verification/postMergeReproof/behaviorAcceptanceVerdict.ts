@@ -40,6 +40,8 @@ import {
 } from "../../repositories/verificationEnvironments.js";
 import {
   AcceptanceOrchestrator,
+  actuateFlakeQuarantine,
+  FLAKE_CLASSIFIER_ACTOR,
   HttpAcceptanceSurfaceDriver,
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
@@ -49,8 +51,13 @@ import {
   type AcceptancePlanLoader,
   type AcceptanceRunRequest,
   type AcceptanceRunResult,
+  type FlakeQuarantineActuatorStore,
 } from "../acceptance/index.js";
+import { PgBehaviorQuarantineStore } from "../../repositories/behaviorQuarantines.js";
 import { EphemeralAcceptanceEventSink } from "../../demo/proofBackedWebDemo.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("post-merge-behavior-acceptance");
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
@@ -70,6 +77,13 @@ export interface PostMergeBehaviorAcceptanceVerifierDeps {
   readonly resolveEnvironment: VerificationEnvironmentResolver;
   /** Emits the frozen `post_merge.behavior.{verified,failed}` events (org-scoped per append). */
   readonly events: AcceptanceEventSink;
+  /**
+   * rv-17 flake quarantine actuator store. After the production verdicts are recorded, the lane
+   * classifies each behavior from its recorded `post_merge_production` verdicts (same artifact +
+   * purpose) and, on a decisive flaky pass↔fail conflict, persists a `quarantine` transition — the
+   * LIVE production writer for the quarantine table. Absent ⇒ classification is dormant (no rows).
+   */
+  readonly quarantineStore?: FlakeQuarantineActuatorStore;
   /** Test seam; production always runs on `runWithOrgScope` over the control pool. */
   readonly withOrgScope?: OrgScope;
 }
@@ -137,6 +151,8 @@ export class PostMergeBehaviorAcceptanceVerifier {
       outcome: behavior.outcome,
     }));
     await this.emitVerdictEvents(release, verdicts);
+    // rv-17: LIVE flake classification + quarantine off the just-recorded production verdicts.
+    await this.actuateFlakeQuarantines(release, runResult);
 
     const passed = verdicts.filter((verdict) => verdict.outcome === "passed").length;
     return {
@@ -213,6 +229,36 @@ export class PostMergeBehaviorAcceptanceVerifier {
     };
   }
 
+  /**
+   * rv-17 — the LIVE flake-quarantine writer. For each behavior just verified in production,
+   * classify from its recorded `post_merge_production` verdicts (same artifact + purpose) and, on a
+   * decisive flaky conflict, persist a quarantine. Best-effort + non-fatal: a classification/write
+   * failure is logged and swallowed so it can never destabilize the already-settled deploy decision.
+   */
+  private async actuateFlakeQuarantines(release: ReleaseInstanceRecord, runResult: AcceptanceRunResult): Promise<void> {
+    const store = this.deps.quarantineStore;
+    if (store === undefined) return;
+    for (const behavior of runResult.behaviors) {
+      try {
+        await actuateFlakeQuarantine(store, {
+          orgId: release.orgId,
+          projectId: release.projectId,
+          behaviorRevisionId: behavior.behaviorRevisionId,
+          artifactDigest: release.artifactDigest,
+          purpose: "post_merge_production",
+          contextHash: runResult.runtimeBehaviorContextHash,
+          actor: FLAKE_CLASSIFIER_ACTOR,
+        });
+      } catch (error) {
+        log.warn(
+          "rv-17 flake quarantine actuation failed; diagnostic only",
+          { behaviorRevisionId: behavior.behaviorRevisionId },
+          error,
+        );
+      }
+    }
+  }
+
   /** Emit the frozen `post_merge.behavior.verified` / `.failed` event for each persisted verdict. */
   private async emitVerdictEvents(
     release: ReleaseInstanceRecord,
@@ -284,5 +330,7 @@ export function buildPostMergeBehaviorAcceptanceVerifier(pool: pg.Pool): PostMer
     orchestrator,
     resolveEnvironment: new PgVerificationEnvironmentResolver(pool),
     events: new PgAcceptanceEventSink(pool),
+    // rv-17: the LIVE flake-quarantine writer — classifies + quarantines off recorded verdicts.
+    quarantineStore: new PgBehaviorQuarantineStore(pool),
   });
 }

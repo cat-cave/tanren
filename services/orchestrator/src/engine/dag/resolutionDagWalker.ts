@@ -19,6 +19,7 @@ import {
   recordRegressionBisections,
   type RegressionBisector,
 } from "../verification/postMergeReproof/regressionBisection.js";
+import type { BehaviorQuarantineReader } from "../verification/acceptance/behaviorQuarantineGovernance.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -60,6 +61,12 @@ export interface ResolutionDagWalkerDeps {
    * diagnostic that never blocks the deploy decision or the resolution settlement.
    */
   readonly regressionBisector?: Pick<RegressionBisector, "bisect">;
+  /**
+   * rv-17 flake quarantine governance: consulted so a QUARANTINED (flaky) behavior's regressed
+   * verdict is NEVER used to name a bisection culprit. Absent ⇒ no behavior is treated as
+   * quarantined (bisection runs for every regressed verdict, as before).
+   */
+  readonly behaviorQuarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantined">;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -248,7 +255,12 @@ export class ResolutionDagWalker {
     job: ResolutionJob,
   ): Promise<void> {
     try {
-      await recordRegressionBisections(this.deps.regressionBisector, behaviorResult, job);
+      await recordRegressionBisections(
+        this.deps.regressionBisector,
+        behaviorResult,
+        job,
+        this.deps.behaviorQuarantineReader,
+      );
     } catch (error) {
       log.warn("post-merge regression bisection failed; diagnostic only", { resolutionJobId: job.id }, error);
     }

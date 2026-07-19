@@ -20,6 +20,7 @@
 // there is NO wall-clock deadline / iteration cap (timeout-eradication doctrine).
 
 import type { BehaviorVerdictOutcome } from "../../contracts/runtimeVerificationAdapters.js";
+import type { BehaviorQuarantineReader } from "../acceptance/behaviorQuarantineGovernance.js";
 
 /** A deployed candidate release the bisection re-proves the failing behavior against. */
 export interface CandidateRelease {
@@ -224,6 +225,11 @@ export class RegressionBisector {
  * (`failed_product`/`failed_visual`), run a bisection bound to the failing release. Every
  * other verdict (passed / inconclusive / contract) is left alone. A no-op when no bisector is
  * wired or the settled job carries no release binding.
+ *
+ * rv-17: a QUARANTINED behavior is NEVER used to name a culprit. A flaky behavior's "regression"
+ * is non-deterministic — bisecting it would re-prove flaky probes and could scapegoat a healthy
+ * release, exactly the anti-scapegoat failure rv-16 exists to avoid. When a quarantine reader is
+ * wired, a quarantined behavior's regressed verdict is skipped (no bisection produced).
  */
 export async function recordRegressionBisections(
   bisector: Pick<RegressionBisector, "bisect"> | undefined,
@@ -238,12 +244,20 @@ export async function recordRegressionBisections(
       }
     | undefined,
   job: { readonly orgId: string; readonly projectId: string; readonly releaseInstanceId?: string },
+  quarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantined">,
 ): Promise<readonly BisectionResult[]> {
   if (bisector === undefined || result === undefined || result.decision !== "recorded") return [];
   if (job.releaseInstanceId === undefined) return [];
   const results: BisectionResult[] = [];
   for (const verdict of result.verdicts) {
     if (classifyProbe(verdict.outcome) !== "regressed") continue;
+    // A quarantined (flaky) behavior is never bisected — it cannot name a culprit.
+    if (
+      quarantineReader !== undefined &&
+      (await quarantineReader.isQuarantined({ orgId: job.orgId, projectId: job.projectId }, verdict.behaviorRevisionId))
+    ) {
+      continue;
+    }
     results.push(
       await bisector.bisect({
         orgId: job.orgId,
