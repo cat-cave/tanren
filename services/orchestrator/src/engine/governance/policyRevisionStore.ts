@@ -259,6 +259,22 @@ export async function getPolicyRevision(
   return decodeRevision(row);
 }
 
+export async function listPolicyRevisions(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<PolicyRevision[]> {
+  const result = await client.query(
+    `SELECT id, project_id, revision_number, schema_version, source_document, compiled_ast,
+            policy_hash, parent_revision_id, created_by, created_at::text
+       FROM governance_policy_revisions
+      WHERE org_id = $1 AND project_id = $2
+      ORDER BY revision_number, id`,
+    [orgId, projectId],
+  );
+  return result.rows.map(decodeRevision);
+}
+
 export async function findPolicyRevisionByHash(
   client: QueryClient,
   orgId: string,
