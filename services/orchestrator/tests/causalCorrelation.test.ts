@@ -33,6 +33,19 @@ describe("rv-12 causal-correlation core", () => {
     expect(compareCursor("5", "5")).toBe(0);
   });
 
+  it("compareCursor treats numerically-equal spellings as EQUAL (fail-closed boundary)", () => {
+    // Two spellings of the same instant must compare 0, never ±1 — otherwise a
+    // boundary effect leaks into the window. Regression pin for #35.
+    expect(compareCursor("1000", "1e3")).toBe(0);
+    expect(compareCursor("1e3", "1000")).toBe(0);
+    expect(compareCursor("2000", "02000")).toBe(0);
+    expect(compareCursor("02000", "2000")).toBe(0);
+    expect(compareCursor("1000", "1000.0")).toBe(0);
+    // Non-finite cursors still fall back to a stable lexicographic order.
+    expect(compareCursor("aaa", "aaa")).toBe(0);
+    expect(compareCursor("aaa", "aab")).toBe(-1);
+  });
+
   it("effectCursor prefers the provider cursor and falls back to append time", () => {
     expect(effectCursor(effect({ cursor: "3000" }))).toBe("3000");
     expect(effectCursor(effect({ createdAt: new Date(1234) }))).toBe("1234");
@@ -84,6 +97,46 @@ describe("rv-12 causal-correlation core", () => {
       requireCorrelationId: false,
     });
     expect(correlated.map((e) => e.observationId)).toEqual(["in"]);
+  });
+
+  it("DECISIVE: an effect at the EXACT cause instant is NOT correlated (strict-after)", () => {
+    // firedAt "1000"; an effect whose cursor is a different spelling of 1000 is at
+    // the cause instant, not strictly after — it must be excluded. Without the
+    // compareCursor numeric-equality fix this leaks in (over-attribution). #35.
+    const correlated = correlateEffects({
+      cause: { causeId: "c1", firedAtCursor: "1000" },
+      siblingFiredCursors: [],
+      effects: [effect({ cursor: "1e3", observationId: "at-cause" })],
+      requireCorrelationId: false,
+    });
+    expect(correlated).toHaveLength(0);
+  });
+
+  it("DECISIVE: an effect at the EXACT next-sibling instant belongs to the later cause", () => {
+    // Next sibling fired at "2000"; an effect at a different spelling of 2000 is at
+    // the sibling boundary ⇒ it is the sibling's, not this cause's. Excluded. #35.
+    const correlated = correlateEffects({
+      cause: { causeId: "c1", firedAtCursor: "1000" },
+      siblingFiredCursors: ["2000"],
+      effects: [
+        effect({ cursor: "02000", observationId: "at-sibling" }),
+        effect({ cursor: "1500", observationId: "in" }),
+      ],
+      requireCorrelationId: false,
+    });
+    expect(correlated.map((e) => e.observationId)).toEqual(["in"]);
+  });
+
+  it("requireCorrelationId=false correlates by WINDOW alone (no id demanded)", () => {
+    // An in-window effect with NO trigger id still counts when id-correlation is
+    // not required — the window (cause..next-sibling) is the sole gate.
+    const correlated = correlateEffects({
+      cause: { causeId: "c1", firedAtCursor: "1000" },
+      siblingFiredCursors: ["3000"],
+      effects: [effect({ cursor: "1500", observationId: "win" })],
+      requireCorrelationId: false,
+    });
+    expect(correlated.map((e) => e.observationId)).toEqual(["win"]);
   });
 
   it("an observed-absence (classification missing) is never an occurrence", () => {

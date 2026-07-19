@@ -66,11 +66,19 @@ export interface CauseSpec {
  * lexicographic compare. Provider cursors are opaque strings (Slack `ts`,
  * epoch-ms, monotonic counters) — numeric-first keeps "9" < "10" correct while
  * still totally ordering non-numeric cursors.
+ *
+ * When both parse finite, numeric equality is DECISIVE: two spellings of the same
+ * instant ("1000" / "1e3" / "01000") compare EQUAL, never ±1. This is a fail-closed
+ * boundary guarantee — {@link correlateEffects} excludes an effect whose cursor
+ * equals the cause's fired-at (strict-after) or equals the next sibling's fired-at
+ * (belongs to that later cause). A stray non-zero at a numerically-equal boundary
+ * would leak such an effect into the window (over-attribution); returning 0 keeps
+ * the exclusion airtight regardless of the provider's string formatting.
  */
 export function compareCursor(a: string, b: string): number {
   const na = Number(a);
   const nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na < nb ? -1 : 1;
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na < nb ? -1 : na > nb ? 1 : 0;
   if (a === b) return 0;
   return a < b ? -1 : 1;
 }
