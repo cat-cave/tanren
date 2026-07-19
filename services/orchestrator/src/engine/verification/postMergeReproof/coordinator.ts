@@ -1,3 +1,4 @@
+// cspell:ignore hashtextextended
 // rv-19 — post-merge production re-proof + rollback hook. AFTER a fix merges and
 // deploy-on-merge lands a NEW live production release, the resolution production
 // stage (bh-10 `ProductionSymptomStage`) RE-PROVES the previously-failing symptom
@@ -67,6 +68,11 @@ export class PostMergeReproofCoordinator {
 
   public async settle(input: SettleReproofInput): Promise<ReproofDeployDecision> {
     return this.withOrgScope(input.orgId, async (client) => {
+      // Serialize the WHOLE decide+act (alreadyDecided → promote/rollback) on the same
+      // `org:project:production` advisory-xact lock `revertLiveToPrior` uses, so concurrent
+      // settles for the same project can never each emit a `deployment.promoted` (or race a
+      // double rollback): the loser blocks until the winner commits, then reads its event.
+      await this.lockProduction(client, input.orgId, input.projectId);
       const release = await ReleaseInstancesStore.getById(client, input.orgId, input.releaseInstanceId);
       if (release === undefined) {
         throw new PostMergeReproofBindingError(`re-proof release ${input.releaseInstanceId} not found`);
@@ -142,6 +148,28 @@ export class PostMergeReproofCoordinator {
     return "rolled_back";
   }
 
+  /**
+   * Whether this release's re-proof deploy outcome was ALREADY applied (a prior terminal
+   * `deployment.promoted`/`deployment.rolled_back`). Read under the release's org scope so
+   * a crash-replay of the settled resolution job can short-circuit BEFORE the production
+   * stage re-runs its live-binding against a release this coordinator already demoted.
+   */
+  public async alreadyApplied(input: {
+    readonly orgId: string;
+    readonly projectId: string;
+    readonly releaseInstanceId: string;
+  }): Promise<boolean> {
+    return this.withOrgScope(input.orgId, async (client) => {
+      const release = await ReleaseInstancesStore.getById(client, input.orgId, input.releaseInstanceId);
+      if (release === undefined || release.projectId !== input.projectId) return false;
+      return this.alreadyDecided(client, input.orgId, input.projectId, release.deploymentId);
+    });
+  }
+
+  private async lockProduction(client: QueryClient, orgId: string, projectId: string): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${orgId}:${projectId}:production`]);
+  }
+
   private async alreadyDecided(
     client: QueryClient,
     orgId: string,
@@ -182,5 +210,24 @@ export async function applyReproofDeployOutcome(
     projectId: job.projectId,
     releaseInstanceId: job.releaseInstanceId,
     result: result as ProductionResolutionStageResult,
+  });
+}
+
+/**
+ * Idempotent crash-replay guard for the LIVE settlement paths (walker + retry route). A
+ * production job whose deploy re-proof was ALREADY applied (promoted/rolled_back) must NOT
+ * re-run the production stage: after a rollback the bound release is demoted, so bh-10's
+ * `requireLiveBinding` would throw and the recovered lease would loop forever. Returns true
+ * so the caller settles the job as completed exactly once instead of re-running the stage.
+ */
+export async function reproofAlreadySettled(
+  coordinator: Pick<PostMergeReproofCoordinator, "alreadyApplied"> | undefined,
+  job: Pick<ResolutionJob, "orgId" | "projectId" | "stage" | "releaseInstanceId">,
+): Promise<boolean> {
+  if (job.stage !== "production" || coordinator === undefined || job.releaseInstanceId === undefined) return false;
+  return coordinator.alreadyApplied({
+    orgId: job.orgId,
+    projectId: job.projectId,
+    releaseInstanceId: job.releaseInstanceId,
   });
 }

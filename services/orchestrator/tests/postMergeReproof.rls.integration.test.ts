@@ -5,161 +5,56 @@
 // substrate. Gated on TANREN_RLS_DB_TEST like every peer *.rls.integration test; runs
 // in the `smoke-rls-post-merge-reproof` recipe rather than the DB-less unit phase.
 import { migrate, runWithOrgScope } from "@tanren/db";
+import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ReleaseInstancesStore } from "../src/engine/repositories/releaseInstances.js";
+import {
+  InvalidReleaseStateTransitionError,
+  ReleaseInstancesStore,
+} from "../src/engine/repositories/releaseInstances.js";
 import {
   PostMergeReproofCoordinator,
+  reproofAlreadySettled,
   type SettleReproofInput,
 } from "../src/engine/verification/postMergeReproof/coordinator.js";
-import type { ProductionResolutionStageResult } from "../src/engine/contracts/resolutionStage.js";
+import type { ResolutionStage, ResolutionStageKind } from "../src/engine/contracts/resolutionStage.js";
+import type { ActorContext } from "../src/auth/schemas.js";
+import type { ActorContextEnv } from "../src/middleware/auth.js";
+import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
+import {
+  ADMIN_URL,
+  APP_USER,
+  connectionUrl,
+  deployEventCount,
+  DIGEST_B,
+  DIGEST_NEW,
+  DIGEST_PRIOR,
+  GIT_SHA,
+  INCONCLUSIVE,
+  latestLiveId,
+  ORG_A,
+  ORG_B,
+  PRODUCT_FAILURE,
+  PRODUCT_RESOLVED,
+  PROJECT_A,
+  PROJECT_B,
+  reproofDatabaseName,
+  reproofJob,
+  seedOrg,
+  seedRelease,
+  stateOf,
+} from "./helpers/reproofReleaseHarness.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
-const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
-const APP_USER = "tanren_app";
-const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
 
-const ORG_A = "org_reproof_rls_a";
-const ORG_B = "org_reproof_rls_b";
-const PROJECT_A = "project_reproof_rls_a";
-const PROJECT_B = "project_reproof_rls_b";
-const PROVIDER = "deploy.fixture";
-const APP_ID = "app_reproof";
-const DIGEST_PRIOR = `sha256:${"a".repeat(64)}`;
-const DIGEST_NEW = `sha256:${"b".repeat(64)}`;
-const DIGEST_B = `sha256:${"c".repeat(64)}`;
-const GIT_SHA = "a".repeat(40);
-
-function databaseName(): string {
-  return `tanren_reproof_rls_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-}
-function connectionUrl(database: string, appRole = false): string {
-  const parsed = new URL(ADMIN_URL);
-  parsed.pathname = `/${database}`;
-  if (appRole) {
-    parsed.username = APP_USER;
-    parsed.password = APP_PASSWORD;
-  }
-  return parsed.toString();
-}
-
-const PRODUCT_RESOLVED: ProductionResolutionStageResult = {
-  proofGrade: "active_causal",
-  verificationRunId: "vrun_resolved",
-  assertionIds: ["a1"],
-  evidenceRefs: ["e1"],
-  outcome: "passed",
-  classification: "product_resolved",
-};
-const PRODUCT_FAILURE: ProductionResolutionStageResult = {
-  proofGrade: "active_causal",
-  verificationRunId: "vrun_failure",
-  assertionIds: ["a1"],
-  evidenceRefs: ["e1"],
-  outcome: "failed",
-  classification: "product_failure",
-};
-const INCONCLUSIVE: ProductionResolutionStageResult = {
-  proofGrade: "active_causal",
-  verificationRunId: "vrun_inconclusive",
-  assertionIds: [],
-  evidenceRefs: [],
-  outcome: "inconclusive",
-  classification: "infra_failure",
-};
-
-async function seedOrg(owner: Pool, orgId: string, projectId: string, digests: readonly string[]): Promise<void> {
-  await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
-    [orgId],
-  );
-  await owner.query(
-    `INSERT INTO projects (project_id, name, repo_url, org_id, config)
-     VALUES ($1, $1, 'https://example.com/repo.git', $2, '{"version":1}'::jsonb)`,
-    [projectId, orgId],
-  );
-  for (const digest of digests) {
-    await owner.query(
-      `INSERT INTO cas_artifacts (org_id, digest, byte_size, media_type, storage_backend, inline_bytes)
-       VALUES ($1, $2, 1, 'application/octet-stream', 'inline_pg', '\\x00'::bytea)`,
-      [orgId, digest],
-    );
-  }
-}
-
-async function seedRelease(
-  owner: Pool,
-  input: {
-    orgId: string;
-    projectId: string;
-    id: string;
-    digest: string;
-    state: string;
-    previous: string | null;
-    sourceRef?: string;
-  },
-): Promise<void> {
-  await owner.query(
-    `INSERT INTO release_instances
-       (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref, artifact_digest,
-        provider_checksum, integration_node_id, url, previous_release_instance_id, state)
-     VALUES ($1, $2, $3, $4, $5, 'production', $6, $7, $8, NULL, $9, $10, $11, $12)`,
-    [
-      input.orgId,
-      input.id,
-      input.projectId,
-      PROVIDER,
-      APP_ID,
-      `deployment-${input.id}`,
-      input.sourceRef ?? "main",
-      input.digest,
-      `integration-node-${input.id}`,
-      `https://example.invalid/${input.id}`,
-      input.previous,
-      input.state,
-    ],
-  );
-}
-
-async function latestLiveId(app: Pool, orgId: string, projectId: string): Promise<string | undefined> {
-  return runWithOrgScope(app, orgId, async (client) => {
-    const live = await ReleaseInstancesStore.latestLive(client, orgId, projectId, PROVIDER, APP_ID);
-    return live?.releaseInstanceId;
-  });
-}
-async function stateOf(app: Pool, orgId: string, id: string): Promise<string | undefined> {
-  return runWithOrgScope(app, orgId, async (client) => {
-    const row = await ReleaseInstancesStore.getById(client, orgId, id);
-    return row?.state;
-  });
-}
-async function rolledBackCount(app: Pool, orgId: string, projectId: string, deploymentId: string): Promise<number> {
-  return runWithOrgScope(app, orgId, async (client) => {
-    const rows = await client.query<{ n: string }>(
-      `SELECT count(*) AS n FROM events
-        WHERE org_id = $1 AND project_id = $2 AND event_type = 'deployment.rolled_back'
-          AND payload ->> 'deploymentId' = $3`,
-      [orgId, projectId, deploymentId],
-    );
-    return Number(rows.rows[0]?.n ?? "0");
-  });
-}
-async function promotedCount(app: Pool, orgId: string, projectId: string, deploymentId: string): Promise<number> {
-  return runWithOrgScope(app, orgId, async (client) => {
-    const rows = await client.query<{ n: string }>(
-      `SELECT count(*) AS n FROM events
-        WHERE org_id = $1 AND project_id = $2 AND event_type = 'deployment.promoted'
-          AND payload ->> 'deploymentId' = $3`,
-      [orgId, projectId, deploymentId],
-    );
-    return Number(rows.rows[0]?.n ?? "0");
-  });
-}
+const rolledBackCount = (app: Pool, orgId: string, projectId: string, deploymentId: string) =>
+  deployEventCount(app, "deployment.rolled_back", orgId, projectId, deploymentId);
+const promotedCount = (app: Pool, orgId: string, projectId: string, deploymentId: string) =>
+  deployEventCount(app, "deployment.promoted", orgId, projectId, deploymentId);
 
 describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", () => {
-  const database = databaseName();
+  const database = reproofDatabaseName();
   let owner: Pool;
   let app: Pool;
   let coordinator: PostMergeReproofCoordinator;
@@ -198,7 +93,6 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
   });
 
   it("DECISIVE — a FAILED re-proof rolls the live pointer back to the prior known-good release", async () => {
-    // Prior good P was superseded when the (since-broken) Q went live carrying previous=P.
     await seedRelease(owner, {
       orgId: ORG_A,
       projectId: PROJECT_A,
@@ -301,11 +195,11 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-np_live")).toBe(0);
   });
 
-  it("idempotent — re-running a rollback after a crash re-decides exactly once", async () => {
+  it("DECISIVE (retry-route-rollback) — a product_failure via POST .../retry-verification rolls the live pointer back", async () => {
     await seedRelease(owner, {
       orgId: ORG_A,
       projectId: PROJECT_A,
-      id: "idem_prior",
+      id: "rr_prior",
       digest: DIGEST_PRIOR,
       state: "superseded",
       previous: null,
@@ -313,27 +207,135 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     await seedRelease(owner, {
       orgId: ORG_A,
       projectId: PROJECT_A,
-      id: "idem_broken",
+      id: "rr_broken",
       digest: DIGEST_NEW,
       state: "live",
-      previous: "idem_prior",
+      previous: "rr_prior",
     });
-    const first = await settle({
+    const routeActor: ActorContext = {
+      userId: "operator",
+      orgId: ORG_A,
+      projectId: null,
+      scopes: ["org:admin"],
+      source: "session",
+    };
+    const httpApp = new Hono<ActorContextEnv>();
+    httpApp.use("*", async (c, next) => {
+      c.set("actor", routeActor);
+      await next();
+    });
+    httpApp.route(
+      "/v1/orgs",
+      createProductionVerificationRoutes({
+        // The DEFAULT reproofCoordinator (real, over this pool) settles the deploy side,
+        // proving the manual retry path cannot complete a failure with the release left live.
+        pool: app,
+        contracts: {
+          get: () => Promise.resolve({ id: "contract_a", projectId: PROJECT_A, issueLoopId: "loop_a" } as never),
+        },
+        enqueue: { enqueue: (input) => Promise.resolve({ id: input.id, created: true }) },
+        jobId: () => "rjob_route_rb",
+        executionLeaseOwner: () => "route_lease",
+        authority: {
+          authorize: () =>
+            Promise.resolve({
+              id: "rdec",
+              decision: "authorized",
+              inputSnapshotHash: `sha256:${"a".repeat(64)}`,
+              reasons: [],
+              created: true,
+            }),
+        },
+        jobs: {
+          claimById: (i) =>
+            Promise.resolve(reproofJob("rr_broken", { id: i.id, orgId: i.orgId, leaseOwner: i.leaseOwner })),
+          verifyActiveLease: (i) =>
+            Promise.resolve(reproofJob("rr_broken", { id: i.id, orgId: i.orgId, leaseOwner: i.leaseOwner })),
+          complete: () => Promise.resolve(true),
+          release: () => Promise.resolve(true),
+        },
+        stages: new Map<ResolutionStageKind, ResolutionStage>([
+          ["production", { kind: "production", run: () => Promise.resolve(PRODUCT_FAILURE) }],
+        ]),
+      }),
+    );
+    const res = await httpApp.request(`/v1/orgs/${ORG_A}/projects/${PROJECT_A}/issue-loops/loop_a/retry-verification`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contractId: "contract_a", releaseInstanceId: "rr_broken", idempotencyKey: "op-retry-rb" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await latestLiveId(app, ORG_A, PROJECT_A)).toBe("rr_prior");
+    expect(await stateOf(app, ORG_A, "rr_broken")).toBe("superseded");
+    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-rr_broken")).toBe(1);
+  });
+
+  it("crash-replay-idempotent — after a rollback the settled job short-circuits, never re-running the stage or double-rolling", async () => {
+    await seedRelease(owner, {
       orgId: ORG_A,
       projectId: PROJECT_A,
-      releaseInstanceId: "idem_broken",
-      result: PRODUCT_FAILURE,
+      id: "cr_prior",
+      digest: DIGEST_PRIOR,
+      state: "superseded",
+      previous: null,
     });
-    expect(first).toBe("rolled_back");
-    const second = await settle({
+    await seedRelease(owner, {
       orgId: ORG_A,
       projectId: PROJECT_A,
-      releaseInstanceId: "idem_broken",
-      result: PRODUCT_FAILURE,
+      id: "cr_broken",
+      digest: DIGEST_NEW,
+      state: "live",
+      previous: "cr_prior",
     });
-    expect(second).toBe("noop");
-    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-idem_broken")).toBe(1);
-    expect(await latestLiveId(app, ORG_A, PROJECT_A)).toBe("idem_prior");
+    expect(
+      await settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "cr_broken", result: PRODUCT_FAILURE }),
+    ).toBe("rolled_back");
+    // The bound release is now demoted — a recovered job MUST short-circuit (the walker skips
+    // the stage) rather than re-run bh-10's live-binding (which would throw and loop forever).
+    expect(await reproofAlreadySettled(coordinator, reproofJob("cr_broken"))).toBe(true);
+    // And a direct re-settle re-decides to a no-op exactly once (no throw, no double-rollback).
+    expect(
+      await settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "cr_broken", result: PRODUCT_FAILURE }),
+    ).toBe("noop");
+    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-cr_broken")).toBe(1);
+    expect(await latestLiveId(app, ORG_A, PROJECT_A)).toBe("cr_prior");
+  });
+
+  it("concurrent-single-promote — concurrent product_resolved settles emit exactly ONE deployment.promoted", async () => {
+    await seedRelease(owner, {
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "cp_live",
+      digest: DIGEST_NEW,
+      state: "live",
+      previous: null,
+      sourceRef: GIT_SHA,
+    });
+    const decisions = await Promise.all([
+      settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "cp_live", result: PRODUCT_RESOLVED }),
+      settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "cp_live", result: PRODUCT_RESOLVED }),
+    ]);
+    // The advisory lock serializes decide+act: exactly one promotes, the other reads the
+    // committed event and no-ops — a single deployment.promoted regardless of the race.
+    expect([...decisions].sort()).toEqual(["noop", "promoted"]);
+    expect(await promotedCount(app, ORG_A, PROJECT_A, "deployment-cp_live")).toBe(1);
+  });
+
+  it("non-prior-resurrect-rejected — a raw superseded→live transition of an arbitrary release is rejected at the store", async () => {
+    await seedRelease(owner, {
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "nr_super",
+      digest: DIGEST_PRIOR,
+      state: "superseded",
+      previous: null,
+    });
+    await expect(
+      runWithOrgScope(app, ORG_A, (client) =>
+        ReleaseInstancesStore.transition(client, { orgId: ORG_A, releaseInstanceId: "nr_super", state: "live" }),
+      ),
+    ).rejects.toBeInstanceOf(InvalidReleaseStateTransitionError);
+    expect(await stateOf(app, ORG_A, "nr_super")).toBe("superseded");
   });
 
   it("org isolation — another org sees zero of this org's rollback records and release rows", async () => {
@@ -345,12 +347,10 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
       state: "live",
       previous: null,
     });
-    // Org B's scoped read sees zero of org A's deployment.rolled_back events.
     const crossEvents = await runWithOrgScope(app, ORG_B, (client) =>
       client.query("SELECT id FROM events WHERE event_type = 'deployment.rolled_back' AND org_id = $1", [ORG_A]),
     );
     expect(crossEvents.rowCount).toBe(0);
-    // And zero of org A's release rows.
     const crossReleases = await runWithOrgScope(app, ORG_B, (client) =>
       client.query("SELECT id FROM release_instances WHERE org_id = $1", [ORG_A]),
     );

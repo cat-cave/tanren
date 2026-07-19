@@ -156,7 +156,7 @@ const VALID_TRANSITIONS: Record<ReleaseState, readonly ReleaseState[]> = {
   preview: ["preview", "promoting", "torn_down", "failed"],
   promoting: ["promoting", "live", "failed"],
   live: ["live", "superseded", "rolled_back", "failed"],
-  superseded: ["superseded", "rolled_back", "live"],
+  superseded: ["superseded", "rolled_back"],
   rolled_back: ["rolled_back"],
   torn_down: ["torn_down"],
   failed: ["failed"],

@@ -7,6 +7,7 @@ import { authorizeProductionResolution } from "./productionResolutionAuthorizati
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
 import {
   applyReproofDeployOutcome,
+  reproofAlreadySettled,
   type PostMergeReproofCoordinator,
 } from "../verification/postMergeReproof/coordinator.js";
 
@@ -137,6 +138,18 @@ export class ResolutionDagWalker {
     const stage = this.deps.stages.get(job.stage);
     if (stage === undefined) {
       await this.releaseAfterStageFailure(job, claim, new Error(`resolution stage ${job.stage} is not registered`));
+      return;
+    }
+
+    // rv-19 idempotent crash-replay: a recovered production job whose deploy re-proof was
+    // already applied (promoted/rolled_back) must NOT re-run the stage — after a rollback
+    // its bound release is demoted, so bh-10's live-binding would throw and loop forever.
+    // Settle it completed exactly once under the held lease and skip the stage.
+    if (await reproofAlreadySettled(this.deps.reproofCoordinator, job)) {
+      const completed = await this.deps.store.complete({ orgId: job.orgId, id: job.id, leaseOwner: job.leaseOwner });
+      if (!completed) {
+        throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before idempotent settlement`);
+      }
       return;
     }
 
