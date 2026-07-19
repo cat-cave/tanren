@@ -47,6 +47,7 @@ function landInput(host: InMemoryCodeHost, findings: ReadonlyArray<Finding>, pos
     gateConfigHash: "gc",
     policyVersion: "pv",
     gatedHeadSha: "sha-feat",
+    behaviorGate: { kind: "not_applicable" },
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,

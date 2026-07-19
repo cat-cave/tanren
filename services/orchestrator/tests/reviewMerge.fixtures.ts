@@ -217,8 +217,8 @@ export function authorityBundle(
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
-    // The gate verdict was for the landed head (the host's PR-head-branch sha).
     gatedHeadSha: AUTHORITY_HEAD_SHA,
+    behaviorGate: { kind: "not_applicable" },
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

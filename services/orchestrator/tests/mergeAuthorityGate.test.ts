@@ -17,6 +17,7 @@ import {
   reviewVerdictFrom,
 } from "../src/engine/merge/mergeAuthorityInputs.js";
 import type { AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
+import type { BehaviorLandGate } from "../src/engine/merge/behaviorLandGate.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 
@@ -78,6 +79,9 @@ function gateInput(host: InMemoryCodeHost) {
     // Human/auto path (no forge receipt) unless a TOCTOU test overrides.
     reviewedHeadSha: undefined,
     requiresExactReviewReceipt: false,
+    // Default: no pre-merge behavior verification was required (most runs) — the behavior
+    // section is not-applicable and NEVER blocks. Behavior tests below override this.
+    behaviorGate: { kind: "not_applicable" as const },
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
@@ -216,5 +220,64 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     const disposition = await authorizeAndLand(input);
     expect(disposition).toMatchObject({ kind: "blocked", reasons: [expect.stringContaining("no complete")] });
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+});
+
+describe("authorizeAndLand — the rv-gate runtime BEHAVIOR verdict gates the REAL land decision", () => {
+  async function landWithBehavior(behaviorGate: BehaviorLandGate) {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    // Every OTHER signal clears (gate passed, review approved, clean, budget/demo/hitl ok):
+    // the behavior verdict is the ONLY variable, so the land decision changes iff the
+    // behavior gate does — proving REAL production consumption, not a library-only function.
+    const disposition = await authorizeAndLand({ ...gateInput(host), behaviorGate });
+    return { host, disposition };
+  }
+
+  it("REQUIRED + FAILING behavior (failed_product) → NOT authorized (blocked); main untouched", async () => {
+    const { host, disposition } = await landWithBehavior({
+      kind: "failed",
+      behaviorRevisionId: "br-checkout",
+      outcome: "failed_product",
+    });
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/runtimeBehavior.*failed_product/u);
+    // A failing required behavior NEVER lands — main stays put.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("REQUIRED + failed_visual → NOT authorized (blocked)", async () => {
+    const { disposition } = await landWithBehavior({
+      kind: "failed",
+      behaviorRevisionId: "br-render",
+      outcome: "failed_visual",
+    });
+    expect(disposition.kind).toBe("blocked");
+  });
+
+  it("REQUIRED but INCONCLUSIVE/absent verdict → NOT authorized (fail-closed; inconclusive ≠ passed)", async () => {
+    const { host, disposition } = await landWithBehavior({
+      kind: "inconclusive",
+      reason: "pre-merge behavior verification is 'running', not a completed pass",
+    });
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/runtimeBehavior.*inconclusive ≠ passed/u);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("REQUIRED + PASSING behavior (+ CI passing) → authorized; main advances to the PR head", async () => {
+    const { host, disposition } = await landWithBehavior({ kind: "passed", passedBlockingCount: 2 });
+    expect(disposition.kind).toBe("merged");
+    // The land actually happened only because the behavior verdict was a decisive pass.
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+  });
+
+  it("NO behavior requirement (not_applicable) → authorized on CI alone (non-behavior runs still merge)", async () => {
+    const { host, disposition } = await landWithBehavior({ kind: "not_applicable" });
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });
 });

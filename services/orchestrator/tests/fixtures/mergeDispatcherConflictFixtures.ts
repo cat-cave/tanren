@@ -136,6 +136,7 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
     budget: { ceilingUsd: undefined, spentUsd: 0 },
     demo: "not_required",
     hitlSignoff: "not_required",
+    behaviorGate: { kind: "not_applicable" },
   };
 }
 

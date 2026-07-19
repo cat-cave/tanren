@@ -18,6 +18,7 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import { recordEffectivePolicySnapshot } from "../governance/effectivePolicySnapshotStore.js";
 import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
+import { resolveLandTimeBehaviorGate, type BehaviorLandGate } from "./behaviorLandGate.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
@@ -108,6 +109,12 @@ export interface BuildMergeAuthorityBundleInput {
   demo: RawDemoVerification;
   /** The HITL signoff (explicit; `not_required` when no HITL stage is configured). */
   hitlSignoff: RawHitlSignoff;
+  /**
+   * rv-gate — the run's runtime BEHAVIOR-acceptance outcome, read fresh at land time. Most
+   * runs resolve `not_applicable` (no pre-merge behavior verification required) and are never
+   * blocked by it; a required-and-failing/inconclusive outcome fails closed in the gate.
+   */
+  behaviorGate: BehaviorLandGate;
 }
 
 /**
@@ -198,6 +205,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     budget: rawBudgetFrom(input.budgetState),
     demo: input.demo,
     hitlSignoff: input.hitlSignoff,
+    behaviorGate: input.behaviorGate,
   };
 }
 
@@ -252,6 +260,10 @@ export async function buildBundleForMergeStage(
   // The REAL audit findings (§4) — the live audit gate at merge time. Fail-closed: a
   // missing/unreadable audit record resolves to a synthetic P0 (blocks any posture).
   const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
+  // rv-gate — the run's runtime BEHAVIOR outcome, read fresh at land time. `not_applicable`
+  // for a run with no pre-merge behavior verification (most runs) — never blocks it; a
+  // required-and-failing/inconclusive behavior verdict fails closed in `authorizeAndLand`.
+  const behaviorGate = await resolveLandTimeBehaviorGate(pool, row.org_id, context.runId);
   // Build the land `CodeHost` ONCE over the run's shared HTTP client + token; it both lands
   // the authorized commit AND (gv-3) resolves the candidate's `.tanren/ci.yml` for the real
   // gate-config hash — one host, one config identity shared by land + proof key.
@@ -302,5 +314,7 @@ export async function buildBundleForMergeStage(
     // No HITL stage on the autonomous tiers (the human decision is the `human` review
     // tier, carried via the review verdict). Explicit `not_required`, never omitted.
     hitlSignoff: "not_required",
+    // rv-gate — the fresh behavior-acceptance outcome (fail-closed when required).
+    behaviorGate,
   });
 }
