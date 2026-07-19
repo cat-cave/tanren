@@ -247,6 +247,8 @@ export function neatlinkAgentAnswer(): DesignAgentAnswer {
     intent: "shorten + track links with zero ceremony — instant, legible, calm",
     principles: ["instant feedback", "two accent colors max"],
     constraints: ["WCAG AA"],
+    // A public consumer link tool genuinely calls for AA (inferred from the intent).
+    accessibilityPosture: { standard: "wcag-2.2-aa", notes: "public consumer surface — AA baseline" },
     dimensions: [
       {
         key: "tokens",

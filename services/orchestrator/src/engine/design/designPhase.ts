@@ -136,6 +136,10 @@ export function designContractFromAnswer(input: {
     intent: answer.intent,
     principles: answer.principles,
     constraints: answer.constraints,
+    // The REAL a11y posture the agent inferred from the product intent (never a
+    // hardcoded default) — persisted on the contract so ds-4's render gate reads
+    // and ENFORCES it (a WCAG level renders + judges; "none" stays advisory).
+    accessibilityPosture: answer.accessibilityPosture,
     personaRefs: [...contractPersonaRefs],
     behaviorRefs: [...coveredBehaviorIds],
     dimensions: answer.dimensions.map((dimension) => ({

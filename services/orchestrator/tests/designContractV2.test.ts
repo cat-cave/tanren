@@ -48,9 +48,25 @@ describe("DesignContractV2", () => {
     // V2 additions default to their empty-but-valid state.
     expect(v2.desiredSurfaces).toEqual([]);
     expect(v2.targetProfiles).toEqual([]);
+    // A V1 with NO declared a11y bar carries an honest advisory `none` (the V1 default),
+    // NOT a value hardcoded at migration time.
     expect(v2.accessibilityPosture).toEqual({ standard: "none", notes: "" });
     expect(v2.exportRequirements).toEqual([]);
     expect(v2.acceptanceIntent).toBe("");
+  });
+
+  it("CARRIES a real V1 accessibility posture through the migration (not re-defaulted to none)", () => {
+    // The design agent inferred a real WCAG bar and it was persisted on V1 — the
+    // migration must surface the REAL value so the ds-4 render gate enforces it.
+    const v1WithPosture = normalizeDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "a public link console",
+      intent: "shorten + track links",
+      accessibilityPosture: { standard: "wcag-2.2-aa", notes: "public consumer surface" },
+    });
+    const v2 = migrateDesignContractV1ToV2(v1WithPosture);
+    expect(v2.accessibilityPosture).toEqual({ standard: "wcag-2.2-aa", notes: "public consumer surface" });
   });
 
   it("round-trips a full V2 contract through JSON identically", () => {
