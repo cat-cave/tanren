@@ -7,9 +7,10 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
-import type { AuthorizeLandInput, LandBindingEnvelope } from "../contracts/mergeAuthority.js";
+import type { AuthorizeLandInput, GateVerdict, LandBindingEnvelope } from "../contracts/mergeAuthority.js";
 import { serviceAuditActor } from "../events/schemas/audit.js";
 import { resolveLandTimeFindings, resolveLandTimeSignals } from "./landSignals.js";
+import { resolveLandTimeBehaviorGate, type BehaviorLandGate } from "./behaviorLandGate.js";
 import { reviewVerdictFrom } from "./mergeAuthorityInputs.js";
 import { batchArtifactDigest, batchProofRoot, type MemberFindingAttribution } from "./multiMemberAuthorityTypes.js";
 import { loadBatchDecisionEvidence, type PersistedBatchDecisionSignals } from "./multiMemberAuthorityEvidencePg.js";
@@ -25,6 +26,25 @@ export interface ProjectAuthorityRow {
 interface MemberSignals {
   readonly attribution: MemberFindingAttribution;
   readonly reviewVerdict: ReviewVerdict | undefined;
+  /** rv-gate — this member run's runtime behavior-acceptance outcome (fail-closed when required). */
+  readonly behaviorGate: BehaviorLandGate;
+}
+
+/**
+ * rv-gate (fix #2, MQ-2 batch land): fold every batch member's runtime behavior gate into the
+ * batch gate verdict. A batch lands the WHOLE node as one head, so ANY member with a required,
+ * non-passing behavior (failed OR inconclusive) must block the whole land — it maps the batch
+ * `gateVerdict` to `failed` so `authorizeLand` refuses to authorize (fail-closed). A member with
+ * a `not_applicable`/`passed` behavior gate never triggers it, so a batch of non-behavior members
+ * still lands on its persisted gate verdict. This is coarse-but-fail-closed by design (the frozen
+ * `AuthorizeLandInput` carries no behavior field); the single-run path attributes per-behavior.
+ */
+export function gateVerdictWithBehaviorGates(
+  persistedGateVerdict: GateVerdict,
+  behaviorGates: readonly BehaviorLandGate[],
+): GateVerdict {
+  const behaviorBlocks = behaviorGates.some((gate) => gate.kind === "failed" || gate.kind === "inconclusive");
+  return behaviorBlocks ? "failed" : persistedGateVerdict;
 }
 
 export interface GatheredMultiMemberAuthorityState {
@@ -48,13 +68,15 @@ export async function gatherMultiMemberAuthorityState(
   const config = migrateProjectConfig(project.project_config);
   const memberSignals = await Promise.all(
     input.binding.members.map(async (member): Promise<MemberSignals> => {
-      const [findings, signals] = await Promise.all([
+      const [findings, signals, behaviorGate] = await Promise.all([
         resolveLandTimeFindings(pool, orgId, member.runId),
         resolveLandTimeSignals(pool, orgId, member.runId),
+        resolveLandTimeBehaviorGate(pool, orgId, member.runId),
       ]);
       return {
         attribution: { specId: member.specId, runId: member.runId, findings },
         reviewVerdict: signals.reviewVerdict,
+        behaviorGate,
       };
     }),
   );
@@ -134,7 +156,12 @@ function decisionFromDurableState(
   const reviewVerdict = aggregateReview(signals.map((member) => member.reviewVerdict));
   return {
     subject: { kind: "integration_node", id: binding.nodeId },
-    gateVerdict: persisted.gateVerdict,
+    // rv-gate (fix #2): any member with a required, non-passing behavior forces the batch gate
+    // verdict to `failed` so the whole group land fails closed — never lands a bad behavior member.
+    gateVerdict: gateVerdictWithBehaviorGates(
+      persisted.gateVerdict,
+      signals.map((member) => member.behaviorGate),
+    ),
     findings,
     auditPosture,
     reviewVerdict: reviewVerdictFrom(reviewVerdict),

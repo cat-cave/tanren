@@ -83,7 +83,10 @@ export function evaluateBehaviorLandGate(
   runStatus: BehaviorRunStatus | undefined,
   verdicts: readonly BehaviorVerdictRow[],
 ): BehaviorLandGate {
-  // No pre-merge behavior verification run at all ⇒ behavior acceptance was not required.
+  // The ONLY not_applicable: NO pre-merge behavior verification run exists at all. Once a
+  // pre-merge run exists it IS the requirement signal — reaching any terminal state without a
+  // decisive blocking PASS fails closed, NEVER not_applicable (the audit's absent-when-required
+  // fail-open: a completed run with no blocking passing verdict must block, not fall through).
   if (runStatus === undefined) {
     return { kind: "not_applicable" };
   }
@@ -95,22 +98,28 @@ export function evaluateBehaviorLandGate(
       reason: `pre-merge behavior verification is '${runStatus}', not a completed pass`,
     };
   }
-  // Only BLOCKING, non-quarantined verdicts gate. Advisory verdicts never block; a
-  // `quarantined_fragment` verdict is excluded-from-green (not a pass, not a block).
-  const blocking = verdicts.filter(
-    (verdict) => verdict.gateEffect === "blocking" && verdict.flakeState !== "quarantined_fragment",
+
+  // The run REACHED 'completed' — it IS the requirement. From here the ONLY clear is a decisive
+  // blocking PASS; anything else fails closed.
+
+  // (fix #3) A decisive product/visual/contract FAILURE on a blocking behavior blocks
+  // REGARDLESS of flake_state — a self-asserted `quarantined_fragment` bit can NEVER launder a
+  // genuine failure into an exclusion (until rv-17's governance-checked quarantine reader lands,
+  // quarantine exclusion applies ONLY to the non-failure/pass side below).
+  const failure = verdicts.find(
+    (verdict) => verdict.gateEffect === "blocking" && DECISIVE_FAILURES.has(verdict.outcome),
   );
-  // Nothing enforceable (all advisory / all quarantined / none) ⇒ not_applicable ⇒ never
-  // blocks a run whose behaviors do not gate.
-  if (blocking.length === 0) {
-    return { kind: "not_applicable" };
-  }
-  // A decisive product failure on any blocking behavior fails closed (most actionable first).
-  const failure = blocking.find((verdict) => DECISIVE_FAILURES.has(verdict.outcome));
   if (failure !== undefined) {
     return { kind: "failed", behaviorRevisionId: failure.behaviorRevisionId, outcome: failure.outcome };
   }
-  // An inconclusive blocking verdict fails closed — inconclusive is NEVER a pass.
+
+  // Quarantine (flake_state) may only exclude NON-failure verdicts from the green tally — the
+  // decisive-failure block above already ignored the quarantine bit. Advisory verdicts never gate.
+  const blocking = verdicts.filter(
+    (verdict) => verdict.gateEffect === "blocking" && verdict.flakeState !== "quarantined_fragment",
+  );
+
+  // A blocking inconclusive verdict is not a pass ⇒ fail closed (inconclusive ≠ passed).
   const inconclusive = blocking.find((verdict) => INCONCLUSIVE_OUTCOMES.has(verdict.outcome));
   if (inconclusive !== undefined) {
     return {
@@ -120,11 +129,24 @@ export function evaluateBehaviorLandGate(
         `(not a decisive pass)`,
     };
   }
-  // Defensive: every remaining blocking verdict must be an explicit `passed`. Any other
-  // (unexpected) outcome fails closed rather than silently clearing.
-  if (blocking.every((verdict) => verdict.outcome === "passed")) {
-    return { kind: "passed", passedBlockingCount: blocking.length };
+
+  // (fix #1) The completed run MUST have produced at least one decisive blocking PASS. A completed
+  // run with NO blocking passing verdict (empty / all-advisory / all-quarantined) is NOT green —
+  // it fails closed as inconclusive, NEVER not_applicable (that was the absent-when-required
+  // fail-open). Every present blocking non-quarantined verdict is a `passed` here (a failure or an
+  // inconclusive verdict already returned above), so a non-empty set means a real, decisive pass.
+  const passing = blocking.filter((verdict) => verdict.outcome === "passed");
+  if (passing.length === 0) {
+    return {
+      kind: "inconclusive",
+      reason: "pre-merge behavior verification completed without a passing blocking behavior verdict",
+    };
   }
+  if (blocking.every((verdict) => verdict.outcome === "passed")) {
+    return { kind: "passed", passedBlockingCount: passing.length };
+  }
+  // Defensive dead branch: a blocking non-quarantined verdict that is neither failure,
+  // inconclusive, nor passed cannot exist (the outcome union is exhausted above), but fail closed.
   const stray = blocking.find((verdict) => verdict.outcome !== "passed");
   return {
     kind: "inconclusive",

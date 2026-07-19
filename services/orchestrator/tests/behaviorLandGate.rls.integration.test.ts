@@ -210,12 +210,30 @@ describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {
     expect((await resolveLandTimeBehaviorGate(app, ORG, "run_running")).kind).toBe("inconclusive");
   });
 
-  it("a quarantined failing verdict is excluded-from-green — a co-passing blocking verdict still passes", async () => {
+  it("(fix #1) completed pre-merge run with NO verdicts → inconclusive (absent-when-required, fail closed)", async () => {
+    await seedMergeRun(owner, "run_empty");
+    await seedPreMergeVerification(app, "run_empty", "completed");
+    expect((await resolveLandTimeBehaviorGate(app, ORG, "run_empty")).kind).toBe("inconclusive");
+  });
+
+  it("(fix #3) a quarantined failed_product STILL blocks (a self-asserted quarantine bit never launders a failure)", async () => {
+    await seedMergeRun(owner, "run_q_fail");
+    const bvr = await seedPreMergeVerification(app, "run_q_fail", "completed");
+    await seedVerdict(app, bvr, "v_qf_pass", { outcome: "passed", gateEffect: "blocking" });
+    await seedVerdict(app, bvr, "v_qf_flaky", {
+      outcome: "failed_product",
+      gateEffect: "blocking",
+      flakeState: "quarantined_fragment",
+    });
+    expect((await resolveLandTimeBehaviorGate(app, ORG, "run_q_fail")).kind).toBe("failed");
+  });
+
+  it("a quarantined INCONCLUSIVE is excluded-from-green — a co-passing blocking verdict still passes", async () => {
     await seedMergeRun(owner, "run_quarantine");
     const bvr = await seedPreMergeVerification(app, "run_quarantine", "completed");
     await seedVerdict(app, bvr, "v_q_pass", { outcome: "passed", gateEffect: "blocking" });
     await seedVerdict(app, bvr, "v_q_flaky", {
-      outcome: "failed_product",
+      outcome: "inconclusive_infrastructure",
       gateEffect: "blocking",
       flakeState: "quarantined_fragment",
     });
@@ -225,11 +243,11 @@ describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {
     });
   });
 
-  it("an ADVISORY failing verdict never gates → not_applicable", async () => {
+  it("(fix #1) an ADVISORY-only completed run never clears → inconclusive (no blocking pass; fail closed)", async () => {
     await seedMergeRun(owner, "run_advisory");
     const bvr = await seedPreMergeVerification(app, "run_advisory", "completed");
     await seedVerdict(app, bvr, "v_adv", { outcome: "failed_product", gateEffect: "advisory" });
-    expect(await resolveLandTimeBehaviorGate(app, ORG, "run_advisory")).toEqual({ kind: "not_applicable" });
+    expect((await resolveLandTimeBehaviorGate(app, ORG, "run_advisory")).kind).toBe("inconclusive");
   });
 
   it("the read is org-scoped — a foreign org sees no verdicts (not_applicable)", async () => {

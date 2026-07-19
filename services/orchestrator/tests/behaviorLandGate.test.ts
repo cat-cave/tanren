@@ -17,19 +17,22 @@ function verdict(overrides: Partial<BehaviorVerdictRow> = {}): BehaviorVerdictRo
 }
 
 describe("evaluateBehaviorLandGate — required-vs-not-applicable predicate", () => {
-  it("no pre-merge verification run (undefined status) → not_applicable (never blocks)", () => {
+  it("no pre-merge verification run (undefined status) → not_applicable (never blocks a non-behavior run)", () => {
     expect(evaluateBehaviorLandGate(undefined, [])).toEqual({ kind: "not_applicable" });
   });
 
-  it("a completed run with only ADVISORY verdicts → not_applicable (advisory never gates)", () => {
-    const gate = evaluateBehaviorLandGate("completed", [
-      verdict({ gateEffect: "advisory", outcome: "failed_product" }),
-    ]);
-    expect(gate.kind).toBe("not_applicable");
+  // The ONLY not_applicable is a run that never existed. A pre-merge run that reached a terminal
+  // state without a decisive blocking pass MUST fail closed — never fall through to a merge.
+
+  it("(fix #1) completed run with NO verdicts at all → inconclusive (absent-when-required, fail closed)", () => {
+    // Previously returned not_applicable — the exact absent-when-required fail-open the audit
+    // flagged. A completed pre-merge run IS the requirement; empty is not a green.
+    expect(evaluateBehaviorLandGate("completed", []).kind).toBe("inconclusive");
   });
 
-  it("a completed run with NO verdicts at all → not_applicable (nothing to enforce)", () => {
-    expect(evaluateBehaviorLandGate("completed", [])).toEqual({ kind: "not_applicable" });
+  it("(fix #1) completed run with ONLY advisory verdicts → inconclusive (no blocking pass; fail closed)", () => {
+    const gate = evaluateBehaviorLandGate("completed", [verdict({ gateEffect: "advisory", outcome: "passed" })]);
+    expect(gate.kind).toBe("inconclusive");
   });
 });
 
@@ -87,21 +90,35 @@ describe("evaluateBehaviorLandGate — only an actual pass clears", () => {
   });
 });
 
-describe("evaluateBehaviorLandGate — quarantine is excluded-from-green (rv-17 semantics)", () => {
-  it("a quarantined FAILING verdict does NOT block (flake noise excluded), leaving a passing gate", () => {
+describe("evaluateBehaviorLandGate — quarantine excludes only NON-failure noise (fix #3)", () => {
+  it("a quarantined INCONCLUSIVE is excluded-from-green — a co-passing blocking verdict still passes", () => {
+    const gate = evaluateBehaviorLandGate("completed", [
+      verdict({ behaviorRevisionId: "br-ok", outcome: "passed" }),
+      verdict({
+        behaviorRevisionId: "br-flaky",
+        outcome: "inconclusive_infrastructure",
+        flakeState: "quarantined_fragment",
+      }),
+    ]);
+    // The quarantined inconclusive (flaky infra noise) is excluded; the remaining blocking
+    // behavior passed, so the gate passes. This is the ONLY legitimate quarantine exclusion.
+    expect(gate).toEqual({ kind: "passed", passedBlockingCount: 1 });
+  });
+
+  it("(fix #3) a quarantined failed_product STILL blocks — a self-asserted quarantine bit never launders a failure", () => {
+    // A decisive product failure blocks regardless of flake_state: without rv-17 governance, a
+    // verdict row cannot exempt its own genuine failure by self-asserting quarantine.
     const gate = evaluateBehaviorLandGate("completed", [
       verdict({ behaviorRevisionId: "br-ok", outcome: "passed" }),
       verdict({ behaviorRevisionId: "br-flaky", outcome: "failed_product", flakeState: "quarantined_fragment" }),
     ]);
-    // The quarantined failure is neither counted toward green nor used to block: the
-    // remaining blocking behavior passed, so the gate passes.
-    expect(gate).toEqual({ kind: "passed", passedBlockingCount: 1 });
+    expect(gate).toMatchObject({ kind: "failed", outcome: "failed_product" });
   });
 
-  it("when the ONLY blocking verdict is quarantined → not_applicable (nothing left to enforce)", () => {
+  it("(fix #3) the ONLY blocking verdict being a quarantined failed_visual → failed (never laundered)", () => {
     const gate = evaluateBehaviorLandGate("completed", [
-      verdict({ outcome: "failed_product", flakeState: "quarantined_fragment" }),
+      verdict({ outcome: "failed_visual", flakeState: "quarantined_fragment" }),
     ]);
-    expect(gate.kind).toBe("not_applicable");
+    expect(gate).toMatchObject({ kind: "failed", outcome: "failed_visual" });
   });
 });
