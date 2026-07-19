@@ -96,9 +96,13 @@ describe("rv-17 quarantine gate-contribution resolver (ready, not-yet-wired) —
   });
 });
 
-describe("rv-17 quarantine changes rv-16 bisection — a quarantined behavior never names a culprit", () => {
+describe("rv-17/mq-7 quarantine changes rv-16 bisection — a quarantined behavior never names a culprit", () => {
+  // The observed epoch these verdicts were recorded at (mq-7 epoch-scoping key).
+  const NEW_EPOCH = `sha256:${"a".repeat(64)}`;
+  const OLD_EPOCH = `sha256:${"b".repeat(64)}`;
   const result = {
     decision: "recorded" as const,
+    artifactDigest: NEW_EPOCH,
     verdicts: [{ behaviorRevisionId: "br_flaky", verdictId: "v_reg", outcome: "failed_product" as const }],
   };
   const job = { orgId: "org", projectId: "proj", releaseInstanceId: "ri_live" };
@@ -113,22 +117,54 @@ describe("rv-17 quarantine changes rv-16 bisection — a quarantined behavior ne
     expect(results[0]).toEqual({ status: "inconclusive" });
   });
 
-  it("DECISIVE: a QUARANTINED behavior's regressed verdict is SKIPPED — no bisection, no scapegoat", async () => {
+  it("DECISIVE (same epoch): a behavior quarantined IN THIS epoch is SKIPPED — no bisection, no scapegoat", async () => {
     const bisect = vi
       .fn<() => Promise<BisectionResult>>()
       .mockResolvedValue({ status: "inconclusive" } as BisectionResult);
-    const quarantineReader = { isQuarantined: vi.fn<() => Promise<boolean>>().mockResolvedValue(true) };
+    // Epoch-comparing fake: quarantined only in NEW_EPOCH (its own, current generation).
+    const quarantineReader = {
+      isQuarantinedInEpoch: vi
+        .fn<(scope: unknown, br: string, epoch: string) => Promise<boolean>>()
+        .mockImplementation((_scope, _br, epoch) => Promise.resolve(epoch === NEW_EPOCH)),
+    };
     const results = await recordRegressionBisections({ bisect }, result, job, quarantineReader);
-    expect(quarantineReader.isQuarantined).toHaveBeenCalledWith({ orgId: "org", projectId: "proj" }, "br_flaky");
+    expect(quarantineReader.isQuarantinedInEpoch).toHaveBeenCalledWith(
+      { orgId: "org", projectId: "proj" },
+      "br_flaky",
+      NEW_EPOCH,
+    );
     expect(bisect).not.toHaveBeenCalled();
     expect(results).toEqual([]);
+  });
+
+  it("DURABLE ANTI-MASKING: a STALE-epoch quarantine does NOT mask a new-epoch regression — bisection PROCEEDS", async () => {
+    const bisect = vi
+      .fn<() => Promise<BisectionResult>>()
+      .mockResolvedValue({ status: "localized" } as BisectionResult);
+    // The behavior is STILL quarantined, but only in an OLDER generation (OLD_EPOCH) — exactly the
+    // state when actuateFlakeQuarantine threw/was skipped and NO release row was written. The
+    // epoch-scoped reader returns false for the OBSERVED (new) epoch, so the regression is not masked.
+    const quarantineReader = {
+      isQuarantinedInEpoch: vi
+        .fn<(scope: unknown, br: string, epoch: string) => Promise<boolean>>()
+        .mockImplementation((_scope, _br, epoch) => Promise.resolve(epoch === OLD_EPOCH)),
+    };
+    const results = await recordRegressionBisections({ bisect }, result, job, quarantineReader);
+    // Queried for the NEW epoch (the generation the regression was observed in), not the stale one.
+    expect(quarantineReader.isQuarantinedInEpoch).toHaveBeenCalledWith(
+      { orgId: "org", projectId: "proj" },
+      "br_flaky",
+      NEW_EPOCH,
+    );
+    expect(bisect).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([{ status: "localized" }]);
   });
 
   it("a NON-quarantined regressed behavior still bisects even when a reader is wired", async () => {
     const bisect = vi
       .fn<() => Promise<BisectionResult>>()
       .mockResolvedValue({ status: "localized" } as BisectionResult);
-    const quarantineReader = { isQuarantined: vi.fn<() => Promise<boolean>>().mockResolvedValue(false) };
+    const quarantineReader = { isQuarantinedInEpoch: vi.fn<() => Promise<boolean>>().mockResolvedValue(false) };
     const results = await recordRegressionBisections({ bisect }, result, job, quarantineReader);
     expect(bisect).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ status: "localized" }]);

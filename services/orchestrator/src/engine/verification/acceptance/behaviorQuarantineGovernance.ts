@@ -155,10 +155,30 @@ export interface BehaviorQuarantineReader {
     readonly orgId: string;
     readonly projectId: string;
   }): Promise<ReadonlySet<string>>;
-  /** Whether ONE behavior is currently quarantined. */
+  /** Whether ONE behavior is currently quarantined (latest transition = quarantine, any epoch). */
   isQuarantined(
     scope: { readonly orgId: string; readonly projectId: string },
     behaviorRevisionId: string,
+  ): Promise<boolean>;
+  /**
+   * mq-7 DURABLE ANTI-MASKING — the behaviors currently quarantined IN a given epoch (latest
+   * transition = quarantine, proven in that artifact_digest). Epoch-scoped so a stale
+   * (older-generation) quarantine can NEVER mask a new-generation failure at a gate that consults it.
+   */
+  readActiveQuarantinedBehaviorsInEpoch(
+    scope: { readonly orgId: string; readonly projectId: string },
+    epoch: string,
+  ): Promise<ReadonlySet<string>>;
+  /**
+   * mq-7 DURABLE ANTI-MASKING — whether ONE behavior is currently quarantined IN a given epoch. The
+   * seam consumed by rv-16 bisection so masking is EPOCH-SCOPED: a quarantine suppresses a behavior's
+   * observations ONLY within its own epoch, so a new-epoch regression is never masked by a stale
+   * quarantine — independent of whether a `release` row was written for the new epoch.
+   */
+  isQuarantinedInEpoch(
+    scope: { readonly orgId: string; readonly projectId: string },
+    behaviorRevisionId: string,
+    epoch: string,
   ): Promise<boolean>;
 }
 

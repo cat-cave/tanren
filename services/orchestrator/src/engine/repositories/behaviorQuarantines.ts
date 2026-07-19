@@ -122,6 +122,59 @@ export class PgBehaviorQuarantineStore implements BehaviorQuarantineReader {
     });
   }
 
+  /**
+   * mq-7 DURABLE ANTI-MASKING — whether ONE behavior is currently quarantined IN THE GIVEN EPOCH:
+   * its LATEST transition is a `quarantine` AND that quarantine was proven in `epoch` (the
+   * artifact_digest currently being observed). A quarantine masks a behavior's observations ONLY
+   * within its OWN epoch; a quarantine proven in an OLDER generation (epoch ≠ the observed one)
+   * returns FALSE here. This is what makes the anti-masking guarantee DURABLE at the CONSUMPTION
+   * site: a new-generation regression is never suppressed by a stale quarantine, regardless of
+   * whether the actuator managed to write a `release` row for the new epoch.
+   */
+  public async isQuarantinedInEpoch(
+    scope: { readonly orgId: string; readonly projectId: string },
+    behaviorRevisionId: string,
+    epoch: string,
+  ): Promise<boolean> {
+    return this.withOrgScope(scope.orgId, async (client) => {
+      const result = await client.query<{ transition: string; epoch: string }>(
+        `SELECT transition, epoch
+           FROM behavior_flake_quarantines
+          WHERE org_id = $1 AND project_id = $2 AND behavior_revision_id = $3
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        [scope.orgId, scope.projectId, behaviorRevisionId],
+      );
+      const latest = result.rows[0];
+      return latest?.transition === "quarantine" && latest.epoch === epoch;
+    });
+  }
+
+  /**
+   * mq-7 DURABLE ANTI-MASKING (gate seam) — the behaviors whose LATEST transition is a `quarantine`
+   * proven IN the given epoch. A stale quarantine from an older generation is EXCLUDED, so a gate
+   * that consults this set never suppresses a new-generation failure behind an old-epoch quarantine.
+   */
+  public async readActiveQuarantinedBehaviorsInEpoch(
+    scope: { readonly orgId: string; readonly projectId: string },
+    epoch: string,
+  ): Promise<ReadonlySet<string>> {
+    return this.withOrgScope(scope.orgId, async (client) => {
+      const result = await client.query<{ behavior_revision_id: string }>(
+        `SELECT behavior_revision_id
+           FROM (
+             SELECT DISTINCT ON (behavior_revision_id) behavior_revision_id, transition, epoch
+               FROM behavior_flake_quarantines
+              WHERE org_id = $1 AND project_id = $2
+              ORDER BY behavior_revision_id, created_at DESC, id DESC
+           ) latest
+          WHERE transition = 'quarantine' AND epoch = $3`,
+        [scope.orgId, scope.projectId, epoch],
+      );
+      return new Set(result.rows.map((row) => row.behavior_revision_id));
+    });
+  }
+
   public async readActiveQuarantinedBehaviors(scope: {
     readonly orgId: string;
     readonly projectId: string;

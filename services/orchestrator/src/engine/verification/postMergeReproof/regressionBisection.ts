@@ -228,14 +228,25 @@ export class RegressionBisector {
  *
  * rv-17: a QUARANTINED behavior is NEVER used to name a culprit. A flaky behavior's "regression"
  * is non-deterministic — bisecting it would re-prove flaky probes and could scapegoat a healthy
- * release, exactly the anti-scapegoat failure rv-16 exists to avoid. When a quarantine reader is
- * wired, a quarantined behavior's regressed verdict is skipped (no bisection produced).
+ * release, exactly the anti-scapegoat failure rv-16 exists to avoid.
+ *
+ * mq-7 DURABLE ANTI-MASKING: the quarantine skip is EPOCH-SCOPED. A quarantine masks a behavior's
+ * regression ONLY within its OWN epoch (the same artifact_digest it was proven flaky in). The
+ * observed epoch is `result.artifactDigest` (the generation these verdicts were recorded at); the
+ * reader's `isQuarantinedInEpoch` returns true ONLY when the active quarantine was proven in THAT
+ * epoch. A quarantine from an OLDER generation therefore does NOT suppress a new-epoch regression —
+ * bisection proceeds — EVEN IF the actuator failed to (or has not yet) written the `release` row
+ * that lifts the stale quarantine. That is the invariant: a new-epoch consistent_failure is never
+ * masked from bisection, independent of whether `actuateFlakeQuarantine` succeeded. When the epoch
+ * is unknown we DO NOT mask (fail-open toward bisecting — the anti-masking-safe direction).
  */
 export async function recordRegressionBisections(
   bisector: Pick<RegressionBisector, "bisect"> | undefined,
   result:
     | {
         readonly decision: string;
+        /** mq-7: the observed epoch — the artifact_digest these verdicts were recorded at. */
+        readonly artifactDigest?: string;
         readonly verdicts: readonly {
           readonly behaviorRevisionId: string;
           readonly verdictId: string;
@@ -244,17 +255,25 @@ export async function recordRegressionBisections(
       }
     | undefined,
   job: { readonly orgId: string; readonly projectId: string; readonly releaseInstanceId?: string },
-  quarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantined">,
+  quarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantinedInEpoch">,
 ): Promise<readonly BisectionResult[]> {
   if (bisector === undefined || result === undefined || result.decision !== "recorded") return [];
   if (job.releaseInstanceId === undefined) return [];
+  const observedEpoch = result.artifactDigest;
   const results: BisectionResult[] = [];
   for (const verdict of result.verdicts) {
     if (classifyProbe(verdict.outcome) !== "regressed") continue;
-    // A quarantined (flaky) behavior is never bisected — it cannot name a culprit.
+    // A behavior quarantined IN THIS observed epoch is proven-flaky in this same generation — it is
+    // never bisected (it cannot name a culprit). A quarantine from an OLDER epoch does NOT mask this
+    // regression: the epoch-scoped check returns false, so bisection proceeds even without a release.
     if (
       quarantineReader !== undefined &&
-      (await quarantineReader.isQuarantined({ orgId: job.orgId, projectId: job.projectId }, verdict.behaviorRevisionId))
+      observedEpoch !== undefined &&
+      (await quarantineReader.isQuarantinedInEpoch(
+        { orgId: job.orgId, projectId: job.projectId },
+        verdict.behaviorRevisionId,
+        observedEpoch,
+      ))
     ) {
       continue;
     }

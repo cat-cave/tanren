@@ -63,10 +63,11 @@ export interface ResolutionDagWalkerDeps {
   readonly regressionBisector?: Pick<RegressionBisector, "bisect">;
   /**
    * rv-17 flake quarantine governance: consulted so a QUARANTINED (flaky) behavior's regressed
-   * verdict is NEVER used to name a bisection culprit. Absent ⇒ no behavior is treated as
-   * quarantined (bisection runs for every regressed verdict, as before).
+   * verdict is NEVER used to name a bisection culprit. mq-7: the check is EPOCH-SCOPED
+   * (`isQuarantinedInEpoch`) so a stale-epoch quarantine never masks a new-epoch regression. Absent
+   * ⇒ no behavior is treated as quarantined (bisection runs for every regressed verdict, as before).
    */
-  readonly behaviorQuarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantined">;
+  readonly behaviorQuarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantinedInEpoch">;
 }
 
 export interface ResolutionDagWalkerOptions {

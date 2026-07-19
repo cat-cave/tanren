@@ -306,6 +306,8 @@ function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }
             decision: "recorded" as const,
             passed: 0,
             failed: 1,
+            // mq-7: the observed epoch the regression was recorded at (epoch-scopes the masking).
+            artifactDigest: `sha256:${"a".repeat(64)}`,
             verdicts: [{ behaviorRevisionId: "br_flaky", verdictId: "v_reg", outcome: "failed_product" as const }],
           });
         },
@@ -316,7 +318,10 @@ function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }
           return Promise.resolve({ status: "inconclusive" } as BisectionResult);
         },
       },
-      behaviorQuarantineReader: { isQuarantined: () => Promise.resolve(opts.isQuarantined) },
+      // mq-7: epoch-scoped masking. This fake proves WIRING (the reader is consulted for the observed
+      // epoch); the durable stale-epoch-does-not-mask semantics are proven on the real store in the
+      // RLS integration test. `opts.isQuarantined` = quarantined IN the observed epoch.
+      behaviorQuarantineReader: { isQuarantinedInEpoch: () => Promise.resolve(opts.isQuarantined) },
       contracts: {
         async get() {
           return contract;
