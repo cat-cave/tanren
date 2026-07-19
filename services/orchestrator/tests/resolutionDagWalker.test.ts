@@ -1,5 +1,5 @@
 // cspell:ignore rdec vassert
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import type { ResolutionJob, ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
 import type { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
@@ -19,6 +19,60 @@ const job: ResolutionJob = {
 };
 
 describe("ResolutionDagWalker", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("surfaces a fenced-out release loudly when a stage failure races an expired lease", async () => {
+    // Worker A's stage fails, but by the time it releases, its lease has expired
+    // and been re-claimed — so the fenced release affects 0 rows (returns false).
+    // The walker must NOT swallow this as a benign settlement: it surfaces the
+    // lost lease loudly (a logged error), never a silent success that would let A
+    // believe it released work another worker is now driving.
+    const errors: string[] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation((line: unknown) => {
+      errors.push(String(line));
+    });
+    const store = {
+      async recoverExpiredLeases() {
+        return [];
+      },
+      async claimNext() {
+        return job;
+      },
+      async verifyActiveLease() {
+        return job;
+      },
+      async heartbeat() {
+        return true;
+      },
+      async complete() {
+        return true;
+      },
+      async release() {
+        return false;
+      },
+    } as unknown as ResolutionJobStore;
+    const stage: ResolutionStage = {
+      kind: "baseline",
+      async run() {
+        throw new Error("stage blew up mid-run");
+      },
+    };
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => ["org_a"],
+      stages: new Map([["baseline", stage]]),
+      leaseOwner: "walker_a",
+    });
+
+    // tick's periodic-scan guard swallows the throw (the next scan retries) but the
+    // lost lease is logged loudly rather than silently completed.
+    await expect(walker.tick()).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(errors.join("\n")).toContain("lost its lease");
+  });
+
   it("fences, runs, and completes a claimed registered stage", async () => {
     const calls: string[] = [];
     const store = {

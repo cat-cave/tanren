@@ -269,7 +269,15 @@ export class ResolutionDagWalker {
   private async releaseAfterStageFailure(job: ResolutionJob, claim: LeaseClaim, error: unknown): Promise<never> {
     const released = await this.deps.store.release({ ...claim, id: job.id, state: "retryable" });
     if (!released) {
-      throw new Error(`resolution job ${job.id} failed and could not be released under its lease`, { cause: error });
+      // The fenced UPDATE affected 0 rows: this worker's lease expired and was
+      // re-claimed while its stage ran, so the release is a no-op that must NOT
+      // masquerade as a generic stage failure. Surface it as the same typed
+      // lease-lost outcome the complete/settle fences raise — the never-discard
+      // BaseShift model re-drives under the new owner's lease.
+      throw new ResolutionLeaseLostError(
+        `resolution job ${job.id} lost its lease before its stage failure could be released`,
+        { cause: error },
+      );
     }
     throw asError(error);
   }
