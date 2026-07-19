@@ -9,6 +9,7 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import type {
   BehaviorVerdictHistory,
   VerificationEnvironmentBinding,
@@ -44,10 +45,13 @@ function toInt(value: unknown): number {
   throw new Error(`verification read expected an integer, got ${String(value)}`);
 }
 
-function toIso(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "string" && value.length > 0) return new Date(value).toISOString();
-  throw new Error(`verification read expected a timestamp, got ${String(value)}`);
+// Decode a raw pg timestamp through a Zod boundary (z.coerce.date()) rather than
+// casting it — a laundering `as Date` would silently hand garbage to the consumer
+// if the column type changed or the value were NULL (audit RC-6 / no-pg-as-date).
+const timestampSchema = z.coerce.date();
+
+function toDate(value: unknown): Date {
+  return timestampSchema.parse(value);
 }
 
 function verdictView(row: Row): VerificationVerdictView {
@@ -90,7 +94,7 @@ function runHeader(row: Row): VerificationRunHeader {
     integrationNodeId: textOrNull(row["integration_node_id"]),
     environmentId: text(row["environment_id"]),
     artifactDigest: text(row["artifact_digest"]),
-    createdAt: toIso(row["created_at"]) as unknown as Date,
+    createdAt: toDate(row["created_at"]),
     verdictCount: toInt(row["verdict_count"]),
     latestOutcome: (textOrNull(row["latest_outcome"]) as VerificationRunHeader["latestOutcome"]) ?? null,
   };
@@ -144,44 +148,49 @@ export class VerificationReadStore {
     scope: ProjectScope,
     runId: string,
   ): Promise<Omit<VerificationRunDetail, "version" | "orgId" | "projectId" | "proofBundleHref"> | undefined> {
-    return this.withOrgScope(scope.orgId, async (client) => {
-      const runRow = (
-        await client.query<Row>(`${RUN_HEADER_SELECT} AND r.project_id = $2 AND r.id = $3`, [
-          scope.orgId,
-          scope.projectId,
-          runId,
-        ])
-      ).rows[0];
-      if (runRow === undefined) return;
+    return this.withOrgScope(
+      scope.orgId,
+      async (
+        client,
+      ): Promise<Omit<VerificationRunDetail, "version" | "orgId" | "projectId" | "proofBundleHref"> | undefined> => {
+        const runRow = (
+          await client.query<Row>(`${RUN_HEADER_SELECT} AND r.project_id = $2 AND r.id = $3`, [
+            scope.orgId,
+            scope.projectId,
+            runId,
+          ])
+        ).rows[0];
+        if (runRow === undefined) return undefined;
 
-      const envRow = (
-        await client.query<Row>(
-          `SELECT id, project_id, integration_node_id, artifact_digest, deployment_target,
+        const envRow = (
+          await client.query<Row>(
+            `SELECT id, project_id, integration_node_id, artifact_digest, deployment_target,
                   environment_fingerprint, lifecycle_status
              FROM verification_environments
             WHERE org_id = $1 AND id = $2`,
-          [scope.orgId, textOrNull(runRow["environment_id"])],
-        )
-      ).rows[0];
+            [scope.orgId, textOrNull(runRow["environment_id"])],
+          )
+        ).rows[0];
 
-      const verdictRows = (
-        await client.query<Row>(
-          `SELECT id, behavior_revision_id, outcome, required_assertion_count, executed_assertion_count,
+        const verdictRows = (
+          await client.query<Row>(
+            `SELECT id, behavior_revision_id, outcome, required_assertion_count, executed_assertion_count,
                   attempt_count, flake_state, gate_effect, artifact_digest, proof_unit_digest,
                   runtime_behavior_context_hash
              FROM behavior_verdicts
             WHERE org_id = $1 AND run_id = $2
             ORDER BY created_at ASC, id ASC`,
-          [scope.orgId, runId],
-        )
-      ).rows;
+            [scope.orgId, runId],
+          )
+        ).rows;
 
-      return {
-        run: runHeader(runRow),
-        environment: environmentBinding(envRow),
-        verdicts: verdictRows.map((row) => verdictView(row)),
-      };
-    });
+        return {
+          run: runHeader(runRow),
+          environment: environmentBinding(envRow),
+          verdicts: verdictRows.map((row) => verdictView(row)),
+        };
+      },
+    );
   }
 
   /** A behavior's verdict history across every run, newest first, with the latest outcome. */
@@ -209,7 +218,7 @@ export class VerificationReadStore {
         runId: text(row["run_id"]),
         runPurpose: text(row["run_purpose"]) as BehaviorVerdictHistory["verdicts"][number]["runPurpose"],
         runStatus: text(row["run_status"]) as BehaviorVerdictHistory["verdicts"][number]["runStatus"],
-        createdAt: toIso(row["created_at"]) as unknown as Date,
+        createdAt: toDate(row["created_at"]),
         verdict: verdictView(row),
       }));
       const latestOutcome = verdicts[0]?.verdict.outcome ?? null;
