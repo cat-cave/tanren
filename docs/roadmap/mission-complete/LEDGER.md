@@ -7,7 +7,7 @@ counts anywhere else (README, CLAUDE.md) are derived from here. When a node land
 update its row here in the **same PR** that merges it. Node IDs and specs are frozen
 by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _status_.
 
-**Last reconciled:** 2026-07-17 (post #1010 — WAVE-6 COMPLETE: barrier 0064-0068 + mq-6/rv-7/rv-8/gv-11; 35/142).
+**Last reconciled:** 2026-07-19 (rv acceptance-spine reconciliation — this file had gone stale: PRs #1079/#1082/#1083/#1084/#1086/#1087/#1088/#1089 merged their rv nodes without updating the ledger). Corrected rv statuses: **rv-6** done (#1083 real HTTP driver + plan loader), **rv-11** done (#1079 acceptance orchestrator), **rv-12** done (#1081), **rv-18** done (#1084 proof-backed demo A2), **rv-19** done (#1082 post-merge re-proof + rollback), **rv-22** done (#1088 HTTP read surface + read-compat guard), **rv-24** done (#1086 proof bundles + CLI), **rv-25** done (#1089 event-schema registration + completeness guard); **rv-16** PARTIAL (rv-16a verdict lane done #1087, behavior-aware bisection in-flight on `mission/rv-16b`); rv-env (#1085) merged as the deploy-provisions-verification-environment infra enabler. **rv-26 (v97 apex acceptance) remaining blockers: rv-13 (needs ds-4 ← ds-3, in-flight), rv-16 bisection (in-flight), rv-17 (needs rv-16), and rv-23.** Aggregate /142 count carried from the 2026-07-17 line is now an undercount — a full strict recount is pending (do not trust the old 35/142). Prior reconciliation baseline: 2026-07-17 (post #1010 — WAVE-6 COMPLETE: barrier 0064-0068 + mq-6/rv-7/rv-8/gv-11).
 
 ## Status vocabulary
 
@@ -76,34 +76,34 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## runtime-verification (26)
 
-| Node  | Phase | Status         | Purpose                                                           | Deps               |
-| ----- | ----- | -------------- | ----------------------------------------------------------------- | ------------------ |
-| rv-1  | MVP   | 🧱 spine-built | Immutable behavior revisions + spec binding (SP·1)                | —                  |
-| rv-2  | MVP   | 🧱 spine-built | Executable-plan compiler + typed assertion DSL                    | rv-1               |
-| rv-3  | MVP   | 🧱 spine-built | Verification-fragment registry + F2 authoring (SP·2)              | rv-2 · SP·2        |
-| rv-4  | MVP   | ✅ done        | Behavior coverage edges + affected selection (#969)               | rv-1/2             |
-| rv-5  | MVP   | 🧱 spine-built | Preview deployment adapter (Fly lifecycle) (SP·6)                 | rv-1 · SP·3        |
-| rv-6  | MVP   | 🧱 spine-built | Driver adapters — Playwright + API/CLI/package/mobile             | rv-2/5             |
-| rv-7  | MVP   | ✅ done        | Fixture lease adapter (isolated tenant/channel/data) (#1008)      | rv-5/8             |
-| rv-8  | MVP   | ✅ done        | Side-effect observer adapter (Slack; cursor/watermark) (#1007)    | rv-7/12            |
-| rv-9  | MVP   | 🧱 spine-built | Render-capture + content-addressed artifact store (SP·3)          | rv-6               |
-| rv-10 | MVP   | 🧱 spine-built | Per-behavior verdict store (runs/attempts/verdicts)               | rv-6/9             |
-| rv-11 | MVP   | 🧱 spine-built | A1 executable-acceptance orchestrator                             | rv-5/6/7/10        |
-| rv-12 | MVP   | ✅ done        | A3 causal-correlation protocol + cardinality assertions           | rv-8/11            |
-| rv-13 | MVP   | ⬜ todo        | A4 DesignContractV2 + rendered visual verification                | rv-9/11 · ds-4     |
-| rv-14 | MVP   | 🧱 spine-built | Effective native gate + GateProofBundleV2 (SP·7)                  | rv-10/11/13 · SP·4 |
-| rv-15 | MVP   | 🧱 spine-built | MergeAuthority-V2 runtime outcome + proof-reuse V2 (SP·4)         | rv-14              |
-| rv-16 | MVP   | ⬜ todo        | Behavior-aware merge-queue bisection                              | rv-11/14/15 · mq   |
-| rv-17 | MVP   | ⬜ todo        | Flake classification + quarantine governance                      | rv-10/16           |
-| rv-18 | MVP   | ⬜ todo        | Proof-backed demo engine (A2) — no more `/` probe                 | rv-10/19           |
-| rv-19 | MVP   | ⬜ todo        | Post-merge production re-proof + rollback hook                    | rv-5/11/15         |
-| rv-20 | MVP   | ⏸ deferred     | `ci_test_results` compatibility projection                        | rv-10              |
-| rv-21 | MVP   | 🧱 spine-built | Forge interview + DesignContract synthesis (SP·1)                 | rv-1/13            |
-| rv-22 | MVP   | ⬜ todo        | HTTP surface + read-compat guard                                  | rv-1/2/10/13/14    |
-| rv-23 | MVP   | ⬜ todo        | Dashboard surfaces (Behavior Proof Matrix + 6 more)               | rv-22 · SP·8       |
-| rv-24 | MVP   | ⬜ todo        | Exportable proof bundles + `tanren proof verify` CLI              | rv-14/15/9         |
-| rv-25 | MVP   | ⬜ todo        | Event-schema registration                                         | SP·8               |
-| rv-26 | MVP   | ⬜ todo        | Apex workflow — 16 positive + 10 negative proofs (v97 acceptance) | rv-1..19/24/25     |
+| Node  | Phase | Status         | Purpose                                                            | Deps               |
+| ----- | ----- | -------------- | ------------------------------------------------------------------ | ------------------ |
+| rv-1  | MVP   | 🧱 spine-built | Immutable behavior revisions + spec binding (SP·1)                 | —                  |
+| rv-2  | MVP   | 🧱 spine-built | Executable-plan compiler + typed assertion DSL                     | rv-1               |
+| rv-3  | MVP   | 🧱 spine-built | Verification-fragment registry + F2 authoring (SP·2)               | rv-2 · SP·2        |
+| rv-4  | MVP   | ✅ done        | Behavior coverage edges + affected selection (#969)                | rv-1/2             |
+| rv-5  | MVP   | 🧱 spine-built | Preview deployment adapter (Fly lifecycle) (SP·6)                  | rv-1 · SP·3        |
+| rv-6  | MVP   | ✅ done        | Driver adapters — real HTTP driver + plan loader (#1083)           | rv-2/5             |
+| rv-7  | MVP   | ✅ done        | Fixture lease adapter (isolated tenant/channel/data) (#1008)       | rv-5/8             |
+| rv-8  | MVP   | ✅ done        | Side-effect observer adapter (Slack; cursor/watermark) (#1007)     | rv-7/12            |
+| rv-9  | MVP   | 🧱 spine-built | Render-capture + content-addressed artifact store (SP·3)           | rv-6               |
+| rv-10 | MVP   | 🧱 spine-built | Per-behavior verdict store (runs/attempts/verdicts)                | rv-6/9             |
+| rv-11 | MVP   | ✅ done        | A1 executable-acceptance orchestrator (#1079)                      | rv-5/6/7/10        |
+| rv-12 | MVP   | ✅ done        | A3 causal-correlation protocol + cardinality assertions            | rv-8/11            |
+| rv-13 | MVP   | ⬜ todo        | A4 DesignContractV2 + rendered visual verification                 | rv-9/11 · ds-4     |
+| rv-14 | MVP   | 🧱 spine-built | Effective native gate + GateProofBundleV2 (SP·7)                   | rv-10/11/13 · SP·4 |
+| rv-15 | MVP   | 🧱 spine-built | MergeAuthority-V2 runtime outcome + proof-reuse V2 (SP·4)          | rv-14              |
+| rv-16 | MVP   | 🟡 partial     | MQ bisection — rv-16a verdict lane done #1087; bisection in-flight | rv-11/14/15 · mq   |
+| rv-17 | MVP   | ⬜ todo        | Flake classification + quarantine governance                       | rv-10/16           |
+| rv-18 | MVP   | ✅ done        | Proof-backed demo engine A2 (#1084)                                | rv-10/19           |
+| rv-19 | MVP   | ✅ done        | Post-merge production re-proof + rollback (#1082)                  | rv-5/11/15         |
+| rv-20 | MVP   | ⏸ deferred     | `ci_test_results` compatibility projection                         | rv-10              |
+| rv-21 | MVP   | 🧱 spine-built | Forge interview + DesignContract synthesis (SP·1)                  | rv-1/13            |
+| rv-22 | MVP   | ✅ done        | HTTP read surface + read-compat guard (#1088)                      | rv-1/2/10/13/14    |
+| rv-23 | MVP   | ⬜ todo        | Dashboard surfaces (Behavior Proof Matrix + 6 more)                | rv-22 · SP·8       |
+| rv-24 | MVP   | ✅ done        | Exportable proof bundles + `tanren proof verify` CLI (#1086)       | rv-14/15/9         |
+| rv-25 | MVP   | ✅ done        | Event-schema registration + completeness guard (#1089)             | SP·8               |
+| rv-26 | MVP   | ⬜ todo        | Apex workflow — 16 positive + 10 negative proofs (v97 acceptance)  | rv-1..19/24/25     |
 
 ## integrations (22) — all MVP
 
