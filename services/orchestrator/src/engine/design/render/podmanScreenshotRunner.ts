@@ -110,6 +110,24 @@ export function buildPodmanScreenshotRunner(config: PodmanScreenshotRunnerConfig
   };
 }
 
+/**
+ * Fail-closed infra probe: is the render worker actually runnable HERE? True only when
+ * podman is on PATH AND the render-worker image exists locally (`podman image exists`
+ * exits 0). Any spawn error / missing image → false, so an opted-in project whose
+ * container infra is absent is judged INCONCLUSIVE (blocked), never a silent skip that
+ * passes. NO wall-clock timeout — the probe is a single fast metadata check.
+ */
+export async function probeRenderWorkerAvailable(config: PodmanScreenshotRunnerConfig = {}): Promise<boolean> {
+  const podmanBin = config.podmanBin ?? process.env["TANREN_PODMAN_BIN"] ?? "podman";
+  const image = config.image ?? process.env["TANREN_DS4_RENDER_IMAGE"] ?? DEFAULT_RENDER_WORKER_IMAGE;
+  try {
+    await execFileAsync(podmanBin, ["image", "exists", image]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function failure(reason: string): PixelScreenshotFailure {
   return { ok: false, reason };
 }

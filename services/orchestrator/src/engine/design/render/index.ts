@@ -12,4 +12,9 @@ export * from "./pixelRenderContracts.js";
 export * from "./pixelRenderCaptureHarness.js";
 export * from "./podmanScreenshotRunner.js";
 export * from "./visualDiffOracle.js";
-export { checkpointFromPixelVerdict } from "./pixelRenderCheckpoint.js";
+export * from "./pixelRenderScenarioPass.js";
+export {
+  checkpointFromPixelVerdict,
+  pixelCheckpointId,
+  scenarioKeyFromPixelCheckpointId,
+} from "./pixelRenderCheckpoint.js";

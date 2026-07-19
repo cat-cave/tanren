@@ -82,8 +82,10 @@ export async function recordDesignRenderVerdict(pool: pg.Pool, input: RecordDesi
             checkpointId: checkpoint.checkpointId,
             verdict: checkpoint.verdict,
             failingRuleIds: [...checkpoint.failingRuleIds],
-            // Slice-B pixel checkpoints carry a real diffRatio; the a11y path omits it.
+            // Slice-B pixel checkpoints carry a real diffRatio + the screenshot digest (the
+            // next release's baseline anchor); the a11y path omits both.
             ...(checkpoint.diffRatio === undefined ? {} : { diffRatio: checkpoint.diffRatio }),
+            ...(checkpoint.screenshotDigest === undefined ? {} : { screenshotDigest: checkpoint.screenshotDigest }),
           })),
         ),
       ],
@@ -163,12 +165,15 @@ function decodeCheckpoints(value: unknown): readonly DesignRenderCheckpoint[] {
     // else (absent / malformed) omits it, so a corrupt value never becomes a fake ratio.
     const diffRatio =
       typeof rawDiffRatio === "number" && Number.isFinite(rawDiffRatio) && rawDiffRatio >= 0 ? rawDiffRatio : undefined;
+    const rawDigest = record["screenshotDigest"];
+    const screenshotDigest = typeof rawDigest === "string" && rawDigest.length > 0 ? rawDigest : undefined;
     return [
       {
         checkpointId,
         verdict,
         failingRuleIds: decodeStringArray(record["failingRuleIds"]),
         ...(diffRatio === undefined ? {} : { diffRatio }),
+        ...(screenshotDigest === undefined ? {} : { screenshotDigest }),
       },
     ];
   });

@@ -27,8 +27,10 @@ import { PixelRenderCaptureHarness } from "../src/engine/design/render/pixelRend
 import {
   buildPodmanScreenshotRunner,
   DEFAULT_RENDER_WORKER_IMAGE,
+  probeRenderWorkerAvailable,
 } from "../src/engine/design/render/podmanScreenshotRunner.js";
 import { PixelVisualDiffOracle } from "../src/engine/design/render/visualDiffOracle.js";
+import { verifyComposedDesignSystemRender } from "../src/engine/design/render/designSystemRenderVerification.js";
 
 const execFileAsync = promisify(execFile);
 const ENABLED = process.env["TANREN_DS4_PIXEL_E2E"] === "1";
@@ -153,5 +155,50 @@ describe.skipIf(!ENABLED)("ds-4 Slice B — real containerized screenshot + diff
     const changedFail = await oracle.judge({ orgId: ORG_ID, capture: changed, baseline: baselineRef, rules: RULES });
     expect(changedFail.outcome).toBe("failed_visual");
     expect(changedFail.diffRatio ?? 0).toBeGreaterThan(RULES.imageDiffThreshold);
+  });
+
+  it("PRODUCTION PATH: verifyComposedDesignSystemRender with the REAL runner + probe → CHANGED → failed_visual (BLOCKED)", async () => {
+    const cas = new InMemoryContentStore();
+    // The infra probe genuinely sees the image we built in beforeAll.
+    expect(await probeRenderWorkerAvailable()).toBe(true);
+
+    // Establish a REAL baseline screenshot (indigo swatch) via the real container.
+    const harness = new PixelRenderCaptureHarness(cas, buildPodmanScreenshotRunner());
+    const base = await harness.capture({
+      orgId: ORG_ID,
+      scenario: scenario(),
+      componentSource: swatchSource("#4f46e5"),
+      componentExportName: "Swatch",
+      designContractVersion: DCV,
+    });
+    expect(base.kind).toBe("pixel_captured");
+    if (base.kind !== "pixel_captured") return;
+    const baselineRef = base.captureRef.casRef;
+
+    // Drive the REAL production producer with the REAL runner. The catalog component is now a
+    // RED swatch — a genuine visual change vs the indigo baseline.
+    const changedBuild = {
+      catalog: { components: [{ key: "swatch", sourcePath: "components/ui/swatch.tsx" }] },
+      files: [{ path: "components/ui/swatch.tsx", bytes: new TextEncoder().encode(swatchSource("#dc2626")) }],
+    };
+    const verification = await verifyComposedDesignSystemRender({
+      orgId: ORG_ID,
+      cas,
+      build: changedBuild,
+      scenarios: [scenario()],
+      accessibilityPosture: { standard: "none", notes: "" },
+      designContractVersion: DCV,
+      pixel: {
+        runner: buildPodmanScreenshotRunner(),
+        available: () => probeRenderWorkerAvailable(),
+        rules: RULES,
+        baselineResolver: { resolve: async () => baselineRef },
+      },
+    });
+
+    expect(verification.outcome).toBe("failed_visual");
+    const pixel = verification.checkpoints.find((c) => c.checkpointId.endsWith("::pixel"));
+    expect(pixel?.verdict).toBe("failed");
+    expect(pixel?.diffRatio ?? 0).toBeGreaterThan(RULES.imageDiffThreshold);
   });
 });

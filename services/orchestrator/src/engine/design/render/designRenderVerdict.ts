@@ -25,6 +25,12 @@ export interface DesignRenderCheckpoint {
    * diff. Present only when a real screenshot was diffed against a baseline.
    */
   readonly diffRatio?: number;
+  /**
+   * The CAS digest of the pixel checkpoint's captured screenshot — persisted so the NEXT
+   * release's pixel pass can use it as the regression baseline. OMITTED for the a11y path
+   * and for a pixel checkpoint whose capture failed (no screenshot to anchor).
+   */
+  readonly screenshotDigest?: string;
 }
 
 /** The aggregated run-level verification result the producer persists. */
