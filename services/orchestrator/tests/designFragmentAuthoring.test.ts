@@ -239,6 +239,48 @@ describe("ds-3 F2D — design fragment authoring", () => {
     for (const failed of failedEvents) expect(failed.payload.reason).toContain("batch_compose_failed");
   });
 
+  it("NEW-vs-EXISTING: an authored fragment colliding with a PRESENT registry file fails the batch (retract)", async () => {
+    const store = new FakeStore();
+    const { captured, events } = captureEvents();
+    const spec = requiredSpec("surface/dashboard", "Dashboard");
+    // The org already has a persisted fragment occupying `components/Dashboard.tsx`
+    // (a DIFFERENT (kind,label), so the selector does not treat the NEW slot as
+    // present). `loadPresentFiles` is what the producer wires to the real store's
+    // `listPresentFilesByOrg`; here it returns that existing file. The per-fragment
+    // validate passes on a fresh VFS, but the whole-batch compose over present+authored
+    // collides ⇒ the NEW fragment is retracted and the store ends EMPTY. Without
+    // `loadPresentFiles` (the old empty stub) this collision would go UNDETECTED.
+    const presentFile = {
+      path: "components/Dashboard.tsx",
+      kind: "component-source" as const,
+      mediaType: "text/plain",
+      digest: `sha256:${"a".repeat(64)}`,
+      byteSize: 42,
+      executable: false,
+    };
+    const result = await runDesignFragmentAuthoring({
+      missing: [spec],
+      context: CONTEXT,
+      deps: {
+        authorer: authorerFor((s) => validDraft(s)),
+        adapter: webAdapter(),
+        store,
+        events,
+        loadPresentFiles: async () => [presentFile],
+      },
+    });
+    expect(result.validated).toEqual([]);
+    expect(result.failedIds).toEqual(["surface/dashboard@Dashboard"]);
+    expect(store.rows.size).toBe(0);
+    expect(store.deletes).toEqual(["org1:surface/dashboard-Dashboard:1.0.0"]);
+    const failedEvents = captured.filter(
+      (e): e is Extract<DesignFragmentAuthoringEvent, { eventType: "designFragment.authoring.failed" }> =>
+        e.eventType === "designFragment.authoring.failed",
+    );
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]?.payload.reason).toContain("batch_compose_failed");
+  });
+
   it("resolveDesignFragmentConfig HALTS LOUD when a fragment is missing and no authoring seam exists", async () => {
     const required = [requiredSpec("surface/dashboard", "Dashboard")];
     await expect(resolveDesignFragmentConfig({ required, present: [] })).rejects.toBeInstanceOf(

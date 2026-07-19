@@ -13,6 +13,12 @@ import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js"
 import { handleConfigCasSql } from "../../helpers/routesPoolConfigCas.js";
 import { RoutesPoolDerivationEvidence } from "../../helpers/routesPoolDerivationEvidence.js";
 
+// The `composeDesignSystem` seam is production-required (deriveProductGraph fails
+// loud on an absent wire — a dropped seam is a bug, never a silent design-less skip),
+// so a full-derive test must wire it. This no-op stands in for the real F2D composer
+// (its own integration test exercises the producer); here we only need the seam present.
+export const noopComposeDesignSystem: NonNullable<DeriveInput["composeDesignSystem"]> = async () => {};
+
 export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => {
   const fixture = input.pool as pg.Pool & {
     seedDerivationBootstrap?: (orgId: string, projectId: string) => Promise<unknown> | unknown;

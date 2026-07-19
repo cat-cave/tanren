@@ -117,4 +117,33 @@ describe("derive — ds-composer seam wiring", () => {
     expect(calls[0]?.orgId).toBe("org_a");
     expect(calls[0]?.projectId).toBe(derived.projectId);
   });
+
+  it("FAILS LOUD when composeDesignSystem is absent (a dropped production wiring, never a silent skip)", async () => {
+    const { pool } = stubPool();
+    // A full production-shaped derive (materializeTemplate + bootstrapProject wired) but
+    // with the `composeDesignSystem` seam DROPPED. Production always supplies it
+    // (mountFeatureRoutes), so its absence is a wiring bug that must halt the derive —
+    // NOT silently ship a design-less product (the old `!== undefined` skip).
+    await expect(
+      deriveFromCapture(
+        {
+          pool,
+          async prepareDeploy() {
+            return preparedFlyDeploy();
+          },
+        },
+        {
+          orgId: "org_a",
+          capture: captureWithLifecycle(),
+          actor,
+          repoUrl: TEST_REPO_URL,
+          owner: "cat-cave",
+          deploy: { providerKind: "deploy.flyio" },
+          materializeTemplate: materialize,
+          bootstrapProject: successfulBootstrapProject,
+          // composeDesignSystem intentionally omitted.
+        },
+      ),
+    ).rejects.toThrow(/greenfield derive requires `composeDesignSystem`/u);
+  });
 });

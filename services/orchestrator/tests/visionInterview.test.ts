@@ -28,6 +28,7 @@ import { createDeterministicInterviewAnswerer } from "./fixtures/forge/determini
 import {
   preparedDeploy,
   stubPool,
+  noopComposeDesignSystem,
   successfulBootstrapProject,
   type StubState,
 } from "./fixtures/forge/interviewDeriveStub.js";
@@ -119,6 +120,7 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
   const defaults: Partial<Parameters<typeof deriveFromCapture>[1]> = {
     materializeTemplate: stubMaterialize(),
     bootstrapProject: successfulBootstrapProject,
+    composeDesignSystem: noopComposeDesignSystem,
   };
   const derived = await deriveFromCapture(
     {
@@ -325,6 +327,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
         deploy: { providerKind: "deploy.vercel" },
         materializeTemplate: stubMaterialize(),
         bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
       },
     );
 

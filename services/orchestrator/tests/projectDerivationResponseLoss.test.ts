@@ -16,7 +16,7 @@ import {
 import { designContractDigest } from "../src/engine/design/designContract.js";
 import { ProjectDerivationStore } from "../src/engine/repositories/projects.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
-import { stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
+import { stubPool, noopComposeDesignSystem, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
 
 const ACTOR: ActorContext = {
   userId: "response-loss-test",
@@ -166,6 +166,7 @@ function deriveInput(
     deploy: { providerKind: "deploy.flyio" as const },
     materializeTemplate,
     bootstrapProject: successfulBootstrapProject,
+    composeDesignSystem: noopComposeDesignSystem,
     createRepository,
   };
 }

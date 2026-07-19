@@ -172,4 +172,23 @@ export class DesignFragmentStore implements DesignFragmentPersistenceStore {
       return result.rows.map((row) => ({ kind: row.kind, label: row.label }));
     });
   }
+
+  /** The FILE bodies of the org's present validated fragments — the batch-compose
+   * gate's cross-run collision defense (`loadPresentFiles`). A NEW authored fragment
+   * whose file path collides (case-insensitively) with an EXISTING persisted fragment
+   * is caught only when the gate composes the authored set AGAINST these files. Each
+   * row's `files` is re-validated through the schema boundary (fail-closed — a corrupt
+   * persisted row surfaces loud, never a partial/undefended set). Org-scoped under RLS
+   * with an explicit `WHERE org_id = $1` belt over the policy. */
+  async listPresentFilesByOrg(orgId: string): Promise<DesignArtifactFileV1[]> {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<{ files: unknown }>(
+        `SELECT files FROM design_fragments
+           WHERE status = 'validated' AND org_id = $1
+           ORDER BY id`,
+        [orgId],
+      );
+      return result.rows.flatMap((row) => FilesArray.parse(row.files));
+    });
+  }
 }

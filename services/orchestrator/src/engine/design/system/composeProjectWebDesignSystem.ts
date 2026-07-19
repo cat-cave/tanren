@@ -127,6 +127,12 @@ export async function composeProjectWebDesignSystem(
   const required = requiredDesignFragmentsFromSurfaces(contractV2);
   const fragmentStore = new DesignFragmentStore(deps.pool);
   const present = await fragmentStore.listPresentByOrg(orgId);
+  // Snapshot the org's present fragment FILE bodies BEFORE authoring persists this
+  // run's fragments (the kernel persists-as-validated ahead of the batch gate). The
+  // batch gate composes the authored set against THIS pre-run registry, so a NEW
+  // fragment colliding with an EXISTING persisted fragment is caught — while the just-
+  // authored fragments are NOT double-counted (they are added by the gate separately).
+  const presentFiles = await fragmentStore.listPresentFilesByOrg(orgId);
   const missing = selectMissingDesignFragments(required, present);
 
   const authoredIds: string[] = [];
@@ -142,7 +148,12 @@ export async function composeProjectWebDesignSystem(
         adapter,
         store: fragmentStore,
         events: createDesignFragmentAuthoringEvents(deps.eventStore),
-        loadPresentFiles: async () => [],
+        // Cross-run collision defense: the batch gate composes the authored fragments
+        // against the org's REAL present file bodies (snapshotted PRE-authoring above),
+        // so a NEW fragment whose path collides with an EXISTING persisted fragment is
+        // caught (not just NEW-vs-NEW). The pre-run snapshot avoids double-counting this
+        // run's own just-persisted fragments (the kernel persists ahead of the gate).
+        loadPresentFiles: async () => presentFiles,
       },
     });
     if (result.failedIds.length > 0) {

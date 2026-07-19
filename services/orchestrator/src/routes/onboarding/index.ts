@@ -53,6 +53,7 @@ import {
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { DesignAgent } from "../../engine/design/designAgent.js";
+import { DesignFragmentAuthoringFailedError } from "../../engine/design/system/authoring/index.js";
 import type { MaterializeTemplate } from "../../engine/templates/fragments/materialize.js";
 import type { FragmentAuthoring, FragmentLibrary } from "../../engine/templates/index.js";
 export { buildLiveMaterializeTemplate } from "./materializeTemplate.js";
@@ -391,25 +392,16 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           400,
         );
       }
-      // One or more per-fragment authoring runs failed at their fixed point. The
-      // derive halts loud per doctrine (no silent skip). Surfaced as 409
-      // needs_attention — an operator inspects the `fragment.authoring.failed`
-      // events, fixes the writer / validator, and retries.
+      // An authoring loop (code-F2 fragments OR ds-composer design-F2D) halted at its
+      // fixed point (no silent skip). Both map to a typed 409 needs_attention carrying
+      // the failed ids + per-unit rejection reasons on the body, so an operator reads
+      // WHY it halted off the response (no log grepping) and inspects the matching
+      // `*.authoring.failed` events — never a generic 500.
       if (error instanceof FragmentAuthoringFailedError) {
-        return respond(
-          {
-            error: "fragment_authoring_failed",
-            capability: "fragments",
-            failedIds: error.failedIds,
-            // v66 fix: surface the per-fragment writer rejection reason on the 409
-            // body so the operator can read WHY F2 halted directly off the
-            // response — no orchestrator-log grepping. Keyed by fragment id; value
-            // is the LAST rejection captured by F2 at the fixed point.
-            failureReasons: error.failureReasons,
-            message: error.message,
-          },
-          409,
-        );
+        return respond(authoringFailedBody("fragment_authoring_failed", "fragments", error), 409);
+      }
+      if (error instanceof DesignFragmentAuthoringFailedError) {
+        return respond(authoringFailedBody("design_fragment_authoring_failed", "design_fragments", error), 409);
       }
       if (error instanceof Error && error.message.startsWith("deploy provision failed:")) {
         return respond({ error: "deploy_provision_failed", message: error.message }, 502);
@@ -419,6 +411,23 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
   });
 
   return app;
+}
+
+/** The shared 409 body for an authoring fixed-point halt — both the code-F2
+ * `FragmentAuthoringFailedError` and the ds-composer `DesignFragmentAuthoringFailedError`
+ * carry `failedIds` + `failureReasons`, so one shape serves both typed arms. */
+function authoringFailedBody(
+  errorCode: string,
+  capability: string,
+  error: FragmentAuthoringFailedError | DesignFragmentAuthoringFailedError,
+): Record<string, unknown> {
+  return {
+    error: errorCode,
+    capability,
+    failedIds: error.failedIds,
+    failureReasons: error.failureReasons,
+    message: error.message,
+  };
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
