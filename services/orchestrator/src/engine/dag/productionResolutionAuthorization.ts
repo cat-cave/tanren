@@ -18,6 +18,13 @@ export {
   buildPostMergeBehaviorAcceptanceVerifier,
   PostMergeBehaviorAcceptanceVerifier,
 } from "../verification/postMergeReproof/behaviorAcceptanceVerdict.js";
+// rv-16b behavior-aware regression bisection, re-exported through the SAME seam the walker +
+// retry route import from (no fresh module dep for the route).
+export {
+  recordRegressionBisections,
+  type RegressionBisector,
+} from "../verification/postMergeReproof/regressionBisection.js";
+export { buildRegressionBisector } from "../verification/postMergeReproof/regressionBisectionBuild.js";
 
 /** Production composition keeps the fail-closed blocked-decision seam together. */
 export function buildProductionRepairRouter(pool: pg.Pool): RepairRouter {
