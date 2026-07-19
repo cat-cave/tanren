@@ -18,6 +18,7 @@ import type { AuditPosture } from "../../contracts/auditPosture.js";
 import type { GateOutcome } from "../gate/index.js";
 import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
+import type { BehaviorLandGate } from "../../merge/behaviorLandGate.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
 import type {
@@ -92,6 +93,15 @@ export interface MergeAuthorityBundle {
   demo: RawDemoVerification | undefined;
   /** The HITL signoff (REQUIRED + explicit; absent → pending → needs_attention). */
   hitlSignoff: RawHitlSignoff | undefined;
+  /**
+   * rv-gate — the run's runtime BEHAVIOR-acceptance outcome at land time. `not_applicable`
+   * when no pre-merge behavior verification with a blocking verdict was required (most runs)
+   * — it NEVER blocks those. When required, only `passed` clears; a `failed` /
+   * `inconclusive` behavior outcome fails closed (a required product-behavior failure or an
+   * inconclusive/absent required verdict never authorizes). Resolved fresh at land time by
+   * `resolveLandTimeBehaviorGate` (the SAME freshness the gate/review/findings reads apply).
+   */
+  behaviorGate: BehaviorLandGate;
 }
 
 /**

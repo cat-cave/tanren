@@ -41,5 +41,6 @@ export function lifecycleAuthorityBundle(input: {
     budget: { ceilingUsd: undefined, spentUsd: 0 },
     demo: "not_required",
     hitlSignoff: "not_required",
+    behaviorGate: { kind: "not_applicable" },
   };
 }

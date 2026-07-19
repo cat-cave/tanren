@@ -136,6 +136,7 @@ describe("gv-3 buildMergeAuthorityBundle — stamps the real hashes it is handed
       budgetState: { ceilingUsd: undefined, spentUsd: 0 },
       demo: "not_required",
       hitlSignoff: "not_required",
+      behaviorGate: { kind: "not_applicable" },
     };
     const bundle = buildMergeAuthorityBundle(input);
     // The gate-config hash is the REAL resolved hash — not the former `""`.

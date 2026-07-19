@@ -28,6 +28,7 @@ import type { PullRequestMergeability } from "../contracts/codeHostTypes.js";
 import type { Digest } from "../contracts/cas.js";
 import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
+import type { BehaviorLandGate } from "./behaviorLandGate.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import { evaluateExactReviewReceiptHead } from "./landSignals.js";
@@ -82,6 +83,14 @@ export interface MergeAuthorityGateInput {
   requiresExactReviewReceipt: boolean;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
+  /**
+   * rv-gate — the run's runtime BEHAVIOR-acceptance outcome. Held as a SIBLING of `signals`
+   * (NOT inside the frozen `AuthorizeLandInput`, per mergeAuthority.ts reconciliation rule 2:
+   * SP-5 EMITS evidence, it never bolts a field onto the decision input). It is enforced as a
+   * PRE-AUTHORIZE guard here (mirroring the gate↔land / review↔land commit-binding guards):
+   * `not_applicable` never blocks; `failed`/`inconclusive` fail closed.
+   */
+  behaviorGate: BehaviorLandGate;
   /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
   store: AuthorityLandStore;
 }
@@ -165,6 +174,7 @@ export async function runAuthorityLand(input: {
     reviewedHeadSha: bundle.reviewedHeadSha,
     requiresExactReviewReceipt: bundle.requiresExactReviewReceipt,
     signals,
+    behaviorGate: bundle.behaviorGate,
     store,
   });
 }
@@ -267,6 +277,34 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
     return {
       kind: "blocked",
       reasons: [`reviewVerdict: ${reviewReceiptGuard.reason} — fail closed (re-review the current head)`],
+    };
+  }
+
+  // BEHAVIOR-VERDICT GATE (rv-gate): when a run REQUIRED behavior acceptance (a pre-merge
+  // behavior verification produced a blocking, non-quarantined verdict), that behavior must
+  // be a decisive PASS. Fail-closed: a decisive product/visual/contract failure OR an
+  // inconclusive/absent/still-running required verdict NEVER authorizes (inconclusive ≠
+  // passed). `not_applicable` (no behavior verification was required — most runs) NEVER
+  // blocks: the behavior section only gates when there is a required behavior to gate on,
+  // mirroring how the native CI gate only applies when CI ran. A quarantined behavior was
+  // already excluded-from-green upstream, so it neither passes nor blocks here.
+  const behavior = input.behaviorGate;
+  if (behavior.kind === "failed") {
+    return {
+      kind: "blocked",
+      reasons: [
+        `runtimeBehavior: required behavior '${behavior.behaviorRevisionId}' recorded '${behavior.outcome}' ` +
+          `on the live surface — fail closed (a required product-behavior failure never authorizes)`,
+      ],
+    };
+  }
+  if (behavior.kind === "inconclusive") {
+    return {
+      kind: "blocked",
+      reasons: [
+        `runtimeBehavior: ${behavior.reason} — fail closed ` +
+          `(a required-but-not-green behavior verdict never authorizes; inconclusive ≠ passed)`,
+      ],
     };
   }
 
