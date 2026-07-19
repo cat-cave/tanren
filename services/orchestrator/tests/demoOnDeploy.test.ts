@@ -311,7 +311,14 @@ function scriptedProofBackedDemo(
       };
     },
   };
-  return new ProofBackedWebDemo({ events, planLoader, orchestrator });
+  // The fake orchestrator ignores the env id, so a stub resolver suffices; the PERSISTING
+  // env-bound path is proven in the *.rls.integration demo tests.
+  return new ProofBackedWebDemo({
+    events,
+    planLoader,
+    orchestrator,
+    resolveEnvironment: { resolveForLiveRelease: (liveRelease) => Promise.resolve(liveRelease.integrationNodeId) },
+  });
 }
 
 async function run(

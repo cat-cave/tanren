@@ -17,15 +17,15 @@
 //     exercised at all) the demo fails LOUD as unobservable so the operator triages an
 //     infra halt, distinct from a real product-behavior failure.
 //
-// EVIDENCE, NOT LEDGER: the acceptance run drives REAL observations but its verdict is
-// persisted as the demo's append-only, org-scoped `demo.evidence.recorded` +
-// `demo.completed` events — the live demo surface — rather than into the pre-merge
-// `behavior_verdicts` ledger (whose `behavior_verification_runs.environment_id` FK
-// requires a provisioned `verification_environments` row the deploy path does not yet
-// create). The demo therefore drives the full orchestrator over non-persisting run/event
-// sinks (below); when environment provisioning lands, the same drive can persist real
-// verdicts without changing this mapping. Every recorded field is NON-SECRET — a behavior
-// id, an outcome, and an assertion tally; never a token or a response body.
+// LEDGER + EVIDENCE: the acceptance run drives REAL observations, and (rv-env) now that the
+// deploy path provisions a `verification_environments` row for the live release, the run
+// PERSISTS its real per-behavior verdict into the 0079-hardened `behavior_verdicts` ledger
+// through the {@link PgAcceptanceRunStore} bound to that deploy-created environment (resolved
+// via {@link VerificationEnvironmentResolver} — never a fabricated `integrationNodeId`). It
+// ALSO records the operator-facing append-only, org-scoped `demo.evidence.recorded` +
+// `demo.completed` events (the acceptance orchestrator's own `behavior.verification.*`
+// vocabulary stays swallowed so the pre-merge-gate timeline is uncontaminated). Every
+// recorded field is NON-SECRET — a behavior id, an outcome, and an assertion tally.
 
 import { randomUUID } from "node:crypto";
 import { runWithJobOrgId } from "@tanren/db";
@@ -39,6 +39,7 @@ import {
   HttpAcceptanceSurfaceDriver,
   MalformedAcceptanceSpecError,
   PgAcceptancePlanLoader,
+  PgAcceptanceRunStore,
   PgReleaseInstanceBaseUrlResolver,
   type AcceptanceBehaviorResult,
   type AcceptanceEventSink,
@@ -52,6 +53,10 @@ import {
   type RecordAcceptanceVerdictInput,
   type StoredAcceptanceVerdict,
 } from "../verification/acceptance/index.js";
+import {
+  PgVerificationEnvironmentResolver,
+  type VerificationEnvironmentResolver,
+} from "../repositories/verificationEnvironments.js";
 import type { BehaviorEvidence } from "./demoEvidence.js";
 import type { DemoTarget } from "./demoEngine.js";
 
@@ -105,6 +110,12 @@ export interface ProofBackedWebDemoDeps {
   readonly planLoader: AcceptancePlanLoader;
   /** The acceptance orchestrator the demo drives (real rv-6 driver + rv-11 evaluation). */
   readonly orchestrator: AcceptanceExecutor;
+  /**
+   * Resolves the deploy-created `verification_environments` id for the run's live release so
+   * the acceptance run PERSISTS its verdict against a real environment (rv-env) — never the
+   * fabricated `integrationNodeId`.
+   */
+  readonly resolveEnvironment: VerificationEnvironmentResolver;
 }
 
 /** The in-memory result of a proof-backed demo — the per-behavior evidence + the pass/fail tally. */
@@ -161,7 +172,10 @@ export class ProofBackedWebDemo {
       orgId: target.orgId,
       behaviorRevisionIds: release.behaviorRevisionIds,
     });
-    const runResult = await this.deps.orchestrator.execute(this.buildRequest(target, release, plans));
+    // Resolve the deploy-created verification environment for THIS live release so the
+    // acceptance run persists its verdict against a real env (fail-closed if none/mismatch).
+    const environmentId = await this.deps.resolveEnvironment.resolveForLiveRelease(release);
+    const runResult = await this.deps.orchestrator.execute(this.buildRequest(target, release, plans, environmentId));
 
     const evidence = runResult.behaviors.map((behavior) => toEvidence(behavior));
     const passed = evidence.filter((entry) => entry.outcome === "passed").length;
@@ -182,13 +196,15 @@ export class ProofBackedWebDemo {
     target: DemoTarget,
     release: ReleaseInstanceRecord,
     plans: readonly AcceptancePlan[],
+    environmentId: string,
   ): AcceptanceRunRequest {
     return {
       orgId: target.orgId,
       projectId: target.projectId,
       // The release's integration node binds the rv-6 resolver to THIS run's release URL.
       integrationNodeId: release.integrationNodeId,
-      environmentId: release.integrationNodeId,
+      // rv-env: the REAL deploy-created verification environment (not the integration node).
+      environmentId,
       preparedHeadSha: release.sourceRef,
       jjTreeId: release.sourceRef,
       artifactDigest: release.artifactDigest,
@@ -286,11 +302,20 @@ export class EphemeralAcceptanceEventSink implements AcceptanceEventSink {
  */
 export function buildProofBackedWebDemo(pool: pg.Pool, events: EventStore): ProofBackedWebDemo {
   const orchestrator = new AcceptanceOrchestrator({
-    store: new EphemeralAcceptanceRunStore(),
+    // rv-env: the PERSISTING store — the demo's real per-behavior verdict now lands in the
+    // 0079-hardened `behavior_verdicts` ledger (bound to the deploy-created env), not a sink.
+    store: new PgAcceptanceRunStore(pool),
+    // The orchestrator's pre-merge `behavior.verification.*` events stay swallowed; the demo
+    // surfaces its own `demo.*` events via `events` below.
     events: new EphemeralAcceptanceEventSink(),
     drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(pool) })],
   });
-  return new ProofBackedWebDemo({ events, planLoader: new PgAcceptancePlanLoader(pool), orchestrator });
+  return new ProofBackedWebDemo({
+    events,
+    planLoader: new PgAcceptancePlanLoader(pool),
+    orchestrator,
+    resolveEnvironment: new PgVerificationEnvironmentResolver(pool),
+  });
 }
 
 /**
