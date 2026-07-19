@@ -11,10 +11,14 @@
 //       the runId violates the FK and fails the gate closed on every run).
 //   (C) LEAK-SAFE teardown (fix #2): when the env bind throws AFTER applyPreview, the deployed
 //       preview is torn down — no leaked previews.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveLandTimeBehaviorGate } from "../src/engine/merge/behaviorLandGate.js";
+import { parseDigest, type Digest } from "../src/engine/contracts/cas.js";
+import { buildPreMergeBehaviorGateProducer } from "../src/engine/verification/preMerge/buildPreMergeBehaviorGateProducer.js";
 import {
   AcceptanceOrchestrator,
   HttpAcceptanceSurfaceDriver,
@@ -249,6 +253,62 @@ describeDb("pre-merge behavior gate — production resolution, real-node binding
     const outcome = await buildProducer(app, 200, fixedProvisioner()).produce(gateInput(mergeRunId));
     expect(outcome).toMatchObject({ kind: "passed", passedBlockingCount: 1 });
     expect(await resolveLandTimeBehaviorGate(app, ORG, mergeRunId)).toEqual({ kind: "passed", passedBlockingCount: 1 });
+  });
+
+  it("rv-9 FINDING 1: the PRODUCTION buildPreMergeBehaviorGateProducer content-addresses the drive + durably links it", async () => {
+    // Drive the REAL production factory's executor (the closure the merge stage invokes) against a
+    // real local product surface. Unlike buildProducer above, this is the shipped
+    // buildPreMergeBehaviorGateProducer — so it must construct + pass renderCapture, or the
+    // merge-critical gate content-addresses NOTHING.
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const producer = buildPreMergeBehaviorGateProducer(app, {} as never);
+      const buildExecutor = (
+        producer as unknown as { deps: { buildExecutor: (url: string) => AcceptanceOrchestrator } }
+      ).deps.buildExecutor;
+      const orchestrator = buildExecutor(baseUrl);
+      const plans = await new PgAcceptancePlanLoader(app).loadPlans({
+        orgId: ORG,
+        behaviorRevisionIds: [BEHAVIOR_REVISION],
+      });
+      const result = await orchestrator.execute({
+        orgId: ORG,
+        projectId: PROJECT,
+        integrationNodeId: NODE_ID,
+        environmentId: ENV_ID,
+        preparedHeadSha: "deadbeef",
+        jjTreeId: "tree",
+        artifactDigest: CAS as unknown as Digest,
+        deploymentFingerprint: "fp",
+        purpose: "pre_merge",
+        plans,
+      });
+      const behavior = result.behaviors[0]!;
+      expect(behavior.outcome).toBe("passed");
+      // The production factory captured the real response and returned a content-addressed ref...
+      expect(behavior.evidenceLinkRefs).toHaveLength(1);
+      // ...and DURABLY linked it onto the persisted verdict — resolvable from the ledger alone.
+      const evidence = await runWithOrgScope(app, ORG, (client) =>
+        client.query<{ cas_digest: string }>(
+          "SELECT cas_digest FROM behavior_verdict_evidence WHERE org_id = $1 AND verdict_id = $2",
+          [ORG, behavior.verdictId],
+        ),
+      );
+      expect(evidence.rowCount).toBe(1);
+      expect(evidence.rows[0]!.cas_digest).toBe(behavior.evidenceLinkRefs[0]!.casDigest);
+      expect(parseDigest(evidence.rows[0]!.cas_digest)).toBe(behavior.evidenceLinkRefs[0]!.casDigest);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("(A) COUNT hole closed: behavior A has 2 active revisions, behavior B has 0 → blocked (SET coverage)", async () => {

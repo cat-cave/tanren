@@ -47,12 +47,14 @@ import {
   PgAcceptanceRunStore,
   PgAcceptanceEventSink,
   PgReleaseInstanceBaseUrlResolver,
+  PgVerificationCaptureStore,
   type AcceptanceEventSink,
   type AcceptancePlanLoader,
   type AcceptanceRunRequest,
   type AcceptanceRunResult,
   type FlakeQuarantineActuatorStore,
 } from "../acceptance/index.js";
+import { PgCasByteStore } from "../../cas/pgCasByteStore.js";
 import { PgBehaviorQuarantineStore } from "../../repositories/behaviorQuarantines.js";
 import { EphemeralAcceptanceEventSink } from "../../demo/proofBackedWebDemo.js";
 import { createLogger } from "../../observability/logger.js";
@@ -323,6 +325,10 @@ export function buildPostMergeBehaviorAcceptanceVerifier(pool: pg.Pool): PostMer
     store: new PgAcceptanceRunStore(pool),
     events: new EphemeralAcceptanceEventSink(),
     drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(pool) })],
+    // rv-9: content-address the post-merge reproof's response/render captures into the SP-3 CAS +
+    // verification_artifacts; the persisted `post_merge_production` verdict carries the durable
+    // evidence link (behavior_verdict_evidence) so a later proof resolves the artifact from the ledger.
+    renderCapture: new PgVerificationCaptureStore(pool, new PgCasByteStore(pool)),
   });
   return new PostMergeBehaviorAcceptanceVerifier({
     pool,

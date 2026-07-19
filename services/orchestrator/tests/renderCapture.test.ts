@@ -337,3 +337,93 @@ describe("rv-9 render-capture wired into the REAL acceptance run", () => {
     expect(db.rows.size).toBe(1);
   });
 });
+
+// ---- FINDING 2 write path: the verdict recorded onto the ledger carries the capture links ----
+
+/** Records every verdict input so a test can assert what reached the durable ledger. */
+class RecordingStore implements AcceptanceRunStore {
+  public readonly verdicts: RecordAcceptanceVerdictInput[] = [];
+  public recordRun(_input: RecordAcceptanceRunInput): Promise<string> {
+    return Promise.resolve("run_1");
+  }
+  public completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {
+    return Promise.resolve();
+  }
+  public recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
+    this.verdicts.push(input);
+    return Promise.resolve("verdict_1");
+  }
+  public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
+    return Promise.resolve([]);
+  }
+}
+
+describe("rv-9 durable linkage: captures are threaded onto the recorded verdict (FINDING 2)", () => {
+  let server: Server;
+  let baseUrl: string;
+  const healthBody = JSON.stringify({ status: "ok", count: 7 });
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(healthBody);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  function makeRequest() {
+    return {
+      orgId: ORG,
+      projectId: PROJECT,
+      integrationNodeId: "inode_1",
+      environmentId: "env_1",
+      preparedHeadSha: "abc",
+      jjTreeId: "tree",
+      artifactDigest: ARTIFACT,
+      deploymentFingerprint: "fp",
+      plans: [healthPlan()],
+    };
+  }
+
+  it("with renderCapture: recordVerdict receives the content-addressed capture link", async () => {
+    const store = new RecordingStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new NoopEvents(),
+      drivers: [new HttpAcceptanceSurfaceDriver({ surface: "api", resolveBaseUrl: fixedResolver(baseUrl) })],
+      renderCapture: makeStore(new InMemoryCas(), new FakeDb()),
+    });
+    await orchestrator.execute(makeRequest());
+    const links = store.verdicts[0]!.evidenceLinks!;
+    expect(links).toHaveLength(1);
+    expect(links[0]!.casDigest).toBe(expectedCaptureDigest(healthBody));
+    expect(links[0]!.verificationArtifactId).toBe(
+      captureArtifactId(PROJECT, expectedCaptureDigest(healthBody), "response_capture"),
+    );
+  });
+
+  it("without renderCapture: the recorded verdict carries no evidence links (never a partial write)", async () => {
+    const store = new RecordingStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new NoopEvents(),
+      drivers: [new HttpAcceptanceSurfaceDriver({ surface: "api", resolveBaseUrl: fixedResolver(baseUrl) })],
+    });
+    const result = await orchestrator.execute(makeRequest());
+    expect(result.behaviors[0]!.evidenceLinkRefs).toHaveLength(0);
+    expect(store.verdicts[0]!.evidenceLinks).toBeUndefined();
+  });
+});
