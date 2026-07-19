@@ -264,6 +264,8 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "merge.member.isolated": "warn",
   "merge.partition.leased": "info",
   "merge.partition.released": "info",
+  "merge.repair.routed": "warn",
+  "merge.member.respec_routed": "warn",
 
   // Notification meta — opted off by default; severity floor will mask them
   // even on routes that accidentally enable them, since the dispatcher does

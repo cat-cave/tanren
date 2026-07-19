@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "blockedReason": {
+      "type": "string"
+    },
+    "disposition": {
+      "enum": [
+        "repair_in_place",
+        "respec",
+        "blocked_needs_attention"
+      ],
+      "type": "string"
+    },
+    "evaluationId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "failureClass": {
+      "enum": [
+        "deterministic_policy",
+        "needs_product_decision",
+        "unknown_fail_closed",
+        "transient_infrastructure"
+      ],
+      "type": "string"
+    },
+    "failureSignature": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "groupId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "magnitude": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "sourceSpecId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "sourceSpecId",
+    "groupId",
+    "evaluationId",
+    "disposition",
+    "failureClass",
+    "failureSignature",
+    "magnitude"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.repair.routed"
+}

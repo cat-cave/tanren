@@ -33,6 +33,7 @@ import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { driveMultiMemberPass } from "./multiMemberAuthorityEmbark.js";
 import type { BatchAuthorityEvaluator } from "./multiMemberAuthorityTypes.js";
+import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
 import { createLogger } from "../observability/logger.js";
 import { BatchBisector } from "./batchBisector.js";
 export { DEFAULT_MAX_BATCH_SIZE };
@@ -78,6 +79,8 @@ export interface BatchMergeCoordinatorDeps {
   escalator: SpecEscalator;
   /** Writer-rework router for gate-fail bisect + sustained infra hold. Prod always wires it. */
   gateRework?: BatchGateReworkRouter;
+  /** mq-10 autonomous-repair router: classifies an isolated member → repair / respec / blocked. */
+  repairRouter?: AutonomousRepairRouter;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /** Atomic active-successor proof + canonical event + exact queue retirement. */
   recoverySettlement?: RecoveryOwnedSettlementWriter;

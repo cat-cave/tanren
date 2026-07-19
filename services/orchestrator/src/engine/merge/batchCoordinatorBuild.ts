@@ -12,44 +12,19 @@
 // PgBatchMergeEventEmitter (merge.batch.*). The max batch size is resolved per-project
 // from `projects.config.maxBatchSize` (the config knob, the single source of truth).
 
-import { runWithSystemScope } from "@tanren/db";
-import type pg from "pg";
-import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
-import { BatchMergeCoordinator, DEFAULT_MAX_BATCH_SIZE } from "./batchCoordinator.js";
+import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
+import { resolveMaxBatchSize } from "./batchMaxSize.js";
 import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
 import { PgMultiMemberAuthorityEvaluator } from "./multiMemberAuthorityGatherPg.js";
-
-/**
- * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
- * scope — the single config source of truth.
- *
- * no_silent_fallbacks: an ABSENT config (the `'{}'::jsonb` default a fresh project
- * carries; `isAbsentProjectConfig`) legitimately uses the schema default. But a
- * PRESENT-but-CORRUPT config must NOT be silently masked as the default — a corrupt
- * blob silently capping at the wrong batch size is a wrong-CAP fallback. A parse
- * failure PROPAGATES (loud, fail-closed) rather than being swallowed.
- */
-export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Promise<number> {
-  const config = await runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ config: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
-      projectId,
-    ]);
-    return result.rows[0]?.config;
-  });
-  if (isAbsentProjectConfig(config)) {
-    return DEFAULT_MAX_BATCH_SIZE;
-  }
-  // Present config: a parse failure here is genuine corruption — let it propagate.
-  return migrateProjectConfig(config).maxBatchSize;
-}
+import { PgAutonomousRepairRouter } from "./respecRouterPg.js";
 
 /**
  * Assemble the production BatchMergeCoordinator (the native-queue driver).
@@ -100,6 +75,11 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       pool: deps.pool,
       runStateWriter,
     }),
+    // mq-10: the autonomous-repair router. An isolated deterministic-policy member is classified —
+    // in-place-repairable → the writer rework above; a PROVEN fixed point → a RespecPacketV1 that
+    // re-drives spec authoring on a different agent (materializing a replacement spec); an
+    // unclassifiable failure → fail-closed needs-attention. Never a silent drop or infinite requeue.
+    repairRouter: new PgAutonomousRepairRouter({ pool: deps.pool }),
     recoverySettlement,
     // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
