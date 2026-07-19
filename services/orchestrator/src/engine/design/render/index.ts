@@ -6,3 +6,4 @@ export * from "./renderCaptureContracts.js";
 export * from "./browserFreeRenderCaptureHarness.js";
 export { captureDomA11y, type DomA11yCapture } from "./domA11yAudit.js";
 export { renderComponentToStaticMarkup, type SsrRenderInput, type SsrRenderResult } from "./componentSsrRenderer.js";
+export * from "./renderVerdictOracle.js";
