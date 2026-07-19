@@ -490,7 +490,7 @@ export * from "./schemaDesignSystems.js";
 export { designFragments } from "./schemaDesignFragments.js";
 export { designRenderLandVerdicts } from "./schemaDesignRender.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
-export { governancePolicyRevisions } from "./schemaGovernance.js";
+export { governanceFragments, governancePolicyRevisions } from "./schemaGovernance.js";
 export * from "./schemaEffectivePolicySnapshots.js";
 export * from "./schemaWave6.js";
 export * from "./schemaBhCluster.js";

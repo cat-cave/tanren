@@ -617,6 +617,13 @@
       "when": 1784483831386,
       "tag": "0089_verdict_count_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1784492416102,
+      "tag": "0090_sudden_patriot",
+      "breakpoints": true
     }
   ]
 }
