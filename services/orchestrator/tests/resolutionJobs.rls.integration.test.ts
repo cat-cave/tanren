@@ -207,6 +207,64 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     ]);
   });
 
+  it("fences a stale worker's late complete/release after its lease expires and is re-claimed", async () => {
+    await store.enqueue({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "rjob_fence",
+      issueLoopId: a.loopId,
+      contractId: a.contractId,
+      stage: "baseline",
+      idempotencyKey: "iloop-a:fence",
+    });
+
+    // Worker A claims the job under its lease.
+    const claimedByA = await store.claimNext({ orgId: ORG_A, leaseOwner: "worker_a", leaseMs: 60_000 });
+    expect(claimedByA).toMatchObject({ id: "rjob_fence", state: "running", leaseOwner: "worker_a" });
+
+    // A's lease expires (crash / GC pause) and worker B re-claims the row.
+    await runWithOrgScope(app, ORG_A, (client) =>
+      client.query(
+        "UPDATE resolution_jobs SET lease_expiry = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
+        [ORG_A, "rjob_fence"],
+      ),
+    );
+    const recoveredByB = await store.recoverExpiredLeases({ orgId: ORG_A, leaseOwner: "worker_b", leaseMs: 60_000 });
+    expect(recoveredByB).toEqual([
+      expect.objectContaining({ id: "rjob_fence", state: "running", leaseOwner: "worker_b" }),
+    ]);
+
+    // A's LATE terminal ops are fenced out (0 rows) — they must report the lost
+    // lease, never silently succeed and clobber B's active drive.
+    await expect(store.complete({ orgId: ORG_A, id: "rjob_fence", leaseOwner: "worker_a" })).resolves.toBe(false);
+    await expect(
+      store.release({ orgId: ORG_A, id: "rjob_fence", leaseOwner: "worker_a", state: "retryable" }),
+    ).resolves.toBe(false);
+
+    // B's state is intact: still running, still owned by B, never completed by A.
+    const afterFence = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query<{ state: string; lease_owner: string | null }>(
+        "SELECT state, lease_owner FROM resolution_jobs WHERE org_id = $1 AND id = $2",
+        [ORG_A, "rjob_fence"],
+      ),
+    );
+    expect(afterFence.rows[0]).toEqual({ state: "running", lease_owner: "worker_b" });
+
+    // The normal path still works: B holds the live lease and completes it.
+    await expect(store.complete({ orgId: ORG_A, id: "rjob_fence", leaseOwner: "worker_b" })).resolves.toBe(true);
+    const afterComplete = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query<{ state: string; lease_owner: string | null }>(
+        "SELECT state, lease_owner FROM resolution_jobs WHERE org_id = $1 AND id = $2",
+        [ORG_A, "rjob_fence"],
+      ),
+    );
+    expect(afterComplete.rows[0]).toEqual({ state: "completed", lease_owner: null });
+
+    // A completed row is terminal: a late complete/release from ANY owner is a no-op.
+    await expect(store.complete({ orgId: ORG_A, id: "rjob_fence", leaseOwner: "worker_b" })).resolves.toBe(false);
+    await expect(store.claimNext({ orgId: ORG_A, leaseOwner: "worker_c", leaseMs: 60_000 })).resolves.toBeUndefined();
+  });
+
   it("walks a crashed lease through recovery and does not re-run its completed job", async () => {
     await store.enqueue({
       orgId: ORG_A,
