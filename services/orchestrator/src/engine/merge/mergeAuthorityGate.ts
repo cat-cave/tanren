@@ -33,6 +33,7 @@ import type { DesignRenderGate } from "./designRenderLandGate.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import { evaluateExactReviewReceiptHead } from "./landSignals.js";
+import { evaluateReviewRules, type GovernanceReviewGate } from "../governance/reviewRules.js";
 
 /**
  * The fail-closed signals the dispatcher gathers for ONE land authorization, in
@@ -82,6 +83,8 @@ export interface MergeAuthorityGateInput {
   reviewedHeadSha: string | undefined;
   /** Simulated policy fails closed when the receipt tuple is absent or malformed. */
   requiresExactReviewReceipt: boolean;
+  /** Immutable review requirements and their durable, actor-bound evidence. */
+  reviewGate: GovernanceReviewGate;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
   /**
@@ -182,6 +185,7 @@ export async function runAuthorityLand(input: {
     gatedHeadSha: bundle.gatedHeadSha,
     reviewedHeadSha: bundle.reviewedHeadSha,
     requiresExactReviewReceipt: bundle.requiresExactReviewReceipt,
+    reviewGate: bundle.reviewGate,
     signals,
     behaviorGate: bundle.behaviorGate,
     designRenderGate: bundle.designRenderGate,
@@ -288,6 +292,20 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
       kind: "blocked",
       reasons: [`reviewVerdict: ${reviewReceiptGuard.reason} — fail closed (re-review the current head)`],
     };
+  }
+
+  // GV-12 REVIEW RULES: a generic `review.approved` event is insufficient when
+  // governance requires a particular reviewer, approval count, forge receipt, or
+  // exact-head freshness. The durable evidence is interpreted HERE, immediately
+  // before the sole MergeAuthority, so missing/unreadable/unresolved review proof
+  // blocks rather than becoming an auto-pass.
+  const reviewRules = evaluateReviewRules({
+    gate: input.reviewGate,
+    latestVerdict: input.signals.reviewVerdict ?? "unread",
+    landingHeadSha: headSha,
+  });
+  if (reviewRules.kind === "blocked") {
+    return { kind: "blocked", reasons: [`reviewRules: ${reviewRules.reason} — fail closed`] };
   }
 
   // BEHAVIOR-VERDICT GATE (rv-gate): when a run REQUIRED behavior acceptance (a pre-merge

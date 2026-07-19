@@ -7,6 +7,7 @@
 
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 export const PLANNER_AUTHORITY_REPO = { owner: "cat-cave", name: "tanren-fixture-medium" };
 export const PLANNER_AUTHORITY_HEAD_SHA = "sha-head";
@@ -39,6 +40,9 @@ export function plannerAuthorityBundle(host: InMemoryCodeHost): MergeAuthorityBu
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: PLANNER_AUTHORITY_HEAD_SHA,
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

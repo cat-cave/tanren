@@ -17,6 +17,7 @@ import type { PullRequestMergeability } from "../../src/engine/contracts/codeHos
 import type { AuthorityLandStore } from "../../src/engine/merge/mergeAuthorityV2Impl.js";
 import type { AuditPosture } from "../../src/engine/contracts/auditPosture.js";
 import type { RunStateWriter } from "../../src/engine/contracts/runStateWriter.js";
+import { noRequiredReviewGate } from "../../src/engine/governance/reviewRules.js";
 
 export const REPO = { owner: "o", name: "r" };
 export const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
@@ -130,6 +131,9 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
     gateOutcome,
     // The gate verdict was for the landed head (`sha-feat`) unless overridden (TOCTOU lock).
     gatedHeadSha: o.gatedHeadSha ?? "sha-feat",
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     findings: [],
     auditPosture: POSTURE,
     reviewVerdict: o.reviewVerdict ?? "approved",

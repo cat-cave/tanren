@@ -21,6 +21,7 @@ import type { BehaviorLandGate } from "../src/engine/merge/behaviorLandGate.js";
 import type { DesignRenderGate } from "../src/engine/merge/designRenderLandGate.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 const REPO = { owner: "o", name: "r" };
 const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
@@ -80,6 +81,7 @@ function gateInput(host: InMemoryCodeHost) {
     // Human/auto path (no forge receipt) unless a TOCTOU test overrides.
     reviewedHeadSha: undefined,
     requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     // Default: no pre-merge behavior verification was required (most runs) — the behavior
     // section is not-applicable and NEVER blocks. Behavior tests below override this.
     behaviorGate: { kind: "not_applicable" as const },

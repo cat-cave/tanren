@@ -9,10 +9,17 @@ import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { AuthorizeLandInput, GateVerdict, LandBindingEnvelope } from "../contracts/mergeAuthority.js";
 import { serviceAuditActor } from "../events/schemas/audit.js";
-import { resolveLandTimeFindings, resolveLandTimeSignals } from "./landSignals.js";
+import {
+  resolveLandTimeFindings,
+  resolveLandTimeReviewGate,
+  resolveLandTimeSignals,
+  type GovernanceReviewGate,
+} from "./landSignals.js";
 import { resolveLandTimeBehaviorGate, type BehaviorLandGate } from "./behaviorLandGate.js";
 import { resolveDesignRenderGate, type DesignRenderGate } from "./designRenderLandGate.js";
 import { reviewVerdictFrom } from "./mergeAuthorityInputs.js";
+import { evaluateReviewRules, type ReviewRuleEvaluation } from "../governance/reviewRules.js";
+import { resolveEffectivePolicyBody } from "../governance/effectivePolicySnapshotStore.js";
 import { batchArtifactDigest, batchProofRoot, type MemberFindingAttribution } from "./multiMemberAuthorityTypes.js";
 import { loadBatchDecisionEvidence, type PersistedBatchDecisionSignals } from "./multiMemberAuthorityEvidencePg.js";
 
@@ -27,6 +34,10 @@ export interface ProjectAuthorityRow {
 interface MemberSignals {
   readonly attribution: MemberFindingAttribution;
   readonly reviewVerdict: ReviewVerdict | undefined;
+  /** The head sha this member's PR is landing (the branch head bound in the node). */
+  readonly headSha: string;
+  /** gv-12 — this member run's immutable review rules + durable, actor-bound approval evidence. */
+  readonly reviewGate: GovernanceReviewGate;
   /** rv-gate — this member run's runtime behavior-acceptance outcome (fail-closed when required). */
   readonly behaviorGate: BehaviorLandGate;
   /** ds-4 — this member run's design-render acceptance outcome (fail-closed when required). */
@@ -67,6 +78,41 @@ export function gateVerdictWithDesignRenderGates(
   return designBlocks ? "failed" : persistedGateVerdict;
 }
 
+/**
+ * gv-12 (MQ-2 batch land): fold every batch member's DEDICATED review-rule evaluation into the
+ * batch gate verdict, exactly like {@link gateVerdictWithBehaviorGates} /
+ * {@link gateVerdictWithDesignRenderGates}. A generic aggregated `reviewVerdict === 'approved'`
+ * is NOT sufficient: governance may require a particular reviewer principal (the dedicated
+ * `tanren-reviewer` actor), a minimum distinct approval count, a complete forge receipt, and
+ * head freshness. Each member is evaluated against its OWN immutable review rules + durable,
+ * actor-bound evidence at its OWN landing head; ANY member whose review rules BLOCK (missing,
+ * malformed, stale, wrong-actor, or below the required count) forces the whole batch gate
+ * verdict to `failed` so `authorizeLand` refuses to authorize (fail-closed). This closes the
+ * MQ-2 fail-open where a batch of size ≥2 CAS-landed `main` on bare `review.approved` events.
+ * Coarse-but-fail-closed by design (the frozen `AuthorizeLandInput` carries no review-rule
+ * field); the single-run path (`authorizeAndLand`) attributes the exact failing rule.
+ */
+export function gateVerdictWithReviewRules(
+  persistedGateVerdict: GateVerdict,
+  reviewEvaluations: readonly ReviewRuleEvaluation[],
+): GateVerdict {
+  const reviewBlocks = reviewEvaluations.some((evaluation) => evaluation.kind === "blocked");
+  return reviewBlocks ? "failed" : persistedGateVerdict;
+}
+
+/** Evaluate one member's dedicated review rules at its own landing head (fail-closed). */
+export function evaluateMemberReviewRules(member: {
+  readonly reviewGate: GovernanceReviewGate;
+  readonly reviewVerdict: ReviewVerdict | undefined;
+  readonly headSha: string;
+}): ReviewRuleEvaluation {
+  return evaluateReviewRules({
+    gate: member.reviewGate,
+    latestVerdict: member.reviewVerdict ?? "unread",
+    landingHeadSha: member.headSha,
+  });
+}
+
 export interface GatheredMultiMemberAuthorityState {
   readonly project: ProjectAuthorityRow;
   readonly orgId: string;
@@ -86,17 +132,27 @@ export async function gatherMultiMemberAuthorityState(
   const project = await loadProject(pool, input.projectId);
   const orgId = requireSingleOrg(input, project.org_id);
   const config = migrateProjectConfig(project.project_config);
+  // gv-12 — resolve the project's effective compiled governance policy ONCE (read-only). The
+  // batch is single-project/single-org (asserted above), so every member shares these immutable
+  // review rules; only the per-member durable evidence differs. FAIL-CLOSED: an unresolvable
+  // policy throws here, so a batch never lands on an inferred permissive review posture.
+  const compiledPolicy = await runWithOrgScope(pool, orgId, (client) =>
+    resolveEffectivePolicyBody(client, orgId, input.projectId),
+  );
   const memberSignals = await Promise.all(
     input.binding.members.map(async (member): Promise<MemberSignals> => {
-      const [findings, signals, behaviorGate, designRenderGate] = await Promise.all([
+      const [findings, signals, reviewGate, behaviorGate, designRenderGate] = await Promise.all([
         resolveLandTimeFindings(pool, orgId, member.runId),
         resolveLandTimeSignals(pool, orgId, member.runId),
+        resolveLandTimeReviewGate(pool, orgId, member.runId, compiledPolicy),
         resolveLandTimeBehaviorGate(pool, orgId, member.runId),
         resolveDesignRenderGate(pool, orgId, member.runId),
       ]);
       return {
         attribution: { specId: member.specId, runId: member.runId, findings },
         reviewVerdict: signals.reviewVerdict,
+        headSha: member.headSha,
+        reviewGate,
         behaviorGate,
         designRenderGate,
       };
@@ -176,17 +232,31 @@ function decisionFromDurableState(
 ): AuthorizeLandInput {
   const findings = signals.flatMap((member) => member.attribution.findings);
   const reviewVerdict = aggregateReview(signals.map((member) => member.reviewVerdict));
+  // gv-12: evaluate EACH member's dedicated review rules against its OWN durable, actor-bound
+  // evidence at its OWN landing head — a generic aggregated `approved` verdict never authorizes
+  // a batch when governance requires a dedicated reviewer / receipt / count / freshness.
+  const reviewEvaluations = signals.map((member) =>
+    evaluateMemberReviewRules({
+      reviewGate: member.reviewGate,
+      reviewVerdict: member.reviewVerdict,
+      headSha: member.headSha,
+    }),
+  );
   return {
     subject: { kind: "integration_node", id: binding.nodeId },
-    // rv-gate (fix #2) + ds-4: any member with a required, non-passing behavior OR design-render
-    // outcome forces the batch gate verdict to `failed` so the whole group land fails closed —
-    // never lands a bad-behavior or a11y-failing member.
-    gateVerdict: gateVerdictWithDesignRenderGates(
-      gateVerdictWithBehaviorGates(
-        persisted.gateVerdict,
-        signals.map((member) => member.behaviorGate),
+    // rv-gate (fix #2) + ds-4 + gv-12: any member with a required, non-passing behavior OR
+    // design-render outcome, OR whose dedicated review rules BLOCK, forces the batch gate verdict
+    // to `failed` so the whole group land fails closed — never lands a bad-behavior, a11y-failing,
+    // or under-reviewed member.
+    gateVerdict: gateVerdictWithReviewRules(
+      gateVerdictWithDesignRenderGates(
+        gateVerdictWithBehaviorGates(
+          persisted.gateVerdict,
+          signals.map((member) => member.behaviorGate),
+        ),
+        signals.map((member) => member.designRenderGate),
       ),
-      signals.map((member) => member.designRenderGate),
+      reviewEvaluations,
     ),
     findings,
     auditPosture,

@@ -51,6 +51,7 @@ export const GOVERNANCE_TIER_PRESETS: Readonly<Record<GovernanceTierPreset, Gove
       { key: "review.freshness", value: "branch_head" },
       { key: "review.require_forge_publication", value: true },
       { key: "review.dismiss_on_base_shift", value: true },
+      { key: "review.required_principal", value: { kind: "agent_profile", name: "tanren-reviewer" } },
       { key: "audit.block_at", value: "P1" },
       { key: "audit.residual_disposition", value: "new_spec" },
       { key: "integration.max_unmerged_ancestor_depth", value: 2 },

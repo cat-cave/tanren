@@ -34,10 +34,29 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { Finding } from "../contracts/findings.js";
 import { AuditFinding, normalizeFinding } from "../answerers/schemas/index.js";
+import { ReviewApprovedPayload } from "../events/schemas/reviewForgeReceipt.js";
+import {
+  noRequiredReviewGate,
+  reviewRulesFromCompiledPolicy,
+  ReviewPrincipal as ReviewPrincipalSchema,
+  type GovernanceReviewGate,
+  type ReviewApprovalEvidence,
+  type ReviewPrincipal,
+} from "../governance/reviewRules.js";
+
+const ApprovedReceiptEvidence = z
+  .object({
+    forgeReviewId: z.string().min(1),
+    forgeReviewState: z.literal("approved"),
+    forgeReviewUrl: z.string().min(1),
+    headSha: z.string().regex(/^[0-9a-f]{40}$/iu),
+  })
+  .passthrough();
 
 /** The fresh land-time signals, as the durable record reflects them right now. */
 export interface LandTimeSignals {
@@ -63,6 +82,56 @@ export interface LandTimeSignals {
    */
   reviewedHeadSha: string | undefined;
 }
+
+/** Re-read all durable review approvals that can satisfy a governance rule. */
+export async function resolveLandTimeReviewEvidence(
+  pool: pg.Pool,
+  orgId: string,
+  runId: string,
+): Promise<GovernanceReviewGate["evidence"]> {
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query<{ payload: unknown }>(
+      `SELECT payload FROM events
+        WHERE run_id = $1 AND event_type = 'review.approved'
+        ORDER BY ts DESC, id DESC`,
+      [runId],
+    );
+    const approvals: ReviewApprovalEvidence[] = [];
+    for (const row of result.rows) {
+      const parsed = ReviewApprovedPayload.safeParse(row.payload);
+      if (!parsed.success) {
+        return { kind: "unresolved", reason: "a durable review approval has an unreadable payload" };
+      }
+      const principal = parseReviewPrincipal(parsed.data);
+      if (principal === "invalid") {
+        return { kind: "unresolved", reason: "a durable review approval has an invalid reviewer principal" };
+      }
+      const forgeReviewHeadSha = approvedReceiptHead(parsed.data);
+      approvals.push({
+        ...(parsed.data.reviewer === undefined ? {} : { reviewer: parsed.data.reviewer }),
+        ...(principal === undefined ? {} : { principal }),
+        ...(forgeReviewHeadSha === undefined ? {} : { forgeReviewHeadSha }),
+      });
+    }
+    return { kind: "observed", approvals };
+  });
+}
+
+/** Compile immutable review rules and combine them with fresh durable evidence. */
+export async function resolveLandTimeReviewGate(
+  pool: pg.Pool,
+  orgId: string,
+  runId: string,
+  compiledPolicy: unknown,
+): Promise<GovernanceReviewGate> {
+  return {
+    rules: reviewRulesFromCompiledPolicy(compiledPolicy),
+    evidence: await resolveLandTimeReviewEvidence(pool, orgId, runId),
+  };
+}
+
+export { noRequiredReviewGate };
+export type { GovernanceReviewGate };
 
 export type ExactReviewReceiptHeadGuard =
   | { kind: "matched" }
@@ -168,6 +237,17 @@ function completeForgeReceiptHead(
   if (payload["forgeReviewState"] !== expectedState) return undefined;
   const headSha = payload["headSha"];
   return typeof headSha === "string" && headSha !== "" ? headSha : undefined;
+}
+
+function parseReviewPrincipal(payload: { reviewerPrincipal?: unknown }): ReviewPrincipal | undefined | "invalid" {
+  if (payload.reviewerPrincipal === undefined) return undefined;
+  const parsed = ReviewPrincipalSchema.safeParse(payload.reviewerPrincipal);
+  return parsed.success ? parsed.data : "invalid";
+}
+
+function approvedReceiptHead(payload: unknown): string | undefined {
+  const parsed = ApprovedReceiptEvidence.safeParse(payload);
+  return parsed.success ? parsed.data.headSha : undefined;
 }
 
 // ---- The LAND-TIME audit findings (the live audit gate, tanren-owns-the-engine.md §4) ----

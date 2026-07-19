@@ -22,6 +22,7 @@ import type { BehaviorLandGate } from "../../merge/behaviorLandGate.js";
 import type { DesignRenderGate } from "../../merge/designRenderLandGate.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
+import type { GovernanceReviewGate } from "../../governance/reviewRules.js";
 import type {
   ConflictRecoveryDisposition,
   ConflictRecoverySettlement,
@@ -83,6 +84,8 @@ export interface MergeAuthorityBundle {
   reviewedHeadSha: string | undefined;
   /** Simulated policy requires a complete provider receipt; human/auto do not. */
   requiresExactReviewReceipt: boolean;
+  /** Immutable governance review rules + durable approval evidence for this land. */
+  reviewGate: GovernanceReviewGate;
   /** The auditor's emitted findings + the project posture (the DORA block decision). */
   findings: ReadonlyArray<Finding>;
   auditPosture: AuditPosture;

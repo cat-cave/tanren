@@ -49,6 +49,23 @@ function receiptFor(
 
 const FIXTURE_REVIEWER_LOGIN = "tanren-reviewer[bot]";
 
+const SIMULATED_REVIEW_POLICY = {
+  apiVersion: "tanren.dev/governance/v2",
+  schemaVersion: 1,
+  core: { rules: [] },
+  org: { rules: [] },
+  tier: {
+    rules: [
+      { key: "review.mode", value: "simulated" },
+      { key: "review.minimum_approvals", value: 1 },
+      { key: "review.freshness", value: "exact_head_sha" },
+      { key: "review.require_forge_publication", value: true },
+      { key: "review.dismiss_on_base_shift", value: true },
+    ],
+  },
+  binding: { rules: [] },
+} as const;
+
 function simulatedProbe(
   captured: { diff: string; submitted: SubmittedReview[]; fetchedDiff: boolean; headSha: string },
   opts: {
@@ -163,8 +180,11 @@ describe("simulated reviewer Answerer", () => {
 });
 
 describe("review polling stage — reviewPolicy: simulated (gv-2 strict publication)", () => {
-  it("positive: APPROVE on exact head persists forge receipt with review.approved", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+  it("active governance policy selects the dedicated simulated reviewer and persists its actor", async () => {
+    // Config says human, but the immutable active governance policy owns the
+    // review DAG and must select simulated review before any land is attempted.
+    const pool = new ReviewMergePool("direct_merge", "open", "human");
+    pool.activePolicyDocument = SIMULATED_REVIEW_POLICY;
     const events = new FakeEventStore();
     const captured = {
       diff: "diff --git a/x b/x\n+x",
@@ -194,6 +214,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
     });
 
     expect(result.verdict).toBe("approved");
+    expect(result.reviewerPrincipal).toEqual({ kind: "agent_profile", name: "tanren-reviewer" });
     expect(result.forgePublication?.forgeReviewId).toBe("9001");
     expect(result.forgePublication?.headSha).toBe(HEAD);
     expect(captured.fetchedDiff).toBe(true);
