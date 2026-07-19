@@ -86,6 +86,8 @@ export interface AcceptancePlan {
 export interface AcceptanceDriveInput {
   readonly orgId: string;
   readonly projectId: string;
+  /** rv-6: the run's integration node — binds a driver to THIS run's release. */
+  readonly integrationNodeId: string;
   readonly plan: AcceptancePlan;
   readonly example: ExampleRow | undefined;
   readonly matrixKey: string;
@@ -470,6 +472,7 @@ export class AcceptanceOrchestrator {
       const result = await driver.drive({
         orgId: request.orgId,
         projectId: request.projectId,
+        integrationNodeId: request.integrationNodeId,
         plan,
         example,
         matrixKey,

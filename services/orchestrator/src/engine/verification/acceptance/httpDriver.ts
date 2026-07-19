@@ -95,43 +95,59 @@ function parseSubject(subject: string): { probeId: string; selector: string } | 
   return { probeId: subject.slice(0, dot), selector: subject.slice(dot + 1) };
 }
 
-/** Walk a dot-path into a parsed JSON body; a missing segment observes `null` (absent). */
-function extractJsonPath(body: CanonicalBody | undefined, path: string): CanonicalBody {
-  if (body === undefined) return null;
+/**
+ * Walk a dot-path into a parsed JSON body. Returns `undefined` when the path is
+ * UNOBSERVABLE — the body was not JSON, a key/index is genuinely absent, or a
+ * non-container blocks descent. `undefined` means "the response did not contain
+ * this", so the caller emits NO observation (fail-closed). Only a value the
+ * response GENUINELY contains — including a real JSON `null` — is returned.
+ */
+function extractJsonPath(body: CanonicalBody | undefined, path: string): CanonicalBody | undefined {
+  if (body === undefined) return undefined;
   let current: CanonicalBody = body;
   for (const segment of path.split(".")) {
     if (Array.isArray(current)) {
       const index = Number(segment);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) return null;
-      current = current[index] ?? null;
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) return undefined;
+      current = current[index] as CanonicalBody;
       continue;
     }
     if (current !== null && typeof current === "object") {
       const record = current as { readonly [k: string]: CanonicalBody };
-      if (!Object.prototype.hasOwnProperty.call(record, segment)) return null;
-      current = record[segment] ?? null;
+      if (!Object.prototype.hasOwnProperty.call(record, segment)) return undefined;
+      current = record[segment] as CanonicalBody;
       continue;
     }
-    return null;
+    // A scalar / null cannot be descended into — the deeper path is absent.
+    return undefined;
   }
   return current;
 }
 
 /**
- * Extract the observed value for a selector against a real probe response. A
- * reachable response ALWAYS yields a concrete value (an absent header/body path
- * observes `null`), so a wrong response fails the assertion rather than silently
- * skipping it.
+ * Extract the observed value for a selector against a real probe response.
+ * Returns `undefined` when the selector is UNOBSERVABLE against this response
+ * (unknown selector, absent header, or an absent/non-JSON body path) so the
+ * caller emits NO observation — the assertion then does NOT execute and can
+ * never be laundered into a pass. It NEVER fabricates a `null` the response did
+ * not actually contain; a returned `null` is only a value the response genuinely
+ * carried (a present null header-less selector never reaches here).
  */
-function observeSelector(response: ProbeResponse, selector: string): CanonicalBody {
+function observeSelector(response: ProbeResponse, selector: string): CanonicalBody | undefined {
   if (selector === "status") return response.status;
   if (selector === "latencyMs") return response.latencyMs;
   if (selector === "text") return response.text;
-  if (selector === "body") return response.json ?? response.text;
-  if (selector.startsWith("header.")) return response.headerOf(selector.slice("header.".length));
+  // The whole body: a genuine JSON `null` is observed as null; a non-JSON body
+  // is observed as its raw text. Either way the response genuinely carried it.
+  if (selector === "body") return response.json === undefined ? response.text : response.json;
+  if (selector.startsWith("header.")) {
+    const value = response.headerOf(selector.slice("header.".length));
+    // An absent header is NOT observed (undefined), never a fabricated null.
+    return value === null ? undefined : value;
+  }
   if (selector.startsWith("body.")) return extractJsonPath(response.json, selector.slice("body.".length));
-  // An unknown selector observes `null` (absent) rather than fabricating a value.
-  return null;
+  // An unknown selector is unobservable — emit NO observation (never a null match).
+  return undefined;
 }
 
 function buildUrl(baseUrl: string, path: string): string {
@@ -216,12 +232,11 @@ export class HttpAcceptanceSurfaceDriver implements AcceptanceSurfaceDriver {
       if (parsed === undefined) continue;
       const response = responses.get(parsed.probeId);
       if (response === undefined) continue;
-      observations.push({
-        observationKind: "http",
-        subject: assertion.subject,
-        value: observeSelector(response, parsed.selector),
-        observedAt,
-      });
+      const value = observeSelector(response, parsed.selector);
+      // Unobservable (unknown selector / absent header / absent-or-non-JSON body
+      // path) ⇒ NO observation ⇒ the assertion does not execute (fail-closed).
+      if (value === undefined) continue;
+      observations.push({ observationKind: "http", subject: assertion.subject, value, observedAt });
     }
     return observations;
   }

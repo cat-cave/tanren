@@ -125,6 +125,11 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
         res.end(JSON.stringify({ error: "boom" }));
         return;
       }
+      if (req.url === "/null_field") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ value: null }));
+        return;
+      }
       res.writeHead(404);
       res.end();
     });
@@ -174,7 +179,7 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.passedAssertionCount).toBe(0);
   });
 
-  it("DECISIVE: a genuinely-absent body field is observed and fails — never skipped into a pass", async () => {
+  it("DECISIVE: a genuinely-absent body field is NOT observed — the assertion does not execute, never passes", async () => {
     const { behavior } = await runWith(
       baseUrl,
       plan("/health", [
@@ -182,9 +187,62 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
         { assertionId: "a2", subject: "p1.body.missing", comparisonOperator: "equals", expected: "present" },
       ]),
     );
-    expect(behavior.outcome).toBe("failed_product");
-    // Both assertions EXECUTED — the absent field is observed as null, not skipped.
-    expect(behavior.executedAssertionCount).toBe(2);
+    // The absent field is unobservable ⇒ a2 does not execute ⇒ executed(1) <
+    // required(2) ⇒ failed_verification_contract. It is NEVER a fabricated-null
+    // observation and NEVER a pass.
+    expect(behavior.outcome).not.toBe("passed");
+    expect(behavior.outcome).toBe("failed_verification_contract");
+    expect(behavior.executedAssertionCount).toBe(1);
+    expect(behavior.passedAssertionCount).toBe(1);
+  });
+
+  it("DECISIVE: a bogus/unknown selector is NOT observed — never a fabricated-null match, never passed", async () => {
+    const { behavior } = await runWith(
+      baseUrl,
+      // `p1.totally_bogus equals null` must NOT pass on a fabricated null; the
+      // selector is unobservable ⇒ the assertion does not execute ⇒ not passed.
+      plan("/health", [
+        { assertionId: "a1", subject: "p1.totally_bogus", comparisonOperator: "equals", expected: null },
+      ]),
+    );
+    expect(behavior.outcome).not.toBe("passed");
+    expect(behavior.outcome).toBe("failed_verification_contract");
+    expect(behavior.executedAssertionCount).toBe(0);
+  });
+
+  it("DECISIVE: not_equals / not_contains on a genuinely-absent field never pass (absent ≠ observed)", async () => {
+    const notEquals = await runWith(
+      baseUrl,
+      plan("/health", [
+        { assertionId: "a1", subject: "p1.status", comparisonOperator: "equals", expected: 200 },
+        { assertionId: "a2", subject: "p1.body.missing", comparisonOperator: "not_equals", expected: "x" },
+      ]),
+    );
+    // The absent field is NOT observed, so a2 never executes — the run cannot pass.
+    expect(notEquals.behavior.outcome).not.toBe("passed");
+    expect(notEquals.behavior.outcome).toBe("failed_verification_contract");
+    expect(notEquals.behavior.executedAssertionCount).toBe(1);
+
+    const notContains = await runWith(
+      baseUrl,
+      plan("/health", [
+        { assertionId: "a1", subject: "p1.status", comparisonOperator: "equals", expected: 200 },
+        { assertionId: "a2", subject: "p1.body.missing", comparisonOperator: "not_contains", expected: "secret" },
+      ]),
+    );
+    expect(notContains.behavior.outcome).not.toBe("passed");
+    expect(notContains.behavior.executedAssertionCount).toBe(1);
+  });
+
+  it("REGRESSION: a genuinely-present JSON null IS observed and satisfies equals null", async () => {
+    const { behavior } = await runWith(
+      baseUrl,
+      plan("/null_field", [
+        { assertionId: "a1", subject: "p1.body.value", comparisonOperator: "equals", expected: null },
+      ]),
+    );
+    expect(behavior.outcome).toBe("passed");
+    expect(behavior.executedAssertionCount).toBe(1);
     expect(behavior.passedAssertionCount).toBe(1);
   });
 
