@@ -12,6 +12,7 @@ function verdict(overrides: Partial<BehaviorVerdictRow> = {}): BehaviorVerdictRo
     outcome: "passed",
     flakeState: "stable",
     gateEffect: "blocking",
+    countInconsistent: false,
     ...overrides,
   };
 }
@@ -77,6 +78,32 @@ describe("evaluateBehaviorLandGate — fail-closed when behavior WAS required", 
       verdict({ behaviorRevisionId: "br-fail", outcome: "failed_product" }),
     ]);
     expect(gate).toEqual({ kind: "failed", behaviorRevisionId: "br-fail", outcome: "failed_product" });
+  });
+});
+
+describe("evaluateBehaviorLandGate — count-inconsistent evidence poisons the whole run (fail closed)", () => {
+  it("a count-inconsistent FAILING verdict alongside a count-consistent PASSING sibling → inconclusive (never silently dropped)", () => {
+    // THE fail-open this closes: a fabricated-count blocking FAILURE must NOT be excluded so a
+    // count-consistent passing sibling can authorize. Any count-inconsistent verdict on the run
+    // poisons the gate → inconclusive (→ blocked), mirroring the sibling readers that throw.
+    const gate = evaluateBehaviorLandGate("completed", [
+      verdict({ behaviorRevisionId: "br-pass", outcome: "passed", countInconsistent: false }),
+      verdict({ behaviorRevisionId: "br-fabricated", outcome: "failed_product", countInconsistent: true }),
+    ]);
+    expect(gate.kind).toBe("inconclusive");
+  });
+
+  it("a single count-inconsistent verdict (even if it self-reports 'passed') → inconclusive (unverifiable evidence)", () => {
+    const gate = evaluateBehaviorLandGate("completed", [verdict({ outcome: "passed", countInconsistent: true })]);
+    expect(gate.kind).toBe("inconclusive");
+  });
+
+  it("count-inconsistency outranks even a decisive failure classification → inconclusive (evidence untrustworthy)", () => {
+    // Once evidence is unverifiable we cannot even trust the 'failed' label — the run is inconclusive.
+    const gate = evaluateBehaviorLandGate("completed", [
+      verdict({ behaviorRevisionId: "br-bad", outcome: "failed_product", countInconsistent: true }),
+    ]);
+    expect(gate.kind).toBe("inconclusive");
   });
 });
 

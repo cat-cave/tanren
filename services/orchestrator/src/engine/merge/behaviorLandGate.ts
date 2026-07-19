@@ -57,6 +57,15 @@ export interface BehaviorVerdictRow {
   readonly outcome: BehaviorVerdictOutcome;
   readonly flakeState: FlakeState;
   readonly gateEffect: "blocking" | "advisory";
+  /**
+   * TRUE when this verdict's RECORDED counts (`required_assertion_count` /
+   * `executed_assertion_count` / `attempt_count`) DIVERGE from the actual FK-bound
+   * `behavior_verdict_assertions` / `behavior_verdict_attempts` row tallies — a
+   * fabricated-count verdict whose self-reported evidence cannot be trusted. It poisons
+   * the whole run's gate (see {@link evaluateBehaviorLandGate}); it is NEVER silently
+   * excluded, which would let a count-consistent passing sibling authorize the merge.
+   */
+  readonly countInconsistent: boolean;
 }
 
 const DECISIVE_FAILURES: ReadonlySet<BehaviorVerdictOutcome> = new Set<BehaviorVerdictOutcome>([
@@ -101,6 +110,24 @@ export function evaluateBehaviorLandGate(
 
   // The run REACHED 'completed' — it IS the requirement. From here the ONLY clear is a decisive
   // blocking PASS; anything else fails closed.
+
+  // (fail-closed count integrity) A verdict whose RECORDED counts diverge from its FK-bound
+  // evidence rows is UNVERIFIABLE — its self-reported outcome cannot be trusted. Mirroring the
+  // sibling readers (`verificationReadStore.verdictView` THROWS on a mismatch; `listVerdicts`
+  // throws `unverifiable count evidence`; run headers refuse `unverifiable_verdict_count > 0`),
+  // ANY count-inconsistent verdict on the run POISONS the whole gate → inconclusive (→ blocked).
+  // It must NEVER be silently excluded (the count-integrity fail-open): a fabricated-count
+  // BLOCKING FAILURE alongside a count-consistent PASSING sibling would otherwise be dropped by a
+  // WHERE filter and let the sibling authorize the merge. Poison-the-run is the fail-closed answer.
+  const unverifiable = verdicts.find((verdict) => verdict.countInconsistent);
+  if (unverifiable !== undefined) {
+    return {
+      kind: "inconclusive",
+      reason:
+        `behavior '${unverifiable.behaviorRevisionId}' has unverifiable verdict count evidence ` +
+        `(recorded count ≠ FK-bound assertion/attempt rows)`,
+    };
+  }
 
   // (fix #3) A decisive product/visual/contract FAILURE on a blocking behavior blocks
   // REGARDLESS of flake_state — a self-asserted `quarantined_fragment` bit can NEVER launder a
@@ -188,28 +215,36 @@ export async function resolveLandTimeBehaviorGate(
     if (status !== "completed") {
       return evaluateBehaviorLandGate(status, []);
     }
+    // Read EVERY verdict on the run (no exclude-then-evaluate WHERE filter — that would
+    // silently DROP a fabricated-count blocking failure and let a count-consistent passing
+    // sibling authorize). Each row carries a computed `count_inconsistent` flag comparing its
+    // recorded counts to the FK-bound evidence tallies; `evaluateBehaviorLandGate` fails the
+    // whole run closed if ANY verdict is inconsistent (mirroring the sibling readers).
     const verdictRows = (
       await client.query<{
         behavior_revision_id: string;
         outcome: string;
         flake_state: string;
         gate_effect: string;
+        count_inconsistent: boolean;
       }>(
-        `SELECT v.behavior_revision_id, v.outcome, v.flake_state, v.gate_effect
+        `SELECT v.behavior_revision_id, v.outcome, v.flake_state, v.gate_effect,
+                (
+                  v.required_assertion_count <> (
+                    SELECT COUNT(*)::int FROM behavior_verdict_assertions a
+                     WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                  )
+                  OR v.executed_assertion_count <> (
+                    SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
+                     WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                  )
+                  OR v.attempt_count <> (
+                    SELECT COUNT(*)::int FROM behavior_verdict_attempts a
+                     WHERE a.org_id = v.org_id AND a.verdict_id = v.id
+                  )
+                ) AS count_inconsistent
            FROM behavior_verdicts v
-          WHERE v.org_id = $1 AND v.run_id = $2
-            AND v.required_assertion_count = (
-              SELECT COUNT(*)::int FROM behavior_verdict_assertions a
-               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
-            )
-            AND v.executed_assertion_count = (
-              SELECT (COUNT(*) FILTER (WHERE a.executed))::int FROM behavior_verdict_assertions a
-               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
-            )
-            AND v.attempt_count = (
-              SELECT COUNT(*)::int FROM behavior_verdict_attempts a
-               WHERE a.org_id = v.org_id AND a.verdict_id = v.id
-            )`,
+          WHERE v.org_id = $1 AND v.run_id = $2`,
         [orgId, runRow.id],
       )
     ).rows;
@@ -255,6 +290,7 @@ function decodeVerdictRow(row: {
   outcome: string;
   flake_state: string;
   gate_effect: string;
+  count_inconsistent: boolean;
 }): BehaviorVerdictRow {
   if (!OUTCOMES.has(row.outcome as BehaviorVerdictOutcome)) {
     throw new TypeError(`behavior verdict has an unknown outcome: ${row.outcome}`);
@@ -270,5 +306,6 @@ function decodeVerdictRow(row: {
     outcome: row.outcome as BehaviorVerdictOutcome,
     flakeState: row.flake_state as FlakeState,
     gateEffect: row.gate_effect,
+    countInconsistent: row.count_inconsistent,
   };
 }
