@@ -6,6 +6,13 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
+import { PersonaStore } from "../../entities/personas.js";
+import {
+  PgBehaviorRevisionStore,
+  PgPersonaRevisionStore,
+  RevisionBindingError,
+} from "../../repositories/behaviorRevisionStore.js";
+import type { BehaviorRevision } from "../../contracts/behaviorRevision.js";
 import { createSpecOnClient, type ProjectSpecQueryClient, type SpecContract } from "../../workflow/projectSpec.js";
 import { behaviorKey, DanglingDesignRefError } from "./deriveDesignContract.js";
 import type { CaptureBehavior, CaptureInterface, InterviewCapture } from "./types.js";
@@ -70,6 +77,64 @@ function acceptanceFor(behavior: CaptureBehavior): string[] {
   return [`given ${given}, when ${when}, then ${then}`];
 }
 
+// rv-1 freeze seam — mint the IMMUTABLE, content-addressed behavior revision for
+// a behavior the derive just authored, bound to its originating spec. Runs on the
+// SAME org-scoped client/transaction as the behavior + spec_behaviors link, so
+// the revision is frozen atomically with the spec that declares it. A behavior
+// can only cite a persona revision that exists (rejected otherwise), and the
+// frozen revision must resolve back by its own content digest (fail-closed).
+async function mintFrozenBehaviorRevision(
+  client: ProjectSpecQueryClient,
+  input: {
+    orgId: string;
+    projectId: string;
+    specId: string;
+    personaId: string;
+    behavior: CaptureBehavior;
+    behaviorId: string;
+    actor: ActorContext;
+  },
+): Promise<BehaviorRevision> {
+  const persona = await PersonaStore.get(client, input.personaId, input.actor);
+  if (persona === undefined) {
+    throw new Error(`persona not found for behavior revision: ${input.personaId}`);
+  }
+  const personaRevision = await new PgPersonaRevisionStore(client).create({
+    orgId: input.orgId,
+    projectId: persona.projectId,
+    personaId: input.personaId,
+    scope: persona.scope,
+    name: persona.name,
+    description: persona.description,
+    attributes: persona.metadata,
+    authoringProvenance: { source: "derive", personaId: input.personaId },
+  });
+  const behaviorStore = new PgBehaviorRevisionStore(client);
+  /* eslint-disable unicorn/no-thenable */
+  // `then` is the BDD Given/When/Then field name carried into the revision body.
+  const behaviorRevision = await behaviorStore.create({
+    orgId: input.orgId,
+    projectId: input.projectId,
+    behaviorId: input.behaviorId,
+    personaRevisionId: personaRevision.id,
+    title: input.behavior.title,
+    given: input.behavior.given,
+    when: input.behavior.when,
+    then: input.behavior.then,
+    acceptance: { criteria: acceptanceFor(input.behavior) },
+    authoringProvenance: { source: "derive", originatingSpecId: input.specId, behaviorId: input.behaviorId },
+  });
+  /* eslint-enable unicorn/no-thenable */
+  // Fail-closed: the frozen behavior MUST resolve by its content digest (the same
+  // content-addressed binding downstream spec consumers use). A miss is a broken
+  // append-only write, never a silent pass.
+  const bound = await behaviorStore.getByDigest(input.orgId, behaviorRevision.contentDigest);
+  if (bound === undefined || bound.id !== behaviorRevision.id) {
+    throw new RevisionBindingError(behaviorRevision.contentDigest);
+  }
+  return behaviorRevision;
+}
+
 export interface DeriveBehaviorSpecInput {
   projectId: string;
   orgId: string;
@@ -120,6 +185,17 @@ export async function deriveBehaviorSpec(
   );
   /* eslint-enable unicorn/no-thenable */
   await BehaviorStore.linkToSpec(pool, { specId: spec.specId, behaviorId: behaviorRow.id }, input.actor);
+  // rv-1 — freeze the behavior as an immutable, content-addressed revision bound
+  // to the spec that just declared it (atomic with the link above).
+  await mintFrozenBehaviorRevision(pool, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    specId: spec.specId,
+    personaId,
+    behavior: input.behavior,
+    behaviorId: behaviorRow.id,
+    actor: input.actor,
+  });
   return { ...spec, behaviorId: behaviorRow.id };
 }
 
