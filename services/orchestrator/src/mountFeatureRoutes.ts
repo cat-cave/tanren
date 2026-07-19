@@ -18,6 +18,7 @@ import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js"
 import { mountBehaviorSurfaces } from "./routes/behaviorCoverage/mount.js";
 import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
+import { createDesignStudioRoutes } from "./routes/designStudio/reads.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experiments/mount.js";
@@ -150,7 +151,6 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     // secrets/http/minter deps (the brownfield-link route uses the same App resolution).
     createProjectRoutes({ pool: scopedPool, secrets, githubHttp, githubAppMinter }),
   );
-  forgeAnswerers.mountGovernanceRoutes(app);
   // The app-env-to-Actions-secrets + CI-ingest-secrets routes are GONE: the native gate
   // runs the project's tests over SSH with the app env materialized in-process, and the
   // per-test JUnit grain is ingested in-process from the runner — no Actions secrets,
@@ -330,6 +330,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // confirm to the tenant's own attestation rows).
   app.route("/orgs", createDeployRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));
+  // ds-5 WITHIN-ORG DESIGN REUSE surface (Studio catalog, per-project reuse
+  // binding, render-verdict evidence lab, artifact export index + real byte
+  // download), versioned under `/v1/orgs` like the rv-22 read surface. The export
+  // download streams the SAME local CAS bytes the greenfield composer wrote (the
+  // route self-defaults to DEFAULT_DESIGN_ARTIFACT_ROOT); an absent byte fails
+  // LOUD (503), never fake.
+  app.route("/v1/orgs", createDesignStudioRoutes({ pool: scopedPool }));
   // Credentials mount at root but every endpoint is `/orgs/:orgId/credentials/*`
   // and reads/writes the org's `config` (RLS-enabled `organizations`), so it gets
   // the org-scoping pool too.

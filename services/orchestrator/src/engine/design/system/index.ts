@@ -12,6 +12,7 @@ export * from "./designArtifactSchemas.js";
 export * from "./designTargetAdapter.js";
 export * from "./designProofKey.js";
 export * from "./designSystemStore.js";
+export * from "./designStudioStore.js";
 export * from "./designFoundationValidator.js";
 export * from "./designSystemCoreEvents.js";
 export * from "./dtcgResolver.js";
