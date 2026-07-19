@@ -192,10 +192,36 @@ function approvalIsUsable(
   landingHeadSha: string,
 ): boolean {
   if (approval.reviewer === undefined || approval.reviewer.trim() === "") return false;
-  if (!rules.requireForgePublication) return true;
+  const headMatchRequired = requiresApprovalHeadMatch(rules);
+  if (!rules.requireForgePublication) {
+    // Without a forge receipt the approval carries no head to verify freshness against.
+    // A policy that pins the approval to the landed head (`exact_head_sha`) OR dismisses
+    // approvals on a base shift (`branch_head` freshness / `dismiss_on_base_shift`) therefore
+    // cannot treat an unpublished approval as usable — fail closed. A policy with no head
+    // requirement still accepts the reviewer-only approval.
+    return !headMatchRequired;
+  }
   const receiptHead = approval.forgeReviewHeadSha;
   if (receiptHead === undefined || !/^[0-9a-f]{40}$/iu.test(receiptHead)) return false;
-  return rules.freshness !== "exact_head_sha" || receiptHead.toLowerCase() === landingHeadSha.toLowerCase();
+  // P2 (dismissOnBaseShift enforcement): `exact_head_sha` binds the approval to the exact
+  // commit; `branch_head` freshness AND `dismiss_on_base_shift` both dismiss an approval the
+  // moment the PR head advances (a rebase / base shift / any new push). In every such case the
+  // receipt's head must EQUAL the head being landed — a drifted head means the base shifted
+  // under the approval, so it is STALE → unusable → the land blocks. Previously `branch_head`
+  // and `dismiss_on_base_shift` were dead (only `exact_head_sha` was checked): a review given
+  // against a since-shifted base was silently reused.
+  return !headMatchRequired || receiptHead.toLowerCase() === landingHeadSha.toLowerCase();
+}
+
+/**
+ * A base shift (a rebase, a base-shift regate, or any new push that advances the PR head)
+ * invalidates an approval when the policy pins freshness to the exact landed commit
+ * (`exact_head_sha`) OR dismisses approvals on base shift (`branch_head` freshness /
+ * `dismiss_on_base_shift`). In every such case the approval's forge-receipt head must EQUAL
+ * the head being landed; a drifted head is stale.
+ */
+function requiresApprovalHeadMatch(rules: ResolvedReviewRules): boolean {
+  return rules.freshness === "exact_head_sha" || rules.freshness === "branch_head" || rules.dismissOnBaseShift;
 }
 
 function uniquePrincipals(principals: readonly ReviewPrincipal[]): readonly ReviewPrincipal[] {
