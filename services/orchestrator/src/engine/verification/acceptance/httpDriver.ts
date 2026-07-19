@@ -21,10 +21,12 @@
  */
 
 import type { CanonicalBody } from "../../contracts/cas.js";
+import { canonicalJson } from "../../contracts/cas.js";
 import type {
   AdapterUnavailableResult,
   DriverExecutionResult,
   DriverObservation,
+  EvidenceBytePayload,
 } from "../../contracts/runtimeVerificationAdapters.js";
 import type { RequiredSurface } from "../../contracts/runtimeVerificationPlan.js";
 import type { AcceptanceDriveInput, AcceptancePlan, AcceptanceSurfaceDriver, HttpProbeSpec } from "./orchestrator.js";
@@ -154,6 +156,36 @@ function buildUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
 }
 
+/**
+ * rv-9: assemble the drive's REAL response capture as a single deterministic
+ * evidence payload — one entry per fired probe, sorted by probe id, carrying the
+ * request method/path plus the observed status and raw response body. It EXCLUDES
+ * non-deterministic fields (latency, wall clock) so an identical set of responses
+ * hashes to one content address (dedupe). Returns `undefined` when no probe was
+ * fired, so a probe-less surface contributes no capture. The body may carry
+ * product data, so the payload is marked `sensitive`.
+ */
+function buildResponseCapture(
+  probes: readonly HttpProbeSpec[],
+  responses: Map<string, ProbeResponse>,
+): EvidenceBytePayload | undefined {
+  const entries: CanonicalBody[] = [];
+  for (const probe of [...probes].sort((a, b) => a.probeId.localeCompare(b.probeId))) {
+    const response = responses.get(probe.probeId);
+    if (response === undefined) continue;
+    entries.push({
+      probeId: probe.probeId,
+      method: probe.method,
+      path: probe.path,
+      status: response.status,
+      body: response.text,
+    });
+  }
+  if (entries.length === 0) return undefined;
+  const bytes = new TextEncoder().encode(canonicalJson({ probes: entries }));
+  return { kind: "network", mediaType: "application/json", bytes, redactionClass: "sensitive" };
+}
+
 export class HttpAcceptanceSurfaceDriver implements AcceptanceSurfaceDriver {
   public readonly surface: RequiredSurface;
   private readonly resolveBaseUrl: AcceptanceBaseUrlResolver;
@@ -181,7 +213,13 @@ export class HttpAcceptanceSurfaceDriver implements AcceptanceSurfaceDriver {
       }
       responses.set(probe.probeId, response.response);
     }
-    return { kind: "executed", observations: this.observe(input.plan, responses), providerChecksums: [] };
+    const capture = buildResponseCapture(probes, responses);
+    return {
+      kind: "executed",
+      observations: this.observe(input.plan, responses),
+      providerChecksums: [],
+      ...(capture === undefined ? {} : { capture: [capture] }),
+    };
   }
 
   private async fireProbe(

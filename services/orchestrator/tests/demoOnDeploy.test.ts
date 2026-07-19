@@ -302,6 +302,7 @@ function scriptedProofBackedDemo(
           requiredAssertionCount: 1,
           executedAssertionCount: outcome === "inconclusive_infrastructure" ? 0 : 1,
           passedAssertionCount: outcome === "passed" ? 1 : 0,
+          evidenceLinkRefs: [],
         };
       });
       return {
