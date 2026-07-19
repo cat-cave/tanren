@@ -1,0 +1,245 @@
+{
+  "version": "tanren-proof-bundle.v1",
+  "orgId": "org_fixture",
+  "projectId": "project_fixture",
+  "runId": "verification_run_fixture",
+  "evidence": {
+    "orgId": "org_fixture",
+    "projectId": "project_fixture",
+    "runId": "verification_run_fixture",
+    "run": {
+      "runId": "verification_run_fixture",
+      "projectId": "project_fixture",
+      "purpose": "post_merge_production",
+      "status": "completed",
+      "stage": "production",
+      "classification": "product_resolved",
+      "resolutionJobId": "rjob_fixture",
+      "specId": "spec_1",
+      "integrationNodeId": "inode_1",
+      "preparedHeadSha": "abc123",
+      "jjTreeId": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "planSetHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "runtimeBehaviorContextHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "environment": {
+      "environmentId": "venv_fixture",
+      "projectId": "project_fixture",
+      "integrationNodeId": "inode_1",
+      "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "deploymentTarget": "container",
+      "environmentFingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "tenantLeaseId": "lease_1",
+      "lifecycleStatus": "ready"
+    },
+    "verdicts": [
+      {
+        "verdictId": "verdict_1",
+        "behaviorRevisionId": "br_1",
+        "outcome": "passed",
+        "requiredAssertionCount": 12,
+        "executedAssertionCount": 12,
+        "attemptCount": 1,
+        "flakeState": "stable",
+        "gateEffect": "blocking",
+        "exampleHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "matrixHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "proofUnitDigest": null,
+        "runtimeBehaviorContextHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "resolutionProofs": [
+      {
+        "version": "tanren-resolution-proof.v1",
+        "terminal": "authorized_verified_closed",
+        "orgId": "org_fixture",
+        "projectId": "project_fixture",
+        "issueLoopId": "loop_fixture",
+        "resolutionJobId": "rjob_fixture",
+        "resolutionDecisionId": "rdec_fixture",
+        "badges": {
+          "gate": "passed",
+          "merged": "passed",
+          "deploy": "bound",
+          "demo": "reachable",
+          "symptom": "passed",
+          "source": "verified_closed"
+        },
+        "entries": [
+          {
+            "index": 0,
+            "kind": "issue_loop",
+            "evidenceHash": "sha256:129c71d71a8477e516efd19ee9953601f5b913a8302ae4a03f14055b0a98272e",
+            "hash": "sha256:fa0ad3921e32364583bbbbb614e6bcaa984d10559af6efb2160eb66062641922"
+          },
+          {
+            "index": 1,
+            "kind": "triage",
+            "evidenceHash": "sha256:5956ef570cb58f7be79cbbc763e710a35aca69812f2ab469fec61b9f1ff20479",
+            "hash": "sha256:1b3b3d4912e64b26762410372c6facee0ec274353563833f77b5782d4ac21b3c"
+          },
+          {
+            "index": 2,
+            "kind": "spec_origins",
+            "evidenceHash": "sha256:193fa2a9b35b541c6353a2548fac3a16976671cf1cb9842e0e81a3f08d44036e",
+            "hash": "sha256:3ee49ec5ecb237fc604595441445d4129a94cb831ee95e0bcb0218d0cf33399a"
+          },
+          {
+            "index": 3,
+            "kind": "merge",
+            "evidenceHash": "sha256:4a642c4070ebb2d2a874d04fe9d93dc016a4bb9f529d4705bcc2a3bdca1e6a27",
+            "hash": "sha256:1b91cd0b6f4ef2c6cea1fe6c7c2b0c9c655599c3277ee1497fc9620960394a4b"
+          },
+          {
+            "index": 4,
+            "kind": "deployment",
+            "evidenceHash": "sha256:b53ddd37f4fdf1404b1bf0ea1b0d2fff40594a22235450048d43b935ccf59bb3",
+            "hash": "sha256:4caa08724145c1e06e907c9648afbe9064a67f1862e9894fe35b1a2989c371d7"
+          },
+          {
+            "index": 5,
+            "kind": "baseline",
+            "evidenceHash": "sha256:0c8563f8fbbf6e0fe637ab457e20605dd185c43a769416f14d7958ac183b9604",
+            "hash": "sha256:ab3e35c3e3573e5ad9568b73b908cb5d43d4fe82335ed273c6ffb9c85fcc4a58"
+          },
+          {
+            "index": 6,
+            "kind": "counterfactual",
+            "evidenceHash": "sha256:5db884c1f0d590b71ef0affeb466abfcc20f825cda4463ea2bbe5fb0a7a93885",
+            "hash": "sha256:4ed7d9106e981a0454e6abc8d15cca5b70952ab1a78b2be565fe22984b0bc505"
+          },
+          {
+            "index": 7,
+            "kind": "production_symptom",
+            "evidenceHash": "sha256:507baaff0b7466631b5a75146c2ada4cf7a5578408c4f598dbebb537bb7b5307",
+            "hash": "sha256:68d71121bc327a02284e379d31c9e34840144f81c34ba8f46f8aa32c9f5935b3"
+          },
+          {
+            "index": 8,
+            "kind": "resolution_decision",
+            "evidenceHash": "sha256:652f8ab5f727b5cb341d6025c547420b5813c9efc2c69db2d99487c446f4616d",
+            "hash": "sha256:a6db9072a330c0a640cabc01841f284d937200bddb1a83e6d016e057321bccb5"
+          },
+          {
+            "index": 9,
+            "kind": "source_sync",
+            "evidenceHash": "sha256:23f3bfb7e790f99c563d635d45ba2b0d0a9b6090bb3cb1149d01622ad3a56938",
+            "hash": "sha256:79a2fc4b7f935488a0b7526191591dff51a4150b0bf8f9c2acd4920163813cf6"
+          }
+        ],
+        "proofHash": "sha256:79a2fc4b7f935488a0b7526191591dff51a4150b0bf8f9c2acd4920163813cf6",
+        "evidence": {
+          "orgId": "org_fixture",
+          "projectId": "project_fixture",
+          "issueLoopId": "loop_fixture",
+          "resolutionJobId": "rjob_fixture",
+          "resolutionDecisionId": "rdec_fixture",
+          "sections": {
+            "issue_loop": {
+              "issueLoopId": "loop_fixture",
+              "fingerprint": "fp",
+              "sourceRevision": "rev1",
+              "sourceFindingId": "finding_1",
+              "providerObjectId": "gh_1"
+            },
+            "triage": {
+              "taskId": "task_1",
+              "status": "done",
+              "agentKind": "triage"
+            },
+            "spec_origins": [
+              {
+                "id": "so_1",
+                "specId": "spec_1",
+                "role": "primary",
+                "attemptNumber": 1,
+                "ordinal": 0
+              }
+            ],
+            "merge": {
+              "mergeSha": "abc123",
+              "authorityAuditId": "audit_1"
+            },
+            "deployment": {
+              "releaseInstanceId": "rel_1",
+              "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "url": "https://demo.example.com",
+              "state": "live",
+              "sourceRef": "abc123"
+            },
+            "baseline": {
+              "verificationRunId": "run_base",
+              "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "classification": "product_failure"
+            },
+            "counterfactual": {
+              "verificationRunId": "run_cf",
+              "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "classification": "product_resolved"
+            },
+            "production_symptom": {
+              "verificationRunId": "run_prod",
+              "classification": "product_resolved",
+              "outcome": "passed",
+              "artifactDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "preparedHeadSha": "abc123",
+              "probedUrl": "https://demo.example.com",
+              "assertions": [
+                {
+                  "id": "va_1",
+                  "outcome": "passed"
+                }
+              ]
+            },
+            "resolution_decision": {
+              "decisionId": "rdec_fixture",
+              "decision": "authorized",
+              "inputSnapshotHash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "authorityVersion": "v1"
+            },
+            "source_sync": {
+              "outboxId": "outbox_1",
+              "operation": "close",
+              "state": "verified",
+              "providerReceipt": {
+                "ok": true
+              },
+              "readback": {
+                "closed": true
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "entries": [
+    {
+      "index": 0,
+      "kind": "run",
+      "evidenceHash": "sha256:e02f88c3ff769960779bec524be132a0a00f704f8d5aad46a22811664731ffe7",
+      "hash": "sha256:864ac96ca97fba2dfdfc6e3ace171b8fe0a4f81e46b95f4f431981c64a56638d"
+    },
+    {
+      "index": 1,
+      "kind": "environment",
+      "evidenceHash": "sha256:f572a4c5b6643934fafa7f657e4b6ab3ccfe374cc66ca8aa020bfd7a340801c4",
+      "hash": "sha256:0d96a694c70a444c876a16cb45912aed078486957b5ca755d1d89b0643e7f7db"
+    },
+    {
+      "index": 2,
+      "kind": "verdicts",
+      "evidenceHash": "sha256:30d95ca4a561ea960582279e344c0b492a762dff400663a110604f7597f733bd",
+      "hash": "sha256:ce07084f5779fe3c808942a1ed61e9ab4d18547d0c25f7b00c16c203f74df6e8"
+    },
+    {
+      "index": 3,
+      "kind": "resolution_proofs",
+      "evidenceHash": "sha256:4468f505476357bec58752021805b2256cbf59284c6e327d0eaf27084f632e81",
+      "hash": "sha256:d7ff0f2b0465fdc2e10ffa6e06bce92ae69a2ac5557f00949590a61c4324362f"
+    }
+  ],
+  "bundleHash": "sha256:d7ff0f2b0465fdc2e10ffa6e06bce92ae69a2ac5557f00949590a61c4324362f"
+}
