@@ -124,6 +124,14 @@ export function checkNoHostProcessSpawn(projectFiles) {
       // production shim + the fake (test-injected) invoker share the seam types
       // in `runtimeValiditySmoke.ts`; only THIS file imports child_process.
       file === "services/orchestrator/src/engine/templates/fragments/runtimeValiditySmokeLive.ts" ||
+      // The ds-4 Slice B render-worker screenshot runner: a confined host-side
+      // container-spawn seam. It shells `podman run` on the ORCHESTRATOR HOST to take a
+      // REAL Playwright chromium screenshot INSIDE a container (the host can't launch a
+      // prebuilt chromium — missing FHS libs — but podman is already the deploy substrate
+      // here). It is NOT workload execution over SSH — it is a design-verification image
+      // run, analogous to liveEnvBuildDriver's host-side image build. The `PixelRenderRunner`
+      // seam lets tests inject a fixture-PNG double; only THIS file imports child_process.
+      file === "services/orchestrator/src/engine/design/render/podmanScreenshotRunner.ts" ||
       // Test fixtures may spawn local processes: the ban targets the ENGINE (which
       // must route through the CommandSubstrate seam), not a tests/ fixture that
       // IMPLEMENTS a local CommandSubstrate to drive a real git/jj process in a

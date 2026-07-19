@@ -11,7 +11,7 @@ import { JSDOM } from "jsdom";
 import axe from "axe-core";
 import type { DesignRenderScenario } from "../system/designTargetAdapter.js";
 
-interface ViewportSize {
+export interface ViewportSize {
   readonly width: number;
   readonly height: number;
 }
@@ -19,7 +19,7 @@ const DESKTOP_VIEWPORT: ViewportSize = { width: 1280, height: 800 };
 const MOBILE_VIEWPORT: ViewportSize = { width: 390, height: 844 };
 
 /** Map a scenario viewport name to concrete window dimensions (unknown → desktop). */
-function resolveViewport(name: string): ViewportSize {
+export function resolveViewport(name: string): ViewportSize {
   return name === "mobile" ? MOBILE_VIEWPORT : DESKTOP_VIEWPORT;
 }
 
@@ -70,7 +70,13 @@ export interface DomA11yCapture {
   };
 }
 
-function scenarioDocument(componentHtml: string, scenario: DesignRenderScenario): string {
+/**
+ * Wrap the rendered component markup in a scenario-specific document (theme,
+ * viewport, locale) so distinct scenarios yield distinct capture bytes. Shared by
+ * the browser-free a11y capture AND the pixel screenshot runner (Slice B) so both
+ * paths screenshot/audit the SAME document.
+ */
+export function scenarioDocument(componentHtml: string, scenario: DesignRenderScenario): string {
   const viewport = resolveViewport(scenario.viewport);
   return [
     "<!DOCTYPE html>",

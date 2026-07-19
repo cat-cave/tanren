@@ -122,6 +122,11 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // construct the merge-reflecting FlyImageBuilder (gated on the opt-in flag). The
   // deploy-layer counterpart of envCreationConfig.ts above.
   "services/orchestrator/src/engine/provisioners/flyImageBuilderConfig.ts",
+  // ds-4 Slice B render-worker point-of-use config: the podman binary name
+  // (TANREN_PODMAN_BIN) + the render-worker image ref (TANREN_DS4_RENDER_IMAGE) —
+  // both non-secret, defaulted knobs read when the containerized screenshot runner
+  // is constructed (same point-of-use posture as the env/Fly build config above).
+  "services/orchestrator/src/engine/design/render/podmanScreenshotRunner.ts",
   // ── allocator boot ─────────────────────────────────────────────────────────
   // main.ts: the BYPASSRLS system DB URL pool selection.
   "services/allocator/src/main.ts",

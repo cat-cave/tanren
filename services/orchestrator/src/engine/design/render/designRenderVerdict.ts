@@ -19,6 +19,12 @@ export interface DesignRenderCheckpoint {
   readonly verdict: "passed" | "failed" | "unknown";
   /** The real axe rule ids backing a `failed` verdict (evidence; empty otherwise). */
   readonly failingRuleIds: readonly string[];
+  /**
+   * The REAL per-pixel diff ratio in [0, 1] for a Slice-B (pixel screenshot) checkpoint —
+   * OMITTED (undefined) for the browser-free a11y path, which never fabricates a pixel
+   * diff. Present only when a real screenshot was diffed against a baseline.
+   */
+  readonly diffRatio?: number;
 }
 
 /** The aggregated run-level verification result the producer persists. */
