@@ -43,7 +43,12 @@ import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githu
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
 import { appTokenSeam, mergeQueueEarlyEnqueueSeam } from "./plannerRunSeams.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
-import { applyFailedMergeGate, mergeGateSelfHeal, type MergeGateBudget } from "./plannerRunSelfHeal.js";
+import {
+  applyFailedMergeGate,
+  mergeGateSelfHeal,
+  type MergeGateBudget,
+  runPreMergeBehaviorGate,
+} from "./plannerRunSelfHeal.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
@@ -304,7 +309,16 @@ export async function runPublishGateStage(
   const { pushSource, pullRequest } = published;
   const mergeGate = await runMergeGateForRun(input, ctx, pushSource.headSha);
   if (mergeGate.passed) {
-    return { pullRequest, mergeGate, kind: "merged" };
+    // rv-premerge: OPT-IN pre-merge BEHAVIOR gate (default OFF). A passing CI gate is NOT
+    // yet a merge if the project opted into behavior gating and a declared product behavior
+    // fails on a preview of the PR head — fail-closed. No knob / no producer ⇒ a no-op.
+    const behaviorGate = await runPreMergeBehaviorGate(
+      input,
+      context,
+      { finalizeRunState: stage.finalizeRunState, appendEvent: stage.appendEvent },
+      pushSource.headSha,
+    );
+    return { pullRequest, mergeGate, kind: behaviorGate === "halt" ? "halt" : "merged" };
   }
   const decision = await mergeGateSelfHeal(mergeGate, stage.budget.attempts);
   const move = await applyFailedMergeGate(

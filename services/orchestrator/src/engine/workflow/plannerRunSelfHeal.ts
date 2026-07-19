@@ -20,6 +20,8 @@ import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import { type FinalizeRunState, finalizeNonPassOutcome, setSpecStatus } from "./plannerRunFinalize.js";
+// rv-premerge: re-exported so plannerRunCi.ts imports it WITHOUT taking an extra module edge.
+export { runPreMergeBehaviorGate } from "./plannerRunPreMergeBehavior.js";
 
 /** The merge stage's decision for a failed `pre_merge` gate: re-author (progress) or halt (fixed point). */
 export type MergeGateSelfHealDecision =

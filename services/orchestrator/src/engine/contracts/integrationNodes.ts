@@ -28,10 +28,20 @@ const MEMBER_SEPARATOR = "\n";
  *                      together) the gate proves once before the real land.
  *   - `stack_head`   — the head of a stacked / chain PR.
  *   - `bisect_prefix`— a prefix node a bisection reads a reusable prefix proof from.
- * All four are the SAME object; the purpose only labels intent, never branches the path.
+ *   - `pre_merge_preview` — an ephemeral node the OPT-IN pre-merge behavior gate (rv-premerge)
+ *                      binds a candidate's preview `verification_environments` row to, so a
+ *                      `pre_merge` acceptance run has a real node FK before merge. Run-unique
+ *                      (member_key keyed on the run), never assembled by the merge coordinator.
+ * All are the SAME object; the purpose only labels intent, never branches the path.
  */
 /** The purpose vocabulary as a tuple (the read seam validates a raw column against it). */
-export const INTEGRATION_NODE_PURPOSES = ["eager_base", "merge_batch", "stack_head", "bisect_prefix"] as const;
+export const INTEGRATION_NODE_PURPOSES = [
+  "eager_base",
+  "merge_batch",
+  "stack_head",
+  "bisect_prefix",
+  "pre_merge_preview",
+] as const;
 export type IntegrationNodePurpose = (typeof INTEGRATION_NODE_PURPOSES)[number];
 
 /**

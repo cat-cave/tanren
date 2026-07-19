@@ -1,0 +1,56 @@
+// rv-premerge — the PRODUCTION wiring of the pre-merge behavior-gate producer. A thin
+// factory: the real preview provisioner ({@link DeployAdapterPreviewSurfaceProvisioner}, the
+// deploy stack) + the persisting rv-11 orchestrator (`PgAcceptanceRunStore` + real rv-6
+// `HttpAcceptanceSurfaceDriver` bound to the preview URL) + the `PgAcceptancePlanLoader`.
+// Wired into the planner-run input so the merge-authority stage runs it ONLY when the
+// project opted into `preMergeBehaviorGate`. The worker imports ONE symbol.
+
+import type pg from "pg";
+import { fetchDeployTransport } from "../../provisioners/deployTransport.js";
+import type { SecretStore } from "../../contracts/secretStore.js";
+import {
+  AcceptanceOrchestrator,
+  HttpAcceptanceSurfaceDriver,
+  PgAcceptanceEventSink,
+  PgAcceptancePlanLoader,
+  PgAcceptanceRunStore,
+  type AcceptanceBaseUrlResolver,
+} from "../acceptance/index.js";
+import {
+  PreviewBehaviorGateProducer,
+  type AcceptanceExecutorFactory,
+  type PreMergeBehaviorGateProducer,
+} from "./preMergeBehaviorGateProducer.js";
+import { DeployAdapterPreviewSurfaceProvisioner } from "./deployAdapterPreviewProvisioner.js";
+import { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
+
+/** A base-URL resolver hard-bound to ONE preview URL for a single acceptance run. */
+class FixedBaseUrlResolver implements AcceptanceBaseUrlResolver {
+  public constructor(private readonly baseUrl: string) {}
+  // eslint-disable-next-line @typescript-eslint/require-await
+  public async resolve(): Promise<{ kind: "resolved"; baseUrl: string }> {
+    return { kind: "resolved", baseUrl: this.baseUrl };
+  }
+}
+
+/**
+ * Build the production pre-merge behavior-gate producer. Wired into the planner-run input
+ * (`RunPlannerLoopInput.preMergeBehaviorProducer`); the merge stage runs it ONLY when the
+ * project's `preMergeBehaviorGate` knob is on.
+ */
+export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: SecretStore): PreMergeBehaviorGateProducer {
+  const buildExecutor: AcceptanceExecutorFactory = (baseUrl) =>
+    new AcceptanceOrchestrator({
+      // PERSIST: the `pre_merge` run + blocking verdicts land in the 0079-hardened ledger so
+      // `resolveLandTimeBehaviorGate` reads them at land time.
+      store: new PgAcceptanceRunStore(pool),
+      events: new PgAcceptanceEventSink(pool),
+      drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new FixedBaseUrlResolver(baseUrl) })],
+    });
+  return new PreviewBehaviorGateProducer({
+    provisioner: new DeployAdapterPreviewSurfaceProvisioner(pool, { transport: fetchDeployTransport(), secrets }),
+    behaviorRevisions: new PgBehaviorRevisionResolver(pool),
+    planLoader: new PgAcceptancePlanLoader(pool),
+    buildExecutor,
+  });
+}

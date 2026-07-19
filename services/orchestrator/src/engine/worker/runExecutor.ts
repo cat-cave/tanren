@@ -32,6 +32,7 @@ import {
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
+  buildPreMergeBehaviorGateProducer,
   buildRedriveHistoryReader,
   buildTriageNewSpecsMaterializer,
   DirectRunStateWriter,
@@ -325,17 +326,17 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // ancestor is non-terminal but headless BENIGN-WAITS (re-driven) instead of stranding. Org-scoped.
         ancestorPhaseReader: buildAncestorPhaseReader(deps.pool),
         // ROBUSTNESS (apex v35): the run-failure boundary re-drives a random/transient fault (spec → open)
-        // instead of stranding, bounded by this consecutive-same-failure reader (SAME failure K times
-        // escalates loudly). Org-scoped read over the pool.
+        // instead of stranding, bounded by this consecutive-same-failure reader (SAME failure K times escalates).
         redriveHistoryReader: buildRedriveHistoryReader(deps.pool),
-        // apex v79/v80 loop closure: MATERIALIZE the triage-emitted `kind: spec`
-        // items as real DAG specs via `acceptProposals` under the run's org scope
-        // (the workflow otherwise emits `outcome.newSpecs` and drops them).
+        // apex v79/v80 loop closure: MATERIALIZE the triage-emitted `kind: spec` items as real
+        // DAG specs via `acceptProposals` under the run's org scope (else `newSpecs` is dropped).
         materializeTriageNewSpecs: buildTriageNewSpecsMaterializer({
           pool: deps.pool,
           runStateWriter: writer,
           resolveActor: triageMaterializerSystemActor,
         }),
+        // rv-premerge: OPT-IN pre-merge behavior-gate producer (runs only when the knob is on).
+        preMergeBehaviorProducer: buildPreMergeBehaviorGateProducer(deps.pool, deps.secrets),
       }),
     );
     await deps.jobQueue.complete(job.id);

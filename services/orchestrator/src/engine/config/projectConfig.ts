@@ -239,6 +239,18 @@ export const ProjectConfigV1 = z
     // zero-defect shop blocks on even P3, a velocity shop routes everything into the
     // DAG. A governed SETTING (like `governancePosture`/`reviewPolicy`), never an env var.
     auditPosture: AuditPostureConfig.default(DEFAULT_AUDIT_POSTURE),
+    // rv-premerge — the OPT-IN pre-merge BEHAVIOR-gate knob (default OFF). When true,
+    // the merge-authority stage additionally deploys the PR head to an EPHEMERAL preview
+    // and drives the rv-11 executable-acceptance orchestrator (real rv-6 HTTP driver)
+    // against it, recording a `purpose='pre_merge'` blocking behavior verdict the
+    // land-time `resolveLandTimeBehaviorGate` consumes — a failing/inconclusive behavior
+    // then BLOCKS the merge fail-closed. Default FALSE: this adds a real preview deploy
+    // (cost + time) per gate, and apex's back-half is already covered by the POST-merge
+    // re-proof (rv-19), so pre-merge behavior gating is an ADDITIONAL safety layer, not
+    // the critical path. When false the merge stage behaves exactly as before (no preview
+    // deploy, the land-time behavior gate stays `not_applicable`) — a genuine zero-cost
+    // no-op. A governed SETTING (like `auditPosture`), never an env var.
+    preMergeBehaviorGate: z.boolean().default(false),
     // Per-project INSIGHT THRESHOLDS — a governed SETTING, like `auditPosture`/
     // `reviewPolicy` (never an env var). Every field is optional; a present value
     // overrides the corresponding `DEFAULT_THRESHOLDS` entry, an absent field

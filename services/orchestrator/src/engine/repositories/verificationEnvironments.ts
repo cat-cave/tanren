@@ -38,6 +38,11 @@ import type { ReleaseInstanceRecord } from "../contracts/deployAdapter.js";
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 const PRODUCTION_TARGET = "production";
+// rv-premerge: the deployment target for an EPHEMERAL pre-merge preview env. `deployment_target`
+// is a plain-text column (migration 0037) that is part of the 0082 partial-unique identity, so a
+// 'preview' env and a 'production' env with otherwise-identical identity are DISTINCT rows — a
+// pre-merge verdict is never attributed to the production environment (or vice versa).
+const PREVIEW_TARGET = "preview";
 const READY = "ready";
 
 /** The exact identity fields the runtime-verification readers bind an environment on. */
@@ -82,13 +87,38 @@ export async function ensureLiveVerificationEnvironment(
   release: LiveReleaseBinding,
   newId: () => string = () => `verenv_${randomUUID()}`,
 ): Promise<EnsureLiveVerificationEnvironmentResult> {
+  return ensureReadyVerificationEnvironment(client, release, PRODUCTION_TARGET, newId);
+}
+
+/**
+ * rv-premerge: find-or-create the ready PREVIEW `verification_environments` row for an
+ * ephemeral pre-merge preview a release has been applied to. Identical identity/idempotency
+ * semantics to the live variant, but `deployment_target='preview'` — so a `pre_merge`
+ * acceptance run persists against a preview-scoped env distinct from any production env for
+ * the same node/artifact. The preview release's `applyPreview` write already registered the
+ * artifact in `cas_artifacts`, satisfying this row's artifact FK.
+ */
+export async function ensurePreviewVerificationEnvironment(
+  client: QueryClient,
+  release: LiveReleaseBinding,
+  newId: () => string = () => `verenv_${randomUUID()}`,
+): Promise<EnsureLiveVerificationEnvironmentResult> {
+  return ensureReadyVerificationEnvironment(client, release, PREVIEW_TARGET, newId);
+}
+
+async function ensureReadyVerificationEnvironment(
+  client: QueryClient,
+  release: LiveReleaseBinding,
+  deploymentTarget: string,
+  newId: () => string,
+): Promise<EnsureLiveVerificationEnvironmentResult> {
   const fingerprint = deploymentFingerprint(release);
   const key = [
     release.orgId,
     release.projectId,
     release.integrationNodeId,
     release.artifactDigest,
-    PRODUCTION_TARGET,
+    deploymentTarget,
     fingerprint,
     READY,
   ];
@@ -112,7 +142,7 @@ export async function ensureLiveVerificationEnvironment(
       release.projectId,
       release.integrationNodeId,
       release.artifactDigest,
-      PRODUCTION_TARGET,
+      deploymentTarget,
       fingerprint,
       release.releaseInstanceId,
       READY,
@@ -127,6 +157,44 @@ export async function ensureLiveVerificationEnvironment(
     );
   }
   return { environmentId: row.id, created: row.id === id };
+}
+
+/**
+ * rv-premerge fix #2: find-or-create the run's REAL `integration_nodes` row the pre-merge
+ * preview `verification_environments` row FKs. At the pre-merge point NO merge_batch node
+ * exists yet (it is materialized later, in the merge-coordinator drive) and an eager_base node
+ * exists only for jj-local dependents — so binding the preview env to the runId violates the
+ * `verification_environments.integration_node_id → integration_nodes(node_id)` FK. This mints a
+ * dedicated, run-unique `pre_merge_preview` node (migration 0086 purpose) instead: a plain
+ * `status='ready'` row with a run-keyed `member_key`, idempotent on `(org_id, member_key)`. It
+ * needs NO coverage-authority / jj workspace (it is not assembled by the merge coordinator).
+ */
+export async function ensurePreMergePreviewNode(
+  client: QueryClient,
+  input: { readonly orgId: string; readonly projectId: string; readonly runId: string; readonly headSha: string },
+  newId: () => string = () => `inode_${randomUUID()}`,
+): Promise<string> {
+  const memberKey = `pre_merge_preview:${input.runId}`;
+  const selectByKey = `SELECT node_id FROM integration_nodes WHERE org_id = $1 AND member_key = $2 LIMIT 1`;
+  const existing = await client.query<{ node_id: string }>(selectByKey, [input.orgId, memberKey]);
+  const found = existing.rows[0];
+  if (found !== undefined) return found.node_id;
+
+  const nodeId = newId();
+  await client.query(
+    `INSERT INTO integration_nodes
+       (node_id, project_id, org_id, base_branch, base_sha, ref, purpose, members, member_key, status)
+     VALUES ($1, $2, $3, 'pre_merge_preview', $4, $5, 'pre_merge_preview', '[]'::jsonb, $6, 'ready')
+     ON CONFLICT (org_id, member_key) DO NOTHING`,
+    [nodeId, input.projectId, input.orgId, input.headSha, `pre_merge_preview/${input.runId}`, memberKey],
+  );
+  // Re-read on the unique (org_id, member_key) so a concurrent winner (or our row) settles to one id.
+  const settled = await client.query<{ node_id: string }>(selectByKey, [input.orgId, memberKey]);
+  const row = settled.rows[0];
+  if (row === undefined) {
+    throw new Error(`pre-merge preview node find-or-create failed to settle for run ${input.runId}`);
+  }
+  return row.node_id;
 }
 
 /** Resolves the ready verification environment id for a run's live release. */
