@@ -23,6 +23,7 @@ import { createProject, createQueuedRunFromSpec, createSpec } from "../src/engin
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import type { ConflictContext } from "../src/engine/workflow/reviewMerge/index.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import {
   buildPlan,
@@ -408,6 +409,9 @@ export function hardTierAuthorityBundle(): MergeAuthorityBundle {
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: HARD_AUTHORITY_HEAD_SHA,
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

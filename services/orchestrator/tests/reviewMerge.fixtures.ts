@@ -20,6 +20,7 @@ import type {
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 /**
  * MERGE-SAFETY (self-identity): a secret store seeded with a static GitHub token at
@@ -217,6 +218,9 @@ export function authorityBundle(
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: AUTHORITY_HEAD_SHA,
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     behaviorGate: { kind: "not_applicable" },
     designRenderGate: { kind: "not_applicable" },
     findings: [],
@@ -252,13 +256,6 @@ export class ReviewMergePool {
     private readonly reviewPolicy: ReviewPolicy = "human",
   ) {}
 
-  /**
-   * the speculative-merge-hold lookups. By default a run is NOT speculative
-   * (an EMPTY `ancestor_stack`) and has no deps, so the hold is a no-op and existing
-   * tests proceed to merge unchanged. A test can set `ancestorStack` (the jj-local base
-   * source — a run is speculative iff it is non-empty) + `specDependsOn` +
-   * `mergedAncestors` to drive the hold path.
-   */
   specDependsOn: string[] = [];
   mergedAncestors: string[] = [];
   unresolvedSpeculativeHolds: string[] = [];
@@ -274,6 +271,8 @@ export class ReviewMergePool {
    * to prove the autonomous-tier auto-approve; absent ⇒ the config omits the key.
    */
   governancePlatformLogins: string[] | undefined = undefined;
+  /** Optional active governance tier source; when set it controls reviewPolicy. */
+  activePolicyDocument: unknown = undefined;
 
   /**
    * Codex H3 #11: the run's current `runs.status` + `outcome` — updated by the
@@ -334,6 +333,7 @@ export class ReviewMergePool {
         },
         default_branch: "main",
         org_config: null,
+        active_policy_document: this.activePolicyDocument,
       };
       return { rows: [row], rowCount: 1 };
     }

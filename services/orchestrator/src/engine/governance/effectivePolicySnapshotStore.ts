@@ -95,7 +95,10 @@ function decodeSnapshot(input: unknown): EffectivePolicySnapshot {
   };
 }
 
-async function activeBinding(client: QueryClient, input: RecordEffectivePolicySnapshotInput) {
+async function activeBinding(
+  client: QueryClient,
+  input: { readonly orgId: string; readonly projectId: string; readonly bindingId?: string },
+) {
   const result = await client.query(
     `SELECT b.id AS binding_id, b.tier_id, b.effective_policy_hash, t.tier_json,
             r.id AS policy_revision_id, r.policy_hash AS policy_revision_hash
@@ -196,6 +199,25 @@ export async function recordEffectivePolicySnapshot(
     },
   });
   return snapshot;
+}
+
+/**
+ * READ-ONLY resolution of a project's effective compiled governance policy body — the same
+ * `compiled.ast` {@link recordEffectivePolicySnapshot} would persist, but WITHOUT inserting a
+ * snapshot row or emitting an event. It is the source the MQ-2 multi-member land reads its
+ * review rules from (`reviewRulesFromCompiledPolicy`). FAIL-CLOSED: a missing active binding
+ * throws {@link EffectivePolicyBindingNotFoundError} and a non-reproducibly-compiled policy
+ * throws {@link EffectivePolicyIntegrityError} — the batch land cannot proceed on an
+ * unresolved policy.
+ */
+export async function resolveEffectivePolicyBody(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<unknown> {
+  const binding = await activeBinding(client, { orgId, projectId });
+  if (binding === undefined) throw new EffectivePolicyBindingNotFoundError(projectId);
+  return compileEffectivePolicy(binding, projectId).ast;
 }
 
 export async function getEffectivePolicySnapshot(

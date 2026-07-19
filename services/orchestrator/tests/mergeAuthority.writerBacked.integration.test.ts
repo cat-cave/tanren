@@ -31,7 +31,11 @@ import {
 } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import { buildAuthorityLandStore, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
-import { resolveLandTimeSignals, resolveLandTimeFindings } from "../src/engine/merge/landSignals.js";
+import {
+  noRequiredReviewGate,
+  resolveLandTimeSignals,
+  resolveLandTimeFindings,
+} from "../src/engine/merge/landSignals.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
@@ -241,6 +245,9 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
       gateConfigHash: "gc",
       policyVersion: "pv",
       gatedHeadSha: signals.gatedHeadSha,
+      reviewedHeadSha: undefined,
+      requiresExactReviewReceipt: false,
+      reviewGate: noRequiredReviewGate(),
       behaviorGate: { kind: "not_applicable" },
       designRenderGate: { kind: "not_applicable" },
       store: {

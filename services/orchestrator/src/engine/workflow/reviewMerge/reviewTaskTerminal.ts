@@ -22,6 +22,7 @@
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { EventPayload } from "../../events/index.js";
 import type { PriorEventInput } from "../../eventStore.js";
+import type { ReviewPrincipal } from "../../governance/reviewRules.js";
 import { SimulatedReviewPublicationError, type ForgeReviewPublication } from "./simulatedReviewPublication.js";
 
 export interface ReviewTaskTerminalBase {
@@ -49,6 +50,8 @@ export async function markReviewTaskDoneWithEvent(input: {
   prUrl: string;
   prNumber: number;
   reviewer?: string;
+  /** Governance identity of the reviewer; absent evidence never satisfies a required principal. */
+  reviewerPrincipal?: ReviewPrincipal;
   /** changes_requested feedback body (the writer-rework steering payload). */
   feedback?: string;
   /**
@@ -58,7 +61,7 @@ export async function markReviewTaskDoneWithEvent(input: {
    */
   forgePublication?: ForgeReviewPublication;
 }): Promise<void> {
-  const { writer, base, verdict, prUrl, prNumber, reviewer, feedback, forgePublication } = input;
+  const { writer, base, verdict, prUrl, prNumber, reviewer, reviewerPrincipal, feedback, forgePublication } = input;
   // PRE-TERMINAL verdict event (the loud `review.*` observation, downstream
   // consumers key off this event). Bundled into the SAME atomic transaction
   // as the terminal row + `task.completed` via the writer-seam `priorEvents`
@@ -93,7 +96,13 @@ export async function markReviewTaskDoneWithEvent(input: {
       ? {
           ...base,
           eventType: "review.approved",
-          payload: approvedPayload({ prUrl, prNumber, reviewer: effectiveReviewer, forgePublication }),
+          payload: approvedPayload({
+            prUrl,
+            prNumber,
+            reviewer: effectiveReviewer,
+            reviewerPrincipal,
+            forgePublication,
+          }),
           idempotencyKey,
         }
       : {
@@ -103,6 +112,7 @@ export async function markReviewTaskDoneWithEvent(input: {
             prUrl,
             prNumber,
             reviewer: effectiveReviewer,
+            reviewerPrincipal,
             feedback,
             forgePublication,
           }),
@@ -128,12 +138,14 @@ function approvedPayload(input: {
   prUrl: string;
   prNumber: number;
   reviewer?: string;
+  reviewerPrincipal?: ReviewPrincipal;
   forgePublication?: ForgeReviewPublication;
 }): EventPayload<"review.approved"> {
   const base = {
     prUrl: input.prUrl,
     prNumber: input.prNumber,
     ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+    ...(input.reviewerPrincipal !== undefined && { reviewerPrincipal: input.reviewerPrincipal }),
   };
   if (input.forgePublication === undefined) return base;
   if (input.forgePublication.forgeReviewState !== "approved") {
@@ -152,6 +164,7 @@ function changesRequestedPayload(input: {
   prUrl: string;
   prNumber: number;
   reviewer?: string;
+  reviewerPrincipal?: ReviewPrincipal;
   feedback?: string;
   forgePublication?: ForgeReviewPublication;
 }): EventPayload<"review.changes_requested"> {
@@ -159,6 +172,7 @@ function changesRequestedPayload(input: {
     prUrl: input.prUrl,
     prNumber: input.prNumber,
     ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+    ...(input.reviewerPrincipal !== undefined && { reviewerPrincipal: input.reviewerPrincipal }),
     ...(input.feedback !== undefined && { message: input.feedback }),
   };
   if (input.forgePublication === undefined) return base;

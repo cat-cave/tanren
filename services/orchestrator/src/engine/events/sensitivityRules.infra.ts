@@ -7,14 +7,14 @@ const reviewTerminalRules: ReadonlyArray<[string, SensitivityRule["tag"]]> = [
   ["prUrl", "public"],
   ["prNumber", "public"],
   ["reviewer", "public"],
+  ["reviewerPrincipal.kind", "public"],
+  ["reviewerPrincipal.name", "public"],
   ["forgeReviewId", "public"],
   ["forgeReviewState", "public"],
   ["forgeReviewUrl", "public"],
   ["headSha", "public"],
 ];
 
-// Infrastructure-and-integration sensitivity rules, split out of sensitivityRules.ts for the 500-line
-// cap (role rules stay there). Runtime substrate + cost/usage telemetry + the integration surface.
 export const infraSensitivityRules: SensitivityRule[] = [
   // runner allocation
   ...rulesFor("allocator.requested", [

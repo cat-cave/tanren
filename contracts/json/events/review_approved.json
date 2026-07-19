@@ -31,6 +31,29 @@
         "reviewer": {
           "minLength": 1,
           "type": "string"
+        },
+        "reviewerPrincipal": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "agent_profile",
+                "user",
+                "team"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
         }
       },
       "required": [
@@ -57,6 +80,29 @@
         },
         "reviewer": {
           "type": "string"
+        },
+        "reviewerPrincipal": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "agent_profile",
+                "user",
+                "team"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
         }
       },
       "required": [

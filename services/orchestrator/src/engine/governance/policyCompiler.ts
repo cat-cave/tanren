@@ -120,7 +120,12 @@ function ruleOrder(rule: CompiledPolicyRule): string {
 }
 
 function selectionKey(rule: PolicyRule): string {
-  return rule.key === "review.required_principal" ? `${rule.key}\u0000${valueKey(rule.value)}` : rule.key;
+  // This key becomes a persisted `compiled_ast.sourceMap` property. PostgreSQL
+  // JSON rejects the NUL escape, so it must be printable while still retaining
+  // one source-map entry per distinct required principal.
+  return rule.key === "review.required_principal"
+    ? `${rule.key}:${encodeURIComponent(valueKey(rule.value))}`
+    : rule.key;
 }
 
 function compileWithoutContradictions(ast: PolicyAst): CompiledPolicyAst {

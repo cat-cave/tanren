@@ -10,6 +10,7 @@ import { buildAuthorityLandStore } from "../src/engine/merge/mergeAuthorityLandF
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
 export function lifecycleAuthorityBundle(input: {
   pool: Pool;
@@ -35,6 +36,9 @@ export function lifecycleAuthorityBundle(input: {
     // The native gate anchored its verdict on the workspace HEAD (`headSha`); the land's
     // authorized commit is the same head, so the §5 commit-binding clears.
     gatedHeadSha: input.headSha,
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

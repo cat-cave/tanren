@@ -29,6 +29,7 @@ import { createProject, createQueuedRunFromSpec, createSpec } from "../../src/en
 import { runPlannerLoopWorkflow } from "../../src/engine/workflow/plannerRun.js";
 import { InMemoryCodeHost } from "../conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { noRequiredReviewGate } from "../../src/engine/governance/reviewRules.js";
 import {
   buildPlan,
   cleanAudit,
@@ -204,6 +205,9 @@ function workerAuthorityBundle(): MergeAuthorityBundle {
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: WORKER_AUTHORITY_HEAD_SHA,
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
+    reviewGate: noRequiredReviewGate(),
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",
