@@ -89,6 +89,7 @@ export const eventTypesSeed = [
   { name: "deploy.failed", defaultSeverity: "warn" },
   { name: "deploy.manual_confirmed", defaultSeverity: "info" },
   { name: "deploy.pending_manual", defaultSeverity: "warn" },
+  { name: "deploy.reap_failed", defaultSeverity: "warn" },
   { name: "deploy.skipped", defaultSeverity: "warn" },
   { name: "deploy.triggered", defaultSeverity: "info" },
   { name: "deploy.verified", defaultSeverity: "warn" },

@@ -9,6 +9,7 @@ import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.j
 import type { EventStore } from "../eventStore.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import { buildDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../deploy/buildDeployAdapter.js";
+import { EventReapFailureReporter } from "../deploy/reapFailureReporter.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import type { ProjectDeployTarget } from "./deployOnMergeShared.js";
 import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
@@ -138,6 +139,9 @@ export async function verifyDeploy(
     releaseInstances: ctx.releaseInstances,
     ...(ctx.urlProbe !== undefined && { urlProbe: ctx.urlProbe }),
     ...(ctx.verifyPoll !== undefined && { poll: ctx.verifyPoll }),
+    // A swallowed single-instance machine reap must not silently accumulate machines
+    // (apex-v96): wire the durable reporter so a non-converged reap emits `deploy.reap_failed`.
+    reapFailureReporter: new EventReapFailureReporter(ctx.eventStore),
   });
   const verification = await adapter.verify(
     async () => {

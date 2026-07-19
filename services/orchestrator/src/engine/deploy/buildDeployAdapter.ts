@@ -60,6 +60,7 @@ import {
   type ManualAttestationStore,
 } from "./manualExternalDeployAdapter.js";
 import type { EventStore } from "../eventStore.js";
+import type { ReapFailureReporter } from "./reapFailureReporter.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
 import type pg from "pg";
 import { PgReleaseInstancesRepository, type ReleaseInstancesRepository } from "../repositories/index.js";
@@ -123,6 +124,13 @@ export interface BuildDeployAdapterDeps {
   manualEvents?: EventStore;
   /** The optional per-run bindings the emitted manual_external events carry. */
   manualRunBindings?: { runId?: string };
+  /**
+   * OPTIONAL durable reporter for a non-converged post-verify machine reap (the
+   * `direct_api` Fly single-instance convergence). Wired by the deploy-on-merge verify
+   * path so a swallowed reap emits `deploy.reap_failed` instead of silently accumulating
+   * machines (apex-v96). Omitted ⇒ the adapter loudly logs the non-converged reap.
+   */
+  reapFailureReporter?: ReapFailureReporter;
 }
 
 /** The class kinds the production catalog registers — for the diagnostic below. */
@@ -167,6 +175,7 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
         poll,
         releaseInstances: deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool!),
         ...(deps.integrationNodeId === undefined ? {} : { integrationNodeId: deps.integrationNodeId }),
+        ...(deps.reapFailureReporter === undefined ? {} : { reapFailureReporter: deps.reapFailureReporter }),
       });
     case MANUAL_EXTERNAL_ADAPTER_KIND: {
       if (deps.manualAttestations === undefined) {

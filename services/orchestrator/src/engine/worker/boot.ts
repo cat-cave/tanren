@@ -30,9 +30,11 @@ import type { RunWorker } from "./runWorker.js";
 import {
   buildEnvCreationFromEnv,
   buildRunCredentialScoping,
+  startFlyMachineOrphanSweeper,
   startRunnerRowOrphanSweeper,
   startRunWorker,
   startRunWorkspaceReaper,
+  type FlyMachineOrphanSweeper,
   type RunnerRowOrphanSweeper,
   type RunWorkspaceReaper,
 } from "./lifecycle.js";
@@ -85,7 +87,14 @@ export interface BootedRunWorker {
    * paths. Undefined for the ephemeral kinds.
    */
   runnerRowOrphanSweeper: RunnerRowOrphanSweeper | undefined;
-  /** Drain the worker + reaper + autonomy loops + run-sandbox reaper + orphan sweeper (the SIGTERM path). */
+  /**
+   * The Fly-machine orphan sweeper (apex-v96 guard): the durable out-of-band
+   * reconciler that reaps accumulated Fly machines the inline post-verify reap
+   * missed (keeping only the release_instances-recorded live machine per
+   * single-instance app). Always on — a clean no-op when no Fly deployment is live.
+   */
+  flyMachineOrphanSweeper: FlyMachineOrphanSweeper;
+  /** Drain the worker + reaper + autonomy loops + run-sandbox reaper + orphan sweepers (the SIGTERM path). */
   stop: () => Promise<void>;
 }
 
@@ -239,6 +248,12 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
   // `resolveBootedAllocatorKind` the workspace reaper reads, so a typo'd kind
   // fails LOUD there rather than silently disabling the sweeper.
   const runnerRowOrphanSweeper = startRunnerRowOrphanSweeper({ pool });
+  // Fly-machine orphan sweeper (apex-v96 guard): the durable out-of-band reconciler
+  // that reaps accumulated Fly machines the inline post-verify reap missed. Always on
+  // (its live-deployment enumeration is a system-scope SELECT that no-ops when no Fly
+  // deploy is live), so a transient reap blip during a deploy self-corrects next sweep
+  // instead of fragmenting a single-instance product's file store.
+  const flyMachineOrphanSweeper = startFlyMachineOrphanSweeper({ pool, secrets });
   const { IntegrationSecretCleanupReaper } = await import("../integrations/integrationSecretCleanupReaper.js");
   const integrationSecretCleanupReaper = new IntegrationSecretCleanupReaper({ pool, secrets });
   integrationSecretCleanupReaper.start();
@@ -256,6 +271,7 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
       autonomy.stop(),
       runWorkspaceReaper?.stop(),
       runnerRowOrphanSweeper?.stop(),
+      flyMachineOrphanSweeper.stop(),
       integrationSecretCleanupReaper.stop(),
       worker.stop(),
       reaper.stop(),
@@ -269,6 +285,7 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     autonomy,
     runWorkspaceReaper,
     runnerRowOrphanSweeper,
+    flyMachineOrphanSweeper,
     integrationSecretCleanupReaper,
     stop,
   };

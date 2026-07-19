@@ -401,6 +401,7 @@ export {
   DeployTriggeredPayload,
   DeployVerifiedPayload,
   DeployFailedPayload,
+  DeployReapFailedPayload,
   DeploySkippedPayload,
   DeployPendingManualPayload,
   DeployManualConfirmedPayload,

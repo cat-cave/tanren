@@ -55,6 +55,20 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.failed", path: "reason", tag: "public" },
   ...auditEnvelopeRulesFor("deploy.failed"),
 
+  // deploy.reap_failed: the deploy target + the kept live deployment + the reap source
+  // (verify | sweeper) + the list-failed flag + the failed/reaped machine counts + a
+  // NON-SECRET fixed reason. No token/env values reach here (the reap token went only
+  // into the Fly machines API requests).
+  { eventName: "deploy.reap_failed", path: "provider", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "appId", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "source", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "listFailed", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "failedMachineCount", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "reapedMachineCount", tag: "public" },
+  { eventName: "deploy.reap_failed", path: "reason", tag: "public" },
+  ...auditEnvelopeRulesFor("deploy.reap_failed"),
+
   // deploy.skipped: a PRE-resolution skip — the project id + a fixed reason code + a
   // bounded non-secret detail string. No token/env values, no provider/appId (the skip
   // is BEFORE a target resolves).

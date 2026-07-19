@@ -75,6 +75,7 @@ import {
   type DeployProvisionerDeps,
   type DeployResult,
   type DeploySource,
+  type ReapOutcome,
 } from "./deployProvisioner.js";
 import type { FlyImageBuilder } from "./flyImageBuilder.js";
 import { flyMachineConfig } from "./flyMachineConfig.js";
@@ -356,38 +357,59 @@ class FlyDeployApi implements DeployProviderApi {
    * production machine if the new image reaches a failure terminal or its URL fails
    * the smoke check.
    */
-  async afterVerifiedDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void> {
-    await this.reapOtherMachines(app.name, token, deploymentId);
+  async afterVerifiedDeployment(_grant: OrgGrant, token: string, app: DeployApp, id: string): Promise<ReapOutcome> {
+    return this.reapOtherMachines(app.name, token, id);
   }
 
-  // Destroy every machine of `appName` except `keepId`, so a single-instance app
-  // converges to exactly one machine per deploy instead of accumulating one per
-  // release. Best-effort by contract (see the call site).
-  private async reapOtherMachines(appName: string, token: string, keepId: string): Promise<void> {
-    try {
-      const list = await this.transport.request({
-        method: "GET",
-        url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines`,
+  // Destroy every machine of `appName` except `keepId` (single-instance convergence).
+  // Best-effort (a blip NEVER fails the deploy) but NOT a silent swallow: the returned
+  // {@link ReapOutcome} records a failed enumeration + failed deletes so the caller emits
+  // a durable `deploy.reap_failed` + the reconciler retries.
+  private async reapOtherMachines(appName: string, token: string, keepId: string): Promise<ReapOutcome> {
+    const outcome: ReapOutcome = {
+      appName,
+      keptMachineId: keepId,
+      reapedMachineIds: [],
+      listFailed: false,
+      failedMachineIds: [],
+    };
+    const list = await this.bestEffortRequest({
+      method: "GET",
+      url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (list === undefined || !list.ok) {
+      outcome.listFailed = true;
+      return outcome;
+    }
+    for (const machine of (list.json ?? []) as ReadonlyArray<{ id?: string }>) {
+      if (machine.id === undefined || machine.id === keepId) {
+        continue;
+      }
+      const machineId = machine.id;
+      const deleted = await this.bestEffortRequest({
+        method: "DELETE",
+        url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}?force=true`,
         headers: { authorization: `Bearer ${token}` },
       });
-      if (!list.ok) {
-        return;
+      // A 404 is an already-gone machine — an idempotent no-op, NOT a failure.
+      if (deleted !== undefined && (deleted.ok || deleted.status === 404)) {
+        outcome.reapedMachineIds.push(machineId);
+      } else {
+        outcome.failedMachineIds.push(machineId);
       }
-      const machines = (list.json ?? []) as ReadonlyArray<{ id?: string }>;
-      for (const machine of machines) {
-        if (machine.id === undefined || machine.id === keepId) {
-          continue;
-        }
-        await this.transport
-          .request({
-            method: "DELETE",
-            url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
-            headers: { authorization: `Bearer ${token}` },
-          })
-          .catch(() => {});
-      }
+    }
+    return outcome;
+  }
+
+  // One transport call whose throw is swallowed to `undefined` (a reap blip must not fail the deploy).
+  private async bestEffortRequest(
+    req: Parameters<DeployProvisionerDeps["transport"]["request"]>[0],
+  ): Promise<Awaited<ReturnType<DeployProvisionerDeps["transport"]["request"]>> | undefined> {
+    try {
+      return await this.transport.request(req);
     } catch {
-      // Reap is best-effort: a listing/transport failure must not fail the deploy.
+      return undefined;
     }
   }
 
