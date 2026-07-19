@@ -63,12 +63,15 @@ export function buildDesignFragmentBatchCompose(
         };
       }
 
-      // Re-check adapter composability over the union of authored capabilities on a
-      // fresh VFS (the union may surface an incompatibility the per-fragment pass
-      // did not — e.g. a capability another fragment `conflicts` with).
+      // Re-check adapter composability over the union of authored capabilities
+      // AGAINST THE COMPOSED VFS (the present + authored file bodies already
+      // assembled above) — NOT a fresh empty VFS. Materializing onto `composed`
+      // means the capability re-check actually sees the authored content (a union
+      // incompatibility the per-fragment pass could not — e.g. a capability another
+      // fragment `conflicts` with, or a merge conflict on the real file set).
       const specs = input.authored.map((entry) => entry.validated.spec);
       try {
-        await deps.adapter.materialize(specs, new DesignVfs());
+        await deps.adapter.materialize(specs, composed);
       } catch (err) {
         return { kind: "failed", reason: `augmented_set_not_composable: ${message(err)}` };
       }
