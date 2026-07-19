@@ -175,6 +175,7 @@ describeDb("rv-17 flake classification + quarantine governance — real Postgres
         { verdictId: "verdict_bq_fail", outcome: "failed_product" },
       ],
       contextHash: CTX,
+      epoch: DIGEST,
     });
     let active = await store.readActiveQuarantinedBehaviors({ orgId: ORG, projectId: PROJECT });
     expect(active.has(BEHAVIOR)).toBe(true);
@@ -190,6 +191,7 @@ describeDb("rv-17 flake classification + quarantine governance — real Postgres
       actor: "operator@example.com",
       evidence: [],
       contextHash: CTX,
+      epoch: DIGEST,
     });
     active = await store.readActiveQuarantinedBehaviors({ orgId: ORG, projectId: PROJECT });
     expect(active.has(BEHAVIOR)).toBe(false);
@@ -201,9 +203,9 @@ describeDb("rv-17 flake classification + quarantine governance — real Postgres
       runWithOrgScope(app, ORG, (client) =>
         client.query(
           `INSERT INTO behavior_flake_quarantines
-             (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash)
-           VALUES ($1, $2, 'bq_bad_effect', $3, 'quarantine', 'restored', 'flaky', 'r', 'a', $4)`,
-          [ORG, PROJECT, BEHAVIOR, CTX],
+             (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash, epoch)
+           VALUES ($1, $2, 'bq_bad_effect', $3, 'quarantine', 'restored', 'flaky', 'r', 'a', $4, $5)`,
+          [ORG, PROJECT, BEHAVIOR, CTX, DIGEST],
         ),
       ),
     ).rejects.toThrow(/behavior_flake_quarantines_transition_shape_check/u);
@@ -214,9 +216,9 @@ describeDb("rv-17 flake classification + quarantine governance — real Postgres
       runWithOrgScope(app, ORG, (client) =>
         client.query(
           `INSERT INTO behavior_flake_quarantines
-             (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash)
-           VALUES ($1, $2, 'bq_bad_class', $3, 'quarantine', 'excluded_from_green', 'stable', 'r', 'a', $4)`,
-          [ORG, PROJECT, BEHAVIOR, CTX],
+             (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash, epoch)
+           VALUES ($1, $2, 'bq_bad_class', $3, 'quarantine', 'excluded_from_green', 'stable', 'r', 'a', $4, $5)`,
+          [ORG, PROJECT, BEHAVIOR, CTX, DIGEST],
         ),
       ),
     ).rejects.toThrow(/behavior_flake_quarantines_transition_shape_check/u);
@@ -226,9 +228,9 @@ describeDb("rv-17 flake classification + quarantine governance — real Postgres
     await runWithOrgScope(app, ORG, (client) =>
       client.query(
         `INSERT INTO behavior_flake_quarantines
-           (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash)
-         VALUES ($1, $2, 'bq_immutable', $3, 'quarantine', 'excluded_from_green', 'flaky', 'r', 'a', $4)`,
-        [ORG, PROJECT, BEHAVIOR, CTX],
+           (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification, reason, actor, context_hash, epoch)
+         VALUES ($1, $2, 'bq_immutable', $3, 'quarantine', 'excluded_from_green', 'flaky', 'r', 'a', $4, $5)`,
+        [ORG, PROJECT, BEHAVIOR, CTX, DIGEST],
       ),
     );
     await expect(

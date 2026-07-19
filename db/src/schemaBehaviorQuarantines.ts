@@ -50,6 +50,14 @@ export const behaviorQuarantines = pgTable(
       .default(sql`'[]'::jsonb`),
     // The runtime_behavior_context_hash the classification was observed over.
     contextHash: text("context_hash").notNull(),
+    // mq-7 EPOCH — the code GENERATION marker the transition was proven in: the
+    // artifact_digest whose recorded verdicts the classification read. A quarantine speaks
+    // ONLY for its epoch; a later generation (a new artifact_digest) is a fresh epoch that
+    // must RE-PROVE the flake or the quarantine is released. This is what forbids a
+    // quarantine from silently persisting across generations and masking a real regression:
+    // when a new epoch instead shows a consistent failure, the quarantine is released
+    // (`release`, classification 'consistent_failure') so the regression reaches the gate.
+    epoch: text("epoch").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -71,6 +79,8 @@ export const behaviorQuarantines = pgTable(
       sql`${table.classification} IN ('flaky','consistent_failure','stable','insufficient_observation')`,
     ),
     check("behavior_flake_quarantines_context_hash_check", sql`${table.contextHash} ~ ${digestPattern}`),
+    // mq-7: the epoch is an artifact_digest — a content-addressed generation marker.
+    check("behavior_flake_quarantines_epoch_check", sql`${table.epoch} ~ ${digestPattern}`),
     // ANTI-LAUNDERING shape CHECK: a quarantine can ONLY be 'excluded_from_green' + 'flaky'
     // (never a green effect, never an unjustified classification); a release is 'restored'.
     check(

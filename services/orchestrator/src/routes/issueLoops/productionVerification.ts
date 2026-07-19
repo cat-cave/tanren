@@ -75,9 +75,10 @@ export interface ProductionVerificationRoutesOptions {
   /**
    * rv-17 flake quarantine reader — consulted so a QUARANTINED (flaky) behavior's regressed verdict
    * is NEVER used to name a bisection culprit on THIS operator-retry path too (mirrors the walker).
-   * Defaults to the live PgBehaviorQuarantineStore.
+   * mq-7: the check is EPOCH-SCOPED (`isQuarantinedInEpoch`) so a stale-epoch quarantine never masks
+   * a new-epoch regression. Defaults to the live PgBehaviorQuarantineStore.
    */
-  readonly behaviorQuarantineReader?: Pick<PgBehaviorQuarantineStore, "isQuarantined">;
+  readonly behaviorQuarantineReader?: Pick<PgBehaviorQuarantineStore, "isQuarantinedInEpoch">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
