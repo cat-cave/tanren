@@ -411,6 +411,7 @@
     "precmd",
     "preconfigured",
     "preflight",
+    "premerge",
     "preflighted",
     "prepwork",
     "prettier",

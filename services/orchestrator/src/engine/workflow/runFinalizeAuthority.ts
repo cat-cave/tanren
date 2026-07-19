@@ -90,6 +90,7 @@ export type NonPassDetail =
   | "window_exhausted"
   | "convergence_stalled"
   | "merge_gate_unsatisfied"
+  | "pre_merge_behavior_unsatisfied"
   | "review_stalled"
   | "halted";
 
@@ -483,6 +484,7 @@ function nonPassSummary(detail: NonPassDetail): string {
     window_exhausted: "the agent's usage window was exhausted mid-run",
     convergence_stalled: "the planner loop stalled without converging",
     merge_gate_unsatisfied: "the pre-merge gate was not satisfied within the self-heal budget",
+    pre_merge_behavior_unsatisfied: "a pre-merge behavior verification failed or could not be proven on the preview",
     review_stalled: "the review did not resolve within the poll/rework budget",
     halted: "the run halted without producing a mergeable change",
   };

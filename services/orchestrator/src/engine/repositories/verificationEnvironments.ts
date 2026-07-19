@@ -38,6 +38,11 @@ import type { ReleaseInstanceRecord } from "../contracts/deployAdapter.js";
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 const PRODUCTION_TARGET = "production";
+// rv-premerge: the deployment target for an EPHEMERAL pre-merge preview env. `deployment_target`
+// is a plain-text column (migration 0037) that is part of the 0082 partial-unique identity, so a
+// 'preview' env and a 'production' env with otherwise-identical identity are DISTINCT rows — a
+// pre-merge verdict is never attributed to the production environment (or vice versa).
+const PREVIEW_TARGET = "preview";
 const READY = "ready";
 
 /** The exact identity fields the runtime-verification readers bind an environment on. */
@@ -82,13 +87,38 @@ export async function ensureLiveVerificationEnvironment(
   release: LiveReleaseBinding,
   newId: () => string = () => `verenv_${randomUUID()}`,
 ): Promise<EnsureLiveVerificationEnvironmentResult> {
+  return ensureReadyVerificationEnvironment(client, release, PRODUCTION_TARGET, newId);
+}
+
+/**
+ * rv-premerge: find-or-create the ready PREVIEW `verification_environments` row for an
+ * ephemeral pre-merge preview a release has been applied to. Identical identity/idempotency
+ * semantics to the live variant, but `deployment_target='preview'` — so a `pre_merge`
+ * acceptance run persists against a preview-scoped env distinct from any production env for
+ * the same node/artifact. The preview release's `applyPreview` write already registered the
+ * artifact in `cas_artifacts`, satisfying this row's artifact FK.
+ */
+export async function ensurePreviewVerificationEnvironment(
+  client: QueryClient,
+  release: LiveReleaseBinding,
+  newId: () => string = () => `verenv_${randomUUID()}`,
+): Promise<EnsureLiveVerificationEnvironmentResult> {
+  return ensureReadyVerificationEnvironment(client, release, PREVIEW_TARGET, newId);
+}
+
+async function ensureReadyVerificationEnvironment(
+  client: QueryClient,
+  release: LiveReleaseBinding,
+  deploymentTarget: string,
+  newId: () => string,
+): Promise<EnsureLiveVerificationEnvironmentResult> {
   const fingerprint = deploymentFingerprint(release);
   const key = [
     release.orgId,
     release.projectId,
     release.integrationNodeId,
     release.artifactDigest,
-    PRODUCTION_TARGET,
+    deploymentTarget,
     fingerprint,
     READY,
   ];
@@ -112,7 +142,7 @@ export async function ensureLiveVerificationEnvironment(
       release.projectId,
       release.integrationNodeId,
       release.artifactDigest,
-      PRODUCTION_TARGET,
+      deploymentTarget,
       fingerprint,
       release.releaseInstanceId,
       READY,

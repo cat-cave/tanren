@@ -92,6 +92,7 @@ import {
 } from "./reviewMerge/index.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { materializeFreshTriageNewSpecs, type TriageNewSpecsMaterializer } from "./plannerRunTriageNewSpecs.js";
+import type { PreMergeBehaviorGateProducer } from "../verification/preMerge/preMergeBehaviorGateProducer.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -138,6 +139,9 @@ export interface PlannerRunContext {
   // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy.
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
+  // rv-premerge: OPT-IN pre-merge BEHAVIOR-gate knob (default OFF); gates the preview-deploy →
+  // rv-11 → `pre_merge` verdict producer at the merge stage. Absent/false ⇒ no preview deploy.
+  preMergeBehaviorGate?: boolean;
   // AUDIT-EVIDENCE BASELINE: governance policy version, stamped onto `gate.verdict` roll-up.
   policyVersion?: number;
   greenfield?: boolean;
@@ -160,11 +164,9 @@ export interface PlannerRunAdapterContext {
 export interface RunPlannerLoopInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // Cost recorder — in-process default over pool+eventStore; worker injects a
-  // writer-backed recorder for remote-writes (control-plane INSERT).
+  // Cost recorder — in-process default over pool+eventStore; worker injects a writer-backed recorder for remote-writes.
   recorder?: CostRecorder;
-  // Run terminal finalize — in-process org-scoped UPDATE default; worker injects
-  // a writer-backed finalizer for remote-writes.
+  // Run terminal finalize — in-process org-scoped UPDATE default; worker injects a writer-backed finalizer for remote-writes.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
   // REQUIRED (audit D3/H3 sweep): atomic terminal seams ride through this writer.
   runStateWriter: RunStateWriter;
@@ -176,8 +178,7 @@ export interface RunPlannerLoopInput {
   credentialScoping?: RunCredentialScoping;
   /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
   githubHttp: GitHubHttpClient;
-  // Part 2: the shared GitHub App installation-token minter (cache lives here), threaded into
-  // App-first clone-token resolution so a private clone reuses the run's minted/cached token.
+  // Part 2: the shared GitHub App installation-token minter (cache lives here), threaded into App-first clone-token resolution.
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
   workspacePath?: string;
@@ -186,8 +187,7 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // Bootstrap install-command override over SSH; omitted ⇒ resolve from tanren-ci.yml
-  // `bootstrap.run` else `DEFAULT_BOOTSTRAP_COMMAND` (see `buildDefaultGate`).
+  // Bootstrap install-command override over SSH; omitted ⇒ tanren-ci.yml `bootstrap.run` else `DEFAULT_BOOTSTRAP_COMMAND`.
   bootstrapCommand?: string;
   // Test seam: no-op / scripted failure for `bootstrapWorkspace` over SSH.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
@@ -219,26 +219,26 @@ export interface RunPlannerLoopInput {
   // native_queue enqueue: on-client is PR #724's atomic 3-write block.
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   nativeQueueOnClientEnqueuer?: NativeQueueOnClientEnqueuer;
-  // WS-A PR-8 (§2.3, fork F4): OBSERVE-ONLY jj-local `eager_base` integration
-  // node UPSERT (proof-reuse substrate). NEVER gates the run.
+  // WS-A PR-8 (§2.3, fork F4): OBSERVE-ONLY jj-local `eager_base` integration node UPSERT
+  // (proof-reuse substrate). NEVER gates the run.
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
   /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (divergence key). */
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
-  // §3 NEVER-DISCARD (apex v35): reads ancestor lifecycle buckets so a headless
-  // non-terminal ancestor makes the dependent BENIGN-WAIT (never strand).
+  // §3 NEVER-DISCARD (apex v35): reads ancestor lifecycle buckets so a headless non-terminal
+  // ancestor makes the dependent BENIGN-WAIT (never strand).
   ancestorPhaseReader?: AncestorPhaseReader;
-  // apex v35 ROBUSTNESS: consecutive-same-failure reader — RE-DRIVE transient, ESCALATE
-  // on SAME classified failure K times.
+  // apex v35 ROBUSTNESS: consecutive-same-failure reader — RE-DRIVE transient, ESCALATE K times.
   redriveHistoryReader?: RedriveHistoryReader;
-  // Plane B: project dev+test app env for the runner (gate+bootstrap), NEVER logged,
-  // DISTINCT from Tanren's own creds.
+  // Plane B: project dev+test app env for the runner (gate+bootstrap), NEVER logged, DISTINCT
+  // from Tanren's own creds.
   appEnv?: Record<string, string>;
-  // apex v79/v80 loop closure: MATERIALIZE the triage-emitted cross-scope work items
-  // as REAL DAG specs so the "route out" decision lands on the DAG (else `newSpecs`
-  // is a value object that vanishes). Wired by `runExecutor.ts` (`acceptProposals`
-  // under the run's org scope); absent on unit paths (the outcome's `newSpecs` is
-  // still observable — nothing is persisted, byte-identical to the pre-fix behavior).
+  // apex v79/v80 loop closure: MATERIALIZE the triage-emitted cross-scope work items as REAL
+  // DAG specs so the "route out" decision lands on the DAG. Wired by `runExecutor.ts`; absent
+  // on unit paths (the outcome's `newSpecs` is still observable, byte-identical to pre-fix).
   materializeTriageNewSpecs?: TriageNewSpecsMaterializer;
+  // rv-premerge: OPT-IN pre-merge behavior-gate producer (runs only when the project's
+  // `context.preMergeBehaviorGate` is true); absent / knob off ⇒ NO preview deploy (no-op).
+  preMergeBehaviorProducer?: PreMergeBehaviorGateProducer;
 }
 
 export interface PlannerRunResult {

@@ -305,6 +305,10 @@ export async function loadRunExecutionContext(
     // BALANCED default would strand findings and the preflight FAILS LOUD; an
     // autonomous project that PUT AUTONOMOUS_AUDIT_POSTURE passes the preflight.
     auditPosture: projectConfig.auditPosture,
+    // rv-premerge: the OPT-IN pre-merge behavior-gate knob (default false). Threaded so
+    // `runPublishGateStage` runs the preview-deploy → rv-11 → `pre_merge` verdict producer
+    // ONLY when the operator opted in; false ⇒ the merge stage does no preview deploy.
+    preMergeBehaviorGate: projectConfig.preMergeBehaviorGate,
     // The project's convergence policy (sustained-non-recovery thresholds, etc.).
     // Threaded so the in-loop hold/escape-hatch logic reads the operator's choice
     // rather than the absent-config default.
