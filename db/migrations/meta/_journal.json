@@ -603,6 +603,13 @@
       "when": 1784474648044,
       "tag": "0087_redundant_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1784480949901,
+      "tag": "0088_design_render_verdict_contract_digest",
+      "breakpoints": true
     }
   ]
 }

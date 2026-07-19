@@ -355,6 +355,93 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(resolved).toBeUndefined();
   });
 
+  it("Fix-2 — an already-published system with a STALE verdict is RE-VERIFIED (not stale-reused); a matching one is honored", async () => {
+    // The already-published short-circuit must NOT blindly reuse a design-render verdict that was
+    // recorded against a DIFFERENT contract than the current HEAD. This drives: compose → publish
+    // (verdict v_current) → simulate the verdict having been recorded against a PRIOR contract
+    // version → re-compose (still already-published) → the reuse guard detects the mismatch and
+    // RE-VERIFIES, writing a FRESH verdict keyed to the current contract → a THIRD compose now
+    // finds a matching verdict and honors it (idempotent, no redundant re-render).
+    const REVERIFY_PROJECT = "project_ds_reverify";
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ($1, 'DS Reverify', 'https://example.test/ds-reverify.git', 'main', 'runner:test', $2, '{"version":1}'::jsonb)`,
+      [REVERIFY_PROJECT, ORG_ID],
+    );
+    const contract = parseDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "a reverify console",
+      intent: "a surface that must re-prove its a11y verdict against the current contract",
+      // A UNIQUE dimension key so the authored surface fragment does not collide with the other
+      // tests' org-registry paths.
+      dimensions: [
+        { key: "widgets", label: "Widgets", intent: "composable primitives", guidance: "", personaRefs: [] },
+      ],
+    });
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_ID, projectId: REVERIFY_PROJECT, contract },
+        { kind: "operator" },
+      ),
+    );
+
+    const deps = {
+      pool: runtimePool,
+      artifactStore: new FilesystemArtifactStore(artifactRoot),
+      fragmentAnswerer: fixtureFragmentAnswerer(),
+      eventStore: new CapturingEventStore(),
+      createdBy: "tanren.ds-composer.test",
+    };
+
+    const countVerdicts = async (): Promise<number> =>
+      (
+        await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+          client.query<{ n: string }>(
+            "SELECT count(*)::text AS n FROM design_render_land_verdicts WHERE org_id = $1 AND project_id = $2",
+            [ORG_ID, REVERIFY_PROJECT],
+          ),
+        )
+      ).rows[0]!.n;
+
+    // First compose — publishes and records exactly one verdict, keyed to the current contract.
+    const first = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    expect(first?.alreadyPublished).toBe(false);
+    expect(await countVerdicts()).toBe("1");
+
+    // Simulate the persisted verdict having been recorded against a PRIOR contract version — the
+    // published release/system is unchanged (resolve still returns it), but the verdict's contract
+    // provenance no longer matches the current HEAD (version "1").
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query(
+        "UPDATE design_render_land_verdicts SET design_contract_version = '0', contract_digest = 'sha256:stale' WHERE org_id = $1 AND project_id = $2",
+        [ORG_ID, REVERIFY_PROJECT],
+      ),
+    );
+
+    // Re-compose — still already-published, but the STALE verdict forces a RE-VERIFY (fresh row).
+    const second = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    expect(second?.alreadyPublished).toBe(true);
+    expect(await countVerdicts()).toBe("2");
+    const latest = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query<{ design_contract_version: string; contract_digest: string | null }>(
+        `SELECT design_contract_version, contract_digest FROM design_render_land_verdicts
+          WHERE org_id = $1 AND project_id = $2 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [ORG_ID, REVERIFY_PROJECT],
+      ),
+    );
+    // The FRESH verdict is keyed to the CURRENT contract (version "1", a real digest), NOT the stale one.
+    expect(latest.rows[0]?.design_contract_version).toBe("1");
+    expect(latest.rows[0]?.contract_digest).toMatch(/^sha256:/u);
+    expect(latest.rows[0]?.contract_digest).not.toBe("sha256:stale");
+
+    // Third compose — the latest verdict now matches the current contract → honored, NO re-render.
+    const third = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    expect(third?.alreadyPublished).toBe(true);
+    expect(await countVerdicts()).toBe("2");
+  });
+
   it("is idempotent — a second compose short-circuits on the published lineage (no re-author)", async () => {
     const events = new CapturingEventStore();
     const result = await composeProjectWebDesignSystem(

@@ -26,6 +26,11 @@ export interface DesignRenderVerdictRow {
   readonly outcome: DesignRenderRunOutcome;
   readonly accessibilityStandard: string;
   readonly designContractVersion: string;
+  /** The published release this verdict was recorded for (compose-time reuse-guard key). */
+  readonly releaseId: string;
+  /** The contract V2 digest this verdict was rendered against; `null` on a legacy row whose
+   * provenance predates the column (treated as a mismatch → re-verify, fail-closed). */
+  readonly contractDigest: string | null;
   readonly failingScenarioKey: string | null;
   readonly failingRuleIds: readonly string[];
   readonly checkpointCount: number;
@@ -38,6 +43,8 @@ export interface RecordDesignRenderVerdictInput {
   readonly designSystemId: string;
   readonly releaseId: string;
   readonly designContractVersion: string;
+  /** The contract V2 digest the verification ran against (provenance for the reuse guard). */
+  readonly contractDigest: string;
   readonly verification: DesignRenderVerification;
 }
 
@@ -49,9 +56,10 @@ export async function recordDesignRenderVerdict(pool: pg.Pool, input: RecordDesi
     client.query(
       `INSERT INTO design_render_land_verdicts
          (org_id, project_id, id, design_system_id, release_id, design_contract_version,
-          accessibility_standard, outcome, checkpoint_count, passed_count, failed_count,
-          inconclusive_count, excluded_count, failing_scenario_key, failing_rule_ids, checkpoints)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb)`,
+          contract_digest, accessibility_standard, outcome, checkpoint_count, passed_count,
+          failed_count, inconclusive_count, excluded_count, failing_scenario_key,
+          failing_rule_ids, checkpoints)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb)`,
       [
         input.orgId,
         input.projectId,
@@ -59,6 +67,7 @@ export async function recordDesignRenderVerdict(pool: pg.Pool, input: RecordDesi
         input.designSystemId,
         input.releaseId,
         input.designContractVersion,
+        input.contractDigest,
         verification.accessibilityStandard,
         verification.outcome,
         verification.checkpoints.length,
@@ -85,6 +94,8 @@ interface RawDesignRenderVerdictRow {
   outcome: string;
   accessibility_standard: string;
   design_contract_version: string;
+  release_id: string;
+  contract_digest: string | null;
   failing_scenario_key: string | null;
   failing_rule_ids: unknown;
   checkpoint_count: number;
@@ -103,8 +114,8 @@ export async function readLatestDesignRenderVerdict(
 ): Promise<DesignRenderVerdictRow | undefined> {
   const row = (
     await client.query<RawDesignRenderVerdictRow>(
-      `SELECT outcome, accessibility_standard, design_contract_version, failing_scenario_key,
-              failing_rule_ids, checkpoint_count, checkpoints
+      `SELECT outcome, accessibility_standard, design_contract_version, release_id, contract_digest,
+              failing_scenario_key, failing_rule_ids, checkpoint_count, checkpoints
          FROM design_render_land_verdicts
         WHERE org_id = $1 AND project_id = $2
         ORDER BY created_at DESC, id DESC
@@ -123,6 +134,8 @@ function decodeRow(row: RawDesignRenderVerdictRow): DesignRenderVerdictRow {
     outcome: row.outcome as DesignRenderRunOutcome,
     accessibilityStandard: row.accessibility_standard,
     designContractVersion: row.design_contract_version,
+    releaseId: row.release_id,
+    contractDigest: row.contract_digest,
     failingScenarioKey: row.failing_scenario_key,
     failingRuleIds: decodeStringArray(row.failing_rule_ids),
     checkpointCount: row.checkpoint_count,

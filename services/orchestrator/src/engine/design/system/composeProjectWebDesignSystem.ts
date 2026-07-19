@@ -22,9 +22,16 @@ import type { EventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import { verifyAndRecordDesignRender } from "../render/composeDesignRenderVerification.js";
+import { readLatestDesignRenderVerdict } from "../render/designRenderVerdictStore.js";
 import type { ArtifactStore } from "./artifactStore.js";
-import { designContractV2Digest, migrateDesignContractV1ToV2, withDerivedDesiredSurfaces } from "./designContractV2.js";
+import {
+  type DesignContractV2,
+  designContractV2Digest,
+  migrateDesignContractV1ToV2,
+  withDerivedDesiredSurfaces,
+} from "./designContractV2.js";
 import { DesignSystemReleaseStore, resolveProjectWebDesignSystem } from "./designSystemStore.js";
+import type { WebDesignWriterContext } from "./webWriterContext.js";
 import { resolveDtcgTokens } from "./dtcgResolver.js";
 import { WEB_DESIGN_TARGET, WebDesignTargetAdapter } from "./webAdapter.js";
 import {
@@ -106,10 +113,39 @@ export async function composeProjectWebDesignSystem(
   );
   if (head === undefined) return undefined;
 
+  // Derive the executable V2 the producer composes against: the lossless migration PLUS the
+  // composition-need surfaces (from the authored dimensions) + web profile. Computed up-front so
+  // BOTH the idempotent reuse guard and the full-compose path key off the CURRENT contract digest.
+  const contractV2 = withDerivedDesiredSurfaces(migrateDesignContractV1ToV2(head.contract));
+  const contractDigest = designContractV2Digest(contractV2);
+
   const existing = await runWithOrgScope(deps.pool, orgId, (client) =>
     resolveProjectWebDesignSystem(client, { orgId, projectId }),
   );
   if (existing !== undefined) {
+    // IDEMPOTENT — but NEVER reuse a stale/absent design-render verdict. A published system's
+    // verdict is honored ONLY when the latest persisted verdict was recorded FOR THIS release
+    // AND against the CURRENT contract (version + digest). A missing verdict (crash between
+    // publish and verify) or a verdict recorded against a prior contract → RE-VERIFY against the
+    // current contract. Fail-closed: a stale/absent verdict must never green the land gate.
+    const priorVerdict = await runWithOrgScope(deps.pool, orgId, (client) =>
+      readLatestDesignRenderVerdict(client, orgId, projectId),
+    );
+    const verdictMatchesCurrentContract =
+      priorVerdict !== undefined &&
+      priorVerdict.releaseId === existing.releaseId &&
+      priorVerdict.designContractVersion === String(head.version) &&
+      priorVerdict.contractDigest === contractDigest;
+    if (!verdictMatchesCurrentContract) {
+      await reverifyPublishedDesignRender(deps, {
+        orgId,
+        projectId,
+        existing,
+        contractVersion: head.version,
+        contractV2,
+        contractDigest,
+      });
+    }
     return {
       designSystemId: existing.designSystemId,
       releaseId: existing.releaseId,
@@ -118,11 +154,6 @@ export async function composeProjectWebDesignSystem(
       alreadyPublished: true,
     };
   }
-
-  // 2) Derive the executable V2 the producer composes against: the lossless migration
-  // PLUS the composition-need surfaces (from the authored dimensions) + web profile.
-  const contractV2 = withDerivedDesiredSurfaces(migrateDesignContractV1ToV2(head.contract));
-  const contractDigest = designContractV2Digest(contractV2);
 
   // 3) SELECT the missing design fragments for the required surfaces against the org's
   // present registry, then AUTHOR them through ds-3 F2D (fires here for the missing set).
@@ -253,6 +284,54 @@ export async function composeProjectWebDesignSystem(
   });
 
   return { designSystemId, releaseId, artifactId, authoredFragmentIds: authoredIds, alreadyPublished: false };
+}
+
+/**
+ * RE-VERIFY an already-published web design system against the CURRENT contract and persist a
+ * FRESH design-render verdict. Invoked from the idempotent short-circuit ONLY when the latest
+ * persisted verdict is missing OR was recorded against a different contract version/digest — so a
+ * re-compose never reuses a stale verdict. The materialized catalog is rebuilt DETERMINISTICALLY
+ * from the current contract's required surfaces + the plain base (the same inputs the original
+ * publish used; the authored-fragment lineage does not alter the a11y-rendered catalog), so the
+ * re-verification judges the real composed surface against the current a11y posture and records a
+ * verdict keyed to the current contract digest.
+ */
+async function reverifyPublishedDesignRender(
+  deps: ComposeProjectWebDesignSystemDeps,
+  input: {
+    readonly orgId: string;
+    readonly projectId: string;
+    readonly existing: WebDesignWriterContext;
+    readonly contractVersion: number;
+    readonly contractV2: DesignContractV2;
+    readonly contractDigest: string;
+  },
+): Promise<void> {
+  const { existing, contractV2, contractDigest } = input;
+  const required = requiredDesignFragmentsFromSurfaces(contractV2);
+  const adapter = buildWebAdapter(existing.designSystemId, existing.releaseId);
+  const profile = { target: WEB_DESIGN_TARGET, capabilities: [] };
+  const plain = await adapter.bootstrapPlainSystem(profile);
+  const materialized = await adapter.materialize(required, plain);
+  await verifyAndRecordDesignRender({
+    pool: deps.pool,
+    orgId: input.orgId,
+    projectId: input.projectId,
+    designSystemId: existing.designSystemId,
+    releaseId: existing.releaseId,
+    artifactId: existing.artifactId,
+    contractDigest,
+    plainReleaseDigest: digestOf(["tanren.ds-composer.plain.v1", PLAIN_BASE_TOKENS]),
+    // No fragments are re-authored on the reuse path, so the polished digest reflects the
+    // contract digest with an empty authored set (the a11y verdict is over `materialized`).
+    polishedReleaseDigest: digestOf(["tanren.ds-composer.polished.v1", contractDigest, []]),
+    fragmentLineage: [],
+    designContractVersion: String(input.contractVersion),
+    accessibilityPosture: contractV2.accessibilityPosture,
+    adapter,
+    materialized,
+    profile,
+  });
 }
 
 function buildWebAdapter(designSystemId: string, releaseId: string): WebDesignTargetAdapter {

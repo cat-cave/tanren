@@ -16,6 +16,8 @@ function row(overrides: Partial<DesignRenderVerdictRow>): DesignRenderVerdictRow
     outcome: "passed",
     accessibilityStandard: "wcag-2.2-aa",
     designContractVersion: "3",
+    releaseId: "design_web_release_x",
+    contractDigest: "sha256:deadbeef",
     failingScenarioKey: null,
     failingRuleIds: [],
     checkpointCount: 1,

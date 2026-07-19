@@ -90,6 +90,7 @@ async function persist(app: Pool, outcome: DesignRenderVerification["outcome"]):
     designSystemId: "design_web_system_x",
     releaseId: "design_web_release_x",
     designContractVersion: "1",
+    contractDigest: "sha256:test-contract-digest",
     verification: verification(outcome),
   });
 }
