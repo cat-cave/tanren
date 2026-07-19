@@ -251,10 +251,16 @@ describeDb("pre-merge behavior gate — production resolution, real-node binding
     expect(await resolveLandTimeBehaviorGate(app, ORG, mergeRunId)).toEqual({ kind: "passed", passedBlockingCount: 1 });
   });
 
-  it("(A) PARTIAL coverage: a 2nd declared behavior with NO active revision → blocked (real resolver drops it)", async () => {
-    // A second declared behavior whose ONLY revision is superseded (no active) — the real
-    // PgBehaviorRevisionResolver returns only the first behavior's revision, so the producer
-    // must BLOCK on the shortfall rather than pass on the 1-of-2 subset.
+  it("(A) COUNT hole closed: behavior A has 2 active revisions, behavior B has 0 → blocked (SET coverage)", async () => {
+    // The exact count-hole scenario: give BEHAVIOR_ID (A) a SECOND active revision, and declare a
+    // second behavior B whose only revision is superseded (no active). The OLD count check would
+    // see 2 active rows ≥ 2 declared and PASS — silently dropping B. The real resolver is
+    // DISTINCT ON (behavior_id) → one row for A, none for B → SET coverage BLOCKS on B.
+    await owner.query(
+      `INSERT INTO behavior_revisions (id, org_id, project_id, behavior_id, persona_revision_id, revision_number, title, given, "when", "then", content_digest, acceptance, status)
+       VALUES ('br_premerge_v2', $1, $2, $3, $4, 2, 'behavior', 'g', 'w', 't', $5, $6::jsonb, 'active')`,
+      [ORG, PROJECT, BEHAVIOR_ID, PERSONA_REVISION, D, JSON.stringify(ACCEPTANCE)],
+    );
     await owner.query(
       `INSERT INTO behaviors (id, persona_id, title, given, "when", "then") VALUES ('beh2', 'persona_pm', 'b2', 'g', 'w', 't')`,
     );

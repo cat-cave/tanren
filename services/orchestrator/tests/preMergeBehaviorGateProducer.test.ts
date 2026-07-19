@@ -20,6 +20,7 @@ import {
   type PreviewProvisionResult,
   type PreviewSurface,
   type PreviewSurfaceProvisioner,
+  type ResolvedBehaviorRevision,
 } from "../src/engine/verification/preMerge/preMergeBehaviorGateProducer.js";
 import type { BehaviorVerdictOutcome } from "../src/engine/contracts/runtimeVerificationAdapters.js";
 
@@ -71,8 +72,13 @@ function planLoaderThrowing(): AcceptancePlanLoader {
     },
   };
 }
-function resolverReturning(ids: readonly string[]): BehaviorRevisionResolver {
-  return { resolveActive: async () => ids as readonly BehaviorRevisionId[] };
+/** Build a resolver from behaviorId→revisionId pairs (the SET the gate checks coverage over). */
+function resolverFor(pairs: ReadonlyArray<readonly [string, string]>): BehaviorRevisionResolver {
+  const entries: readonly ResolvedBehaviorRevision[] = pairs.map(([behaviorId, revisionId]) => ({
+    behaviorId,
+    revisionId: revisionId as BehaviorRevisionId,
+  }));
+  return { resolveActive: async () => entries };
 }
 function resolverThrowing(): BehaviorRevisionResolver {
   return {
@@ -127,7 +133,7 @@ function buildProducer(overrides: {
 }): PreviewBehaviorGateProducer {
   return new PreviewBehaviorGateProducer({
     provisioner: overrides.provisioner ?? provisionerReturning({ kind: "provisioned", surface: SURFACE }).provisioner,
-    behaviorRevisions: overrides.behaviorRevisions ?? resolverReturning(["br1"]),
+    behaviorRevisions: overrides.behaviorRevisions ?? resolverFor([["beh1", "br1"]]),
     planLoader: overrides.planLoader ?? planLoaderReturning([fakePlan()]),
     buildExecutor: () => overrides.executor ?? executorWithOutcome("passed"),
   });
@@ -146,7 +152,7 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
 
   it("declared behaviors resolve to NO active revision → blocked (unverifiable, no preview)", async () => {
     const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
-    const producer = buildProducer({ provisioner, behaviorRevisions: resolverReturning([]) });
+    const producer = buildProducer({ provisioner, behaviorRevisions: resolverFor([]) });
     expect((await producer.produce(INPUT)).kind).toBe("blocked");
     expect(provision).not.toHaveBeenCalled();
   });
@@ -157,7 +163,7 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     // unverifiable and must BLOCK, never be silently dropped so the run "passes" on a subset.
     const producer = buildProducer({
       provisioner,
-      behaviorRevisions: resolverReturning(["br1"]),
+      behaviorRevisions: resolverFor([["beh1", "br1"]]),
       planLoader: planLoaderReturning([fakePlan()]),
     });
     const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
@@ -169,12 +175,69 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
     const producer = buildProducer({
       provisioner,
-      behaviorRevisions: resolverReturning(["br1", "br2"]),
+      behaviorRevisions: resolverFor([
+        ["beh1", "br1"],
+        ["beh2", "br2"],
+      ]),
       planLoader: planLoaderReturning([fakePlan()]),
     });
     const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
     expect(outcome.kind).toBe("blocked");
     expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("COUNT hole: behavior A has 2 active revisions, behavior B has 0 → blocked (SET coverage, not count)", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    // A raw/buggy resolver padding beh1 with TWO active revisions while beh2 has none: the OLD
+    // count check (2 >= 2 declared) would have PASSED beh2 through silently. SET coverage blocks.
+    const producer = buildProducer({
+      provisioner,
+      behaviorRevisions: resolverFor([
+        ["beh1", "br1"],
+        ["beh1", "br1b"],
+      ]),
+    });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
+    expect(outcome.kind).toBe("blocked");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("ALL-PASS: 2 plans but only 1 produced a verdict (a plan unaccounted) → blocked, never ≥1-pass", async () => {
+    const { provisioner } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    // Two declared/planned behaviors, but the run yields ONE passing verdict and drops the other
+    // (no failure, no inconclusive — just absent). ≥1-passed must NOT pass; every plan is required.
+    const oneVerdictExecutor: AcceptanceExecutor = {
+      async execute() {
+        return {
+          runId: "vr1",
+          requiredVerdictCount: 2,
+          passedVerdictCount: 1,
+          runtimeBehaviorContextHash: CAS,
+          behaviors: [
+            {
+              behaviorRevisionId: "br1",
+              planId: "plan1",
+              verdictId: "vd1",
+              outcome: "passed",
+              requiredAssertionCount: 1,
+              executedAssertionCount: 1,
+              passedAssertionCount: 1,
+            },
+          ],
+        };
+      },
+    };
+    const producer = buildProducer({
+      provisioner,
+      behaviorRevisions: resolverFor([
+        ["beh1", "br1"],
+        ["beh2", "br2"],
+      ]),
+      planLoader: planLoaderReturning([fakePlan(), { ...fakePlan(), planId: "plan2", behaviorRevisionId: "br2" }]),
+      executor: oneVerdictExecutor,
+    });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
+    expect(outcome).toMatchObject({ kind: "blocked", recordedRunId: "vr1" });
   });
 
   it("revision resolution THROWS → blocked, no preview deployed", async () => {

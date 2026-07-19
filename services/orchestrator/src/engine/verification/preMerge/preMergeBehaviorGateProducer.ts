@@ -104,13 +104,24 @@ export interface PreviewSurfaceProvisioner {
   teardown(surface: PreviewSurface): Promise<void>;
 }
 
-/** Resolves the ACTIVE `behavior_revision` ids for a run's declared behavior ids (org-scoped). */
+/** One declared behavior mapped to the ACTIVE revision the gate will verify. */
+export interface ResolvedBehaviorRevision {
+  readonly behaviorId: string;
+  readonly revisionId: BehaviorRevisionId;
+}
+
+/**
+ * Resolves, per declared behavior id, the ONE canonical ACTIVE `behavior_revision` the gate
+ * verifies (org-scoped). Returns AT MOST one entry per behavior id — a behavior with no active
+ * revision is OMITTED (the producer enforces SET coverage over the declared behavior ids, so an
+ * omission blocks rather than being padded away by a peer's extra active revision).
+ */
 export interface BehaviorRevisionResolver {
   resolveActive(input: {
     readonly orgId: string;
     readonly projectId: string;
     readonly behaviorIds: readonly string[];
-  }): Promise<readonly BehaviorRevisionId[]>;
+  }): Promise<readonly ResolvedBehaviorRevision[]>;
 }
 
 /** The rv-11 orchestrator, bound (by the factory) to a specific preview URL for this run. */
@@ -200,18 +211,18 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
   }
 
   /**
-   * Resolve the declared behaviors to ACTIVE revisions and compile their acceptance plans, with
-   * FULL COVERAGE required: EVERY declared behavior must resolve to an active revision AND
-   * compile to a plan. A declared behavior that resolves to no active revision — or does not
-   * compile — is unverifiable and is NEVER silently dropped: any shortfall is a fail-closed
-   * BLOCK (a run with 3 declared behaviors where only 2 resolve can NEVER return `passed`). All
-   * checked BEFORE paying any preview-deploy cost.
+   * Resolve the declared behaviors to their canonical ACTIVE revisions and compile the plans,
+   * with SET COVERAGE required (never a count): EVERY declared behavior_id must resolve to an
+   * active revision AND compile to a plan. Coverage is checked over the declared behavior_id SET
+   * — so one behavior's two active revisions can NEVER pad the tally for a peer with zero active
+   * revisions (the COUNT hole). Any declared behavior left uncovered or without a plan is a fail-closed
+   * BLOCK, never silently dropped. All checked BEFORE paying any preview-deploy cost.
    */
   private async resolvePlans(input: PreMergeBehaviorGateInput): Promise<PlanResolution> {
-    const declaredCount = new Set(input.behaviorIds).size;
-    let revisionIds: readonly BehaviorRevisionId[];
+    const declaredSet = new Set(input.behaviorIds);
+    let resolved: readonly ResolvedBehaviorRevision[];
     try {
-      revisionIds = await this.deps.behaviorRevisions.resolveActive({
+      resolved = await this.deps.behaviorRevisions.resolveActive({
         orgId: input.orgId,
         projectId: input.projectId,
         behaviorIds: input.behaviorIds,
@@ -219,27 +230,31 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
     } catch (error) {
       return { kind: "blocked", reason: `pre-merge behavior revision resolution failed: ${messageOf(error)}` };
     }
-    if (revisionIds.length < declaredCount) {
-      // A declared behavior with NO active revision must BLOCK, never be dropped from the gate.
+    // SET coverage: every DECLARED behavior id must have resolved to an active revision.
+    const coveredSet = new Set(resolved.map((entry) => entry.behaviorId));
+    const uncovered = [...declaredSet].filter((behaviorId) => !coveredSet.has(behaviorId));
+    if (uncovered.length > 0) {
       return {
         kind: "blocked",
         reason:
-          `only ${revisionIds.length} of ${declaredCount} declared behaviors resolve to an active behavior ` +
-          "revision — an unverifiable declared behavior blocks, it is never silently dropped",
+          `declared behaviors [${uncovered.join(", ")}] have no active behavior revision — an unverifiable ` +
+          "declared behavior blocks, it is never silently dropped (set coverage, not count)",
       };
     }
+    // One canonical revision per declared behavior (the resolver is DISTINCT ON behavior_id).
+    const revisionIds = resolved.map((entry) => entry.revisionId);
     let plans: readonly AcceptancePlan[];
     try {
       plans = await this.deps.planLoader.loadPlans({ orgId: input.orgId, behaviorRevisionIds: revisionIds });
     } catch (error) {
       return { kind: "blocked", reason: `pre-merge acceptance plan load failed: ${messageOf(error)}` };
     }
-    // Every active revision MUST compile to exactly one plan — a shortfall is unverifiable.
-    if (plans.length < revisionIds.length) {
+    // Every declared behavior's revision MUST compile to exactly one plan — a shortfall is unverifiable.
+    if (plans.length < declaredSet.size) {
       return {
         kind: "blocked",
         reason:
-          `only ${plans.length} of ${revisionIds.length} behavior revisions compiled to an acceptance plan — ` +
+          `only ${plans.length} of ${declaredSet.size} declared behaviors compiled to an acceptance plan — ` +
           "unverifiable pre-merge",
       };
     }
@@ -269,8 +284,19 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
       plans,
     });
 
-    // The orchestrator recorded a completed `pre_merge` run + one BLOCKING verdict per plan.
-    // Judge fail-closed, MIRRORING `resolveLandTimeBehaviorGate` so both gates agree.
+    // The orchestrator records one BLOCKING verdict per plan. ALL-PASS coverage: `passed` ONLY
+    // when EVERY plan produced a decisive PASS — a plan that yielded NO verdict (a silent drop at
+    // the verdict layer) blocks just like a failure/inconclusive. Judged fail-closed, mirroring
+    // `resolveLandTimeBehaviorGate` so both gates agree.
+    if (result.behaviors.length < plans.length) {
+      return {
+        kind: "blocked",
+        reason:
+          `only ${result.behaviors.length} of ${plans.length} planned behaviors produced a verdict — an ` +
+          "unaccounted behavior blocks, it is never a silent pass",
+        recordedRunId: result.runId,
+      };
+    }
     const failure = result.behaviors.find((behavior) => DECISIVE_FAILURES.has(behavior.outcome));
     if (failure !== undefined) {
       return {
@@ -287,11 +313,13 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
         recordedRunId: result.runId,
       };
     }
+    // Every plan is accounted for and none failed/inconclusive ⇒ every one is a decisive PASS.
     const passedBlockingCount = result.behaviors.filter((behavior) => behavior.outcome === "passed").length;
-    if (passedBlockingCount === 0) {
+    if (passedBlockingCount < plans.length) {
+      // Defensive: an outcome outside the known unions would land here — fail closed, never pass.
       return {
         kind: "blocked",
-        reason: "pre-merge behavior verification produced no passing blocking behavior verdict",
+        reason: `only ${passedBlockingCount} of ${plans.length} planned behaviors produced a decisive pass`,
         recordedRunId: result.runId,
       };
     }
