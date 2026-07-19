@@ -178,6 +178,17 @@ export function compileAcceptancePlan(revision: Pick<BehaviorRevision, "id" | "a
     declaredProbeIds.add(probe.probeId);
   }
 
+  // Fail EARLY on a duplicate assertion id — before a preview deploy + acceptance
+  // run is paid for. A duplicate is otherwise only caught late by the verdict
+  // store's count-evidence guard (assertVerdictCountEvidence), after the spend.
+  const declaredAssertionIds = new Set<string>();
+  for (const assertion of spec.assertions) {
+    if (declaredAssertionIds.has(assertion.assertionId)) {
+      throw new MalformedAcceptanceSpecError(revision.id, `duplicate assertion id ${assertion.assertionId}`);
+    }
+    declaredAssertionIds.add(assertion.assertionId);
+  }
+
   for (const assertion of spec.assertions) {
     if (assertion.correlation !== undefined) continue;
     const dot = assertion.subject.indexOf(".");
