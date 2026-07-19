@@ -11,6 +11,13 @@ export {
   applyReproofDeployOutcome,
   PostMergeReproofCoordinator,
 } from "../verification/postMergeReproof/coordinator.js";
+// rv-16a persisted post-merge PRODUCTION behavior verdict, re-exported through the SAME
+// production-resolution seam the walker + retry route import from (no fresh module dep).
+export {
+  recordPostMergeBehaviorVerdict,
+  buildPostMergeBehaviorAcceptanceVerifier,
+  PostMergeBehaviorAcceptanceVerifier,
+} from "../verification/postMergeReproof/behaviorAcceptanceVerdict.js";
 
 /** Production composition keeps the fail-closed blocked-decision seam together. */
 export function buildProductionRepairRouter(pool: pg.Pool): RepairRouter {

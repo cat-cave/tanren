@@ -77,6 +77,13 @@ function appFor(
           return Promise.resolve("held");
         },
       },
+      // rv-16a: the persisted post-merge behavior verdict runs on the LIVE route path; stub it
+      // here (the pool is a placeholder) so the retry-settlement assertions stay focused.
+      behaviorVerifier: {
+        verify() {
+          return Promise.resolve({ decision: "noop", passed: 0, failed: 0, verdicts: [] });
+        },
+      },
       contracts: {
         async get() {
           return contract;

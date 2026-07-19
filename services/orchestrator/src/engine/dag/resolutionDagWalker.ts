@@ -10,6 +10,10 @@ import {
   reproofAlreadySettled,
   type PostMergeReproofCoordinator,
 } from "../verification/postMergeReproof/coordinator.js";
+import {
+  recordPostMergeBehaviorVerdict,
+  type PostMergeBehaviorAcceptanceVerifier,
+} from "../verification/postMergeReproof/behaviorAcceptanceVerdict.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -37,6 +41,13 @@ export interface ResolutionDagWalkerDeps {
    * the production composition; a `production` stage settles its deploy side through it.
    */
   readonly reproofCoordinator?: Pick<PostMergeReproofCoordinator, "settle" | "alreadyApplied">;
+  /**
+   * rv-16a persisted post-merge PRODUCTION behavior verdict: after a production stage settles
+   * against the still-live release, drives the run's declared behaviors' rv-11 acceptance and
+   * PERSISTS a real `behavior_verdict` (purpose `post_merge_production`) bound to the
+   * deploy-created env. Runs alongside — never replacing — rv-19's promote/rollback.
+   */
+  readonly behaviorVerifier?: Pick<PostMergeBehaviorAcceptanceVerifier, "verify">;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -185,6 +196,12 @@ export class ResolutionDagWalker {
       // only evidence: the separate ResolutionAuthority is the sole component
       // allowed to declare an internal resolution / source-closure eligibility.
       await authorizeProductionResolution(this.deps.authority, job, this.deps.repairRouter);
+
+      // rv-16a: persist the post-merge PRODUCTION behavior verdict against the STILL-LIVE
+      // release (BEFORE the rv-19 deploy decision, so a product_failure that will roll back
+      // still records the honest verdict bound to the release that was live). Independent of
+      // the symptom re-proof outcome — its own rv-11 acceptance drives the live surface.
+      await recordPostMergeBehaviorVerdict(this.deps.behaviorVerifier, job);
 
       // rv-19 deploy-side settlement of the same production verdict: promote the
       // proven release, or roll the live pointer back to the prior known-good
