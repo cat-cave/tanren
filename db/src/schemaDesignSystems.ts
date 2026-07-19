@@ -49,7 +49,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { organizations } from "./schemaCore.js";
+import { organizations, projects } from "./schemaCore.js";
 
 const sha256Pattern = sql.raw("'^sha256:[0-9a-f]{64}$'");
 
@@ -271,6 +271,64 @@ export const designArtifactFiles = pgTable(
     index("design_artifact_files_org_artifact").on(table.orgId, table.artifactId),
     check("design_artifact_files_digest_check", sql`${table.digest} ~ ${sha256Pattern}`),
     check("design_artifact_files_byte_size_check", sql`${table.byteSize} >= 0`),
+    designOrgIsolationPolicy(table.orgId),
+  ],
+).enableRLS();
+
+// ---------------------------------------------------------------------------
+// project_design_bindings (ds-5) — WITHIN-ORG THEME REUSE. One binding per
+// project pins it to a design-system FAMILY it reuses, either at a fixed
+// `pinned_release_id` (pin_mode='release') or by following a `channel`
+// (pin_mode='channel'). A project reuses ANOTHER same-org project's published
+// design system by binding to that family — the reuse mechanism ds-5 owns.
+//
+// TENANCY IS THE REUSE BOUNDARY: the `(org_id, design_system_id)` FK is
+// COMPOSITE on org_id and the `(org_id, pinned_release_id)` FK likewise, so a
+// project can ONLY bind to a design system OWNED BY ITS OWN ORG — an org can
+// NEVER reuse another org's design system, even if an application check
+// regresses. RLS (+ FORCE) makes another org's row invisible; the composite FK
+// makes it impossible to reference. That is the org-scoped reuse fail-closed proof.
+// ---------------------------------------------------------------------------
+export const projectDesignBindings = pgTable(
+  "project_design_bindings",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id").notNull(),
+    designSystemId: text("design_system_id").notNull(),
+    pinMode: text("pin_mode").notNull(),
+    pinnedReleaseId: text("pinned_release_id"),
+    channel: text("channel"),
+    boundBy: text("bound_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.orgId, table.projectId] }),
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "project_design_bindings_project_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.designSystemId],
+      foreignColumns: [designSystems.orgId, designSystems.id],
+      name: "project_design_bindings_system_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.pinnedReleaseId],
+      foreignColumns: [designSystemReleases.orgId, designSystemReleases.id],
+      name: "project_design_bindings_release_fk",
+    }),
+    index("project_design_bindings_org_system").on(table.orgId, table.designSystemId),
+    check("project_design_bindings_pin_mode_check", sql`${table.pinMode} IN ('release','channel')`),
+    // Exactly-one pin discriminant: a release pin carries the release and no
+    // channel; a channel pin carries the channel and no release.
+    check(
+      "project_design_bindings_pin_shape_check",
+      sql`(${table.pinMode} = 'release' AND ${table.pinnedReleaseId} IS NOT NULL AND ${table.channel} IS NULL) OR (${table.pinMode} = 'channel' AND ${table.channel} IS NOT NULL AND ${table.pinnedReleaseId} IS NULL)`,
+    ),
     designOrgIsolationPolicy(table.orgId),
   ],
 ).enableRLS();

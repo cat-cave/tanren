@@ -139,6 +139,14 @@ SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
 import { mountIntegrationEventsScreen } from "../routes/integrationEvents/index.js";
 SCREEN_MOUNTS.push(mountIntegrationEventsScreen);
 
+// ds-5 design studio — the project-scoped within-org design REUSE surface
+// (`/projects/:projectId/design-studio`): reusable design-system catalog, this
+// project's reuse binding + bind form, the render-verdict evidence lab, and the
+// real artifact export downloads. Directly callable at its project-scoped URL;
+// no nav row is required.
+import { mountDesignStudioScreens } from "../routes/designStudio/index.js";
+SCREEN_MOUNTS.push(mountDesignStudioScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

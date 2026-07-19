@@ -6,9 +6,16 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+
+/** The shared local design-artifact CAS root. Content-addressed (and can be rebuilt), so
+ * an OS-temp root is a safe zero-config default. Both the greenfield composer
+ * (which WRITES the bytes) and the ds-5 export route (which READS them) resolve
+ * this single constant so an export streams the exact bytes the compose produced. */
+export const DEFAULT_DESIGN_ARTIFACT_ROOT = join(tmpdir(), "tanren-design-artifacts");
 
 export interface ArtifactStore {
   put(bytes: Uint8Array): Promise<string>;
