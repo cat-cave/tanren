@@ -292,6 +292,11 @@ export function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJ
     // runs SET status` interceptor still observes the finalize), so the
     // existing pool-driven assertions (`pool.runStatus`) keep holding.
     runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
+    // gv-11 / #25: `repositoryVisibilityAdmission` is REQUIRED on RunExecutorDeps —
+    // the executor AUTO-INVOKES it before every workflow (no `?.` skip). The default
+    // here is a passing admission (declared visibility satisfied); tests that exercise
+    // the fail-closed block override this seam with an admission that throws.
+    repositoryVisibilityAdmission: { admit: async () => {} },
     runWorkflow: fakeWorkflowRunner(github),
   };
 }

@@ -207,3 +207,90 @@ describe("startRunWorker — dep wiring (lifecycle.ts)", () => {
     expect(results.some((r) => r.kind === "completed" || r.kind === "failed")).toBe(true);
   });
 });
+
+// gv-11 / #25 regression pins: the private-repo VISIBILITY predicate is AUTO-INVOKED
+// by the sole production worker construction (`startRunWorker`, lifecycle.ts) — a
+// caller cannot forget to wire it (the RunExecutorDeps field is required). These
+// drive a REAL job all the way through `startRunWorker` and assert the outcome; no
+// test here constructs or calls the admission — the gate/admission path does.
+async function driveOneJobThroughStartRunWorker(
+  pool: WorkerPool,
+  secrets: FakeSecretStore,
+  run: { runId: string; plannerTaskId: string },
+): Promise<ExecuteJobResult[]> {
+  const claimClient = new OneJobClaimClient({
+    id: "job_visibility",
+    runId: run.runId,
+    taskId: run.plannerTaskId,
+    taskKind: "plan",
+    payload: {},
+    attempts: 1,
+    orgId: ORG,
+  });
+  const results: ExecuteJobResult[] = [];
+  const { worker, reaper } = startRunWorker({
+    pool: pool.asPgPool(),
+    concurrency: 1,
+    allocator: noopAllocator,
+    ssh: noopSsh,
+    secrets,
+    githubHttp: noopGitHub,
+    identitySecretRef: "runner/test/identity",
+    claimClient,
+    options: { pollIntervalMs: 0, onResult: (r) => results.push(r) },
+  });
+  const reaperStopped = reaper.stop();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 30);
+  });
+  await Promise.all([worker.stop(), reaperStopped]);
+  return results;
+}
+
+describe("startRunWorker — repository-visibility admission is auto-invoked (gv-11 / #25)", () => {
+  it("REFUSES a private-repo run when the Reviewer-App identity is not configured (fail-closed)", async () => {
+    const pool = new WorkerPool();
+    const { secrets, run } = await seedRunWithOrg(pool);
+    // The project DECLARES a private repo, so the auto-wired admission must obtain a
+    // fresh Reviewer-App readback. The org has no GitHub App installation configured
+    // (org config carries no github_app), so the real `GithubReviewerAppIdentity`
+    // fails closed (`ReviewerAppNotConfiguredError`) — a private repo can NOT be
+    // admitted without the enforced Reviewer-App visibility check.
+    pool.declaredRepoVisibility = "private";
+
+    const results = await driveOneJobThroughStartRunWorker(pool, secrets, run);
+
+    // The run was REFUSED at the admission gate — its terminal failure is the
+    // Reviewer-App identity check (`ReviewerAppNotConfiguredError`), raised BEFORE
+    // any workflow stage. The predicate was auto-invoked by the worker; nothing in
+    // this test called `admit`. A private repo cannot be admitted without the
+    // enforced Reviewer-App visibility check.
+    const failed = results.find((r) => r.kind === "failed");
+    if (failed === undefined || failed.kind !== "failed")
+      throw new Error("expected the private-repo run to be refused");
+    expect(failed.failure.kind).toBe("ReviewerAppNotConfiguredError");
+    expect(failed.failure.message).toMatch(/Reviewer-App/u);
+    expect(results.every((r) => r.kind !== "completed")).toBe(true);
+  });
+
+  it("does NOT block an undeclared-visibility run — the gate only enforces a declared repo", async () => {
+    const pool = new WorkerPool();
+    const { secrets, run } = await seedRunWithOrg(pool);
+    // No declared visibility (the default): the admission skips the Reviewer-App
+    // readback and the run proceeds PAST admission into the workflow. This proves the
+    // fail-closed refusal above is caused by the visibility gate specifically, not a
+    // generic admission short-circuit — an undeclared repo is never refused for
+    // visibility. (The run still terminates for an unrelated reason in this noop-adapter
+    // harness, but crucially NOT with the Reviewer-App visibility check.)
+    pool.declaredRepoVisibility = null;
+
+    const results = await driveOneJobThroughStartRunWorker(pool, secrets, run);
+
+    const failed = results.find((r) => r.kind === "failed");
+    if (failed === undefined || failed.kind !== "failed") throw new Error("expected the undeclared run to advance");
+    // The run got PAST the visibility admission gate — its terminal failure is NOT
+    // the Reviewer-App visibility check.
+    expect(failed.failure.kind).not.toBe("ReviewerAppNotConfiguredError");
+    expect(failed.failure.message).not.toMatch(/Reviewer-App/u);
+  });
+});
