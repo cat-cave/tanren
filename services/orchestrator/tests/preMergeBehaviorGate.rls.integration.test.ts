@@ -315,6 +315,35 @@ describeDb("pre-merge behavior gate — production resolution, real-node binding
     ).rejects.toThrow(/foreign key|violates/iu);
   });
 
+  it("(D) real provisioner + project with NO deploy target → no_surface (the production fail-closed trigger)", async () => {
+    // rv-5 fail-closed proof through the REAL DeployAdapterPreviewSurfaceProvisioner: a project whose
+    // config declares no deploy target resolves `no_surface` (resolveTarget → none) BEFORE any grant
+    // or deploy. A web-behavior run over this result BLOCKS in the producer (unit-proven) — the
+    // preview is NEVER fabricated and the gate is NEVER not_applicable-as-pass for a web behavior.
+    await owner.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ('project_no_target', 'project_no_target', 'https://github.com/acme/web.git', 'main', 'runner:v0', $1, $2::jsonb)`,
+      [ORG, JSON.stringify({ version: 1 })],
+    );
+    const provisioner = new DeployAdapterPreviewSurfaceProvisioner(owner, {
+      transport: {} as never,
+      secrets: {} as never,
+    });
+    const result = await provisioner.provision(
+      {
+        orgId: ORG,
+        projectId: "project_no_target",
+        runId: "run_no_target",
+        specId: SPEC_ID,
+        repoUrl: "https://github.com/acme/web.git",
+        headSha: "beef9999",
+        behaviorIds: [BEHAVIOR_ID],
+      },
+      [BEHAVIOR_REVISION as never],
+    );
+    expect(result.kind).toBe("no_surface");
+  });
+
   it("(C) env bind fails AFTER applyPreview → the deployed preview is TORN DOWN (no leak)", async () => {
     const runId = "run_leak_safe";
     const teardownPreview = vi.fn<() => Promise<void>>(async () => {});

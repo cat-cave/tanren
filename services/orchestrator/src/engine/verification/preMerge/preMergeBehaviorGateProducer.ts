@@ -21,12 +21,17 @@
 // declared behaviors but whose active revisions / acceptance plans do not resolve is
 // unverifiable ⇒ BLOCKS (a required behavior that can't be proven is never a pass). A
 // preview deploy that FAILS blocks. Only a run with GENUINELY ZERO declared behaviors is
-// `not_applicable`. A NON-WEB product (no preview surface) is `not_applicable` (merge on CI
-// alone). The preview is torn down even on failure (no leaked previews — the apex-v96 lesson).
+// `not_applicable`. A run whose declared behaviors need ONLY non-web surfaces
+// (cli/package/mobile/app_channel/external_integration) is `not_applicable` when no preview
+// surface exists (merge on CI alone) — but a run with a WEB-surface (browser/api) behavior whose
+// preview CANNOT be provisioned BLOCKS (fail-closed: a required web behavior that can't be driven
+// against a live preview is never `not_applicable`-as-pass, and never a fabricated deploy). The
+// preview is torn down even on failure (no leaked previews — the apex-v96 lesson).
 
 import type { Digest } from "../../contracts/cas.js";
 import type { BehaviorRevisionId } from "../../contracts/behaviorRevision.js";
 import type { BehaviorVerdictOutcome } from "../../contracts/runtimeVerificationAdapters.js";
+import type { RequiredSurface } from "../../contracts/runtimeVerificationPlan.js";
 import type {
   AcceptancePlan,
   AcceptancePlanLoader,
@@ -53,8 +58,9 @@ export interface PreMergeBehaviorGateInput {
 
 /** The gate's decision over the pre-merge behavior verification. */
 export type PreMergeBehaviorGateOutcome =
-  // GENUINELY ZERO declared behaviors OR no preview surface (non-web product) ⇒ the merge
-  // decides on CI alone; NEVER blocks (there is nothing to prove against a preview here).
+  // GENUINELY ZERO declared behaviors, OR the declared behaviors need only non-web surfaces and no
+  // preview surface exists ⇒ the merge decides on CI alone; NEVER blocks (there is nothing to prove
+  // against a web preview here). A declared web behavior with no provisionable preview is `blocked`.
   | { readonly kind: "not_applicable"; readonly reason: string }
   // Every blocking behavior passed on the preview ⇒ proceed to merge.
   | { readonly kind: "passed"; readonly runId: string; readonly passedBlockingCount: number }
@@ -84,8 +90,9 @@ export interface PreviewSurface {
 /** Provisioning a preview surface for the PR head, or why one is unavailable/failed. */
 export type PreviewProvisionResult =
   | { readonly kind: "provisioned"; readonly surface: PreviewSurface }
-  // No preview surface exists for this product (a non-web adapter / no deploy target) — the
-  // producer resolves `not_applicable` (merge on CI alone).
+  // No preview surface exists for this product (a non-web adapter / no deploy target). The producer
+  // resolves `not_applicable` ONLY when no declared behavior needs a web preview; a declared
+  // web-surface (browser/api) behavior with no provisionable preview instead BLOCKS (fail-closed).
   | { readonly kind: "no_surface"; readonly reason: string }
   // The preview deploy was EXPECTED but FAILED — fail-closed (the caller blocks the merge).
   | { readonly kind: "failed"; readonly reason: string };
@@ -154,6 +161,15 @@ const INCONCLUSIVE_OUTCOMES: ReadonlySet<BehaviorVerdictOutcome> = new Set<Behav
   "cancelled_superseded",
 ]);
 
+/**
+ * The behavior surfaces that REQUIRE a deployed HTTP preview URL to drive against (rv-6 fires real
+ * requests at the preview). A declared behavior demanding one of these is UNVERIFIABLE without a
+ * live preview — so a `no_surface` provisioning result for such a run FAILS CLOSED (blocked), never
+ * `not_applicable`-as-pass. Non-web surfaces (cli/package/mobile/app_channel/external_integration)
+ * need no web preview, so `no_surface` is a genuine `not_applicable` for them (merge on CI alone).
+ */
+const WEB_PREVIEW_SURFACES: ReadonlySet<RequiredSurface> = new Set<RequiredSurface>(["browser", "api"]);
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -180,13 +196,33 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
     if (input.behaviorIds.length === 0) {
       return { kind: "not_applicable", reason: "run declares no behaviors to verify pre-merge" };
     }
-    // The run HAS declared behaviors — from here the ONLY not_applicable is "no preview surface".
-    // A resolution/compilation failure is a REQUIRED-but-unverifiable behavior ⇒ fail-closed.
+    // The run HAS declared behaviors — from here the ONLY not_applicable is "no preview surface AND
+    // no declared behavior needs a web preview". A resolution/compilation failure — or a missing
+    // preview for a web-surface behavior — is a REQUIRED-but-unverifiable behavior ⇒ fail-closed.
     const resolved = await this.resolvePlans(input);
     if (resolved.kind === "blocked") return resolved;
 
     const provisioned = await this.deps.provisioner.provision(input, resolved.revisionIds);
     if (provisioned.kind === "no_surface") {
+      // FAIL-CLOSED (the not_applicable-as-pass gap this node closes): a declared behavior that
+      // REQUIRES a web preview surface (browser/api — rv-6 drives it against a deployed HTTP URL) is
+      // UNVERIFIABLE without a preview. If ANY resolved plan needs one, a missing preview surface is
+      // an unverifiable required behavior ⇒ BLOCK, never `not_applicable`-as-pass and never a
+      // fabricated deploy. Only when NO declared behavior needs a web preview is `no_surface` a
+      // genuine `not_applicable` (a non-web product — cli/package/mobile/app_channel/
+      // external_integration — that merges on CI alone).
+      const webPlan = resolved.plans.find((plan) =>
+        plan.requiredSurfaces.some((surface) => WEB_PREVIEW_SURFACES.has(surface)),
+      );
+      if (webPlan !== undefined) {
+        const webSurfaces = webPlan.requiredSurfaces.filter((surface) => WEB_PREVIEW_SURFACES.has(surface));
+        return {
+          kind: "blocked",
+          reason:
+            `behavior '${webPlan.behaviorRevisionId}' requires a web preview surface [${webSurfaces.join(", ")}] ` +
+            `but no preview could be provisioned (${provisioned.reason}) — unverifiable pre-merge, fail-closed`,
+        };
+      }
       return { kind: "not_applicable", reason: provisioned.reason };
     }
     if (provisioned.kind === "failed") {
