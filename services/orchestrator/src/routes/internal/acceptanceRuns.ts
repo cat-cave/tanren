@@ -12,6 +12,7 @@ import {
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
   PgReleaseInstanceBaseUrlResolver,
+  PgVerificationCaptureStore,
   type AcceptanceAssertion,
   type AcceptanceCauseDriver,
   type AcceptancePlan,
@@ -22,6 +23,7 @@ import {
   type HttpProbeSpec,
 } from "../../engine/verification/acceptance/index.js";
 import { PgCausalEffectReader } from "../../engine/verification/effectObserver/pgCausalEffectReader.js";
+import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
 import { verifyInternalPeer } from "./internalWriteShared.js";
 
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
@@ -214,11 +216,16 @@ export function createInternalAcceptanceRunRoutes(deps: AcceptanceRunRouteDeps):
     new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(deps.pool) }),
   ];
   const planLoader: AcceptancePlanLoader = deps.planLoader ?? new PgAcceptancePlanLoader(deps.pool);
+  // rv-9: content-addressed capture store over the SP-3 CAS byte store, so a real
+  // prod acceptance run content-addresses its response/render captures into
+  // verification_artifacts instead of discarding them.
+  const renderCapture = new PgVerificationCaptureStore(deps.pool, new PgCasByteStore(deps.pool));
   const orchestrator = new AcceptanceOrchestrator({
     store,
     events: new PgAcceptanceEventSink(deps.pool),
     fixtureLease: new PgFixtureLeaseAdapter(deps.pool),
     drivers,
+    renderCapture,
     ...(deps.causeDrivers === undefined ? {} : { causeDrivers: deps.causeDrivers }),
     effectReader: deps.effectReader ?? new PgCausalEffectReader(deps.pool),
   });

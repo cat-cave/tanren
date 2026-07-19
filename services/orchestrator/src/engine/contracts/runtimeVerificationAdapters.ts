@@ -106,6 +106,16 @@ export interface DriverExecutionResult {
   readonly kind: "executed";
   readonly observations: readonly DriverObservation[];
   readonly providerChecksums: readonly ProviderChecksum[];
+  /**
+   * rv-9: the REAL run artifact(s) the drive produced — e.g. the captured HTTP
+   * response(s) or rendered output — surfaced as raw evidence bytes so the
+   * acceptance run's render-capture stage can content-address them into the
+   * verification-artifact store. Absent ⇒ the surface produced no artifact to
+   * capture (the drive is unaffected; only evidence linkage is skipped). The
+   * bytes MUST be deterministic given identical observed output so identical
+   * content dedupes to one content address.
+   */
+  readonly capture?: readonly EvidenceBytePayload[];
 }
 
 export interface BrowserDriverAdapter {
