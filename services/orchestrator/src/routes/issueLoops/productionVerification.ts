@@ -13,8 +13,11 @@ import type { ResolutionAuthority } from "../../engine/contracts/resolutionAutho
 import {
   applyReproofDeployOutcome,
   authorizeProductionResolution,
+  buildPostMergeBehaviorAcceptanceVerifier,
   buildPostMergeReproofCoordinator,
   buildProductionRepairRouter,
+  recordPostMergeBehaviorVerdict,
+  type PostMergeBehaviorAcceptanceVerifier,
   type PostMergeReproofCoordinator,
   type RepairRouter,
 } from "../../engine/dag/productionResolutionAuthorization.js";
@@ -53,6 +56,12 @@ export interface ProductionVerificationRoutesOptions {
    * complete a `product_failure` with the broken release left live (the walker's guarantee).
    */
   readonly reproofCoordinator?: Pick<PostMergeReproofCoordinator, "settle">;
+  /**
+   * rv-16a persisted post-merge PRODUCTION behavior verdict for the operator-retry path —
+   * records the run's declared behaviors' rv-11 acceptance against the live release. Defaults
+   * to the live verifier so a manual retry ALSO persists the real production behavior verdict.
+   */
+  readonly behaviorVerifier?: Pick<PostMergeBehaviorAcceptanceVerifier, "verify">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -90,6 +99,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const authority = options.authority ?? buildResolutionAuthority(options.pool);
   const repairRouter = options.repairRouter ?? buildProductionRepairRouter(options.pool);
   const reproofCoordinator = options.reproofCoordinator ?? buildPostMergeReproofCoordinator(options.pool);
+  const behaviorVerifier = options.behaviorVerifier ?? buildPostMergeBehaviorAcceptanceVerifier(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -162,6 +172,9 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       // stage has written immutable production evidence, but this lease must not
       // become completed until the authority records its decision and event.
       await authorizeProductionResolution(authority, job, repairRouter);
+      // rv-16a: persist the post-merge PRODUCTION behavior verdict against the still-live
+      // release BEFORE the deploy decision (same ordering + guarantee as the walker path).
+      await recordPostMergeBehaviorVerdict(behaviorVerifier, job);
       // rv-19: the SAME deploy-side settlement the walker applies — promote the proven
       // release, or roll the live pointer back on a product_failure. Without it this
       // manual retry path would complete a failed re-proof with the broken release LIVE.
