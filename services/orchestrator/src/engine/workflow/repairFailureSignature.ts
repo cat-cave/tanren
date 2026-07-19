@@ -1,11 +1,13 @@
 // bh-13 — stable identity for the no-attempt-cap repair fixed point.
 //
-// This deliberately accepts only the immutable symptom contract plus the
-// production classification and assertion *shape*. It never accepts a decision,
-// probe, verification-run, timestamp, or other execution-scoped identifier.
-// cspell:ignore attemptid createdat finishedat observedat probeid runid sequencenumber spanid startedat timems timestampms traceid updatedat verificationrunid
+// This deliberately accepts only the immutable symptom contract, production
+// classification, and an explicit set of stable assertion fields. It never
+// accepts a decision, probe, verification-run, timestamp, or other
+// execution-scoped identifier.
+// cspell:ignore errorclass errorcode errorkind errormessage errortype failureclass failurecode failurekind failuremessage failuretype nodekind symptomkind
 
 import { createHash } from "node:crypto";
+import { canonicalizeFailureSignature } from "./convergenceSignatureCanonical.js";
 
 export type RepairFailureAssertion = {
   readonly expectedObservation: unknown;
@@ -20,41 +22,56 @@ export type RepairFailureSignatureInput = {
   readonly assertions: readonly RepairFailureAssertion[];
 };
 
-const VOLATILE_OBSERVATION_FIELDS = new Set([
-  "attempt",
-  "attemptid",
-  "counter",
-  "createdat",
-  "duration",
-  "elapsed",
-  "finishedat",
-  "monotonic",
-  "nonce",
-  "observedat",
-  "probeid",
-  "requestid",
-  "runid",
-  "sequence",
-  "sequencenumber",
-  "spanid",
-  "startedat",
-  "time",
-  "timems",
-  "timestamp",
-  "timestampms",
-  "traceid",
-  "updatedat",
-  "verificationrunid",
+/**
+ * The sole observation fields allowed into a repair fixed-point key.
+ *
+ * `contractId`/`contractHash` carry the immutable symptom identity and
+ * `classification`/`outcome` carry the production verdict. The observation adds
+ * only stable failure discriminators: protocol status, failure/error
+ * class/type/code, and the stage or node that failed. Every other field is
+ * ignored, regardless of its name or nesting, so newly-added run ids, attempt
+ * counters, timestamps, UUIDs, artifact references, and delivery ordering
+ * cannot make a recurring failure look new.
+ */
+const STABLE_OBSERVATION_FIELDS = new Set([
+  "body",
+  "code",
+  "error",
+  "errorclass",
+  "errorcode",
+  "errorkind",
+  "errormessage",
+  "errortype",
+  "failureclass",
+  "failurecode",
+  "failurekind",
+  "failuremessage",
+  "failuretype",
+  "kind",
+  "message",
+  "nodekind",
+  "reason",
+  "stage",
+  "status",
+  "symptom",
+  "symptomkind",
+  "type",
 ]);
 
-function canonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalValue(item));
+const DIAGNOSTIC_FIELDS = new Set(["body", "errormessage", "failuremessage", "message", "reason"]);
+const ATTEMPT_ORDINAL = /\battempt(?:\s*(?:number|no\.?|#))?\s*[:=#-]?\s*\d+\b/giu;
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => canonicalJsonValue(item))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !VOLATILE_OBSERVATION_FIELDS.has(normalizeFieldName(key)))
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, canonicalValue(child)]),
+        .map(([key, child]) => [key, canonicalJsonValue(child)]),
     );
   }
   if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
@@ -67,28 +84,54 @@ function normalizeFieldName(field: string): string {
   return field.replaceAll(/[^a-z0-9]/giu, "").toLowerCase();
 }
 
+function canonicalDiagnostic(value: string): string {
+  return canonicalizeFailureSignature(value).replaceAll(ATTEMPT_ORDINAL, "attempt <ordinal>");
+}
+
+function stableObservation(value: unknown, field?: string): unknown {
+  if (typeof value === "string" && field !== undefined && DIAGNOSTIC_FIELDS.has(field)) {
+    return canonicalDiagnostic(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stableObservation(item, field))
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, child]) => [normalizeFieldName(key), child] as const)
+        .filter(([key]) => STABLE_OBSERVATION_FIELDS.has(key))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, stableObservation(child, key)]),
+    );
+  }
+  return canonicalJsonValue(value);
+}
+
 function canonicalAssertion(assertion: RepairFailureAssertion): unknown {
-  return canonicalValue({
-    expected: assertion.expectedObservation,
-    observed: assertion.observedObservation,
+  return canonicalJsonValue({
+    // The contract hash is the immutable expected-observation identity. Do not
+    // hash the raw sample copy: its only role here is operator evidence.
     outcome: assertion.outcome,
+    observed: stableObservation(assertion.observedObservation),
   });
 }
 
 /**
  * Produce the sole fixed-point key for repair routing.
  *
- * `expected`/`observed` retain semantic fields but strip explicitly execution
- * scoped fields before hashing. That keeps a repeated cosmetic failure stable
- * when a new probe emits fresh timestamps or ids, while a changed symptom value
- * remains a distinct failure that can be routed as a successor.
+ * The observation projection is an allowlist, not a volatile-field denylist.
+ * That keeps a repeated failure stable when a later probe adds fresh execution
+ * metadata, while a changed stable symptom value remains a distinct failure that
+ * can be routed as a successor.
  */
 export function repairFailureSignature(input: RepairFailureSignatureInput): string {
   const assertions = input.assertions
     .map(canonicalAssertion)
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   const canonical = JSON.stringify(
-    canonicalValue({
+    canonicalJsonValue({
       version: "tanren-repair-failure-signature.v2",
       contractId: input.contractId,
       contractHash: input.contractHash,
