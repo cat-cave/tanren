@@ -139,6 +139,15 @@ SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
 import { mountIntegrationEventsScreen } from "../routes/integrationEvents/index.js";
 SCREEN_MOUNTS.push(mountIntegrationEventsScreen);
 
+// rv-23 runtime-verification proof dashboard — the project-scoped Behavior Proof
+// Matrix (`/projects/:projectId/behavior-proof`) plus its six sibling surfaces:
+// behavior detail, run assertion timeline, external-effect causality, visual
+// verification, merge-queue bisections, and flake/quarantine. Each reads a real
+// org-scoped orchestrator endpoint (rv-22 + rv-23) and fails closed. Directly
+// callable at its project-scoped URLs; no nav row is required.
+import { mountProofDashboardScreens } from "../routes/proofDashboard/index.js";
+SCREEN_MOUNTS.push(mountProofDashboardScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
