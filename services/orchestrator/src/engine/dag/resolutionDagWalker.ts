@@ -13,7 +13,12 @@ import {
 import {
   recordPostMergeBehaviorVerdict,
   type PostMergeBehaviorAcceptanceVerifier,
+  type PostMergeBehaviorVerifyResult,
 } from "../verification/postMergeReproof/behaviorAcceptanceVerdict.js";
+import {
+  recordRegressionBisections,
+  type RegressionBisector,
+} from "../verification/postMergeReproof/regressionBisection.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -48,6 +53,13 @@ export interface ResolutionDagWalkerDeps {
    * deploy-created env. Runs alongside — never replacing — rv-19's promote/rollback.
    */
   readonly behaviorVerifier?: Pick<PostMergeBehaviorAcceptanceVerifier, "verify">;
+  /**
+   * rv-16b behavior-aware regression bisector: when the rv-16a post-merge verdict REGRESSED
+   * (`failed_product`), localizes WHICH deployed candidate release introduced it by re-proving
+   * the failing behavior against candidate states (real executor). Best-effort + non-fatal — a
+   * diagnostic that never blocks the deploy decision or the resolution settlement.
+   */
+  readonly regressionBisector?: Pick<RegressionBisector, "bisect">;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -201,7 +213,7 @@ export class ResolutionDagWalker {
       // release (BEFORE the rv-19 deploy decision, so a product_failure that will roll back
       // still records the honest verdict bound to the release that was live). Independent of
       // the symptom re-proof outcome — its own rv-11 acceptance drives the live surface.
-      await recordPostMergeBehaviorVerdict(this.deps.behaviorVerifier, job);
+      const behaviorResult = await recordPostMergeBehaviorVerdict(this.deps.behaviorVerifier, job);
 
       // rv-19 deploy-side settlement of the same production verdict: promote the
       // proven release, or roll the live pointer back to the prior known-good
@@ -209,6 +221,11 @@ export class ResolutionDagWalker {
       // non-production stage. Runs before lease settlement so a throw releases the
       // lease (retryable) rather than completing a decision-less rollback.
       await applyReproofDeployOutcome(this.deps.reproofCoordinator, job, result);
+
+      // rv-16b: localize which deployed candidate introduced a regressed post-merge behavior.
+      // Runs AFTER the deploy decision + is best-effort, so a diagnostic failure can never
+      // block the rollback or the resolution settlement.
+      await this.runRegressionBisection(behaviorResult, job);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {
@@ -218,6 +235,22 @@ export class ResolutionDagWalker {
       stopped = true;
       clearInterval(timer);
       await this.releaseAfterStageFailure(job, claim, error);
+    }
+  }
+
+  /**
+   * Best-effort regression bisection off the rv-16a verdict. A diagnostic lane: any failure is
+   * logged and swallowed so it can never destabilize the already-settled deploy decision. The
+   * bisector itself fails closed to an inconclusive persisted record — it never names a scapegoat.
+   */
+  private async runRegressionBisection(
+    behaviorResult: PostMergeBehaviorVerifyResult | undefined,
+    job: ResolutionJob,
+  ): Promise<void> {
+    try {
+      await recordRegressionBisections(this.deps.regressionBisector, behaviorResult, job);
+    } catch (error) {
+      log.warn("post-merge regression bisection failed; diagnostic only", { resolutionJobId: job.id }, error);
     }
   }
 

@@ -16,9 +16,12 @@ import {
   buildPostMergeBehaviorAcceptanceVerifier,
   buildPostMergeReproofCoordinator,
   buildProductionRepairRouter,
+  buildRegressionBisector,
   recordPostMergeBehaviorVerdict,
+  recordRegressionBisections,
   type PostMergeBehaviorAcceptanceVerifier,
   type PostMergeReproofCoordinator,
+  type RegressionBisector,
   type RepairRouter,
 } from "../../engine/dag/productionResolutionAuthorization.js";
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
@@ -62,6 +65,12 @@ export interface ProductionVerificationRoutesOptions {
    * to the live verifier so a manual retry ALSO persists the real production behavior verdict.
    */
   readonly behaviorVerifier?: Pick<PostMergeBehaviorAcceptanceVerifier, "verify">;
+  /**
+   * rv-16b behavior-aware regression bisector for the operator-retry path — localizes the
+   * culprit deployed release when the re-recorded post-merge verdict regressed. Best-effort;
+   * defaults to the live bisector.
+   */
+  readonly regressionBisector?: Pick<RegressionBisector, "bisect">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
@@ -100,6 +109,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const repairRouter = options.repairRouter ?? buildProductionRepairRouter(options.pool);
   const reproofCoordinator = options.reproofCoordinator ?? buildPostMergeReproofCoordinator(options.pool);
   const behaviorVerifier = options.behaviorVerifier ?? buildPostMergeBehaviorAcceptanceVerifier(options.pool);
+  const regressionBisector = options.regressionBisector ?? buildRegressionBisector(options.pool);
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
@@ -174,11 +184,18 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       await authorizeProductionResolution(authority, job, repairRouter);
       // rv-16a: persist the post-merge PRODUCTION behavior verdict against the still-live
       // release BEFORE the deploy decision (same ordering + guarantee as the walker path).
-      await recordPostMergeBehaviorVerdict(behaviorVerifier, job);
+      const behaviorResult = await recordPostMergeBehaviorVerdict(behaviorVerifier, job);
       // rv-19: the SAME deploy-side settlement the walker applies — promote the proven
       // release, or roll the live pointer back on a product_failure. Without it this
       // manual retry path would complete a failed re-proof with the broken release LIVE.
       await applyReproofDeployOutcome(reproofCoordinator, job, verdict);
+      // rv-16b: best-effort regression bisection off a regressed post-merge verdict (diagnostic;
+      // never blocks settlement — a failure is swallowed so the manual retry still completes).
+      try {
+        await recordRegressionBisections(regressionBisector, behaviorResult, job);
+      } catch {
+        /* diagnostic only; the bisector itself fails closed to an inconclusive record */
+      }
     } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;
