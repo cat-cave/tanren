@@ -24,6 +24,7 @@ export * from "./webCatalog.js";
 export * from "./webExports.js";
 export * from "./webTokens.js";
 export * from "./webWriterContext.js";
+export * from "./composeProjectWebDesignSystem.js";
 // ds-3 (F2D) — the design-fragment authoring loop (selector → author → check →
 // atomic persist / retract) on the shared SP-2 kernel. Reachable from the design
 // public surface so the composition/curation trigger (see the ds-3 blocker note)
