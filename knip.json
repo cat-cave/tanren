@@ -43,11 +43,12 @@
     "services/orchestrator/src/engine/contracts/gateProof.ts",
     "services/orchestrator/src/engine/notifications/eventVocabulary.ts",
     "services/orchestrator/src/engine/design/system/index.ts",
+    "services/orchestrator/src/engine/design/render/index.ts",
     "services/orchestrator/src/engine/design/system/designContractV2.ts",
     "services/orchestrator/src/engine/design/system/designTargetAdapter.ts",
     "db/src/eventTypesSeed.ts"
   ],
-  "ignoreDependencies": ["@playwright/test", "hono", "@commitlint/cli"],
+  "ignoreDependencies": ["@playwright/test", "hono", "@commitlint/cli", "@radix-ui/react-slot"],
   "ignoreBinaries": ["just", "playwright"],
   "ignoreExportsUsedInFile": true,
   "rules": {
