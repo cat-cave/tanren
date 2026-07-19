@@ -193,6 +193,50 @@ export async function listGovernanceTiers(
   return result.rows.map(decodeTier);
 }
 
+export class GovernanceTierAmbiguousNameError extends Error {
+  constructor(tierName: string) {
+    super(`governance tier name is ambiguous: ${tierName}`);
+    this.name = "GovernanceTierAmbiguousNameError";
+  }
+}
+
+/**
+ * Resolve a tier by its human name within a project. Fail-closed on ambiguity:
+ * tier names are not unique in the schema, so an import that names a tier which
+ * resolves to more than one row must be rejected whole rather than pick one.
+ */
+export async function getGovernanceTierByName(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+  tierName: string,
+): Promise<GovernanceTier> {
+  const result = await client.query(
+    `SELECT id, project_id, tier_name, preset, tier_json, canonical_hash, state, created_at::text
+       FROM governance_tiers
+      WHERE org_id = $1 AND project_id = $2 AND tier_name = $3`,
+    [orgId, projectId, tierName],
+  );
+  if (result.rows.length === 0) throw new GovernanceTierNotFoundError(tierName);
+  if (result.rows.length > 1) throw new GovernanceTierAmbiguousNameError(tierName);
+  return decodeTier(result.rows[0]);
+}
+
+export async function listPolicyBindings(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<PolicyBinding[]> {
+  const result = await client.query(
+    `SELECT id, project_id, tier_id, effective_policy_hash, is_active, created_at::text
+       FROM policy_bindings
+      WHERE org_id = $1 AND project_id = $2
+      ORDER BY created_at, id`,
+    [orgId, projectId],
+  );
+  return result.rows.map(decodeBinding);
+}
+
 async function existingBinding(
   client: QueryClient,
   orgId: string,
