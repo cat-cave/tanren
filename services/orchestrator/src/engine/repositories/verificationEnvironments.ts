@@ -159,6 +159,44 @@ async function ensureReadyVerificationEnvironment(
   return { environmentId: row.id, created: row.id === id };
 }
 
+/**
+ * rv-premerge fix #2: find-or-create the run's REAL `integration_nodes` row the pre-merge
+ * preview `verification_environments` row FKs. At the pre-merge point NO merge_batch node
+ * exists yet (it is materialized later, in the merge-coordinator drive) and an eager_base node
+ * exists only for jj-local dependents — so binding the preview env to the runId violates the
+ * `verification_environments.integration_node_id → integration_nodes(node_id)` FK. This mints a
+ * dedicated, run-unique `pre_merge_preview` node (migration 0086 purpose) instead: a plain
+ * `status='ready'` row with a run-keyed `member_key`, idempotent on `(org_id, member_key)`. It
+ * needs NO coverage-authority / jj workspace (it is not assembled by the merge coordinator).
+ */
+export async function ensurePreMergePreviewNode(
+  client: QueryClient,
+  input: { readonly orgId: string; readonly projectId: string; readonly runId: string; readonly headSha: string },
+  newId: () => string = () => `inode_${randomUUID()}`,
+): Promise<string> {
+  const memberKey = `pre_merge_preview:${input.runId}`;
+  const selectByKey = `SELECT node_id FROM integration_nodes WHERE org_id = $1 AND member_key = $2 LIMIT 1`;
+  const existing = await client.query<{ node_id: string }>(selectByKey, [input.orgId, memberKey]);
+  const found = existing.rows[0];
+  if (found !== undefined) return found.node_id;
+
+  const nodeId = newId();
+  await client.query(
+    `INSERT INTO integration_nodes
+       (node_id, project_id, org_id, base_branch, base_sha, ref, purpose, members, member_key, status)
+     VALUES ($1, $2, $3, 'pre_merge_preview', $4, $5, 'pre_merge_preview', '[]'::jsonb, $6, 'ready')
+     ON CONFLICT (org_id, member_key) DO NOTHING`,
+    [nodeId, input.projectId, input.orgId, input.headSha, `pre_merge_preview/${input.runId}`, memberKey],
+  );
+  // Re-read on the unique (org_id, member_key) so a concurrent winner (or our row) settles to one id.
+  const settled = await client.query<{ node_id: string }>(selectByKey, [input.orgId, memberKey]);
+  const row = settled.rows[0];
+  if (row === undefined) {
+    throw new Error(`pre-merge preview node find-or-create failed to settle for run ${input.runId}`);
+  }
+  return row.node_id;
+}
+
 /** Resolves the ready verification environment id for a run's live release. */
 export interface VerificationEnvironmentResolver {
   resolveForLiveRelease(release: LiveReleaseBinding): Promise<string>;

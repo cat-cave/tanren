@@ -4,16 +4,21 @@
 // (`resolveDeployTarget` over `projects.config`), mint a per-operation deploy `OrgGrant`
 // (`loadDeployOperationGrant`, the SAME integration authority the post-merge deploy uses),
 // build the `direct_api` DeployAdapter, and `applyPreview` the PR head to an ephemeral
-// preview; then find-or-create the `deployment_target='preview'` `verification_environments`
-// row the acceptance run persists against, and expose `teardown` to reap the preview.
+// preview; then bind it to the run's REAL `pre_merge_preview` `integration_nodes` node and a
+// `deployment_target='preview'` `verification_environments` row the acceptance run persists
+// against, and expose `teardown` to reap the deployed preview.
+//
+// FIX #2 (leak-safe + real node): at pre-merge NO merge_batch node exists yet, so we MINT a
+// dedicated `pre_merge_preview` node (`ensurePreMergePreviewNode`) for the run and bind the env
+// + release to its REAL node_id — never the runId (which is not a node_id and violated the FK,
+// failing the gate closed on every run). `applyPreview` (the live deploy) is wrapped so that if
+// the SUBSEQUENT env bind throws, the deployed preview is torn down — no leaked previews.
 //
 // FAIL-CLOSED: a project with NO deploy target — or a non-web provider (no HTTP preview
-// surface) — resolves `no_surface` (the producer returns `not_applicable`, merge on CI
-// alone). A configured web target whose grant/apply/persist FAILS resolves `failed` (the
-// producer blocks the merge). Teardown reaps the preview even on failure (apex-v96 lesson).
-//
-// NON-SECRET: the deploy token never reaches this file — it is resolved inside the
-// provisioner from the grant's credential ref and flows only into the provider bearer.
+// surface) — resolves `no_surface` (the producer returns `not_applicable`, merge on CI alone).
+// A configured web target whose grant/apply/persist FAILS resolves `failed` (the producer
+// blocks the merge). NON-SECRET: the deploy token never reaches this file — it is resolved
+// inside the provisioner from the grant's credential ref and flows only into the provider bearer.
 
 import { createHash } from "node:crypto";
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
@@ -23,7 +28,10 @@ import type { DeployProvisionerDeps } from "../../provisioners/deployProvisioner
 import type { BehaviorRevisionId } from "../../contracts/behaviorRevision.js";
 import { buildDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../deploy/buildDeployAdapter.js";
 import { PgReleaseInstancesRepository } from "../../repositories/pgReleaseInstances.js";
-import { ensurePreviewVerificationEnvironment } from "../../repositories/verificationEnvironments.js";
+import {
+  ensurePreMergePreviewNode,
+  ensurePreviewVerificationEnvironment,
+} from "../../repositories/verificationEnvironments.js";
 import { loadDeployOperationGrant } from "../../postMerge/deployOnMergeAuthority.js";
 import { DEPLOY_PROVIDER_KINDS, resolveDeployTarget } from "../../postMerge/deployTargetResolution.js";
 import type {
@@ -32,8 +40,20 @@ import type {
   PreviewSurface,
   PreviewSurfaceProvisioner,
 } from "./preMergeBehaviorGateProducer.js";
+import { createLogger } from "../../observability/logger.js";
 
-type QueryClient = Pick<pg.PoolClient, "query">;
+const log = createLogger("pre-merge-behavior-gate");
+type DeployTarget = { provider: string; appId: string };
+/** The DeployAdapter surface this provisioner uses (test seam narrows to what it calls). */
+type PreviewAdapter = Pick<ReturnType<typeof buildDeployAdapter>, "applyPreview" | "teardownPreview">;
+/** The deploy-grant loader (production → `loadDeployOperationGrant`; injectable for tests). */
+export type LoadDeployGrant = typeof loadDeployOperationGrant;
+
+/** Optional test seams; production defaults to the real deploy adapter + grant authority. */
+export interface PreviewProvisionerSeams {
+  readonly adapter?: PreviewAdapter;
+  readonly loadGrant?: LoadDeployGrant;
+}
 
 /** `owner/name` from a GitHub repo URL (`https://github.com/owner/name(.git)`). */
 function repoSlugOf(repoUrl: string): string {
@@ -54,19 +74,27 @@ function previewSourceDigest(repo: string, headSha: string): Digest {
 
 /** The deploy-stack preview provisioner — the real, first-prod `applyPreview` caller. */
 export class DeployAdapterPreviewSurfaceProvisioner implements PreviewSurfaceProvisioner {
-  private readonly adapter: ReturnType<typeof buildDeployAdapter>;
+  private readonly adapter: PreviewAdapter;
+  private readonly loadGrant: LoadDeployGrant;
 
   public constructor(
     private readonly pool: pg.Pool,
     provisioner: DeployProvisionerDeps,
+    seams: PreviewProvisionerSeams = {},
   ) {
-    this.adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
-      provisioner,
-      releaseInstances: new PgReleaseInstancesRepository(pool),
-    });
+    this.adapter =
+      seams.adapter ??
+      buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
+        provisioner,
+        releaseInstances: new PgReleaseInstancesRepository(pool),
+      });
+    this.loadGrant = seams.loadGrant ?? loadDeployOperationGrant;
   }
 
-  public async provision(input: PreMergeBehaviorGateInput): Promise<PreviewProvisionResult> {
+  public async provision(
+    input: PreMergeBehaviorGateInput,
+    behaviorRevisionIds: readonly BehaviorRevisionId[],
+  ): Promise<PreviewProvisionResult> {
     const target = await this.resolveTarget(input);
     if (target === undefined) {
       return { kind: "no_surface", reason: "project configures no deploy target — no preview surface to verify" };
@@ -80,7 +108,7 @@ export class DeployAdapterPreviewSurfaceProvisioner implements PreviewSurfacePro
       };
     }
     try {
-      return await this.deployAndBind(input, target);
+      return await this.deployAndBind(input, target, behaviorRevisionIds);
     } catch (error) {
       // A configured web target that could not deploy/apply/persist ⇒ fail-closed (block).
       return { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
@@ -89,73 +117,116 @@ export class DeployAdapterPreviewSurfaceProvisioner implements PreviewSurfacePro
 
   private async deployAndBind(
     input: PreMergeBehaviorGateInput,
-    target: { provider: string; appId: string },
+    target: DeployTarget,
+    behaviorRevisionIds: readonly BehaviorRevisionId[],
   ): Promise<PreviewProvisionResult> {
     const repo = repoSlugOf(input.repoUrl);
     const artifactDigest = previewSourceDigest(repo, input.headSha);
-    const grant = await loadDeployOperationGrant(
+    const ref = { provider: target.provider, appId: target.appId };
+    const grant = await this.loadGrant(
       this.pool,
       input.projectId,
       { provider: target.provider, orgId: input.orgId },
       "deploy",
-      { resourceId: target.appId, sourceRepo: repo, sourceRef: input.headSha },
+      {
+        resourceId: target.appId,
+        sourceRepo: repo,
+        sourceRef: input.headSha,
+      },
     );
     if (grant === undefined) {
       return { kind: "failed", reason: `no eligible '${target.provider}' deploy grant for the preview` };
     }
-    const preview = await this.adapter.applyPreview(
-      grant,
-      { provider: target.provider, appId: target.appId },
-      {
-        source: { repo, ref: input.headSha },
-        artifactDigest,
-        integrationNodeId: input.runId,
-        behaviorRevisionIds: input.behaviorRevisionIds as readonly BehaviorRevisionId[],
-      },
-    );
-    const environmentId = await runWithOrgScope(this.pool, input.orgId, (client) =>
-      ensurePreviewVerificationEnvironment(client, {
+    // FIX #2: mint the run's REAL pre_merge_preview node BEFORE the env binds to it (the env
+    // FKs integration_nodes.node_id). Cheap, idempotent, needs no coverage-authority workspace.
+    const integrationNodeId = await runWithOrgScope(this.pool, input.orgId, (client) =>
+      ensurePreMergePreviewNode(client, {
         orgId: input.orgId,
         projectId: input.projectId,
-        integrationNodeId: input.runId,
-        artifactDigest,
-        releaseInstanceId: preview.deploymentId,
-        url: preview.url,
-      }).then((result) => result.environmentId),
+        runId: input.runId,
+        headSha: input.headSha,
+      }),
+    );
+    const preview = await this.adapter.applyPreview(grant, ref, {
+      source: { repo, ref: input.headSha },
+      artifactDigest,
+      integrationNodeId,
+      behaviorRevisionIds,
+    });
+    // The preview is DEPLOYED. If the env bind throws, tear the deployed preview down so no
+    // preview leaks (apex-v96 machine-accumulation), then re-throw → the outer catch → `failed`.
+    const environmentId = await this.bindEnvironmentOrReap(
+      input,
+      ref,
+      grant,
+      integrationNodeId,
+      artifactDigest,
+      preview,
     );
     return {
       kind: "provisioned",
       surface: {
         deploymentId: preview.deploymentId,
         url: preview.url,
-        integrationNodeId: input.runId,
+        integrationNodeId,
         artifactDigest,
         environmentId,
+        orgId: input.orgId,
+        projectId: input.projectId,
+        provider: target.provider,
+        appId: target.appId,
       },
     };
   }
 
-  public async teardown(surface: PreviewSurface): Promise<void> {
-    // A read error propagates to the producer's best-effort tearDown (logged); a genuinely
-    // absent release row (target undefined) means there is nothing to reap here.
-    const target = await runWithSystemScope(this.pool, (client) =>
-      readDeployProviderApp(client, surface.integrationNodeId),
-    );
-    if (target === undefined) return;
-    const grant = await loadDeployOperationGrant(
-      this.pool,
-      surface.integrationNodeId,
-      { provider: target.provider, orgId: surface.integrationNodeId },
-      "deploy",
-      { resourceId: target.appId, deploymentId: surface.deploymentId },
-    );
-    if (grant === undefined) throw new Error("pre-merge preview teardown: no eligible deploy grant");
-    await this.adapter.teardownPreview(grant, { provider: target.provider, appId: target.appId }, surface.deploymentId);
+  private async bindEnvironmentOrReap(
+    input: PreMergeBehaviorGateInput,
+    ref: DeployTarget,
+    grant: Awaited<ReturnType<typeof loadDeployOperationGrant>> & object,
+    integrationNodeId: string,
+    artifactDigest: Digest,
+    preview: { deploymentId: string; url: string },
+  ): Promise<string> {
+    try {
+      return await runWithOrgScope(this.pool, input.orgId, (client) =>
+        ensurePreviewVerificationEnvironment(client, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          integrationNodeId,
+          artifactDigest,
+          releaseInstanceId: preview.deploymentId,
+          url: preview.url,
+        }).then((result) => result.environmentId),
+      );
+    } catch (bindError) {
+      await this.adapter.teardownPreview(grant, ref, preview.deploymentId).catch((teardownError: unknown) => {
+        log.warn("pre-merge preview teardown after env-bind failure failed (preview may leak)", {
+          runId: input.runId,
+          deploymentId: preview.deploymentId,
+          reason: teardownError instanceof Error ? teardownError.message : String(teardownError),
+        });
+      });
+      throw bindError;
+    }
   }
 
-  private async resolveTarget(
-    input: PreMergeBehaviorGateInput,
-  ): Promise<{ provider: string; appId: string } | undefined> {
+  public async teardown(surface: PreviewSurface): Promise<void> {
+    const grant = await this.loadGrant(
+      this.pool,
+      surface.projectId,
+      { provider: surface.provider, orgId: surface.orgId },
+      "deploy",
+      { resourceId: surface.appId, deploymentId: surface.deploymentId },
+    );
+    if (grant === undefined) throw new Error("pre-merge preview teardown: no eligible deploy grant");
+    await this.adapter.teardownPreview(
+      grant,
+      { provider: surface.provider, appId: surface.appId },
+      surface.deploymentId,
+    );
+  }
+
+  private async resolveTarget(input: PreMergeBehaviorGateInput): Promise<DeployTarget | undefined> {
     return runWithSystemScope(this.pool, async (client) => {
       const row = (
         await client.query<{ config: unknown; org_id: string | null }>(
@@ -178,20 +249,4 @@ export class DeployAdapterPreviewSurfaceProvisioner implements PreviewSurfacePro
         : undefined;
     });
   }
-}
-
-/** Read the project's deploy provider/app for a preview release's integration node (teardown). */
-async function readDeployProviderApp(
-  client: QueryClient,
-  integrationNodeId: string,
-): Promise<{ provider: string; appId: string } | undefined> {
-  const row = (
-    await client.query<{ provider: string; app_id: string }>(
-      `SELECT provider, app_id FROM release_instances
-        WHERE integration_node_id = $1 AND deployment_id IS NOT NULL
-        ORDER BY created_at DESC LIMIT 1`,
-      [integrationNodeId],
-    )
-  ).rows[0];
-  return row === undefined ? undefined : { provider: row.provider, appId: row.app_id };
 }

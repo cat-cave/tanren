@@ -23,7 +23,8 @@ const noopAppend: AppendEvent = async () => {};
 
 // A minimal query stub returning a crafted run⋈spec⋈project row + the org-config
 // read resolveCredentialsForRun issues. Drives the real loader without a DB.
-function rowPool(row: Record<string, unknown> | undefined): pg.Pool {
+function rowPool(row: Record<string, unknown> | undefined, behaviorIds: readonly string[] = []): pg.Pool {
+  const behaviorRows = behaviorIds.map((behavior_id) => ({ behavior_id }));
   return {
     async query(sql: string) {
       const trimmed = sql.trim();
@@ -33,6 +34,10 @@ function rowPool(row: Record<string, unknown> | undefined): pg.Pool {
       // WS-D2: the writer-context design read — no design contract in these fixtures.
       if (trimmed.includes("FROM design_contracts")) {
         return { rows: [], rowCount: 0 };
+      }
+      // rv-premerge: the run's declared behaviors (spec_behaviors ⋈ specs) hydrate context.behaviorIds.
+      if (trimmed.includes("FROM\n         spec_behaviors") || trimmed.includes("FROM spec_behaviors")) {
+        return { rows: behaviorRows, rowCount: behaviorRows.length };
       }
       // The run⋈spec⋈project join.
       return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
@@ -71,6 +76,24 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 describe("loadRunExecutionContext", () => {
+  it("rv-premerge: hydrates context.behaviorIds from spec_behaviors (production, not injected)", async () => {
+    const { context } = await loadRunExecutionContext(rowPool(fullRow(), ["beh_a", "beh_b"]), {
+      runId: "run_1",
+      identitySecretRef: "runner/test/identity",
+    });
+    // The pre-merge behavior gate reads context.behaviorIds; an EMPTY hydration would make the
+    // producer a silent no-op (the fail-open bug). The declared behaviors are populated here.
+    expect(context.behaviorIds).toEqual(["beh_a", "beh_b"]);
+  });
+
+  it("rv-premerge: a run with no declared behaviors hydrates an empty behaviorIds", async () => {
+    const { context } = await loadRunExecutionContext(rowPool(fullRow(), []), {
+      runId: "run_1",
+      identitySecretRef: "runner/test/identity",
+    });
+    expect(context.behaviorIds).toEqual([]);
+  });
+
   it("maps every run⋈spec⋈project column onto the PlannerRunContext", async () => {
     const { context, projectConfig, orgId } = await loadRunExecutionContext(rowPool(fullRow()), {
       runId: "run_1",

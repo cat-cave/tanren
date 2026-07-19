@@ -40,7 +40,7 @@ export async function runPreMergeBehaviorGate(
     specId: context.specId,
     repoUrl: context.repoUrl,
     headSha,
-    behaviorRevisionIds: context.behaviorIds ?? [],
+    behaviorIds: context.behaviorIds ?? [],
   });
   if (outcome.kind === "blocked") {
     log.warn("pre-merge behavior gate BLOCKED the merge (fail-closed)", {

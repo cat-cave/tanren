@@ -242,9 +242,26 @@ export async function loadRunExecutionContext(
     ...(webDesignSystem !== undefined && { webDesignSystem }),
   });
 
+  // The spec's declared behavior ids (org-scoped read; genuine empty is valid). Hydrated HERE
+  // (the single production hydration site) so the writer prompt AND the opt-in pre-merge
+  // behavior gate see the run's real behaviors instead of an empty set. rv-premerge fix #1: the
+  // producer resolves these behavior ids to their ACTIVE behavior_revision ids at gate time.
+  // Inlined (not via SpecStore) to keep this file under its module-dependency cap; `pool` is the
+  // run's ORG-SCOPED client, so the specs join is RLS-scoped.
+  const behaviorIdRows = await pool.query<{ behavior_id: string }>(
+    `SELECT sb.behavior_id
+       FROM spec_behaviors sb
+       INNER JOIN specs s ON s.spec_id = sb.spec_id
+      WHERE sb.spec_id = $1 AND s.project_id = $2 AND s.org_id = $3
+      ORDER BY sb.behavior_id`,
+    [decoded.spec_id, decoded.project_id, orgScope.orgId],
+  );
+  const behaviorIds = behaviorIdRows.rows.map((behaviorRow) => behaviorRow.behavior_id);
+
   const context: PlannerRunContext = {
     runId: decoded.run_id,
     specId: decoded.spec_id,
+    behaviorIds,
     projectId: decoded.project_id,
     ...(decoded.origin_issue_loop_id !== null && decoded.origin_issue_loop_id !== undefined
       ? { issueLoopId: decoded.origin_issue_loop_id }

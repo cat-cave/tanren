@@ -17,12 +17,15 @@
 //
 // FAIL-CLOSED (anti-cosplay): the acceptance run is the REAL rv-11 orchestrator against a
 // REAL preview URL — never a fabricated verdict. A decisive product failure BLOCKS; an
-// inconclusive/failed/absent verification BLOCKS (inconclusive ≠ passed). A preview deploy
-// that FAILS blocks (never a silent pass). A NON-WEB product (the deploy adapter has no
-// preview surface) resolves `not_applicable` — the merge decides on CI alone, never fails.
-// The preview is torn down even on failure (no leaked previews — the apex-v96 lesson).
+// inconclusive/failed/absent verification BLOCKS (inconclusive ≠ passed). A run that HAS
+// declared behaviors but whose active revisions / acceptance plans do not resolve is
+// unverifiable ⇒ BLOCKS (a required behavior that can't be proven is never a pass). A
+// preview deploy that FAILS blocks. Only a run with GENUINELY ZERO declared behaviors is
+// `not_applicable`. A NON-WEB product (no preview surface) is `not_applicable` (merge on CI
+// alone). The preview is torn down even on failure (no leaked previews — the apex-v96 lesson).
 
 import type { Digest } from "../../contracts/cas.js";
+import type { BehaviorRevisionId } from "../../contracts/behaviorRevision.js";
 import type { BehaviorVerdictOutcome } from "../../contracts/runtimeVerificationAdapters.js";
 import type {
   AcceptancePlan,
@@ -44,52 +47,70 @@ export interface PreMergeBehaviorGateInput {
   readonly repoUrl: string;
   /** The PUSHED PR head the land authority binds to (`pushSource.headSha`). */
   readonly headSha: string;
-  /** The run's declared behavior revisions (`context.behaviorIds`) — the affected set. */
-  readonly behaviorRevisionIds: readonly string[];
+  /** The run's DECLARED behavior ids (`context.behaviorIds`, hydrated from `spec_behaviors`). */
+  readonly behaviorIds: readonly string[];
 }
 
 /** The gate's decision over the pre-merge behavior verification. */
 export type PreMergeBehaviorGateOutcome =
-  // No preview surface (non-web product) OR no declared/compilable behaviors ⇒ the merge
+  // GENUINELY ZERO declared behaviors OR no preview surface (non-web product) ⇒ the merge
   // decides on CI alone; NEVER blocks (there is nothing to prove against a preview here).
   | { readonly kind: "not_applicable"; readonly reason: string }
   // Every blocking behavior passed on the preview ⇒ proceed to merge.
   | { readonly kind: "passed"; readonly runId: string; readonly passedBlockingCount: number }
-  // A blocking behavior FAILED, was inconclusive, or the verification could not complete
-  // (deploy/run failure) ⇒ FAIL-CLOSED: the merge is blocked. `recordedRunId` present ⇒ a
-  // `pre_merge` run was persisted (so `resolveLandTimeBehaviorGate` ALSO blocks at land
-  // time); absent ⇒ the preview never came up, so the caller MUST block on this outcome.
+  // A blocking behavior FAILED / was inconclusive, the declared behaviors could not be resolved
+  // to active revisions or acceptance plans, or the verification could not complete (deploy/run
+  // failure) ⇒ FAIL-CLOSED: the merge is blocked. `recordedRunId` present ⇒ a `pre_merge` run
+  // was persisted (so `resolveLandTimeBehaviorGate` ALSO blocks at land time); absent ⇒ nothing
+  // was persisted (resolution/deploy failed before a run row), so the caller MUST block here.
   | { readonly kind: "blocked"; readonly reason: string; readonly recordedRunId?: string };
 
-/** A live ephemeral preview the acceptance run drives, plus its persistence bindings. */
+/** A live ephemeral preview the acceptance run drives, plus its persistence + teardown bindings. */
 export interface PreviewSurface {
   readonly deploymentId: string;
   readonly url: string;
+  /** The REAL `integration_nodes.node_id` the run's preview binds to (NOT the runId). */
   readonly integrationNodeId: string;
   readonly artifactDigest: Digest;
   /** The `verification_environments` (deployment_target='preview') row id the run FKs. */
   readonly environmentId: string;
+  // Carried so teardown can load the deploy grant + reap without re-deriving identity.
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly provider: string;
+  readonly appId: string;
 }
 
 /** Provisioning a preview surface for the PR head, or why one is unavailable/failed. */
 export type PreviewProvisionResult =
-  // A web preview came up; run acceptance against it.
   | { readonly kind: "provisioned"; readonly surface: PreviewSurface }
-  // No preview surface exists for this product (a non-web adapter throws on applyPreview) —
-  // the producer resolves `not_applicable` (merge on CI alone).
+  // No preview surface exists for this product (a non-web adapter / no deploy target) — the
+  // producer resolves `not_applicable` (merge on CI alone).
   | { readonly kind: "no_surface"; readonly reason: string }
   // The preview deploy was EXPECTED but FAILED — fail-closed (the caller blocks the merge).
   | { readonly kind: "failed"; readonly reason: string };
 
 /**
- * Provisions + tears down an ephemeral preview for the PR head. The production impl wraps
- * the real `DeployAdapter.applyPreview`/`teardownPreview` + the preview
- * `verification_environments` creation; a test impl scripts each result.
+ * Provisions + tears down an ephemeral preview for the PR head. The production impl wraps the
+ * real `DeployAdapter.applyPreview`/`teardownPreview` + the preview `verification_environments`
+ * creation (bound to the run's REAL integration node); a test impl scripts each result.
  */
 export interface PreviewSurfaceProvisioner {
-  provision(input: PreMergeBehaviorGateInput): Promise<PreviewProvisionResult>;
+  provision(
+    input: PreMergeBehaviorGateInput,
+    behaviorRevisionIds: readonly BehaviorRevisionId[],
+  ): Promise<PreviewProvisionResult>;
   /** Tear the preview down — invoked in a `finally`; the producer swallows a teardown throw. */
   teardown(surface: PreviewSurface): Promise<void>;
+}
+
+/** Resolves the ACTIVE `behavior_revision` ids for a run's declared behavior ids (org-scoped). */
+export interface BehaviorRevisionResolver {
+  resolveActive(input: {
+    readonly orgId: string;
+    readonly projectId: string;
+    readonly behaviorIds: readonly string[];
+  }): Promise<readonly BehaviorRevisionId[]>;
 }
 
 /** The rv-11 orchestrator, bound (by the factory) to a specific preview URL for this run. */
@@ -106,6 +127,7 @@ export interface PreMergeBehaviorGateProducer {
 
 export interface PreviewBehaviorGateProducerDeps {
   readonly provisioner: PreviewSurfaceProvisioner;
+  readonly behaviorRevisions: BehaviorRevisionResolver;
   readonly planLoader: AcceptancePlanLoader;
   readonly buildExecutor: AcceptanceExecutorFactory;
 }
@@ -125,37 +147,35 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+type PlanResolution =
+  | {
+      readonly kind: "resolved";
+      readonly revisionIds: readonly BehaviorRevisionId[];
+      readonly plans: readonly AcceptancePlan[];
+    }
+  | { readonly kind: "blocked"; readonly reason: string };
+
 /**
- * The real producer: preview-deploy the PR head → run rv-11 acceptance against it →
- * record a `pre_merge` run + BLOCKING verdicts → tear the preview down. Judges the run
- * outcome fail-closed, mirroring `resolveLandTimeBehaviorGate` so the immediate gate
- * decision and the land-time gate agree (defense in depth).
+ * The real producer: resolve the run's active behavior revisions → compile acceptance plans →
+ * preview-deploy the PR head → run rv-11 acceptance against it → record a `pre_merge` run +
+ * BLOCKING verdicts → tear the preview down. Judges the run outcome fail-closed, mirroring
+ * `resolveLandTimeBehaviorGate` so the immediate gate decision and the land-time gate agree.
  */
 export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer {
   public constructor(private readonly deps: PreviewBehaviorGateProducerDeps) {}
 
   public async produce(input: PreMergeBehaviorGateInput): Promise<PreMergeBehaviorGateOutcome> {
-    if (input.behaviorRevisionIds.length === 0) {
+    // GENUINELY ZERO declared behaviors ⇒ there is nothing to prove pre-merge.
+    if (input.behaviorIds.length === 0) {
       return { kind: "not_applicable", reason: "run declares no behaviors to verify pre-merge" };
     }
-    // Compile the plans FIRST — a malformed/missing acceptance spec is fail-closed WITHOUT
-    // paying the preview-deploy cost. A behavior that cannot be compiled cannot be proven.
-    let plans: readonly AcceptancePlan[];
-    try {
-      plans = await this.deps.planLoader.loadPlans({
-        orgId: input.orgId,
-        behaviorRevisionIds: input.behaviorRevisionIds,
-      });
-    } catch (error) {
-      return { kind: "blocked", reason: `pre-merge acceptance plan load failed: ${messageOf(error)}` };
-    }
-    if (plans.length === 0) {
-      return { kind: "not_applicable", reason: "no compiled acceptance plans for the run's behaviors" };
-    }
+    // The run HAS declared behaviors — from here the ONLY not_applicable is "no preview surface".
+    // A resolution/compilation failure is a REQUIRED-but-unverifiable behavior ⇒ fail-closed.
+    const resolved = await this.resolvePlans(input);
+    if (resolved.kind === "blocked") return resolved;
 
-    const provisioned = await this.deps.provisioner.provision(input);
+    const provisioned = await this.deps.provisioner.provision(input, resolved.revisionIds);
     if (provisioned.kind === "no_surface") {
-      // A non-web product has no preview surface — merge on CI alone, never fail.
       return { kind: "not_applicable", reason: provisioned.reason };
     }
     if (provisioned.kind === "failed") {
@@ -166,9 +186,8 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
 
     const { surface } = provisioned;
     try {
-      return await this.runAcceptance(input, surface, plans);
+      return await this.runAcceptance(input, surface, resolved.plans);
     } catch (error) {
-      // The rv-11 run itself threw (persistence / driver construction) — fail-closed.
       log.warn("pre-merge behavior verification threw (fail-closed; merge blocked)", {
         runId: input.runId,
         reason: messageOf(error),
@@ -178,6 +197,44 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
       // Tear the preview down EVEN on failure — no leaked preview deployments.
       await this.tearDown(surface);
     }
+  }
+
+  /**
+   * Resolve the declared behaviors to ACTIVE revisions and compile their acceptance plans. A
+   * run that HAS declared behaviors but resolves to zero active revisions / zero plans — or
+   * whose spec fails to compile — is unverifiable ⇒ fail-closed BLOCK (never a pass), all
+   * BEFORE paying any preview-deploy cost.
+   */
+  private async resolvePlans(input: PreMergeBehaviorGateInput): Promise<PlanResolution> {
+    let revisionIds: readonly BehaviorRevisionId[];
+    try {
+      revisionIds = await this.deps.behaviorRevisions.resolveActive({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        behaviorIds: input.behaviorIds,
+      });
+    } catch (error) {
+      return { kind: "blocked", reason: `pre-merge behavior revision resolution failed: ${messageOf(error)}` };
+    }
+    if (revisionIds.length === 0) {
+      return {
+        kind: "blocked",
+        reason: "run's declared behaviors resolve to no active behavior revision — unverifiable pre-merge",
+      };
+    }
+    let plans: readonly AcceptancePlan[];
+    try {
+      plans = await this.deps.planLoader.loadPlans({ orgId: input.orgId, behaviorRevisionIds: revisionIds });
+    } catch (error) {
+      return { kind: "blocked", reason: `pre-merge acceptance plan load failed: ${messageOf(error)}` };
+    }
+    if (plans.length === 0) {
+      return {
+        kind: "blocked",
+        reason: "run's declared behaviors compiled to no acceptance plans — unverifiable pre-merge",
+      };
+    }
+    return { kind: "resolved", revisionIds, plans };
   }
 
   private async runAcceptance(
@@ -223,7 +280,6 @@ export class PreviewBehaviorGateProducer implements PreMergeBehaviorGateProducer
     }
     const passedBlockingCount = result.behaviors.filter((behavior) => behavior.outcome === "passed").length;
     if (passedBlockingCount === 0) {
-      // A completed run with no passing blocking behavior is NOT green — fail-closed.
       return {
         kind: "blocked",
         reason: "pre-merge behavior verification produced no passing blocking behavior verdict",

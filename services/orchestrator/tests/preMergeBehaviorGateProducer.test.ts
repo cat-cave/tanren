@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { Digest } from "../src/engine/contracts/cas.js";
+import type { BehaviorRevisionId } from "../src/engine/contracts/behaviorRevision.js";
 import type {
   AcceptancePlan,
   AcceptancePlanLoader,
@@ -14,6 +15,7 @@ import type {
 import {
   PreviewBehaviorGateProducer,
   type AcceptanceExecutor,
+  type BehaviorRevisionResolver,
   type PreMergeBehaviorGateInput,
   type PreviewProvisionResult,
   type PreviewSurface,
@@ -30,15 +32,19 @@ const INPUT: PreMergeBehaviorGateInput = {
   specId: "spec1",
   repoUrl: "https://github.com/acme/web.git",
   headSha: "deadbeef",
-  behaviorRevisionIds: ["br1"],
+  behaviorIds: ["beh1"],
 };
 
 const SURFACE: PreviewSurface = {
   deploymentId: "dep1",
   url: "https://preview.example.test",
-  integrationNodeId: "run1",
+  integrationNodeId: "inode_real1",
   artifactDigest: CAS,
   environmentId: "venv1",
+  orgId: "org1",
+  projectId: "proj1",
+  provider: "deploy.vercel",
+  appId: "app1",
 };
 
 function fakePlan(): AcceptancePlan {
@@ -58,11 +64,20 @@ function fakePlan(): AcceptancePlan {
 function planLoaderReturning(plans: readonly AcceptancePlan[]): AcceptancePlanLoader {
   return { loadPlans: async () => plans };
 }
-
 function planLoaderThrowing(): AcceptancePlanLoader {
   return {
     loadPlans: async () => {
       throw new Error("malformed acceptance spec");
+    },
+  };
+}
+function resolverReturning(ids: readonly string[]): BehaviorRevisionResolver {
+  return { resolveActive: async () => ids as readonly BehaviorRevisionId[] };
+}
+function resolverThrowing(): BehaviorRevisionResolver {
+  return {
+    resolveActive: async () => {
+      throw new Error("revision lookup failed");
     },
   };
 }
@@ -72,6 +87,7 @@ function executorWithOutcome(outcome: BehaviorVerdictOutcome): AcceptanceExecuto
     async execute(request: AcceptanceRunRequest): Promise<AcceptanceRunResult> {
       expect(request.purpose).toBe("pre_merge");
       expect(request.externalRunId).toBe("run1");
+      expect(request.integrationNodeId).toBe("inode_real1");
       expect(request.environmentId).toBe("venv1");
       return {
         runId: "vr1",
@@ -97,68 +113,81 @@ function executorWithOutcome(outcome: BehaviorVerdictOutcome): AcceptanceExecuto
 function provisionerReturning(
   result: PreviewProvisionResult,
   teardown = vi.fn<PreviewSurfaceProvisioner["teardown"]>(async () => {}),
-): { provisioner: PreviewSurfaceProvisioner; teardown: ReturnType<typeof vi.fn> } {
-  return {
-    teardown,
-    provisioner: { provision: async () => result, teardown },
-  };
+): { provisioner: PreviewSurfaceProvisioner; teardown: ReturnType<typeof vi.fn>; provision: ReturnType<typeof vi.fn> } {
+  const provision = vi.fn<PreviewSurfaceProvisioner["provision"]>(async () => result);
+  return { teardown, provision, provisioner: { provision, teardown } };
+}
+
+/** A fully-working producer over injected deps; overrides let each test vary one collaborator. */
+function buildProducer(overrides: {
+  provisioner?: PreviewSurfaceProvisioner;
+  behaviorRevisions?: BehaviorRevisionResolver;
+  planLoader?: AcceptancePlanLoader;
+  executor?: AcceptanceExecutor;
+}): PreviewBehaviorGateProducer {
+  return new PreviewBehaviorGateProducer({
+    provisioner: overrides.provisioner ?? provisionerReturning({ kind: "provisioned", surface: SURFACE }).provisioner,
+    behaviorRevisions: overrides.behaviorRevisions ?? resolverReturning(["br1"]),
+    planLoader: overrides.planLoader ?? planLoaderReturning([fakePlan()]),
+    buildExecutor: () => overrides.executor ?? executorWithOutcome("passed"),
+  });
 }
 
 describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
-  it("no declared behaviors → not_applicable (never deploys a preview)", async () => {
-    const provision = vi.fn<PreviewSurfaceProvisioner["provision"]>();
-    const producer = new PreviewBehaviorGateProducer({
-      provisioner: { provision, teardown: vi.fn<PreviewSurfaceProvisioner["teardown"]>() },
-      planLoader: planLoaderReturning([fakePlan()]),
-      buildExecutor: () => executorWithOutcome("passed"),
-    });
-    const outcome = await producer.produce({ ...INPUT, behaviorRevisionIds: [] });
+  it("GENUINELY ZERO declared behaviors → not_applicable (no revision lookup, no preview)", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const resolveActive = vi.fn<BehaviorRevisionResolver["resolveActive"]>(async () => []);
+    const producer = buildProducer({ provisioner, behaviorRevisions: { resolveActive } });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: [] });
     expect(outcome.kind).toBe("not_applicable");
+    expect(resolveActive).not.toHaveBeenCalled();
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("declared behaviors resolve to NO active revision → blocked (unverifiable, no preview)", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const producer = buildProducer({ provisioner, behaviorRevisions: resolverReturning([]) });
+    expect((await producer.produce(INPUT)).kind).toBe("blocked");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("revision resolution THROWS → blocked, no preview deployed", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const producer = buildProducer({ provisioner, behaviorRevisions: resolverThrowing() });
+    expect((await producer.produce(INPUT)).kind).toBe("blocked");
     expect(provision).not.toHaveBeenCalled();
   });
 
   it("plan load throws (malformed spec) → blocked, no preview deployed", async () => {
-    const provision = vi.fn<PreviewSurfaceProvisioner["provision"]>();
-    const producer = new PreviewBehaviorGateProducer({
-      provisioner: { provision, teardown: vi.fn<PreviewSurfaceProvisioner["teardown"]>() },
-      planLoader: planLoaderThrowing(),
-      buildExecutor: () => executorWithOutcome("passed"),
-    });
-    const outcome = await producer.produce(INPUT);
-    expect(outcome.kind).toBe("blocked");
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const producer = buildProducer({ provisioner, planLoader: planLoaderThrowing() });
+    expect((await producer.produce(INPUT)).kind).toBe("blocked");
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("declared behaviors compile to ZERO plans → blocked (unverifiable, no preview)", async () => {
+    const { provisioner, provision } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
+    const producer = buildProducer({ provisioner, planLoader: planLoaderReturning([]) });
+    expect((await producer.produce(INPUT)).kind).toBe("blocked");
     expect(provision).not.toHaveBeenCalled();
   });
 
   it("no preview surface (non-web product) → not_applicable (merge on CI alone)", async () => {
     const { provisioner } = provisionerReturning({ kind: "no_surface", reason: "no web surface" });
-    const producer = new PreviewBehaviorGateProducer({
-      provisioner,
-      planLoader: planLoaderReturning([fakePlan()]),
-      buildExecutor: () => executorWithOutcome("passed"),
-    });
-    expect((await producer.produce(INPUT)).kind).toBe("not_applicable");
+    expect((await buildProducer({ provisioner }).produce(INPUT)).kind).toBe("not_applicable");
   });
 
   it("preview deploy FAILED → blocked (fail-closed, no run row)", async () => {
     const { provisioner } = provisionerReturning({ kind: "failed", reason: "deploy error" });
-    const producer = new PreviewBehaviorGateProducer({
-      provisioner,
-      planLoader: planLoaderReturning([fakePlan()]),
-      buildExecutor: () => executorWithOutcome("passed"),
-    });
-    const outcome = await producer.produce(INPUT);
+    const outcome = await buildProducer({ provisioner }).produce(INPUT);
     expect(outcome).toMatchObject({ kind: "blocked" });
     expect("recordedRunId" in outcome && outcome.recordedRunId).toBeFalsy();
   });
 
   it("every blocking behavior passes on the preview → passed, preview torn down", async () => {
     const { provisioner, teardown } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
-    const producer = new PreviewBehaviorGateProducer({
-      provisioner,
-      planLoader: planLoaderReturning([fakePlan()]),
-      buildExecutor: () => executorWithOutcome("passed"),
-    });
-    expect(await producer.produce(INPUT)).toEqual({ kind: "passed", runId: "vr1", passedBlockingCount: 1 });
+    const outcome = await buildProducer({ provisioner, executor: executorWithOutcome("passed") }).produce(INPUT);
+    expect(outcome).toEqual({ kind: "passed", runId: "vr1", passedBlockingCount: 1 });
     expect(teardown).toHaveBeenCalledOnce();
   });
 
@@ -166,12 +195,7 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     "a decisive product failure (%s) → blocked with recordedRunId, preview torn down",
     async (outcome) => {
       const { provisioner, teardown } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
-      const producer = new PreviewBehaviorGateProducer({
-        provisioner,
-        planLoader: planLoaderReturning([fakePlan()]),
-        buildExecutor: () => executorWithOutcome(outcome),
-      });
-      const result = await producer.produce(INPUT);
+      const result = await buildProducer({ provisioner, executor: executorWithOutcome(outcome) }).produce(INPUT);
       expect(result).toMatchObject({ kind: "blocked", recordedRunId: "vr1" });
       expect(teardown).toHaveBeenCalledOnce();
     },
@@ -181,25 +205,21 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     "an inconclusive verdict (%s) → blocked (inconclusive ≠ passed)",
     async (outcome) => {
       const { provisioner } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
-      const producer = new PreviewBehaviorGateProducer({
-        provisioner,
-        planLoader: planLoaderReturning([fakePlan()]),
-        buildExecutor: () => executorWithOutcome(outcome),
-      });
-      expect((await producer.produce(INPUT)).kind).toBe("blocked");
+      expect((await buildProducer({ provisioner, executor: executorWithOutcome(outcome) }).produce(INPUT)).kind).toBe(
+        "blocked",
+      );
     },
   );
 
   it("the rv-11 run THROWS → blocked, and the preview is STILL torn down (finally)", async () => {
     const { provisioner, teardown } = provisionerReturning({ kind: "provisioned", surface: SURFACE });
-    const producer = new PreviewBehaviorGateProducer({
+    const producer = buildProducer({
       provisioner,
-      planLoader: planLoaderReturning([fakePlan()]),
-      buildExecutor: () => ({
+      executor: {
         execute: async () => {
           throw new Error("persistence exploded");
         },
-      }),
+      },
     });
     expect((await producer.produce(INPUT)).kind).toBe("blocked");
     expect(teardown).toHaveBeenCalledOnce();

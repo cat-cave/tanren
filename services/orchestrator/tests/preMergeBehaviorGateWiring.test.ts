@@ -18,7 +18,7 @@ function ctx(preMergeBehaviorGate?: boolean): PlannerRunContext {
     projectId: "proj1",
     orgId: "org1",
     repoUrl: "https://github.com/acme/web.git",
-    behaviorIds: ["br1"],
+    behaviorIds: ["beh1"],
   };
   if (preMergeBehaviorGate !== undefined) base["preMergeBehaviorGate"] = preMergeBehaviorGate;
   return base as unknown as PlannerRunContext;
@@ -68,7 +68,7 @@ describe("runPreMergeBehaviorGate — opt-in, default-off wiring", () => {
     const { producer, produce } = producerReturning({ kind: "passed", runId: "vr1", passedBlockingCount: 2 });
     expect(await runPreMergeBehaviorGate(inputWith(producer), ctx(true), STAGE, "deadbeef")).toBe("proceed");
     expect(produce).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run1", headSha: "deadbeef", behaviorRevisionIds: ["br1"], orgId: "org1" }),
+      expect.objectContaining({ runId: "run1", headSha: "deadbeef", behaviorIds: ["beh1"], orgId: "org1" }),
     );
   });
 

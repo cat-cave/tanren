@@ -22,6 +22,7 @@ import {
   type PreMergeBehaviorGateProducer,
 } from "./preMergeBehaviorGateProducer.js";
 import { DeployAdapterPreviewSurfaceProvisioner } from "./deployAdapterPreviewProvisioner.js";
+import { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
 
 /** A base-URL resolver hard-bound to ONE preview URL for a single acceptance run. */
 class FixedBaseUrlResolver implements AcceptanceBaseUrlResolver {
@@ -48,6 +49,7 @@ export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: Secret
     });
   return new PreviewBehaviorGateProducer({
     provisioner: new DeployAdapterPreviewSurfaceProvisioner(pool, { transport: fetchDeployTransport(), secrets }),
+    behaviorRevisions: new PgBehaviorRevisionResolver(pool),
     planLoader: new PgAcceptancePlanLoader(pool),
     buildExecutor,
   });
