@@ -173,4 +173,11 @@ export interface QuarantineTransitionRecord {
   readonly actor: string;
   readonly evidence: readonly VerdictObservation[];
   readonly contextHash: string;
+  /**
+   * mq-7 — the code GENERATION the transition was proven in: the artifact_digest whose recorded
+   * verdicts the classification read. A quarantine speaks only for this epoch; a later generation
+   * (a different artifact_digest) is re-evaluated against its OWN verdicts (see
+   * {@link reevaluateQuarantineOnEpoch}). A release records the epoch it was released in.
+   */
+  readonly epoch: string;
 }

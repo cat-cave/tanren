@@ -77,8 +77,8 @@ export class PgBehaviorQuarantineStore implements BehaviorQuarantineReader {
       client.query(
         `INSERT INTO behavior_flake_quarantines
            (org_id, project_id, id, behavior_revision_id, transition, gate_effect, classification,
-            reason, actor, evidence, context_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`,
+            reason, actor, evidence, context_hash, epoch)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)`,
         [
           record.orgId,
           record.projectId,
@@ -91,10 +91,35 @@ export class PgBehaviorQuarantineStore implements BehaviorQuarantineReader {
           record.actor,
           JSON.stringify(record.evidence),
           record.contextHash,
+          record.epoch,
         ],
       ),
     );
     return id;
+  }
+
+  /**
+   * mq-7 — the ACTIVE quarantine for one behavior (its LATEST transition), returning the epoch
+   * (artifact_digest) it was proven in, or `undefined` when the behavior is not currently
+   * quarantined (no rows, or the latest transition is a `release`). The epoch is what the
+   * epoch re-evaluation compares against the newly-observed generation.
+   */
+  public async readActiveQuarantine(
+    scope: { readonly orgId: string; readonly projectId: string },
+    behaviorRevisionId: string,
+  ): Promise<{ readonly epoch: string } | undefined> {
+    return this.withOrgScope(scope.orgId, async (client) => {
+      const result = await client.query<{ transition: string; epoch: string }>(
+        `SELECT transition, epoch
+           FROM behavior_flake_quarantines
+          WHERE org_id = $1 AND project_id = $2 AND behavior_revision_id = $3
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        [scope.orgId, scope.projectId, behaviorRevisionId],
+      );
+      const latest = result.rows[0];
+      return latest !== undefined && latest.transition === "quarantine" ? { epoch: latest.epoch } : undefined;
+    });
   }
 
   public async readActiveQuarantinedBehaviors(scope: {
