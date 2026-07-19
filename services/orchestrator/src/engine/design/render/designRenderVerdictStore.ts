@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+// (the pool wrapper below opens its own org-scoped read)
 import type {
   DesignRenderCheckpoint,
   DesignRenderRunOutcome,
@@ -128,6 +129,21 @@ export async function readLatestDesignRenderVerdict(
     )
   ).rows[0];
   return row === undefined ? undefined : decodeRow(row);
+}
+
+/**
+ * ds-5 EVIDENCE LAB read: the latest run-level design-render verdict for a
+ * project, opening its own org-scoped RLS transaction (so it composes off a
+ * `pg.Pool` at the HTTP layer). Returns `undefined` when the project has no
+ * recorded verdict — an inconclusive/absent state the caller must render as
+ * BLOCKED, never as a fabricated pass.
+ */
+export async function readLatestDesignRenderVerdictForProject(
+  pool: pg.Pool,
+  orgId: string,
+  projectId: string,
+): Promise<DesignRenderVerdictRow | undefined> {
+  return runWithOrgScope(pool, orgId, (client) => readLatestDesignRenderVerdict(client, orgId, projectId));
 }
 
 function decodeRow(row: RawDesignRenderVerdictRow): DesignRenderVerdictRow {

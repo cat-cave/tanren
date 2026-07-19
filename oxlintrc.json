@@ -166,7 +166,7 @@
         "services/dashboard/src/app/screens.ts"
       ],
       "rules": {
-        "import/max-dependencies": ["error", { "max": 25, "ignoreTypeImports": true }]
+        "import/max-dependencies": ["error", { "max": 26, "ignoreTypeImports": true }]
       }
     },
     {

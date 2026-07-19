@@ -139,14 +139,13 @@ SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
 import { mountIntegrationEventsScreen } from "../routes/integrationEvents/index.js";
 SCREEN_MOUNTS.push(mountIntegrationEventsScreen);
 
-// rv-23 runtime-verification proof dashboard — the project-scoped Behavior Proof
-// Matrix (`/projects/:projectId/behavior-proof`) plus its six sibling surfaces:
-// behavior detail, run assertion timeline, external-effect causality, visual
-// verification, merge-queue bisections, and flake/quarantine. Each reads a real
-// org-scoped orchestrator endpoint (rv-22 + rv-23) and fails closed. Directly
-// callable at its project-scoped URLs; no nav row is required.
-import { mountProofDashboardScreens } from "../routes/proofDashboard/index.js";
-SCREEN_MOUNTS.push(mountProofDashboardScreens);
+// ds-5 design studio — the project-scoped within-org design REUSE surface
+// (`/projects/:projectId/design-studio`): reusable design-system catalog, this
+// project's reuse binding + bind form, the render-verdict evidence lab, and the
+// real artifact export downloads. Directly callable at its project-scoped URL;
+// no nav row is required.
+import { mountDesignStudioScreens } from "../routes/designStudio/index.js";
+SCREEN_MOUNTS.push(mountDesignStudioScreens);
 
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {

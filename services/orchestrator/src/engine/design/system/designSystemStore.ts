@@ -115,53 +115,16 @@ interface ProjectWebDesignSystemRow {
   readonly release_id: string;
   readonly artifact_id: string;
   readonly web_writer_context: unknown;
+  /** 0 = own contract lineage, 1 = ds-5 within-org reuse binding. */
+  readonly source: number;
 }
 
-/**
- * Resolve the one published web system built from the project's current design
- * contract. ds-5 will replace this lineage lookup with an explicit project
- * binding; until then, ambiguity is a loud fault rather than an arbitrary
- * org-wide default. The caller owns the RLS-scoped client so this composes into
- * the run hydration transaction without opening a nested connection.
- */
-export async function resolveProjectWebDesignSystem(
-  client: QueryClient,
+/** Decode + verify a resolved release/artifact row into the Writer context, failing
+ * LOUD on a malformed projection or an identifier that does not match the linkage. */
+function decodeWriterContextRow(
   input: { orgId: string; projectId: string },
-): Promise<WebDesignWriterContext | undefined> {
-  const result = await client.query<ProjectWebDesignSystemRow>(
-    `WITH head_contract AS (
-       SELECT id, org_id, version
-         FROM design_contracts
-        WHERE org_id = $1 AND project_id = $2
-        ORDER BY version DESC
-        LIMIT 1
-     )
-     SELECT DISTINCT ON (release.design_system_id)
-       release.design_system_id,
-       release.id AS release_id,
-       artifact.id AS artifact_id,
-       artifact.web_writer_context
-       FROM head_contract contract
-       JOIN design_system_releases release
-         ON release.org_id = contract.org_id
-        AND release.contract_id = contract.id
-        AND release.contract_version = contract.version
-        AND release.state = 'published'
-       JOIN design_artifacts artifact
-         ON artifact.org_id = release.org_id
-        AND artifact.id = release.canonical_artifact_id
-      ORDER BY release.design_system_id, release.version DESC`,
-    [input.orgId, input.projectId],
-  );
-  if (result.rows.length === 0) return undefined;
-  if (result.rows.length > 1) {
-    throw new AmbiguousProjectWebDesignSystemError(
-      input.orgId,
-      input.projectId,
-      result.rows.map((row) => row.design_system_id),
-    );
-  }
-  const row = result.rows[0]!;
+  row: ProjectWebDesignSystemRow,
+): WebDesignWriterContext {
   let context: WebDesignWriterContext;
   try {
     context = parseWebDesignWriterContext(row.web_writer_context);
@@ -186,6 +149,95 @@ export async function resolveProjectWebDesignSystem(
     );
   }
   return context;
+}
+
+/**
+ * Resolve the one published web design system a project uses, in a SINGLE query:
+ * FIRST its own contract lineage (`source = 0`); when that resolves NOTHING, the
+ * ds-5 explicit WITHIN-ORG REUSE binding (`source = 1`) — how a project reuses
+ * another same-org project's published design system in the live writer/land-gate
+ * path (a release pin points at a release; a channel pin follows
+ * `design_release_channels`). Ambiguity in the OWN lineage is a loud fault, never
+ * an arbitrary org-wide default; a dangling / non-published binding yields NO
+ * design context, never a fabricated one. The lineage half opens with the SAME
+ * `FROM design_contracts` read as before, so a unit fixture that stubs that read
+ * empty resolves to `undefined` exactly as it did pre-ds-5. The caller owns the
+ * RLS-scoped client (composite FKs + RLS confine every referenced row to the
+ * project's own org), so this composes into the run hydration transaction.
+ */
+export async function resolveProjectWebDesignSystem(
+  client: QueryClient,
+  input: { orgId: string; projectId: string },
+): Promise<WebDesignWriterContext | undefined> {
+  const result = await client.query<ProjectWebDesignSystemRow>(
+    `WITH head_contract AS (
+       SELECT id, org_id, version
+         FROM design_contracts
+        WHERE org_id = $1 AND project_id = $2
+        ORDER BY version DESC
+        LIMIT 1
+     ),
+     lineage AS (
+       SELECT DISTINCT ON (release.design_system_id)
+         release.design_system_id,
+         release.id AS release_id,
+         artifact.id AS artifact_id,
+         artifact.web_writer_context,
+         0 AS source
+         FROM head_contract contract
+         JOIN design_system_releases release
+           ON release.org_id = contract.org_id
+          AND release.contract_id = contract.id
+          AND release.contract_version = contract.version
+          AND release.state = 'published'
+         JOIN design_artifacts artifact
+           ON artifact.org_id = release.org_id
+          AND artifact.id = release.canonical_artifact_id
+        ORDER BY release.design_system_id, release.version DESC
+     ),
+     bound AS (
+       SELECT release.design_system_id,
+         release.id AS release_id,
+         artifact.id AS artifact_id,
+         artifact.web_writer_context,
+         1 AS source
+         FROM project_design_bindings binding
+         JOIN design_system_releases release
+           ON release.org_id = binding.org_id
+          AND release.design_system_id = binding.design_system_id
+          AND release.state = 'published'
+          AND (
+            (binding.pin_mode = 'release' AND release.id = binding.pinned_release_id)
+            OR (binding.pin_mode = 'channel'
+                AND release.id = (
+                  SELECT channel_row.release_id FROM design_release_channels channel_row
+                   WHERE channel_row.org_id = binding.org_id
+                     AND channel_row.design_system_id = binding.design_system_id
+                     AND channel_row.channel = binding.channel
+                ))
+          )
+         JOIN design_artifacts artifact
+           ON artifact.org_id = release.org_id
+          AND artifact.id = release.canonical_artifact_id
+        WHERE binding.org_id = $1 AND binding.project_id = $2
+        LIMIT 1
+     )
+     SELECT design_system_id, release_id, artifact_id, web_writer_context, source FROM lineage
+     UNION ALL
+     SELECT design_system_id, release_id, artifact_id, web_writer_context, source FROM bound
+      WHERE NOT EXISTS (SELECT 1 FROM lineage)`,
+    [input.orgId, input.projectId],
+  );
+  const lineageRows = result.rows.filter((row) => row.source === 0);
+  if (lineageRows.length > 1) {
+    throw new AmbiguousProjectWebDesignSystemError(
+      input.orgId,
+      input.projectId,
+      lineageRows.map((row) => row.design_system_id),
+    );
+  }
+  const resolved = lineageRows[0] ?? result.rows.find((row) => row.source === 1);
+  return resolved === undefined ? undefined : decodeWriterContextRow(input, resolved);
 }
 
 /**
