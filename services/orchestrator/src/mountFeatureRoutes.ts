@@ -150,6 +150,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     // secrets/http/minter deps (the brownfield-link route uses the same App resolution).
     createProjectRoutes({ pool: scopedPool, secrets, githubHttp, githubAppMinter }),
   );
+  forgeAnswerers.mountGovernanceRoutes(app);
   // The app-env-to-Actions-secrets + CI-ingest-secrets routes are GONE: the native gate
   // runs the project's tests over SSH with the app env materialized in-process, and the
   // per-test JUnit grain is ingested in-process from the runner — no Actions secrets,

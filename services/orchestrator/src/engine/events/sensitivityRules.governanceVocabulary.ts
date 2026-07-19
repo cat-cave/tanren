@@ -27,5 +27,9 @@ export const governanceVocabularySensitivityRules: SensitivityRule[] = [
     "ruleCount",
   ]),
   ...publicRules("governance.policy.activated", ["revisionId", "projectId", "revisionNumber", "policyHash"]),
+  ...publicRules("governanceFragment.authoring.started", ["fragmentId", "version"]),
+  ...publicRules("governanceFragment.authoring.attempt", ["fragmentId", "attempt", "signature", "rejection"]),
+  ...publicRules("governanceFragment.authoring.succeeded", ["fragmentId", "version", "fragmentDigest"]),
+  ...publicRules("governanceFragment.authoring.failed", ["fragmentId", "attempts", "reason"]),
   ...publicRules("integration.proof.invalidated", ["reason", "projectId", "proofUnitDigest", "policyHash"]),
 ];
