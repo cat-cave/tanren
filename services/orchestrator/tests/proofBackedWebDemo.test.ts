@@ -29,6 +29,13 @@ import {
   ProofBackedDemoUnobservableError,
   ProofBackedWebDemo,
 } from "../src/engine/demo/proofBackedWebDemo.js";
+import type { VerificationEnvironmentResolver } from "../src/engine/repositories/verificationEnvironments.js";
+
+// The ephemeral-store unit path discards the env id, so a stub resolver suffices; the
+// PERSISTING env-bound path is proven in deployVerificationEnvironment.rls.integration.test.ts.
+const stubResolver: VerificationEnvironmentResolver = {
+  resolveForLiveRelease: (liveRelease) => Promise.resolve(liveRelease.integrationNodeId),
+};
 
 const ORG = "org_demo";
 const RUN = "run_demo";
@@ -126,7 +133,12 @@ function buildDemo(events: EventStore, plans: readonly AcceptancePlan[], fetchIm
       new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: resolver({ kind: "resolved", baseUrl: BASE_URL }), fetchImpl }),
     ],
   });
-  return new ProofBackedWebDemo({ events, planLoader: planLoader(plans), orchestrator });
+  return new ProofBackedWebDemo({
+    events,
+    planLoader: planLoader(plans),
+    orchestrator,
+    resolveEnvironment: stubResolver,
+  });
 }
 
 describe("ProofBackedWebDemo — the demo verdict is the real behavior verdict", () => {
@@ -182,7 +194,12 @@ describe("ProofBackedWebDemo — the demo verdict is the real behavior verdict",
         }),
       ],
     });
-    const demo = new ProofBackedWebDemo({ events, planLoader: planLoader([healthPlan()]), orchestrator });
+    const demo = new ProofBackedWebDemo({
+      events,
+      planLoader: planLoader([healthPlan()]),
+      orchestrator,
+      resolveEnvironment: stubResolver,
+    });
 
     await expect(demo.demo(TARGET, release([BR]))).rejects.toBeInstanceOf(ProofBackedDemoUnobservableError);
     // No demo.completed — an unobservable demo is a loud failure, not a silent green.

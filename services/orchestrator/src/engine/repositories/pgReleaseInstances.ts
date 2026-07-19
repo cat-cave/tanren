@@ -12,6 +12,7 @@ import {
   type TeardownPreviewInput,
   type TransitionReleaseInstanceInput,
 } from "./releaseInstances.js";
+import { ensureLiveVerificationEnvironment } from "./verificationEnvironments.js";
 
 export class PgReleaseInstancesRepository implements ReleaseInstancesRepository {
   constructor(private readonly pool: pg.Pool) {}
@@ -41,7 +42,14 @@ export class PgReleaseInstancesRepository implements ReleaseInstancesRepository 
     return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.applyPreview(client, input));
   }
   promote(input: PromoteReleaseInput) {
-    return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.promote(client, input));
+    // rv-env: a promote lands a NEW live production release — find-or-create its
+    // ready verification environment in the SAME txn so a post-deploy acceptance
+    // run / bh-10 re-proof persists a real verdict against a real environment.
+    return runWithOrgScope(this.pool, input.orgId, async (client) => {
+      const live = await ReleaseInstancesStore.promote(client, input);
+      await ensureLiveVerificationEnvironment(client, live);
+      return live;
+    });
   }
   rollback(input: RollbackReleaseInput) {
     return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.rollback(client, input));
@@ -50,6 +58,13 @@ export class PgReleaseInstancesRepository implements ReleaseInstancesRepository 
     return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.teardownPreview(client, input));
   }
   markLive(input: MarkLiveReleaseInput) {
-    return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.markLive(client, input));
+    // rv-env: marking a release live in production is the deploy-side producer of
+    // its `verification_environments` row — find-or-create it atomically in this
+    // same runWithOrgScope txn (under the advisory lock markLive already holds).
+    return runWithOrgScope(this.pool, input.orgId, async (client) => {
+      const live = await ReleaseInstancesStore.markLive(client, input);
+      await ensureLiveVerificationEnvironment(client, live);
+      return live;
+    });
   }
 }

@@ -8,7 +8,7 @@
 // 200 but whose declared behavior FAILS its assertion produces a FAILED demo behavior
 // (failed_product), never a reachability pass. Cross-org reads see ZERO rows (RLS).
 // Gated on TANREN_RLS_DB_TEST; runs in `smoke-rls-proof-backed-demo`.
-import { migrate } from "@tanren/db";
+import { migrate, runWithOrgScope } from "@tanren/db";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
@@ -25,7 +25,9 @@ import {
   EphemeralAcceptanceEventSink,
   EphemeralAcceptanceRunStore,
   ProofBackedWebDemo,
+  buildProofBackedWebDemo,
 } from "../src/engine/demo/proofBackedWebDemo.js";
+import type { VerificationEnvironmentResolver } from "../src/engine/repositories/verificationEnvironments.js";
 import { loadRunReleaseInstance } from "../src/engine/postMerge/demoOnDeployReads.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
@@ -42,6 +44,8 @@ const NODE_ID = "inode_proof_demo_rv18";
 const PERSONA_REVISION = "pr_proof_demo_rv18";
 const PASS_BR = "br_proof_demo_pass_rv18";
 const FAIL_BR = "br_proof_demo_fail_rv18";
+const SPEC_ID = "spec_proof_demo_rv18";
+const RUN_ID = "run_proof_demo_rv18";
 const D = `sha256:${"e".repeat(64)}` as Digest;
 const CAS = `sha256:${"a".repeat(64)}` as Digest;
 
@@ -135,6 +139,18 @@ async function seedTenant(owner: Pool, serverUrl: string): Promise<void> {
       [ORG, br, ordinal],
     );
   }
+  // The run the persisting proof-backed demo attributes its behavior_verification_runs to
+  // (run_id FK). Its spec is free-text on the run; the verdict run FKs runs(run_id).
+  await owner.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+     VALUES ($1, $2, $3, $1, $1, 'in_flight')`,
+    [SPEC_ID, PROJECT, ORG],
+  );
+  await owner.query(
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+     VALUES ($1, $2, $3, $4, 'cli', 'main', 'running')`,
+    [RUN_ID, SPEC_ID, PROJECT, ORG],
+  );
 }
 
 function buildDemo(events: EventStore, app: Pool): ProofBackedWebDemo {
@@ -144,7 +160,18 @@ function buildDemo(events: EventStore, app: Pool): ProofBackedWebDemo {
     // DEFAULT real fetch → a real HTTP probe against the live product server.
     drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(app) })],
   });
-  return new ProofBackedWebDemo({ events, planLoader: new PgAcceptancePlanLoader(app), orchestrator });
+  // This suite exercises the DRIVE logic over the ephemeral store (its release is inserted
+  // directly, not via markLive), so a stub resolver suffices; the PERSISTING env-bound path
+  // is proven end-to-end in deployVerificationEnvironment.rls.integration.test.ts.
+  const stubResolver: VerificationEnvironmentResolver = {
+    resolveForLiveRelease: (release) => Promise.resolve(release.integrationNodeId),
+  };
+  return new ProofBackedWebDemo({
+    events,
+    planLoader: new PgAcceptancePlanLoader(app),
+    orchestrator,
+    resolveEnvironment: stubResolver,
+  });
 }
 
 describeDb("rv-18 A2 proof-backed web demo — real Pg resolver + real HTTP, end-to-end", () => {
@@ -219,6 +246,63 @@ describeDb("rv-18 A2 proof-backed web demo — real Pg resolver + real HTTP, end
     expect(byId[FAIL_BR]!.detail).toContain("failed_product");
     const summary = events.appends.find((a) => a.eventType === "demo.completed");
     expect(summary!.payload).toMatchObject({ surfaceKind: "web_url", behaviorCount: 2, passed: 1, failed: 1 });
+  });
+
+  it("rv-env DECISIVE: the REAL proof-backed demo PERSISTS behavior verdicts FK'd to the deploy-created env", async () => {
+    // The REAL production factory: PERSISTING PgAcceptanceRunStore + the real
+    // PgVerificationEnvironmentResolver (NOT the ephemeral sink / fabricated env id).
+    const events = new RecordingEventStore();
+    const demo = buildProofBackedWebDemo(app, events);
+    const release = await loadRunReleaseInstance(app, ORG, PROJECT, NODE_ID);
+    expect(release).toBeDefined();
+
+    const result = await demo.demo({ runId: RUN_ID, specId: SPEC_ID, projectId: PROJECT, orgId: ORG }, release!);
+    // The working behavior passes its REAL assertion; the broken one fails on the real value.
+    expect(result.passed).toBe(1);
+    expect(result.failed).toBe(1);
+
+    // The demo's resolver find-or-created the ready production env for THIS live release.
+    const env = await runWithOrgScope(app, ORG, async (client) => {
+      const rows = await client.query<{ id: string; tenant_lease_id: string }>(
+        `SELECT id, tenant_lease_id FROM verification_environments
+          WHERE org_id = $1 AND project_id = $2 AND integration_node_id = $3
+            AND artifact_digest = $4 AND deployment_target = 'production' AND lifecycle_status = 'ready'`,
+        [ORG, PROJECT, NODE_ID, CAS],
+      );
+      return rows.rows[0];
+    });
+    expect(env).toBeDefined();
+    expect(env!.tenant_lease_id).toBe("ri_run_rv18");
+
+    // Both behaviors PERSISTED a real verdict into the 0079-hardened ledger, each FK'd to the
+    // deploy-created env (recordRun.environment_id) — the ephemeral sink persisted NOTHING.
+    const verdicts = await runWithOrgScope(app, ORG, async (client) => {
+      const rows = await client.query<{
+        behavior_revision_id: string;
+        outcome: string;
+        req: number;
+        exe: number;
+        environment_id: string;
+      }>(
+        `SELECT v.behavior_revision_id, v.outcome, v.required_assertion_count AS req,
+                v.executed_assertion_count AS exe, r.environment_id
+           FROM behavior_verdicts v
+           JOIN behavior_verification_runs r ON r.org_id = v.org_id AND r.id = v.run_id
+          WHERE v.org_id = $1`,
+        [ORG],
+      );
+      return rows.rows;
+    });
+    expect(verdicts).toHaveLength(2);
+    for (const row of verdicts) expect(row.environment_id).toBe(env!.id);
+    const passed = verdicts.find((row) => row.behavior_revision_id === PASS_BR);
+    expect(passed!.outcome).toBe("passed");
+    // The rv-11/0079 invariant STILL holds on the LIVE persisted path: a passed verdict has
+    // full, non-zero coverage.
+    expect(passed!.exe).toBeGreaterThanOrEqual(passed!.req);
+    expect(passed!.req).toBeGreaterThanOrEqual(1);
+    const failed = verdicts.find((row) => row.behavior_revision_id === FAIL_BR);
+    expect(failed!.outcome).toBe("failed_product");
   });
 
   it("org isolation: another org sees ZERO of this org's release + behaviors (RLS denies cross-org reads)", async () => {

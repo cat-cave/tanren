@@ -561,6 +561,13 @@
       "when": 1784423705693,
       "tag": "0081_deploy_reap_failed_event",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1784500000000,
+      "tag": "0082_verification_env_live_identity",
+      "breakpoints": true
     }
   ]
 }
