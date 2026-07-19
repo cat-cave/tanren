@@ -125,11 +125,16 @@ export interface CorrelateInput {
  */
 export function correlateEffects(input: CorrelateInput): readonly EffectObservation[] {
   const lower = input.cause.firedAtCursor;
-  // The window's upper bound is the NEAREST sibling cause strictly after this
-  // one fired; effects at/after it belong to that later cause, not this one.
+  // The window's upper bound is the NEAREST sibling cause that fired AT OR AFTER
+  // this one; effects at/after that marker belong to the sibling (or, at the
+  // exact same instant, are ambiguous between the two) — never this cause. A
+  // sibling at the SAME cursor sets upper == lower, collapsing the window to
+  // empty (fail-closed: an effect after two same-instant causes is attributed to
+  // NEITHER rather than leaking into BOTH). Only a sibling strictly BEFORE this
+  // cause is irrelevant to the upper bound.
   let upper: string | undefined;
   for (const sibling of input.siblingFiredCursors) {
-    if (compareCursor(sibling, lower) <= 0) continue;
+    if (compareCursor(sibling, lower) < 0) continue;
     if (upper === undefined || compareCursor(sibling, upper) < 0) upper = sibling;
   }
   return input.effects.filter((effect) => {

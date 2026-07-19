@@ -96,4 +96,22 @@ describe("compileAcceptancePlan — faithful compilation", () => {
       ),
     ).toThrow(/duplicate probe id/u);
   });
+
+  it("LOUD: duplicate assertion ids are rejected EARLY at compile, before any run spend (Finding 3)", () => {
+    // Two assertions share assertionId "a1". Previously this compiled clean and
+    // was only caught late by the verdict store's count-evidence guard — AFTER a
+    // preview deploy + acceptance run was already paid for. compileAcceptancePlan
+    // must now reject it up front, in the same style as duplicate probe ids.
+    expect(() =>
+      compileAcceptancePlan(
+        revision({
+          httpProbes: [{ probeId: "p1", method: "GET", path: "/h" }],
+          assertions: [
+            { assertionId: "a1", subject: "p1.status", comparisonOperator: "equals", expected: 200 },
+            { assertionId: "a1", subject: "p1.body.count", comparisonOperator: "greater_than", expected: 1 },
+          ],
+        }),
+      ),
+    ).toThrow(/duplicate assertion id a1/u);
+  });
 });
