@@ -20,6 +20,8 @@
     "hono": "^4.12.23",
     "jsdom": "^26.1.0",
     "pg": "^8.21.0",
+    "pixelmatch": "^6.0.0",
+    "pngjs": "^7.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "ssh2": "1.17.0",
@@ -27,6 +29,8 @@
   },
   "devDependencies": {
     "@types/jsdom": "^21.1.7",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0"
   }

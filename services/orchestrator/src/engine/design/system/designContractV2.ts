@@ -73,6 +73,25 @@ export const DesignTargetProfileIntent = z
   .strict();
 export type DesignTargetProfileIntent = z.infer<typeof DesignTargetProfileIntent>;
 
+// ---- Visual verification knob (ds-4 Slice B) -------------------------------
+
+// The opt-in knob that turns on the PIXEL (browser screenshot + visual-diff) render
+// verification alongside the always-on browser-free a11y path. DEFAULT OFF: the pixel
+// path needs container infra (podman + the render-worker image) that is not in every
+// env, so an un-opted project runs the a11y-only path exactly as before (no podman
+// invocation). When ON, the pixel scenarios feed the SAME fail-closed design_render
+// gate; `imageDiffThreshold` is the max per-pixel diff ratio a render may drift before
+// it is a `failed_visual` (0 = strictest; a small default tolerates sub-pixel noise).
+export const DesignVisualVerification = z
+  .object({
+    enabled: z.boolean().default(false),
+    imageDiffThreshold: z.number().min(0).max(1).default(0.01),
+  })
+  .strict();
+export type DesignVisualVerification = z.infer<typeof DesignVisualVerification>;
+
+const DEFAULT_VISUAL_VERIFICATION: DesignVisualVerification = { enabled: false, imageDiffThreshold: 0.01 };
+
 // ---- Contract --------------------------------------------------------------
 
 export const DesignContractV2 = z
@@ -94,6 +113,8 @@ export const DesignContractV2 = z
     accessibilityPosture: DesignAccessibilityPosture.default({ standard: "none", notes: "" }),
     exportRequirements: z.array(z.string().min(1).max(120)).default([]),
     acceptanceIntent: z.string().max(4000).default(""),
+    // ds-4 Slice B: the opt-in pixel visual-verification knob (default off).
+    visualVerification: DesignVisualVerification.default(DEFAULT_VISUAL_VERIFICATION),
   })
   .strict();
 export type DesignContractV2 = z.infer<typeof DesignContractV2>;
@@ -161,6 +182,10 @@ export function normalizeDesignContractV2(parsed: DesignContractV2): DesignContr
     },
     exportRequirements: [...parsed.exportRequirements],
     acceptanceIntent: parsed.acceptanceIntent,
+    visualVerification: {
+      enabled: parsed.visualVerification.enabled,
+      imageDiffThreshold: parsed.visualVerification.imageDiffThreshold,
+    },
   };
 }
 
@@ -190,6 +215,9 @@ export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
     accessibilityPosture: v1.accessibilityPosture,
     exportRequirements: [],
     acceptanceIntent: "",
+    // A migrated V1 never carried a visual-verification knob → default OFF (honest:
+    // opt-in, never silently enabled by migration).
+    visualVerification: DEFAULT_VISUAL_VERIFICATION,
   });
 }
 
