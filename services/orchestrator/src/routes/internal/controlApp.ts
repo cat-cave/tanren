@@ -3,6 +3,7 @@ import type pg from "pg";
 import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
 import type { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { BaselineReproductionStage, type BaselineProbe } from "../../engine/verification/resolutionStages/index.js";
+import { createInternalAcceptanceRunRoutes } from "./acceptanceRuns.js";
 import { createInternalClaimRoutes } from "./claimJob.js";
 import { createInternalFixtureLeaseRoutes } from "./fixtureLeases.js";
 import { createInternalResolutionAuthorityRoutes } from "./resolutionAuthority.js";
@@ -22,6 +23,7 @@ export function buildInternalControlApp(deps: InternalControlAppDeps): Hono {
   const app = new Hono();
   app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier: deps.verifier }));
   app.route("/", createInternalFixtureLeaseRoutes({ pool: deps.pool, verifier: deps.verifier }));
+  app.route("/", createInternalAcceptanceRunRoutes({ pool: deps.pool, verifier: deps.verifier }));
   app.route(
     "/",
     createInternalResolutionJobRoutes({
