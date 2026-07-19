@@ -177,24 +177,6 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     expect(await promotedCount(app, ORG_A, PROJECT_A, "deployment-hold_live")).toBe(0);
   });
 
-  it("fail-closed — a FAILED re-proof with NO prior release throws LOUD and never silently leaves the broken release live", async () => {
-    await seedRelease(owner, {
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      id: "np_live",
-      digest: DIGEST_NEW,
-      state: "live",
-      previous: null,
-    });
-    await expect(
-      settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "np_live", result: PRODUCT_FAILURE }),
-    ).rejects.toThrow(/no prior known-good release/u);
-    // The whole org-scoped transaction rolled back: the release is untouched (still live)
-    // and NO rollback was recorded — the failure is LOUD (reclaimable), never a silent leave.
-    expect(await stateOf(app, ORG_A, "np_live")).toBe("live");
-    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-np_live")).toBe(0);
-  });
-
   it("DECISIVE (retry-route-rollback) — a product_failure via POST .../retry-verification rolls the live pointer back", async () => {
     await seedRelease(owner, {
       orgId: ORG_A,
@@ -319,6 +301,49 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     // committed event and no-ops — a single deployment.promoted regardless of the race.
     expect([...decisions].sort()).toEqual(["noop", "promoted"]);
     expect(await promotedCount(app, ORG_A, PROJECT_A, "deployment-cp_live")).toBe(1);
+  });
+
+  it("no-op-when-not-deployed — a re-proof with no LIVE production release settles as before (no deploy action)", async () => {
+    // A pre-deploy / superseded binding has nothing to promote or roll back.
+    await seedRelease(owner, {
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "nd_built",
+      digest: DIGEST_NEW,
+      state: "built",
+      previous: null,
+    });
+    expect(
+      await settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "nd_built", result: PRODUCT_FAILURE }),
+    ).toBe("noop");
+    expect(
+      await settle({ orgId: ORG_A, projectId: PROJECT_A, releaseInstanceId: "nd_built", result: PRODUCT_RESOLVED }),
+    ).toBe("noop");
+    expect(await stateOf(app, ORG_A, "nd_built")).toBe("built");
+    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-nd_built")).toBe(0);
+    expect(await promotedCount(app, ORG_A, PROJECT_A, "deployment-nd_built")).toBe(0);
+  });
+
+  it("no-prior-needs-attention — a first-deploy product_failure (no prior) is needs_attention + completes, never a throw or spurious rollback", async () => {
+    await seedRelease(owner, {
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "npa_live",
+      digest: DIGEST_NEW,
+      state: "live",
+      previous: null,
+    });
+    const decision = await settle({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      releaseInstanceId: "npa_live",
+      result: PRODUCT_FAILURE,
+    });
+    expect(decision).toBe("needs_attention");
+    // The broken release stays live only because there is nothing good to revert to; no
+    // spurious deployment.rolled_back is recorded, and settle did NOT throw (no retry-loop).
+    expect(await stateOf(app, ORG_A, "npa_live")).toBe("live");
+    expect(await rolledBackCount(app, ORG_A, PROJECT_A, "deployment-npa_live")).toBe(0);
   });
 
   it("non-prior-resurrect-rejected — a raw superseded→live transition of an arbitrary release is rejected at the store", async () => {

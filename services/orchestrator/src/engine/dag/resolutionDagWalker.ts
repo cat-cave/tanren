@@ -36,7 +36,7 @@ export interface ResolutionDagWalkerDeps {
    * verdict or rolls the live release pointer back on a `product_failure`. Wired in
    * the production composition; a `production` stage settles its deploy side through it.
    */
-  readonly reproofCoordinator?: PostMergeReproofCoordinator;
+  readonly reproofCoordinator?: Pick<PostMergeReproofCoordinator, "settle" | "alreadyApplied">;
 }
 
 export interface ResolutionDagWalkerOptions {

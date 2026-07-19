@@ -2,11 +2,11 @@
 // The decisive rollback-reverts / promote / idempotency / RLS behavior is proven on
 // the live substrate in postMergeReproof.rls.integration.test.ts; this file pins the
 // pure stage-gating of `applyReproofDeployOutcome` (a no-op for every non-production
-// stage; fail-closed on a production job with no release binding).
+// stage AND for a production job with no release binding — a pre-deploy / pure
+// authority-ledger retry must never throw→retry-loop).
 import { describe, expect, it } from "vitest";
 import {
   applyReproofDeployOutcome,
-  PostMergeReproofBindingError,
   type ReproofDeployDecision,
   type SettleReproofInput,
 } from "../src/engine/verification/postMergeReproof/coordinator.js";
@@ -74,11 +74,16 @@ describe("applyReproofDeployOutcome — production-stage settlement gating", () 
     expect(decision).toBeUndefined();
   });
 
-  it("fails closed when a production job carries no release binding", async () => {
+  it("is a no-op (never a throw) when a production job carries no release binding", async () => {
+    // A pre-deploy / pure authority-ledger production retry has no deployed release — it must
+    // settle exactly as before, never throw (which would release the lease retryable → loop).
     const coordinator = recordingCoordinator("rolled_back");
-    await expect(
-      applyReproofDeployOutcome(coordinator, job({ releaseInstanceId: undefined }), PRODUCTION_FAILURE),
-    ).rejects.toBeInstanceOf(PostMergeReproofBindingError);
+    const decision = await applyReproofDeployOutcome(
+      coordinator,
+      job({ releaseInstanceId: undefined }),
+      PRODUCTION_FAILURE,
+    );
+    expect(decision).toBe("noop");
     expect(coordinator.calls).toHaveLength(0);
   });
 });

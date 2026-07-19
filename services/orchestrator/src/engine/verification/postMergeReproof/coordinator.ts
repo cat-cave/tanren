@@ -31,8 +31,18 @@ import { revertLiveToPrior } from "../../repositories/releaseInstanceRevert.js";
 type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
 
-/** The deploy-side settlement a production re-proof lands on. */
-export type ReproofDeployDecision = "promoted" | "rolled_back" | "held" | "noop";
+/**
+ * The deploy-side settlement a production re-proof lands on:
+ *   - promoted / rolled_back  — a live release was promoted or the live pointer reverted.
+ *   - needs_attention         — a product_failure on a live release with NO prior known-good
+ *     release to revert to (e.g. a first deploy): fail-closed + loud, the broken release stays
+ *     live only because nothing better exists, the loop is flagged (never silently resolved),
+ *     and the job COMPLETES (never a throw→retry-loop).
+ *   - held                    — an inconclusive re-proof (not proof the fix failed).
+ *   - noop                    — no live deployed release to act on (pre-deploy / cosmetic /
+ *     pure authority-ledger retry), or the decision was already applied (idempotent).
+ */
+export type ReproofDeployDecision = "promoted" | "rolled_back" | "needs_attention" | "held" | "noop";
 
 export class PostMergeReproofBindingError extends Error {
   public override readonly name = "PostMergeReproofBindingError";
@@ -74,11 +84,17 @@ export class PostMergeReproofCoordinator {
       // double rollback): the loser blocks until the winner commits, then reads its event.
       await this.lockProduction(client, input.orgId, input.projectId);
       const release = await ReleaseInstancesStore.getById(client, input.orgId, input.releaseInstanceId);
-      if (release === undefined) {
-        throw new PostMergeReproofBindingError(`re-proof release ${input.releaseInstanceId} not found`);
-      }
-      if (release.projectId !== input.projectId) {
-        throw new PostMergeReproofBindingError("re-proof release does not match its resolution project");
+      // Promote/rollback applies ONLY to a real LIVE production release. A missing binding,
+      // a wrong-project binding, or a non-live (pre-deploy / superseded / torn-down) release
+      // means there is nothing deployed to promote or roll back — settle EXACTLY as before
+      // (a cosmetic / pre-deploy / pure authority-ledger retry is untouched here).
+      if (
+        release === undefined ||
+        release.projectId !== input.projectId ||
+        release.environment !== "production" ||
+        release.state !== "live"
+      ) {
+        return "noop";
       }
       // Idempotency: a prior terminal deploy decision for THIS release short-circuits.
       if (await this.alreadyDecided(client, input.orgId, input.projectId, release.deploymentId)) {
@@ -89,7 +105,14 @@ export class PostMergeReproofCoordinator {
         case "passed":
           return this.promote(events, input, release.deploymentId, release.artifactDigest, release.sourceRef);
         case "failed":
-          return this.rollback(client, events, input, release.deploymentId, release.artifactDigest);
+          return this.rollback(
+            client,
+            events,
+            input,
+            release.deploymentId,
+            release.artifactDigest,
+            release.previousReleaseInstanceId,
+          );
         case "inconclusive":
           // Fail-closed: an inconclusive/infra re-proof is not proof the fix failed —
           // never a green promote AND never a destructive rollback. The resolution job
@@ -126,7 +149,17 @@ export class PostMergeReproofCoordinator {
     input: SettleReproofInput,
     deploymentId: string,
     artifactDigest: string,
+    previousReleaseInstanceId: string | null,
   ): Promise<ReproofDeployDecision> {
+    // No prior known-good release to revert to (a first deploy): we CANNOT roll the live
+    // pointer back. Fail-closed + LOUD but do NOT throw — a throw releases the lease
+    // retryable and retry-loops forever — and do NOT emit a spurious deployment.rolled_back.
+    // The broken release stays live only because nothing better exists; the loop is flagged
+    // needs_attention (the ResolutionAuthority's blocked decision + repair routing stand),
+    // never silently "resolved", and the job COMPLETES.
+    if (previousReleaseInstanceId === null) {
+      return "needs_attention";
+    }
     // Revert the live pointer to the prior known-good release BEFORE recording the
     // rollback, so a crash between the two re-drives through the idempotency gate
     // (the release is no longer live → `revertLiveToPrior` fails loud → retryable).
@@ -202,9 +235,10 @@ export async function applyReproofDeployOutcome(
 ): Promise<ReproofDeployDecision | undefined> {
   if (job.stage !== "production") return undefined;
   if (coordinator === undefined) return undefined;
-  if (job.releaseInstanceId === undefined) {
-    throw new PostMergeReproofBindingError("production re-proof settlement requires a release instance binding");
-  }
+  // No release binding ⇒ a pre-deploy / pure authority-ledger production job with nothing
+  // deployed to promote or roll back. A NO-OP (never a throw — that would retry-loop a job
+  // whose authority decision already settled correctly).
+  if (job.releaseInstanceId === undefined) return "noop";
   return coordinator.settle({
     orgId: job.orgId,
     projectId: job.projectId,

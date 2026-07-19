@@ -1015,7 +1015,7 @@ smoke-rls-causal-correlation:
 # broken release live), a PASSED re-proof promotes, inconclusive holds fail-closed,
 # and the decision is idempotent + org-isolated — all as the restricted tanren_app role.
 smoke-rls-post-merge-reproof:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/postMergeReproof.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/postMergeReproof.rls.integration.test.ts services/orchestrator/tests/postMergeReproofWalker.rls.integration.test.ts
 
 smoke-rls-integration-proof-units:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationProofUnits.rls.integration.test.ts

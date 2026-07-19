@@ -147,6 +147,34 @@ export async function deployEventCount(
   });
 }
 
+// Seed the FK rows a resolution_jobs row needs (issue_loops → inbox_sources, symptom_contracts).
+// The walker E2E drives a FAKE production stage, so the contract body is irrelevant — only the
+// referenced rows must exist for the enqueue + release-instance FKs to hold.
+export async function seedLoopAndContract(
+  owner: Pool,
+  input: { orgId: string; projectId: string; loopId: string; contractId: string },
+): Promise<void> {
+  await owner.query(
+    `INSERT INTO inbox_sources (id, org_id, project_id, kind, name)
+     VALUES ($1, $2, $3, 'issues', 'reproof-src') ON CONFLICT DO NOTHING`,
+    [`src_${input.loopId}`, input.orgId, input.projectId],
+  );
+  await owner.query(
+    `INSERT INTO issue_loops
+       (org_id, id, project_id, source_id, external_key, generation, fingerprint, severity, state,
+        resolution_policy, row_version, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 1, $6, 'high', 'verifying', 'active_causal', 1, now())`,
+    [input.orgId, input.loopId, input.projectId, `src_${input.loopId}`, `ext_${input.loopId}`, `fp_${input.loopId}`],
+  );
+  await owner.query(
+    `INSERT INTO symptom_contracts
+       (org_id, project_id, id, issue_loop_id, schema_version, contract_json, canonical_hash,
+        proof_policy, target, source_revision, state)
+     VALUES ($1, $2, $3, $4, 1, '{}'::jsonb, $5, 'active_causal', '{}'::jsonb, 'rev-1', 'validated')`,
+    [input.orgId, input.projectId, input.contractId, input.loopId, `sha256:${"e".repeat(64)}`],
+  );
+}
+
 export function reproofJob(releaseInstanceId: string, overrides: Partial<ResolutionJob> = {}): ResolutionJob {
   return {
     id: "rjob_reproof",
