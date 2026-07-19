@@ -1,8 +1,8 @@
 // rv-17 — append-only persistence + read side for behavior flake quarantine governance
-// (`behavior_flake_quarantines`, migration 0084).
+// (`behavior_flake_quarantines`, migration 0085).
 //   • recordTransition: INSERT a sealed quarantine/release governance transition (who/why/when +
 //     the conflicting-verdict evidence). A `quarantine` is asserted JUSTIFIED (classification must
-//     be `flaky`) in-process BEFORE the write — the same invariant the 0084 shape CHECK enforces.
+//     be `flaky`) in-process BEFORE the write — the same invariant the 0085 shape CHECK enforces.
 //   • readActiveQuarantinedBehaviors / isQuarantined: a behavior's CURRENT state is its LATEST
 //     transition (created_at, id); it is quarantined iff that transition is `quarantine`.
 //   • classifyBehaviorFlake: runs the rv-17 classifier off the RECORDED verdicts for a behavior +

@@ -4,7 +4,7 @@
 //   • rv-16 regression bisection (LIVE via resolutionDagWalker → recordRegressionBisections)
 //     refuses to name a culprit from a quarantined (flaky) behavior; and
 //   • the quarantine record itself is anti-laundering-constrained (`assertQuarantineJustified` +
-//     the 0084 DB CHECK): a quarantine can ONLY be justified by a `flaky` classification and can
+//     the 0085 DB CHECK): a quarantine can ONLY be justified by a `flaky` classification and can
 //     ONLY carry gate_effect='excluded_from_green' — never a green/passed effect.
 //
 // NOT-YET-WIRED SEAM — be honest, do NOT overclaim: `resolveAcceptanceGate` /
@@ -45,7 +45,7 @@ export class QuarantineNotJustifiedError extends Error {
 }
 
 /**
- * The in-process twin of the 0084 anti-laundering CHECK. A `quarantine` transition is JUSTIFIED
+ * The in-process twin of the 0085 anti-laundering CHECK. A `quarantine` transition is JUSTIFIED
  * only by a `flaky` classification (a real observed conflict). Fails loud otherwise, so a caller
  * can never persist an unjustified quarantine that would silently exclude a behavior from the gate.
  */

@@ -10,7 +10,7 @@
 // and the rv-16 bisection skip reads nothing. It is best-effort at the call site (a classification
 // failure must never break verdict recording or the deploy decision) and idempotent (an already-
 // quarantined behavior is left alone). It NEVER launders anything: the only write it makes is a
-// quarantine record, which the 0084 CHECK forbids from carrying a green effect.
+// quarantine record, which the 0085 CHECK forbids from carrying a green effect.
 
 import type { FlakeClassification, FlakeClassificationResult } from "./flakeClassification.js";
 import type { QuarantineTransitionRecord } from "./behaviorQuarantineGovernance.js";
