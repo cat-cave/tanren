@@ -14,6 +14,12 @@ class RecordingEvents implements EventStore {
   }
 }
 
+function bySubject(
+  units: ReadonlyArray<{ readonly subjectId: string; readonly reused: boolean; readonly proofUnitId: string }>,
+): Map<string, { readonly reused: boolean; readonly proofUnitId: string }> {
+  return new Map(units.map((unit) => [unit.subjectId, { reused: unit.reused, proofUnitId: unit.proofUnitId }]));
+}
+
 function seedNode(store: ReturnType<typeof createInMemoryIntegrationProofUnitStore>, nodeId: string): void {
   store.db.integrationNodes.push({
     node_id: nodeId,
@@ -145,5 +151,115 @@ describe("MQ-6 integration proof units", () => {
     });
     expect(changedStamp).toHaveBeenCalledTimes(1);
     expect(changedStampResult.units[0]?.reused).toBe(false);
+  });
+
+  // MQ-6 follow-up (#26): PIN per-unit isolation in a MULTI-unit batch. The reuse key binds
+  // each unit's real content/stamp digest independently, so a changed unit must be re-proven
+  // while an UNCHANGED sibling reuses — in the SAME evaluation. No cross-unit contamination:
+  // the changed unit never inherits the sibling's proof, and the reused unit returns the exact
+  // prior evidence row rather than a fresh record.
+  it("re-proves only the digest-changed unit and reuses the unchanged sibling in a multi-unit batch", async () => {
+    const store = createInMemoryIntegrationProofUnitStore();
+    const events = new RecordingEvents();
+    seedNode(store, "inode_multi_1");
+    seedNode(store, "inode_multi_2");
+    seedNode(store, "inode_multi_3");
+    const graph = new IntegrationProofUnitGraph(store, events);
+    const stamp = {
+      quarantineEpoch: 0,
+      toolchainHash: hash("e"),
+      designContractVersion: "design-v1",
+      behaviorManifestHash: hash("f"),
+    } as const;
+
+    // Prove both units once. `tier` = subject pre_merge; `step` = subject typecheck (depends on tier).
+    const tier1 = vi.fn<TestRun>(async () => ({ verdict: "pass", artifactHash: hash("a") }));
+    const step1 = vi.fn<TestRun>(async () => ({ verdict: "pass", artifactHash: hash("b") }));
+    const first = await graph.evaluate({
+      orgId: "org_a",
+      projectId: "project_a",
+      nodeId: "inode_multi_1",
+      evaluationId: "eval_multi_1",
+      ...stamp,
+      units: [
+        { key: "tier", kind: "native_ci_tier", subjectId: "pre_merge", inputHash: hash("c"), run: tier1 },
+        {
+          key: "step",
+          kind: "native_ci_step",
+          subjectId: "typecheck",
+          inputHash: hash("d"),
+          dependsOn: ["tier"],
+          run: step1,
+        },
+      ],
+    });
+    expect(tier1).toHaveBeenCalledTimes(1);
+    expect(step1).toHaveBeenCalledTimes(1);
+    const firstBySubject = bySubject(first.units);
+
+    // Re-run: ONLY `tier`'s input digest changes. `step` is byte-identical. A `step` run here would
+    // return `fail`, corrupting the recomposed root — so its non-invocation is load-bearing proof of
+    // isolation. The changed `tier` MUST re-prove; the unchanged `step` MUST reuse its exact row.
+    const tier2 = vi.fn<TestRun>(async () => ({ verdict: "pass", artifactHash: hash("9") }));
+    const step2 = vi.fn<TestRun>(async () => ({ verdict: "fail" }));
+    const tierChanged = await graph.evaluate({
+      orgId: "org_a",
+      projectId: "project_a",
+      nodeId: "inode_multi_2",
+      evaluationId: "eval_multi_2",
+      ...stamp,
+      units: [
+        { key: "tier", kind: "native_ci_tier", subjectId: "pre_merge", inputHash: hash("8"), run: tier2 },
+        {
+          key: "step",
+          kind: "native_ci_step",
+          subjectId: "typecheck",
+          inputHash: hash("d"),
+          dependsOn: ["tier"],
+          run: step2,
+        },
+      ],
+    });
+    expect(tier2).toHaveBeenCalledTimes(1);
+    expect(step2).not.toHaveBeenCalled();
+    const tierChangedBySubject = bySubject(tierChanged.units);
+    expect(tierChangedBySubject.get("pre_merge")?.reused).toBe(false);
+    expect(tierChangedBySubject.get("typecheck")?.reused).toBe(true);
+    // No cross-contamination: the changed unit gets a FRESH row; the reused sibling returns the
+    // EXACT prior evidence row (not a re-record, not the sibling's proof).
+    expect(tierChangedBySubject.get("pre_merge")?.proofUnitId).not.toBe(firstBySubject.get("pre_merge")?.proofUnitId);
+    expect(tierChangedBySubject.get("typecheck")?.proofUnitId).toBe(firstBySubject.get("typecheck")?.proofUnitId);
+    // A changed unit shifts the composed root; a false reuse of the sibling would have kept it equal.
+    expect(tierChanged.proofRoot).not.toBe(first.proofRoot);
+
+    // The symmetric direction: ONLY `step`'s digest changes; `tier` is unchanged and MUST reuse.
+    const tier3 = vi.fn<TestRun>(async () => ({ verdict: "fail" }));
+    const step3 = vi.fn<TestRun>(async () => ({ verdict: "pass", artifactHash: hash("7") }));
+    const stepChanged = await graph.evaluate({
+      orgId: "org_a",
+      projectId: "project_a",
+      nodeId: "inode_multi_3",
+      evaluationId: "eval_multi_3",
+      ...stamp,
+      units: [
+        { key: "tier", kind: "native_ci_tier", subjectId: "pre_merge", inputHash: hash("c"), run: tier3 },
+        {
+          key: "step",
+          kind: "native_ci_step",
+          subjectId: "typecheck",
+          inputHash: hash("6"),
+          dependsOn: ["tier"],
+          run: step3,
+        },
+      ],
+    });
+    expect(tier3).not.toHaveBeenCalled();
+    expect(step3).toHaveBeenCalledTimes(1);
+    const stepChangedBySubject = bySubject(stepChanged.units);
+    expect(stepChangedBySubject.get("pre_merge")?.reused).toBe(true);
+    expect(stepChangedBySubject.get("typecheck")?.reused).toBe(false);
+    // The reused `tier` returns the original row; the changed `step` is a fresh, distinct record.
+    expect(stepChangedBySubject.get("pre_merge")?.proofUnitId).toBe(firstBySubject.get("pre_merge")?.proofUnitId);
+    expect(stepChangedBySubject.get("typecheck")?.proofUnitId).not.toBe(firstBySubject.get("typecheck")?.proofUnitId);
   });
 });
