@@ -80,6 +80,7 @@ export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRe
     designSystemId: input.designSystemId,
     releaseId: input.releaseId,
     designContractVersion: input.designContractVersion,
+    contractDigest: input.contractDigest,
     verification,
   });
 }

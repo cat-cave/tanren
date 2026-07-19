@@ -47,16 +47,28 @@ export function checkpointVerdictFromOracle(outcome: RenderVerdictOutcome): "pas
 /**
  * FAIL-CLOSED aggregation of the per-scenario checkpoints into ONE run-level outcome:
  *   · ANY `failed` checkpoint          → `failed_visual` (a real a11y violation blocks).
- *   · else ANY `passed` checkpoint     → `passed` (verified at least one surface clean,
- *                                        none failed — the browser-free slice cleared).
- *   · else (nothing verifiable)        → `inconclusive_infrastructure` (every checkpoint
- *                                        was `unknown` OR every scenario was excluded — we
- *                                        could verify NOTHING → fail closed, never a pass).
+ *   · else EVERY checkpoint `passed`   → `passed` (every rendered scenario decisively
+ *     AND at least one exists            cleared — NOT merely "at least one passed"). A
+ *                                        single `unknown` (rendered-but-no-verdict) sibling
+ *                                        DENIES the pass: partial coverage is NOT a green.
+ *   · else (any `unknown`, or nothing) → `inconclusive_infrastructure` (a scenario rendered
+ *                                        but produced no decisive verdict, OR every checkpoint
+ *                                        was `unknown`, OR every scenario was excluded — we
+ *                                        could not decisively pass EVERY scenario → fail
+ *                                        closed, never a partial-coverage pass).
+ *
+ * The pass condition is tied to the scenario SET, not a count: `passed` requires that EVERY
+ * checkpoint be a decisive `passed` (no `failed`, no `unknown`) and that at least one
+ * checkpoint exist. An `unknown` checkpoint is a scenario the harness DID render but the
+ * oracle could not decisively judge — leaving it unaccounted, so it must block (a mix of
+ * some-passed + some-unknown is a partial-coverage green, the same false-green class as a
+ * partial producer drop).
  *
  * `excludedCount` records scenarios the browser-free harness cannot render (external-dep
- * primitives → the render-worker sub-node); they are neither a pass nor a block. A run
- * where EVERY scenario was excluded yields `inconclusive_infrastructure` (no checkpoint
- * verified), so a catalog that never renders browser-free fails closed rather than passing.
+ * primitives → the render-worker sub-node); they are neither a pass nor a block HERE (the
+ * render-worker sub-node verifies them separately). A run where EVERY scenario was excluded
+ * yields `inconclusive_infrastructure` (no checkpoint verified), so a catalog that never
+ * renders browser-free fails closed rather than passing.
  */
 export function aggregateDesignRenderOutcome(
   accessibilityStandard: string,
@@ -68,8 +80,15 @@ export function aggregateDesignRenderOutcome(
   const inconclusiveCount = checkpoints.filter((c) => c.verdict === "unknown").length;
 
   const firstFailed = checkpoints.find((c) => c.verdict === "failed");
+  // FAIL-CLOSED pass gate: `passed` ONLY when a real a11y violation is absent (no `failed`),
+  // NO scenario is left unaccounted (no `unknown`), and at least one scenario decisively
+  // passed. Any `unknown` sibling → `inconclusive_infrastructure` (blocks), never `passed`.
   const outcome: DesignRenderRunOutcome =
-    firstFailed === undefined ? (passedCount > 0 ? "passed" : "inconclusive_infrastructure") : "failed_visual";
+    firstFailed === undefined
+      ? passedCount > 0 && inconclusiveCount === 0
+        ? "passed"
+        : "inconclusive_infrastructure"
+      : "failed_visual";
 
   return {
     outcome,

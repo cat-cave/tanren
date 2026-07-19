@@ -25,6 +25,12 @@ export const designRenderLandVerdicts = pgTable(
     designSystemId: text("design_system_id").notNull(),
     releaseId: text("release_id").notNull(),
     designContractVersion: text("design_contract_version").notNull(),
+    // The contract V2 digest this verdict was rendered/judged against. Nullable so pre-existing
+    // rows decode as an unverifiable-provenance mismatch (→ re-verify, fail-closed) rather than
+    // silently reusing a verdict whose contract lineage cannot be confirmed. Newly-recorded rows
+    // always carry it; the compose-time reuse guard honors an already-published verdict ONLY when
+    // this digest (and the contract version + release) matches the CURRENT contract.
+    contractDigest: text("contract_digest"),
     accessibilityStandard: text("accessibility_standard").notNull(),
     outcome: text("outcome").notNull(),
     checkpointCount: integer("checkpoint_count").notNull(),
