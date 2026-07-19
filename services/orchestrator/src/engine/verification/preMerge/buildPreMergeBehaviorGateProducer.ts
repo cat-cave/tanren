@@ -14,6 +14,7 @@ import {
   PgAcceptanceEventSink,
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
+  PgDesignRenderVerdictReader,
   type AcceptanceBaseUrlResolver,
 } from "../acceptance/index.js";
 import {
@@ -46,6 +47,9 @@ export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: Secret
       store: new PgAcceptanceRunStore(pool),
       events: new PgAcceptanceEventSink(pool),
       drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new FixedBaseUrlResolver(baseUrl) })],
+      // rv-13: a behavior that declares a required rendered-visual requirement is gated on the
+      // ds-4 design-render verdict for the project (fail-closed) alongside its HTTP assertions.
+      designRenderReader: new PgDesignRenderVerdictReader(pool),
     });
   return new PreviewBehaviorGateProducer({
     provisioner: new DeployAdapterPreviewSurfaceProvisioner(pool, { transport: fetchDeployTransport(), secrets }),
