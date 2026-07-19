@@ -1,0 +1,534 @@
+{
+  "tanren.rv.read.v1.BehaviorVerdictHistory": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "behaviorRevisionId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "latestOutcome": {
+        "anyOf": [
+          {
+            "enum": [
+              "passed",
+              "failed_product",
+              "failed_verification_contract",
+              "failed_visual",
+              "inconclusive_infrastructure",
+              "inconclusive_external",
+              "cancelled_superseded"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "verdicts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "runId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "runPurpose": {
+              "enum": [
+                "per_iteration",
+                "pre_audit",
+                "pre_merge",
+                "release_periodic",
+                "post_merge_production",
+                "manual_canary"
+              ],
+              "type": "string"
+            },
+            "runStatus": {
+              "enum": ["planned", "running", "completed", "failed", "cancelled"],
+              "type": "string"
+            },
+            "verdict": {
+              "additionalProperties": false,
+              "properties": {
+                "artifactDigest": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "attemptCount": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "behaviorRevisionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executedAssertionCount": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "flakeState": {
+                  "enum": ["stable", "suspected", "confirmed", "quarantined_fragment"],
+                  "type": "string"
+                },
+                "gateEffect": {
+                  "enum": ["blocking", "advisory"],
+                  "type": "string"
+                },
+                "outcome": {
+                  "enum": [
+                    "passed",
+                    "failed_product",
+                    "failed_verification_contract",
+                    "failed_visual",
+                    "inconclusive_infrastructure",
+                    "inconclusive_external",
+                    "cancelled_superseded"
+                  ],
+                  "type": "string"
+                },
+                "proofUnitDigest": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "requiredAssertionCount": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "runtimeBehaviorContextHash": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "verdictId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "verdictId",
+                "behaviorRevisionId",
+                "outcome",
+                "requiredAssertionCount",
+                "executedAssertionCount",
+                "attemptCount",
+                "flakeState",
+                "gateEffect",
+                "artifactDigest",
+                "proofUnitDigest",
+                "runtimeBehaviorContextHash"
+              ],
+              "type": "object"
+            }
+          },
+          "required": ["runId", "runPurpose", "runStatus", "createdAt", "verdict"],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "behaviorRevisionId", "latestOutcome", "verdicts"],
+    "type": "object"
+  },
+  "tanren.rv.read.v1.VerificationRunDetail": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "environment": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifactDigest": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "deploymentTarget": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "environmentFingerprint": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "environmentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "integrationNodeId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "lifecycleStatus": {
+                "enum": ["provisioning", "ready", "torn_down", "failed"],
+                "type": "string"
+              },
+              "projectId": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "environmentId",
+              "projectId",
+              "integrationNodeId",
+              "artifactDigest",
+              "deploymentTarget",
+              "environmentFingerprint",
+              "lifecycleStatus"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "proofBundleHref": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "run": {
+        "additionalProperties": false,
+        "properties": {
+          "artifactDigest": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "environmentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "integrationNodeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latestOutcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "passed",
+                  "failed_product",
+                  "failed_verification_contract",
+                  "failed_visual",
+                  "inconclusive_infrastructure",
+                  "inconclusive_external",
+                  "cancelled_superseded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "per_iteration",
+              "pre_audit",
+              "pre_merge",
+              "release_periodic",
+              "post_merge_production",
+              "manual_canary"
+            ],
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "specId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": ["planned", "running", "completed", "failed", "cancelled"],
+            "type": "string"
+          },
+          "verdictCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runId",
+          "projectId",
+          "purpose",
+          "status",
+          "specId",
+          "integrationNodeId",
+          "environmentId",
+          "artifactDigest",
+          "createdAt",
+          "verdictCount",
+          "latestOutcome"
+        ],
+        "type": "object"
+      },
+      "verdicts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "artifactDigest": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "attemptCount": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "behaviorRevisionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executedAssertionCount": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "flakeState": {
+              "enum": ["stable", "suspected", "confirmed", "quarantined_fragment"],
+              "type": "string"
+            },
+            "gateEffect": {
+              "enum": ["blocking", "advisory"],
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "passed",
+                "failed_product",
+                "failed_verification_contract",
+                "failed_visual",
+                "inconclusive_infrastructure",
+                "inconclusive_external",
+                "cancelled_superseded"
+              ],
+              "type": "string"
+            },
+            "proofUnitDigest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requiredAssertionCount": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runtimeBehaviorContextHash": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "verdictId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "verdictId",
+            "behaviorRevisionId",
+            "outcome",
+            "requiredAssertionCount",
+            "executedAssertionCount",
+            "attemptCount",
+            "flakeState",
+            "gateEffect",
+            "artifactDigest",
+            "proofUnitDigest",
+            "runtimeBehaviorContextHash"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "run", "environment", "verdicts", "proofBundleHref"],
+    "type": "object"
+  },
+  "tanren.rv.read.v1.VerificationRunList": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "runs": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "artifactDigest": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "environmentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "integrationNodeId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestOutcome": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "passed",
+                    "failed_product",
+                    "failed_verification_contract",
+                    "failed_visual",
+                    "inconclusive_infrastructure",
+                    "inconclusive_external",
+                    "cancelled_superseded"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "purpose": {
+              "enum": [
+                "per_iteration",
+                "pre_audit",
+                "pre_merge",
+                "release_periodic",
+                "post_merge_production",
+                "manual_canary"
+              ],
+              "type": "string"
+            },
+            "runId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "specId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "enum": ["planned", "running", "completed", "failed", "cancelled"],
+              "type": "string"
+            },
+            "verdictCount": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "runId",
+            "projectId",
+            "purpose",
+            "status",
+            "specId",
+            "integrationNodeId",
+            "environmentId",
+            "artifactDigest",
+            "createdAt",
+            "verdictCount",
+            "latestOutcome"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "runs"],
+    "type": "object"
+  }
+}
