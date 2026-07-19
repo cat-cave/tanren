@@ -300,12 +300,15 @@ function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }
       pool: {} as never,
       reproofCoordinator: { settle: () => Promise.resolve("held") },
       // A REGRESSED post-merge behavior verdict — without the quarantine guard this WOULD bisect.
+      // mq-7: the observed epoch (artifact_digest these verdicts were recorded at) — masking is
+      // epoch-scoped, so a defined observed epoch is required for a same-epoch quarantine to mask.
       behaviorVerifier: {
         verify() {
           return Promise.resolve({
             decision: "recorded" as const,
             passed: 0,
             failed: 1,
+            artifactDigest: `sha256:${"a".repeat(64)}`,
             verdicts: [{ behaviorRevisionId: "br_flaky", verdictId: "v_reg", outcome: "failed_product" as const }],
           });
         },
@@ -316,7 +319,13 @@ function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }
           return Promise.resolve({ status: "inconclusive" } as BisectionResult);
         },
       },
-      behaviorQuarantineReader: { isQuarantined: () => Promise.resolve(opts.isQuarantined) },
+      // mq-7: masking is epoch-scoped — recordRegressionBisections calls isQuarantinedInEpoch against
+      // the observed epoch. A behavior quarantined IN THE OBSERVED epoch masks (not bisected); a
+      // stale-epoch quarantine does NOT (proven separately in flakeEpochMaskingDurability).
+      behaviorQuarantineReader: {
+        isQuarantined: () => Promise.resolve(opts.isQuarantined),
+        isQuarantinedInEpoch: () => Promise.resolve(opts.isQuarantined),
+      },
       contracts: {
         async get() {
           return contract;
