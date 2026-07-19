@@ -5,6 +5,10 @@ import type { RepairRouter } from "../workflow/repairRouting.js";
 import { createLogger } from "../observability/logger.js";
 import { authorizeProductionResolution } from "./productionResolutionAuthorization.js";
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
+import {
+  applyReproofDeployOutcome,
+  type PostMergeReproofCoordinator,
+} from "../verification/postMergeReproof/coordinator.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -26,6 +30,12 @@ export interface ResolutionDagWalkerDeps {
   readonly authority?: ResolutionAuthority;
   /** Required for a blocked production decision; absent routing fails closed. */
   readonly repairRouter?: RepairRouter;
+  /**
+   * rv-19 post-merge re-proof settlement: promotes a `product_resolved` production
+   * verdict or rolls the live release pointer back on a `product_failure`. Wired in
+   * the production composition; a `production` stage settles its deploy side through it.
+   */
+  readonly reproofCoordinator?: PostMergeReproofCoordinator;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -162,6 +172,13 @@ export class ResolutionDagWalker {
       // only evidence: the separate ResolutionAuthority is the sole component
       // allowed to declare an internal resolution / source-closure eligibility.
       await authorizeProductionResolution(this.deps.authority, job, this.deps.repairRouter);
+
+      // rv-19 deploy-side settlement of the same production verdict: promote the
+      // proven release, or roll the live pointer back to the prior known-good
+      // release when the symptom is STILL present in production. A no-op for every
+      // non-production stage. Runs before lease settlement so a throw releases the
+      // lease (retryable) rather than completing a decision-less rollback.
+      await applyReproofDeployOutcome(this.deps.reproofCoordinator, job, result);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {
