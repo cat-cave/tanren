@@ -258,6 +258,11 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       // F2 — unified library (bundled core + org-authored fragments). Shadowing:
       // an org fragment with the same (kind, label) wins over the bundled.
       loadFragmentLibrary: buildLiveLoadFragmentLibrary(scopedPool),
+      // ds-composer — compose+publish the project's WEB DESIGN SYSTEM during derive.
+      // This makes ds-3's F2D authoring loop genuinely callable in production and
+      // lights up the run-context reader (`resolveProjectWebDesignSystem`). The
+      // design-fragment writer is the SAME allocating Forge answerer infra as F2.
+      composeDesignSystem: forgeAnswerers.designSystemComposer,
     }),
   );
   // candidate inbox — issue sources → Forge triage → discovery accept;

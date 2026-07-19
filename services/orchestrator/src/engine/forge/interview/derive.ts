@@ -31,6 +31,11 @@ export {
 } from "./deriveProductGraph.js";
 export { ProjectDerivationConflictError } from "../../repositories/projects.js";
 
+/** The ds-composer seam signature: compose+publish the project's web design system
+ * (idempotent, fail-closed). Threaded into the derive so it runs once the HEAD design
+ * contract exists. Production wires `composeProjectWebDesignSystem`. */
+export type ComposeDesignSystemCallback = (input: { orgId: string; projectId: string }) => Promise<void>;
+
 export interface DeriveInput {
   orgId: string;
   capture: InterviewCapture;
@@ -50,6 +55,15 @@ export interface DeriveInput {
   fragmentLibrary?: FragmentLibrary;
   runFragmentAuthoring?: FragmentAuthoring;
   designAgent?: DesignAgent;
+  /** ds-composer — the DESIGN-SYSTEM COMPOSITION seam (the design analog of
+   * `runFragmentAuthoring`). Runs AFTER the design contract is persisted (the graph
+   * step) and BEFORE bootstrap: it reads the project HEAD contract, authors the
+   * missing design fragments through ds-3 F2D, and publishes the web design release
+   * the run-context reader (`resolveProjectWebDesignSystem`) resolves. Idempotent
+   * (short-circuits on an already-published lineage) + fail-closed (an authoring
+   * failure propagates, blocking activation). Absent ⇒ no design system is composed
+   * (the injected-seam / engine-graph test path). */
+  composeDesignSystem?: ComposeDesignSystemCallback;
   /** Repo-create compensation applies only before the durable deriving shell lands. */
   deleteRepository?: DeleteRepositoryCallback;
   probeRepoBareAutoInit?: (target: { owner: string; name: string }) => Promise<boolean>;

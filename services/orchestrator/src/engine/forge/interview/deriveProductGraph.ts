@@ -432,6 +432,17 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         state = ProjectDerivationStore.decode(operation);
       }
 
+      // ds-composer — compose+publish the project's WEB DESIGN SYSTEM now that the
+      // HEAD design contract exists (persisted by the graph step above). This is the
+      // production seam that makes ds-3's F2D loop callable and lights up the
+      // run-context reader (`resolveProjectWebDesignSystem`). Idempotent (short-circuits
+      // on an already-published lineage), so re-running it on a durable resume is safe;
+      // fail-closed (an authoring failure propagates into the catch → recordFailure →
+      // rethrow, blocking activation rather than shipping a design-less product).
+      if (input.composeDesignSystem !== undefined) {
+        await input.composeDesignSystem({ orgId: input.orgId, projectId: project.projectId });
+      }
+
       if (state.results.bootstrap === undefined) {
         const bootstrap = await (input.bootstrapProject ?? provisionAutonomousProject)({
           pool,

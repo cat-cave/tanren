@@ -197,6 +197,54 @@ export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
   });
 }
 
+// The default web target profile the ds-2 `WebDesignTargetAdapter` composes against
+// (the sole registered adapter). `required: true` — a real run needs the web system.
+const WEB_TARGET_PROFILE: DesignTargetProfileIntent = { target: "web-react", capabilities: [], required: true };
+
+/**
+ * Derive the `desiredSurfaces` a project's design must cover FROM the contract's own
+ * authored content — the design-agent-chosen `dimensions` (each a real, persisted,
+ * domain-derived design facet). This is the honest root that makes F2D meaningful:
+ * `migrateDesignContractV1ToV2` is deliberately LOSSLESS (it cannot invent surfaces),
+ * so this SEPARATE derivation is the explicit, opt-in projection the composer applies
+ * when it needs the composition-need surfaces. Each dimension a project declares
+ * becomes one desired surface (the patterns-and-templates the design system must carry
+ * for that facet), carrying the facet's persona scope (its own `personaRefs`, else the
+ * contract's whole persona set) and the contract's behavior obligation. A contract with
+ * NO dimensions yields NO surfaces (a real empty state) — never a fabricated stub.
+ */
+export function deriveDesiredSurfaces(contract: DesignContractV2): DesignDesiredSurface[] {
+  const seen = new Set<string>();
+  const surfaces: DesignDesiredSurface[] = [];
+  for (const dimension of contract.dimensions) {
+    if (seen.has(dimension.key)) continue;
+    seen.add(dimension.key);
+    surfaces.push({
+      key: dimension.key,
+      label: dimension.label,
+      intent: dimension.intent,
+      personaRefs: dimension.personaRefs.length > 0 ? [...dimension.personaRefs] : [...contract.personaRefs],
+      behaviorRefs: [...contract.behaviorRefs],
+    });
+  }
+  return surfaces;
+}
+
+/**
+ * Compose the executable V2 the design-system PRODUCER reads: the lossless migration
+ * PLUS the derived `desiredSurfaces` (from the authored dimensions) and — when the
+ * contract declares none — the default `web-react` target profile. This is the
+ * contract the composer feeds `requiredDesignFragmentsFromSurfaces` → F2D, so a real
+ * run's contract carries the surfaces the product needs rather than an empty stub. An
+ * explicitly-authored surface/profile set (a future full-V2 persistence) is preserved.
+ */
+export function withDerivedDesiredSurfaces(contract: DesignContractV2): DesignContractV2 {
+  const desiredSurfaces =
+    contract.desiredSurfaces.length > 0 ? contract.desiredSurfaces : deriveDesiredSurfaces(contract);
+  const targetProfiles = contract.targetProfiles.length > 0 ? contract.targetProfiles : [WEB_TARGET_PROFILE];
+  return normalizeDesignContractV2({ ...contract, desiredSurfaces, targetProfiles });
+}
+
 /** Canonical schema-normalized JSON for receipts, digests, and persistence. */
 export function canonicalDesignContractV2Json(value: unknown): string {
   return JSON.stringify(parseDesignContractV2(value));

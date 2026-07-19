@@ -39,6 +39,7 @@ export {
   ProjectBootstrapIncompleteError,
   ProjectDerivationConflictError,
   ProjectDesignElaborationStateUnknownError,
+  type ComposeDesignSystemCallback,
 } from "./derive.js";
 
 // Before the durable shell exists, repository creation is the only compensated
