@@ -38,20 +38,18 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
    */
   watcher?: PostMergeWatcher;
   /**
-   * The deploy-on-merge watcher (apex "a deploy happened"): driven on the SAME
-   * `merge.completed` wake as the issue watcher. Optional — wired when a deploy
-   * transport is available; absent, the subscriber only drives the issue watcher. A
-   * deploy failure is logged + isolated, so it never suppresses the issue watcher.
+   * The durable, resumable post-merge DELIVERY DAG driver (in-17). REPLACES the old fixed
+   * deploy → demo chain: driven on the SAME `merge.completed` wake as the issue watcher, it
+   * consumes the in-16 `delivery_runs` transactional outbox and drives reconcile → lease →
+   * materialize → attach → deploy → verify → stimulate → observe → record-evidence,
+   * resuming from the last durable stage and marking the delivery complete ONLY after
+   * signed evidence of the independently-observed effect. The deploy-on-merge and
+   * demo-on-deploy watchers are now this driver's INTERNAL stage runners, not a separate
+   * fixed chain. Optional — wired when a deploy transport is available; absent, the
+   * subscriber only drives the issue watcher. ISOLATED — a delivery failure is logged +
+   * durably recorded, never suppressing the issue watcher.
    */
-  deployWatcher?: RunMergeWatcher;
-  /**
-   * The demo-on-deploy watcher (demos-as-evidence): driven on the SAME wake, AFTER the
-   * deploy watcher, so by the time it runs the deploy watcher has emitted
-   * `deploy.verified`. It exercises the spec's behaviors against the verified deploy
-   * surface and records per-behavior evidence; a run with no verified deploy is a
-   * clean no-op. ISOLATED — a demo failure is logged and never suppresses the others.
-   */
-  demoWatcher?: RunMergeWatcher;
+  deliveryDriver?: RunMergeWatcher;
 }
 
 /**
@@ -62,8 +60,7 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
  */
 export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
-  private readonly deployWatcher: RunMergeWatcher | undefined;
-  private readonly demoWatcher: RunMergeWatcher | undefined;
+  private readonly deliveryDriver: RunMergeWatcher | undefined;
   private reconnectHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -71,8 +68,7 @@ export class PostMergeSubscriber {
 
   constructor(private readonly deps: PostMergeSubscriberDeps) {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
-    this.deployWatcher = deps.deployWatcher;
-    this.demoWatcher = deps.demoWatcher;
+    this.deliveryDriver = deps.deliveryDriver;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -149,19 +145,16 @@ export class PostMergeSubscriber {
       await this.watcher.check(runId).catch((error: unknown) => {
         log.error("check failed", { runId }, error);
       });
-      // The deploy-on-merge watcher runs on the SAME wake but is ISOLATED: a deploy
-      // failure is logged and never suppresses the issue watcher (and vice versa).
-      if (this.deployWatcher !== undefined) {
-        await this.deployWatcher.check(runId).catch((error: unknown) => {
-          log.error("deploy-on-merge failed", { runId }, error);
-        });
-      }
-      // The demo-on-deploy watcher runs AFTER the deploy watcher (so `deploy.verified`
-      // is already emitted) but is equally ISOLATED: a demo failure is logged and never
-      // suppresses the issue/deploy watchers. A run with no verified deploy is a no-op.
-      if (this.demoWatcher !== undefined) {
-        await this.demoWatcher.check(runId).catch((error: unknown) => {
-          log.error("demo-on-deploy failed", { runId }, error);
+      // The durable delivery DAG driver (in-17) runs on the SAME wake but is ISOLATED: it
+      // consumes the in-16 delivery outbox and drives reconcile → lease → materialize →
+      // attach → deploy → verify → stimulate → observe → record-evidence, resuming from the
+      // last durable stage. Its own failures are recorded durably on `delivery_runs` /
+      // `delivery_stage_attempts`; a thrown driver error is logged and never suppresses the
+      // issue watcher. This REPLACES the old fixed deploy → demo chain (the deploy/demo
+      // watchers are now the driver's internal, idempotent stage runners).
+      if (this.deliveryDriver !== undefined) {
+        await this.deliveryDriver.check(runId).catch((error: unknown) => {
+          log.error("delivery-dag failed", { runId }, error);
         });
       }
     } while (this.rePending.has(runId));

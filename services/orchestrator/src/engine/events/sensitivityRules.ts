@@ -1,7 +1,7 @@
 import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { usageAccountingFailedSensitivityRules } from "./sensitivityRules.usage.js";
-import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
+import { appEnvSensitivityRules, deliveryDagSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 import { gateSensitivityRules } from "./sensitivityRules.gate.js";
@@ -480,6 +480,8 @@ export const sensitivityRules: SensitivityRule[] = [
   ...wave4VocabularySensitivityRules,
   // Mission-complete WAVE-5/WAVE-6 + back-half cluster shared vocabulary freezes.
   ...wave5And6AndResolutionClusterVocabularySensitivityRules,
+  // in-17 durable post-merge delivery DAG — release-activation attestation; all-public (own file for the cap).
+  ...deliveryDagSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
@@ -489,12 +491,9 @@ function rulesFor(eventName: string, entries: ReadonlyArray<[string, Sensitivity
 let registered = false;
 
 export function ensureSensitivityRulesRegistered(): void {
-  if (registered) {
-    return;
-  }
+  if (registered) return;
   registerSensitivities(sensitivityRules);
   registered = true;
 }
-
-// Side-effect import: registers rules at module load. Importing the barrel guarantees rules are live before any decoder or registry consumer runs.
+// Side-effect import: registers rules at module load, before any decoder or registry consumer runs.
 ensureSensitivityRulesRegistered();

@@ -18,7 +18,11 @@ import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/bu
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
-import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
+import {
+  buildDeliveryDagDriver,
+  buildDeployOnMergeWatcher,
+  buildDemoOnDeployWatcher,
+} from "../postMerge/deployOnMerge.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
@@ -205,19 +209,30 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
   });
+  // in-17 durable post-merge DELIVERY DAG: consumes the in-16 `delivery_runs` outbox and
+  // drives reconcile → lease → materialize → attach → deploy → verify → stimulate → observe
+  // → record-evidence, resuming from the last durable stage. The deploy/demo watchers above
+  // are its internal, idempotent stage runners — this REPLACES the old fixed deploy → demo
+  // chain the subscriber used to sequence directly.
+  const deliveryDriver = buildDeliveryDagDriver({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    deployWatcher,
+    demoWatcher,
+    runStateWriter: deps.runStateWriter,
+  });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
-    deployWatcher,
-    demoWatcher,
+    deliveryDriver,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
     runStateWriter: deps.runStateWriter,
   });
-  log.info("post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
+  log.info("post-merge auto-issue + durable delivery-DAG subscriber started (in-17)");
   // Notifications: build the dispatcher ONCE (channel registry with the real
   // channel deps — `secrets` resolves Slack/webhook/etc. write-only credential
   // refs; the shared App minter authenticates github_checks) + the code-level default
