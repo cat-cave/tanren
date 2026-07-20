@@ -17,13 +17,13 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/build.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
-import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import {
+  startPostMergeSubscriber,
   buildDeployOnMergeWatcher,
   buildDemoOnDeployWatcher,
   buildMergeTrainArtifactWatcher,
   type CasByteStore,
-} from "../postMerge/deployOnMerge.js";
+} from "../postMerge/subscriber.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
@@ -34,8 +34,7 @@ import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
 import { buildSourceSyncWorker } from "./sourceSyncWorkerBuild.js";
 import { startWorkerNotifications } from "./notificationAutonomy.js";
-import { PgProofSubstrate, PROOF_SIGNING_KEY_REF, resolveSigningKey } from "../cas/pgProofSubstrate.js";
-import { PgCasByteStore } from "../cas/pgCasByteStore.js";
+import { PgProofSubstrate, PgCasByteStore, PROOF_SIGNING_KEY_REF, resolveSigningKey } from "../cas/pgProofSubstrate.js";
 
 const log = createLogger("run-worker");
 

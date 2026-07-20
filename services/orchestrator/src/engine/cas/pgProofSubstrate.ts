@@ -44,6 +44,10 @@ import { PROOF_SIGNING_KEY_REF, resolveSigningKey } from "./proofSigningKey.js";
 // Re-exported so the worker boot (autonomyLoops) wires the substrate + its
 // boot-time key probe from a SINGLE module import.
 export { PROOF_SIGNING_KEY_REF, resolveSigningKey } from "./proofSigningKey.js";
+// Re-exported off this barrel too: the SP-3 × mq-15 connect-up shares ONE
+// `PgCasByteStore` between the substrate and mq-15's watcher, and importing both
+// from this single module keeps autonomyLoops within its runtime-import cap.
+export { PgCasByteStore } from "./pgCasByteStore.js";
 import {
   bundleUnitId,
   canonicalSealMessage,
