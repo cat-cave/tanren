@@ -3,9 +3,13 @@
 // every queue, lease, partition, and event assertion runs through tanren_app.
 
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
+import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ActorContext } from "../src/auth/schemas.js";
 import { PgMergeQueueEventEmitter, PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
+import type { ActorContextEnv } from "../src/middleware/auth.js";
+import { createMergeQueueScheduleRoutes } from "../src/routes/mergeQueue/schedule.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -210,4 +214,43 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
       payload: { memberId: "spec_poison", partitionId },
     });
   });
+
+  it("serves semantic scheduling only within the requesting org and RLS rejects cross-org partition mutation", async () => {
+    const app = scheduleApp(appPool, platformActor());
+    const own = await app.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/schedule`);
+    expect(own.status).toBe(200);
+    await expect(own.json()).resolves.toMatchObject({ schedule: { selectedCap: 1, partitions: expect.any(Array) } });
+
+    const cross = await app.request(`/orgs/org_other/projects/${PROJECT}/merge-queue/schedule`);
+    expect(cross.status).toBe(404);
+    const mutation = await runWithOrgScope(appPool, "org_other", (client) =>
+      client.query(
+        "UPDATE merge_queue SET scope_fingerprint = 'semantic:v1:all_scopes' WHERE project_id = $1 RETURNING queue_id",
+        [PROJECT],
+      ),
+    );
+    expect(mutation.rowCount).toBe(0);
+  });
+
+  it("blocks scheduling rather than coercing malformed dependency data to an empty set", async () => {
+    await ownerPool.query("UPDATE specs SET depends_on = ARRAY['']::text[] WHERE spec_id = 'spec_orphan'");
+
+    await expect(queue.loadSnapshot(PROJECT)).rejects.toThrow(
+      "spec spec_orphan depends_on must be an array of non-blank strings",
+    );
+  });
 });
+
+function scheduleApp(pool: Pool, actor: ActorContext): Hono<ActorContextEnv> {
+  const app = new Hono<ActorContextEnv>();
+  app.use("*", async (context, next) => {
+    context.set("actor", actor);
+    await next();
+  });
+  app.route("/orgs", createMergeQueueScheduleRoutes({ pool }));
+  return app;
+}
+
+function platformActor(): ActorContext {
+  return { userId: "user_mq4", orgId: null, projectId: null, scopes: ["platform:admin"], source: "local_dev" };
+}

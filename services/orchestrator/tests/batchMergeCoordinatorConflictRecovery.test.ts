@@ -12,6 +12,7 @@ import {
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "proj_conflict_recovery";
 
@@ -51,6 +52,7 @@ function harness(opts?: { rejectOwnership?: boolean }) {
     opts?.rejectOwnership === true ? "reject" : "accept",
   );
   const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(),
     authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,

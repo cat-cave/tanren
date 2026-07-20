@@ -9,6 +9,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_batch";
 
@@ -25,7 +26,7 @@ function makeCoordinator() {
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(),
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
-    resolveMaxBatchSize: () => Promise.resolve(5),
+    scheduler: makeTestIntegrationGraphScheduler(5),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner };

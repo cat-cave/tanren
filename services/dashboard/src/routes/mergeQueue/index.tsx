@@ -33,6 +33,7 @@ import {
   type MergeQueueEvidenceContractResponse,
 } from "../../api/mergeQueueEvidenceContracts.js";
 import { MergeQueueEagerBeamsClient, type MergeQueueEagerBeamsResponse } from "../../api/mergeQueueEagerBeams.js";
+import { MergeQueueScheduleClient, type MergeQueueScheduleResponse } from "../../api/mergeQueueSchedule.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
 
@@ -59,6 +60,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let mergeTrain: MergeTrainListResponse | undefined;
     let evidenceContract: MergeQueueEvidenceContractResponse | undefined;
     let eagerBeams: MergeQueueEagerBeamsResponse | undefined;
+    let semanticSchedule: MergeQueueScheduleResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -84,10 +86,14 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      // mq-8 eager beams join the single parallel fan-out (7-arity). mq-12's evidence
+      // mq-8 beams + mq-9 semantic schedule join the parallel read fan-out. mq-12's evidence
       // contract is a DEPENDENT read (it needs the merge-train's node id), so it stays a
       // follow-up await after the fan-out resolves.
-      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes, mergeTrain, eagerBeams] =
+      const scheduleClient = new MergeQueueScheduleClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes, mergeTrain, eagerBeams, semanticSchedule] =
         await Promise.all([
           client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
           client.getQueueStats(ctx.org.id, project.projectId, windowDays),
@@ -96,6 +102,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
           repairClient.listRepairRoutes(ctx.org.id, project.projectId),
           trainClient.listTrain(ctx.org.id, project.projectId),
           eagerBeamClient.listEagerBeams(ctx.org.id, project.projectId),
+          scheduleClient.getSchedule(ctx.org.id, project.projectId),
         ]);
       const nodeId = mergeTrain?.artifacts?.[0]?.integrationNodeId;
       if (nodeId !== undefined) {
@@ -120,6 +127,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         mergeTrain={mergeTrain}
         evidenceContract={evidenceContract}
         eagerBeams={eagerBeams}
+        semanticSchedule={semanticSchedule}
         orgId={ctx.org?.id ?? ""}
         projectId={project?.projectId ?? ""}
         windowDays={windowDays}

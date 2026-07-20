@@ -19,6 +19,7 @@ import type { MergeForRunInput, MergeProbe } from "../src/engine/workflow/review
 import {
   allowExactBatchAuthority,
   InMemoryBatchChecker,
+  makeTestIntegrationGraphScheduler,
   RecordingBatchGateReworkRouter,
   RecordingBatchMergeEventEmitter,
 } from "./conformance/fakes/inMemoryBatchChecker.js";
@@ -136,6 +137,7 @@ function makeBatchHarness(maxBatchSize = 6) {
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(maxBatchSize),
     authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,
@@ -145,7 +147,6 @@ function makeBatchHarness(maxBatchSize = 6) {
     escalator,
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
-    resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework };

@@ -40,6 +40,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_batch";
 
@@ -72,7 +73,7 @@ function makeHarness(): Harness {
     escalator,
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
-    resolveMaxBatchSize: () => Promise.resolve(5),
+    scheduler: makeTestIntegrationGraphScheduler(5),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework };

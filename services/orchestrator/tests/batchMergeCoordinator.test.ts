@@ -15,6 +15,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_batch";
 
@@ -47,7 +48,7 @@ function makeHarness(maxBatchSize = 5): Harness {
     escalator,
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
-    resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
+    scheduler: makeTestIntegrationGraphScheduler(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).
     sleep: () => Promise.resolve(),
   });

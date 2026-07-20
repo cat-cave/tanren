@@ -10,6 +10,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 function makeHarness() {
   const queue = new InMemoryMergeQueueModel();
@@ -18,6 +19,7 @@ function makeHarness() {
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(),
     authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,

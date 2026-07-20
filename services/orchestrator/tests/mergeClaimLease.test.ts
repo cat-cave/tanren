@@ -18,6 +18,7 @@ import {
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 import { MERGE_QUEUE_PROGRESS_RECHECK_MS } from "../src/engine/merge/mergeSerializedRetry.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 class ActivityControlledMergeRunner implements MergeRunner {
   readonly drives: { runId: string }[] = [];
@@ -57,7 +58,7 @@ function coordinatorFor(queue: InMemoryMergeQueueModel, runner: MergeRunner): Ba
   const events = new RecordingMergeQueueEventEmitter();
   return new BatchMergeCoordinator({
     authorityEvaluator: allowExactBatchAuthority(),
-    resolveMaxBatchSize: async () => 1,
+    scheduler: makeTestIntegrationGraphScheduler(1),
     queue,
     runner,
     checker: new InMemoryBatchChecker(),
@@ -181,7 +182,7 @@ describe("recoverStaleClaims progress heartbeat (P2d serialization hardening)", 
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
       authorityEvaluator: allowExactBatchAuthority(),
-      resolveMaxBatchSize: async () => 1,
+      scheduler: makeTestIntegrationGraphScheduler(1),
       queue,
       runner,
       checker: new InMemoryBatchChecker(),
@@ -217,7 +218,7 @@ describe("recoverStaleClaims progress heartbeat (P2d serialization hardening)", 
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
       authorityEvaluator: allowExactBatchAuthority(),
-      resolveMaxBatchSize: async () => 1,
+      scheduler: makeTestIntegrationGraphScheduler(1),
       queue,
       runner,
       checker: new InMemoryBatchChecker(),
