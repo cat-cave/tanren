@@ -24,6 +24,7 @@
 
 import type { VaultTokenMinter } from "../../contracts/vaultTokenMinter.js";
 import { createLogger } from "../../observability/logger.js";
+import type { DeployTriggerGate } from "../deployTriggerGate.js";
 import type { RunMergeWatcher } from "../subscriber.js";
 import type { DeliverySignals, DemoReach, DeployReach } from "./deliverySignals.js";
 import { appendDeliveryCompleted, type ObservedEffect, type RecordEvidenceDeps } from "./deliveryEvidence.js";
@@ -47,6 +48,12 @@ export interface DeliveryStageDeps {
   readonly saga: ReconcileSagaLike;
   /** The evidence writer + signer for the record_evidence gate. */
   readonly evidence: RecordEvidenceDeps;
+  /**
+   * Cross-process advisory-lock gate for the demo effect (deploy's `PgDeployTriggerGate`
+   * pattern): only ONE worker fires the demo stimulus at a time. Prevents a concurrent
+   * (multi-process) double-fire of the live behavior effect.
+   */
+  readonly demoGate: DeployTriggerGate;
   /** Optional activation-scoped Vault lease minter; absent ⇒ mint_lease no-ops unless product secrets exist. */
   readonly minter?: VaultTokenMinter;
 }
@@ -57,10 +64,24 @@ export interface DriveMemo {
   deployRunnerThrew: boolean;
   demoRunnerInvoked: boolean;
   demoRunnerThrew: boolean;
+  /** A prior drive already reached the stimulate stage (a durable pre-effect marker). */
+  demoPreviouslyStarted: boolean;
+  /** This drive detected a possibly-committed prior demo effect and refused to re-fire. */
+  demoInFlightUnknown: boolean;
+  /** Another worker holds the demo advisory lock (a concurrent demo is firing elsewhere). */
+  demoLockHeld: boolean;
 }
 
-export function newDriveMemo(): DriveMemo {
-  return { deployRunnerInvoked: false, deployRunnerThrew: false, demoRunnerInvoked: false, demoRunnerThrew: false };
+export function newDriveMemo(demoPreviouslyStarted = false): DriveMemo {
+  return {
+    deployRunnerInvoked: false,
+    deployRunnerThrew: false,
+    demoRunnerInvoked: false,
+    demoRunnerThrew: false,
+    demoPreviouslyStarted,
+    demoInFlightUnknown: false,
+    demoLockHeld: false,
+  };
 }
 
 /** The activation lease credential lifetime (a Vault lease TTL, not a work deadline). */
@@ -168,6 +189,23 @@ export class DeliveryStages {
     memo: DriveMemo,
   ): Promise<StageOutcome> {
     await this.ensureDemoClusterDriven(lineage, memo);
+    // FAIL-CLOSED demo idempotency (Finding 2): a prior drive already fired the demo effect
+    // but no terminal demo event is present ⇒ a crash mid-fire ⇒ the effect MAY have
+    // committed; DEGRADE rather than re-fire (a committed external effect is never re-run).
+    if (memo.demoInFlightUnknown) {
+      return degraded(
+        "demo_effect_in_flight_unknown",
+        "a prior demo stimulus may have fired its live effect but recorded no terminal outcome; refusing to re-fire",
+      );
+    }
+    // Another worker holds the demo advisory lock (a concurrent demo is firing elsewhere) —
+    // degrade this pass; the live owner's demo will produce the terminal, and a later wake reads it.
+    if (memo.demoLockHeld) {
+      return degraded(
+        "demo_locked_elsewhere",
+        "another worker holds the demo advisory lock; this pass did not fire the demo",
+      );
+    }
     const deployReach = await this.deps.signals.deployReach(lineage, memo.deployRunnerThrew);
     const demoReach = await this.deps.signals.demoReach(lineage, deployReach);
     return outcomeForDemoStage(stage, demoReach);
@@ -186,15 +224,37 @@ export class DeliveryStages {
     }
   }
 
+  /**
+   * Drive the demo effect AT MOST ONCE per drive, with deploy-equivalent idempotency
+   * protection (Finding 2):
+   *  1. A terminal demo event already exists (`demo.completed`/`demo.failed`) ⇒ the effect
+   *     committed; do NOT re-invoke — the reach reads the terminal.
+   *  2. No terminal but a PRIOR stimulate attempt exists (the durable pre-effect marker,
+   *     which implies a prior drive passed verify_deploy and the demo runner fired) ⇒ a
+   *     crash mid-fire ⇒ mark in-flight-unknown; do NOT re-fire (the stage degrades).
+   *  3. Else fire under the cross-process advisory lock so no two workers fire concurrently;
+   *     a lost lock marks demoLockHeld (the stage degrades this pass).
+   */
   private async ensureDemoClusterDriven(lineage: DeliveryLineage, memo: DriveMemo): Promise<void> {
     if (memo.demoRunnerInvoked) return;
     memo.demoRunnerInvoked = true;
-    try {
-      await this.deps.demoRunner.check(lineage.runId);
-    } catch (error) {
-      memo.demoRunnerThrew = true;
-      log.error("demo cluster runner failed", { runId: lineage.runId }, error);
+
+    // effect committed; reach reads it
+    if (await this.deps.signals.demoTerminalExists(lineage)) return;
+    if (memo.demoPreviouslyStarted) {
+      // Possible committed-but-unrecorded effect from a prior crashed drive — never re-fire.
+      memo.demoInFlightUnknown = true;
+      return;
     }
+    const gate = await this.deps.demoGate.run(lineage.runId, async () => {
+      try {
+        await this.deps.demoRunner.check(lineage.runId);
+      } catch (error) {
+        memo.demoRunnerThrew = true;
+        log.error("demo cluster runner failed", { runId: lineage.runId }, error);
+      }
+    });
+    if (!gate.acquired) memo.demoLockHeld = true;
   }
 
   private async recordEvidence(

@@ -16,8 +16,10 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { PgDeployTriggerGate } from "../src/engine/postMerge/deployTriggerGate.js";
 import { DeliveryDagDriver } from "../src/engine/postMerge/delivery/deliveryDagDriver.js";
 import { contentAddressedEvidenceSigner } from "../src/engine/postMerge/delivery/deliveryEvidence.js";
+import { DeliveryRunStore } from "../src/engine/postMerge/delivery/deliveryRunStore.js";
 import { PgDeliverySignals } from "../src/engine/postMerge/delivery/deliverySignals.js";
 import type { RunMergeWatcher } from "../src/engine/postMerge/subscriber.js";
 
@@ -180,7 +182,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       demoRunner: demo,
       saga: { driveForOrg: () => Promise.resolve({ stateUnknown: 0, needsAttention: 0 }) },
       evidence: { eventStore: new PgEventStore(orgScopingPool(appPool)), signer: contentAddressedEvidenceSigner },
-      claimOwner: "test-owner",
+      demoGate: new PgDeployTriggerGate(appPool, "delivery.demo"),
     });
     return { driver, deploy, demo };
   }
@@ -234,6 +236,43 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       sha: "c".repeat(40),
       deliveryId: "delivery-dec_b",
     });
+    // (4) fence: concurrency + evidence-gate proofs (driven via the store directly).
+    await seedMergedRun(ownerPool, {
+      org: ORG_A,
+      project: "proj_fence",
+      run: "run_fence",
+      spec: "spec_fence",
+      decision: "dec_fence",
+      node: "node_fence",
+      sha: "e".repeat(40),
+      deliveryId: "delivery-dec_fence",
+    });
+    await seedMergedRun(ownerPool, {
+      org: ORG_A,
+      project: "proj_gate",
+      run: "run_gate",
+      spec: "spec_gate",
+      decision: "dec_gate",
+      node: "node_gate",
+      sha: "f".repeat(40),
+      deliveryId: "delivery-dec_gate",
+    });
+    // (5) demo no-double-fire: a prior `stimulate` attempt with NO terminal demo event.
+    await seedMergedRun(ownerPool, {
+      org: ORG_A,
+      project: "proj_demo",
+      run: "run_demo",
+      spec: "spec_demo",
+      decision: "dec_demo",
+      node: "node_demo",
+      sha: "1".repeat(40),
+      deliveryId: "delivery-dec_demo",
+    });
+    await ownerPool.query(
+      `INSERT INTO delivery_stage_attempts (org_id, id, delivery_run_id, stage, ordinal, attempt, status, started_at)
+       VALUES ($1, $2, $3, 'stimulate', 6, 1, 'running', now())`,
+      [ORG_A, "delivery-dec_demo:stimulate:1", "delivery-dec_demo"],
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -318,5 +357,82 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     const bStages = await stageStatuses(appPool, ORG_B, "delivery-dec_b");
     // no stage attempts ever created for org B
     expect(bStages.size).toBe(0);
+  });
+
+  // Finding 1: the claim is a REAL fence — a superseded (stale) owner's writes are no-ops,
+  // and a completed run can never be flipped to degraded by a stale writer.
+  it("fence: a superseded owner's settle is a no-op; only the live owner settles", async () => {
+    const store = new DeliveryRunStore(appPool);
+    const id = "delivery-dec_fence";
+    const stale = await store.claim(ORG_A, "proj_fence", "e".repeat(40));
+    // supersedes the stale token
+    const live = await store.claim(ORG_A, "proj_fence", "e".repeat(40));
+    expect(stale).toBeDefined();
+    expect(live).toBeDefined();
+    if (stale === undefined || live === undefined) throw new Error("claim failed");
+    expect(stale.token).not.toBe(live.token);
+
+    // The stale owner's fence renew + terminal writes are ALL rejected (0 rows).
+    expect(await store.renewClaim(ORG_A, id, stale.token)).toBe(false);
+    expect(await store.markDegraded(ORG_A, id, stale.token, "stale_degrade")).toBe(false);
+    expect(await store.markNeedsAttention(ORG_A, id, stale.token, "stale_attn")).toBe(false);
+    // The live owner still owns it.
+    expect(await store.renewClaim(ORG_A, id, live.token)).toBe(true);
+    // The live owner degrades it (terminal for this pass).
+    expect(await store.markDegraded(ORG_A, id, live.token, "live_degrade")).toBe(true);
+    // A stale writer cannot flip the settled run afterward (status is no longer 'running').
+    expect(await store.markNeedsAttention(ORG_A, id, stale.token, "stale_flip")).toBe(false);
+    const row = await deliveryRow(appPool, ORG_A, id);
+    expect(row?.status).toBe("degraded");
+  });
+
+  // Finding 3: markCompleted refuses without a durable signed `delivery.completed` evidence row.
+  it("fence + evidence gate: markCompleted refuses until the signed evidence row exists", async () => {
+    const store = new DeliveryRunStore(appPool);
+    const id = "delivery-dec_gate";
+    const claimed = await store.claim(ORG_A, "proj_gate", "f".repeat(40));
+    expect(claimed).toBeDefined();
+    if (claimed === undefined) throw new Error("claim failed");
+
+    // No signed evidence yet → the fenced, evidence-gated CAS returns false.
+    expect(await store.markCompleted(ORG_A, id, claimed.token, "run_gate", "proj_gate")).toBe(false);
+    expect((await deliveryRow(appPool, ORG_A, id))?.status).toBe("running");
+
+    // Append the durable signed evidence, then completion is permitted.
+    await runWithJobOrgId(ORG_A, () =>
+      new PgEventStore(orgScopingPool(ownerPool)).append({
+        runId: "run_gate",
+        specId: "spec_gate",
+        projectId: "proj_gate",
+        orgId: ORG_A,
+        eventType: "delivery.completed",
+        payload: {
+          deliveryRunId: id,
+          mergeSha: "f".repeat(40),
+          stagesConfirmed: ["observe"],
+          observedEffect: "none",
+          evidenceDigest: `sha256:${"0".repeat(64)}`,
+          signature: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    );
+    expect(await store.markCompleted(ORG_A, id, claimed.token, "run_gate", "proj_gate")).toBe(true);
+    expect((await deliveryRow(appPool, ORG_A, id))?.status).toBe("completed");
+  });
+
+  // Finding 2: a demo stage re-entered after a prior stimulus (no terminal demo event) does
+  // NOT re-fire the live effect — it degrades fail-closed.
+  it("demo idempotency: a re-entered demo with a prior stimulus + no terminal does NOT re-fire", async () => {
+    const { driver, demo } = makeDriver();
+    await driver.check("run_demo");
+
+    const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo");
+    expect(row?.status).toBe("degraded");
+    expect(row?.completed_at).toBeNull();
+    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo");
+    expect(evTypes).toContain("delivery.degraded");
+    expect(evTypes).not.toContain("delivery.completed");
+    // The demo runner was NEVER invoked — the committed-maybe prior effect is not re-fired.
+    expect(demo.calls).toEqual([]);
   });
 });

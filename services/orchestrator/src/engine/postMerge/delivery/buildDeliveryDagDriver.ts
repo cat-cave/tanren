@@ -9,6 +9,7 @@ import type { VaultTokenMinter } from "../../contracts/vaultTokenMinter.js";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import { PgEventStore } from "../../eventStore.js";
 import { ReconciliationSagaDriver } from "../../integrations/reconciliationSaga.js";
+import { PgDeployTriggerGate } from "../deployTriggerGate.js";
 import type { RunMergeWatcher } from "../subscriber.js";
 import { DeliveryDagDriver } from "./deliveryDagDriver.js";
 import { contentAddressedEvidenceSigner } from "./deliveryEvidence.js";
@@ -37,6 +38,9 @@ export function buildDeliveryDagDriver(deps: {
     demoRunner: deps.demoWatcher,
     saga,
     evidence: { eventStore, signer: contentAddressedEvidenceSigner },
+    // A DISTINCT advisory-lock namespace from the deploy trigger gate so the demo effect
+    // and the deploy trigger never contend on one lock.
+    demoGate: new PgDeployTriggerGate(deps.pool, "delivery.demo"),
     ...(deps.minter !== undefined && { minter: deps.minter }),
   });
 }
