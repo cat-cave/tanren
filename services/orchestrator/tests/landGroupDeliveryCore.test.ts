@@ -67,6 +67,10 @@ class FakeDeployer implements GroupDeliveryDeployer {
   constructor(private readonly opts: FakeOptions = {}) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
+  async recoverDeployVerified(): Promise<void> {
+    /* not driven by runGroupDelivery (the loop calls it) */
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
   async buildArtifact(): Promise<GroupArtifact> {
     this.calls.push("build");
     this.buildCount += 1;

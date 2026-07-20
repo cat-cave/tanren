@@ -7,6 +7,7 @@ import type pg from "pg";
 import type { BehaviorRevisionId } from "../../contracts/behaviorRevision.js";
 import type { ReleaseInstanceRecord, UrlReachabilityProbe } from "../../contracts/deployAdapter.js";
 import type { EventStore } from "../../eventStore.js";
+import type { ReleaseInstancesRepository } from "../../repositories/releaseInstances.js";
 import { ReleaseInstancesStore } from "../../repositories/releaseInstances.js";
 import type { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
 import { loadSpecBehaviors } from "../demoOnDeployReads.js";
@@ -54,26 +55,47 @@ export async function deployVerifiedExists(pool: pg.Pool, plan: GroupDeliveryPla
   });
 }
 
-/** Append the group's `deploy.verified` on the tail run (idempotent — the shape mq-15 / ds-6 read). */
+/** The group `deploy.verified` idempotency key (the `(run_id, idempotency_key)` events unique index). */
+const GROUP_DEPLOY_VERIFIED_KEY = "deploy.verified";
+
+/**
+ * Append the group's `deploy.verified` on the tail run — IDEMPOTENT AT THE WRITE (Finding C): via
+ * `appendPriorIfAbsent` on the `(run_id, idempotency_key)` unique index, so two concurrent no-op
+ * `ensure` calls cannot double-emit (not just check-then-act). Falls back to a read-then-append for
+ * a test event store without `appendPriorIfAbsent`. Runs under an OPEN org scope (a pool-backed
+ * PgEventStore routes the INSERT through the ambient org-scoped client so RLS admits it) + the
+ * ambient job org (a plane-split runStateWriter routes to the control plane).
+ */
 export async function emitGroupDeployVerified(
   deps: { pool: pg.Pool; eventStore: EventStore },
   plan: GroupDeliveryPlan,
   target: ResolvedGroupDeployTarget,
   verified: { deploymentId: string; url: string; state: string; smokeStatus: number },
 ): Promise<void> {
-  if (await deployVerifiedExists(deps.pool, plan)) return;
-  // Under an OPEN org scope (so a pool-backed PgEventStore routes the INSERT through the ambient
-  // org-scoped client and RLS admits it) + the ambient job org (so a plane-split runStateWriter
-  // routes to the control plane).
+  const payload = groupDeployVerifiedPayload(plan, target, verified);
+  const appendPriorIfAbsent = deps.eventStore.appendPriorIfAbsent?.bind(deps.eventStore);
   await runWithJobOrgId(plan.orgId, () =>
     runWithOrgScope(deps.pool, plan.orgId, async () => {
+      if (appendPriorIfAbsent !== undefined) {
+        await appendPriorIfAbsent({
+          runId: plan.tailRunId,
+          specId: plan.tailSpecId,
+          projectId: plan.projectId,
+          orgId: plan.orgId,
+          eventType: "deploy.verified",
+          idempotencyKey: GROUP_DEPLOY_VERIFIED_KEY,
+          payload,
+        });
+        return;
+      }
+      if (await deployVerifiedExists(deps.pool, plan)) return;
       await deps.eventStore.append({
         runId: plan.tailRunId,
         specId: plan.tailSpecId,
         projectId: plan.projectId,
         orgId: plan.orgId,
         eventType: "deploy.verified",
-        payload: groupDeployVerifiedPayload(plan, target, verified),
+        payload,
       });
     }),
   );
@@ -98,6 +120,29 @@ export async function ensureGroupDeployVerified(
     url: release.url,
     state: release.state,
     smokeStatus,
+  });
+}
+
+/**
+ * The group's committed LIVE PRODUCTION release (for recovery, Finding A) — a live production
+ * release_instances row for the group's app bound to the landed commit (`source_ref = mainSha`).
+ * Not scoped by artifact/integration-node so a stranded live group is always found by its commit.
+ */
+export async function findGroupLiveProductionRelease(
+  pool: pg.Pool,
+  plan: GroupDeliveryPlan,
+  target: ResolvedGroupDeployTarget,
+): Promise<ReleaseInstanceRecord | undefined> {
+  return runWithOrgScope(pool, plan.orgId, async (client) => {
+    const releases = await ReleaseInstancesStore.listForProject(client, plan.orgId, plan.projectId);
+    return releases.find(
+      (r) =>
+        r.provider === target.provider &&
+        r.appId === target.appId &&
+        r.sourceRef === plan.mainSha &&
+        r.environment === "production" &&
+        r.state === "live",
+    );
   });
 }
 
@@ -159,6 +204,27 @@ export async function currentPriorGoodRelease(
     if (prior === undefined) return undefined;
     return { releaseInstanceId: prior.releaseInstanceId, artifactDigest: prior.artifactDigest };
   });
+}
+
+/** Read back a persisted release instance by its provider deployment handle (throws if absent). */
+export async function readBackGroupRelease(
+  releaseInstances: ReleaseInstancesRepository,
+  plan: GroupDeliveryPlan,
+  target: ResolvedGroupDeployTarget,
+  deploymentId: string,
+): Promise<ReleaseInstanceRecord> {
+  const record = await releaseInstances.getByDeployment({
+    orgId: plan.orgId,
+    provider: target.provider,
+    appId: target.appId,
+    deploymentId,
+  });
+  if (record === undefined) {
+    throw new Error(
+      `land-group delivery: no persisted release instance for deployment '${deploymentId}' on '${target.provider}/${target.appId}'`,
+    );
+  }
+  return record;
 }
 
 /** Resolve the group's active behavior REVISION ids — the union of the member specs' behaviors. */

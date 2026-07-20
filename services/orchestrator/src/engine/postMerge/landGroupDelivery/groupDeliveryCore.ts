@@ -136,6 +136,13 @@ function ambiguousDegrade(artifactDigest: string, previewReleaseInstanceId: stri
  * NOT claim `rolled_back`); every other throw propagates to the loop shell (→ needs_attention).
  */
 export interface GroupDeliveryDeployer {
+  /**
+   * RECOVERY (Finding A): if the group has a committed LIVE production release with no
+   * `deploy.verified`, emit it idempotently. Driven on EVERY wake BEFORE the claim so a live group
+   * stranded by a transient throw (which finalized `needs_attention`) always converges to having
+   * its mq-15/ds-6 evidence. A clean no-op unless the group is live-without-`deploy.verified`.
+   */
+  recoverDeployVerified(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<void>;
   /** BUILD exactly ONE artifact from the group main SHA; mint its canonical SP-3 digest. */
   buildArtifact(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<GroupArtifact>;
   /**

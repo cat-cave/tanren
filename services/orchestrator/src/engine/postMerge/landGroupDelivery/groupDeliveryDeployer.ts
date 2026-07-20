@@ -22,7 +22,6 @@ import { parseDigest } from "../../contracts/cas.js";
 import type {
   DeployAdapter,
   DeployRef,
-  ReleaseInstanceRecord,
   UrlReachabilityProbe,
   VerifyPollPolicy,
 } from "../../contracts/deployAdapter.js";
@@ -46,6 +45,8 @@ import {
   currentPriorGoodRelease,
   emitGroupDeployVerified,
   ensureGroupDeployVerified,
+  readBackGroupRelease,
+  findGroupLiveProductionRelease,
   findGroupRelease,
   resolveGroupBehaviorRevisionIds,
 } from "./groupDeliveryDeployerHelpers.js";
@@ -166,7 +167,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     }
     // FIRE: write the preview intent FENCED (also the immediate fence-recheck, Finding C) COMMITTED
     // BEFORE the external deploy. A lost fence ⇒ abort before firing.
-    await this.markIntentOrAbort(plan, input.token, input.heartbeat, "preview");
+    await this.markIntentOrAbort(plan, input.token, "preview");
     const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
     const grant = await this.grant(plan, target, "deploy", {
       resourceId: target.appId,
@@ -181,7 +182,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     });
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
-    const release = await this.readBackRelease(plan, target, preview.deploymentId);
+    const release = await readBackGroupRelease(this.releaseInstances, plan, target, preview.deploymentId);
     return {
       kind: "applied",
       preview: {
@@ -197,22 +198,27 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
 
   /**
    * Write the step's intent marker FENCED (Finding A) BEFORE the external effect — which is ALSO
-   * the atomic immediate fence-recheck (Finding C). A lost fence ⇒ throw claim-lost (abort before
-   * firing). With no intent store (tests), fall back to the heartbeat fence-recheck.
+   * the atomic immediate fence-recheck (the prior-round Finding C). A lost fence ⇒ throw claim-lost
+   * (abort before firing).
+   *
+   * FAIL-CLOSED (this round's Finding B): the intent store + fence token are REQUIRED before ANY
+   * irreversible external effect. A mis-composed deployer (missing either) MUST NOT fall through to
+   * firing without an intent marker — that would re-open the double-deploy window. Abort LOUD.
    */
   private async markIntentOrAbort(
     plan: GroupDeliveryPlan,
     token: string | undefined,
-    heartbeat: (() => Promise<void>) | undefined,
     step: "preview" | "promote",
   ): Promise<void> {
-    if (this.deps.intentStore !== undefined && token !== undefined) {
-      if (!(await this.deps.intentStore.writeIntent(plan.orgId, plan.landGroupId, token, step))) {
-        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
-      }
-      return;
+    if (this.deps.intentStore === undefined || token === undefined) {
+      throw new Error(
+        `land-group delivery: refusing to fire the ${step} external effect without an intent marker ` +
+          "(mis-composed deployer — the intent store + fence token are REQUIRED; never fire-without-intent)",
+      );
     }
-    if (heartbeat !== undefined) await heartbeat();
+    if (!(await this.deps.intentStore.writeIntent(plan.orgId, plan.landGroupId, token, step))) {
+      throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+    }
   }
 
   async verifyPreview(input: {
@@ -233,7 +239,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     environment: "preview" | "production";
   }): Promise<GroupDemoOutcome> {
     const { plan, target, release } = input;
-    const record = await this.readBackRelease(plan, target, release.deploymentId);
+    const record = await readBackGroupRelease(this.releaseInstances, plan, target, release.deploymentId);
     try {
       const result = await this.proofBackedWebDemo.demo(
         { runId: plan.tailRunId, specId: plan.tailSpecId, projectId: plan.projectId, orgId: plan.orgId },
@@ -324,7 +330,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     // FIRE: write the promote intent FENCED (the atomic immediate fence-recheck, Finding C)
     // COMMITTED IMMEDIATELY BEFORE the external promote. A lost fence ⇒ abort before firing. This
     // is the tightest boundary — write intent, then the external call, then the durable completion.
-    await this.markIntentOrAbort(plan, input.token, input.heartbeat, "promote");
+    await this.markIntentOrAbort(plan, input.token, "promote");
     const prior = current;
     const grant = await this.grant(plan, target, "promote", {
       resourceId: target.appId,
@@ -345,7 +351,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       state: verified.state,
       smokeStatus: verified.smokeStatus,
     });
-    const release = await this.readBackRelease(plan, target, transition.deploymentId);
+    const release = await readBackGroupRelease(this.releaseInstances, plan, target, transition.deploymentId);
     return {
       kind: "promoted",
       production: {
@@ -356,6 +362,22 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
         },
       },
     };
+  }
+
+  async recoverDeployVerified(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<void> {
+    // Finding A (HIGH): a genuinely-LIVE group must ALWAYS converge to having its `deploy.verified`.
+    // If a prior attempt finalized `needs_attention` AFTER `adapter.promote` marked the release
+    // live but a transient throw (verify/emit) skipped the emit, the terminal row blocks re-entry —
+    // so this RECOVERY runs on EVERY wake, BEFORE the claim, idempotently: if the group has a
+    // committed live production release with no `deploy.verified`, emit it (else a clean no-op).
+    const live = await findGroupLiveProductionRelease(this.deps.pool, input.plan, input.target);
+    if (live === undefined) return;
+    await ensureGroupDeployVerified(
+      { pool: this.deps.pool, eventStore: this.deps.eventStore, urlProbe: this.urlProbe },
+      input.plan,
+      input.target,
+      live,
+    );
   }
 
   async currentPriorGood(input: {
@@ -471,24 +493,5 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       );
     }
     return { state: poll.state, url: poll.url, smokeStatus: smoke };
-  }
-
-  private async readBackRelease(
-    plan: GroupDeliveryPlan,
-    target: ResolvedGroupDeployTarget,
-    deploymentId: string,
-  ): Promise<ReleaseInstanceRecord> {
-    const record = await this.releaseInstances.getByDeployment({
-      orgId: plan.orgId,
-      provider: target.provider,
-      appId: target.appId,
-      deploymentId,
-    });
-    if (record === undefined) {
-      throw new Error(
-        `land-group delivery: no persisted release instance for deployment '${deploymentId}' on '${target.provider}/${target.appId}'`,
-      );
-    }
-    return record;
   }
 }

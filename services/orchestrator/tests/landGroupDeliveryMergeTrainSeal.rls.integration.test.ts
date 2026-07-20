@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MergeTrainArtifactWatcher } from "../src/engine/postMerge/mergeTrainArtifactWatcher.js";
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import { groupDeployVerifiedPayload } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployerHelpers.js";
+import { ProductionGroupDeliveryDeployer } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
 import {
   basePlan,
@@ -31,6 +33,46 @@ describeDb("mq-13 × mq-15 — a land group's group-loop evidence seals a merge-
   }, 60_000);
 
   afterAll(() => db.drop());
+
+  it("recovers deploy.verified for a live group stranded by a throw (idempotent) → mq-15 seals (Findings A + C)", async () => {
+    const { app, owner } = db;
+    const plan = { ...basePlan(), landGroupId: LG };
+    // rel-prod is live (source_ref = MAIN) but RUN has NO deploy.verified (a prior attempt threw
+    // after the release went live and finalized needs_attention). Recovery must emit it now.
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: new PgEventStore(app),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      urlProbe: { probe: async () => 200 },
+    });
+    await deployer.recoverDeployVerified({ plan, target: TARGET });
+    // Finding C: a SECOND recovery does NOT double-emit (idempotent at the write).
+    await deployer.recoverDeployVerified({ plan, target: TARGET });
+    const dv = await runWithOrgScope(app, ORG, (client) =>
+      client.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM events WHERE org_id = $1 AND run_id = $2 AND event_type = 'deploy.verified'",
+        [ORG, RUN],
+      ),
+    );
+    expect(dv.rows[0]?.n).toBe(1);
+    // The recovered deploy.verified + demo.completed → mq-15 seals (the live group is not starved).
+    await insertEvents(owner, RUN, [
+      ["demo.completed", { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 }],
+    ]);
+    const cas = new PgCasByteStore(app);
+    const substrate = new TestProofSubstrate(app, cas);
+    const watcher = new MergeTrainArtifactWatcher({ pool: app, proofSubstrate: substrate, casByteStore: cas });
+    await watcher.check(RUN);
+    const sealed = await runWithOrgScope(app, ORG, (client) =>
+      client.query<{ land_group_id: string }>(
+        "SELECT land_group_id FROM merge_train_artifacts WHERE org_id = $1 AND land_group_id = $2",
+        [ORG, LG],
+      ),
+    );
+    expect(sealed.rows).toHaveLength(1);
+  });
 
   it("mq-15 SEALS a merge-train artifact from the GROUP's deploy.verified + demo.completed", async () => {
     const { app, owner } = db;

@@ -214,8 +214,8 @@ export async function seedTenant(owner: Pool): Promise<void> {
     await owner.query(
       `INSERT INTO release_instances
          (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref, artifact_digest,
-          integration_node_id, state)
-       VALUES ($1,$2,$3,'deploy.vercel','app1',$4,$5,$6,$7,$8,$9)`,
+          integration_node_id, state, url)
+       VALUES ($1,$2,$3,'deploy.vercel','app1',$4,$5,$6,$7,$8,$9,'https://app1.example.com')`,
       [ORG, id, PROJECT, env, deploymentId, MAIN, ARTIFACT_DIGEST, NODE, state],
     );
   }
@@ -343,6 +343,8 @@ export class HappyFakeDeployer implements GroupDeliveryDeployer {
   async buildArtifact(): Promise<GroupArtifact> {
     return ARTIFACT;
   }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async recoverDeployVerified(): Promise<void> {}
   // eslint-disable-next-line @typescript-eslint/require-await
   async applyPreview(): Promise<GroupPreviewOutcome> {
     return { kind: "applied", preview: PREVIEW };

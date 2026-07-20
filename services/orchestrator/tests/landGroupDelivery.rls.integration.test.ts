@@ -279,6 +279,45 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     expect(previewFired).toBe(false);
   });
 
+  it("FAIL-CLOSED intent seam: a deployer WITHOUT an intent store REFUSES to fire promote (Finding B)", async () => {
+    // A mis-composed deployer (no intent store) must NOT fall through to firing the external promote
+    // without an intent marker — that would re-open the double-deploy window. It aborts LOUD instead.
+    let promoteCalls = 0;
+    const guardAdapter = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async promote() {
+        promoteCalls += 1;
+        throw new Error("adapter.promote MUST NOT fire without an intent marker");
+      },
+    } as unknown as DeployAdapter;
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: new PgEventStore(app),
+      deployAdapter: guardAdapter,
+      // NO intentStore — the mis-composition the seam must fail closed on.
+    });
+    await expect(
+      deployer.promote({
+        // A group with no live release for THIS main SHA (so it reaches the fire path).
+        plan: { ...basePlan(), landGroupId: LG_INTENT, mainSha: MAIN_INTENT },
+        target: TARGET,
+        artifact: { artifactDigest: ARTIFACT_INTENT, deploymentId: "dep-build-b" },
+        preview: {
+          release: { releaseInstanceId: "rel-p-b", deploymentId: "dep-p-b", artifactDigest: ARTIFACT_INTENT },
+          previewDeploymentId: "dep-p-b",
+        },
+        token: "tokB",
+        heartbeat: async () => {
+          /* still owned */
+        },
+      }),
+    ).rejects.toThrow(/without an intent marker/u);
+    // never fired the external promote
+    expect(promoteCalls).toBe(0);
+  });
+
   it("continuous heartbeat keeps a LIVE owner fresh (not taken over); a DEAD owner is reclaimed (Finding A)", async () => {
     const store = new PgLandGroupDeliveryStore(app);
     const ownerClaim = await store.claim({ orgId: ORG, projectId: PROJECT, landGroupId: LG_HB, mainSha: MAIN });

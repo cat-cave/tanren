@@ -81,6 +81,21 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
       policyVersion: resolution.target.policyVersion,
     };
 
+    // 2.5 RECOVERY (Finding A): BEFORE the terminal-blocking claim, ensure a genuinely-LIVE group
+    // always has its `deploy.verified`. If a prior attempt finalized `needs_attention` AFTER the
+    // release went live but a transient throw skipped the emit, this idempotent recovery re-emits it
+    // on this wake — so mq-15 seal + ds-6 join are never permanently starved. A clean no-op unless
+    // the group is live-without-`deploy.verified`. ISOLATED — a recovery failure is logged, never
+    // blocking the drive below.
+    try {
+      await this.deps.deployer.recoverDeployVerified({ plan, target });
+    } catch (error) {
+      log.warn("land group deploy.verified recovery failed (will retry next wake)", {
+        landGroupId: plan.landGroupId,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // 3. CLAIM the group (idempotency + cross-process ownership). A terminal row ⇒ exactly one
     //    receipt/artifact already delivered — no-op. A non-terminal `in_progress` ⇒ another
     //    owner is driving — no-op this pass.
