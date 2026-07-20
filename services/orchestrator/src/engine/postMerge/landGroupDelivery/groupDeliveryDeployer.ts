@@ -11,7 +11,7 @@
 // a URL smoke check (NO markLive), preserving the invariant that NOTHING promotes until the
 // preview's proof-backed demo passes. Only the promote step verifies through the live path.
 
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import {
   buildDeployAdapter,
@@ -40,11 +40,10 @@ import {
   isProofBackedLoadFailure,
   type ProofBackedWebDemo,
 } from "../../demo/proofBackedWebDemo.js";
-import { runWithOrgScope } from "@tanren/db";
 import { createLogger } from "../../observability/logger.js";
 import { pollUntilTerminal } from "../../deploy/pollUntilTerminal.js";
 import { loadSpecBehaviors } from "../demoOnDeployReads.js";
-import { loadDeployOperationGrant, missingDeployGrantError } from "../deployOnMergeAuthority.js";
+import { deployAuditEnvelope, loadDeployOperationGrant, missingDeployGrantError } from "../deployOnMergeAuthority.js";
 import type { SecretStore, DeployHttpTransport } from "../deployOnMergeDeployDeps.js";
 import type {
   GroupArtifact,
@@ -60,6 +59,34 @@ import type {
 
 const log = createLogger("land-group-delivery-deployer");
 
+/**
+ * Build the GROUP's `deploy.verified` payload — the shape mq-15's `gatherEvidenceFromClient`
+ * and ds-6's `designDeliveryProofReads` read (provider / appId / deploymentId / url / state +
+ * smokeStatus + the audit envelope, bound to the LIVE production deployment). Pure so the shape
+ * is unit-testable against BOTH the strict registered `DeployVerifiedPayload` and the consumers'
+ * projections (Finding 2). NON-SECRET — refs + a URL + a state + a status code.
+ */
+export function groupDeployVerifiedPayload(
+  plan: GroupDeliveryPlan,
+  target: ResolvedGroupDeployTarget,
+  verified: { deploymentId: string; url: string; state: string; smokeStatus: number },
+) {
+  return {
+    provider: target.provider,
+    appId: target.appId,
+    deploymentId: verified.deploymentId,
+    url: verified.url,
+    state: verified.state,
+    smokeStatus: verified.smokeStatus,
+    ...deployAuditEnvelope({
+      provider: target.provider,
+      appId: target.appId,
+      orgId: plan.orgId,
+      policyVersion: target.policyVersion,
+    }),
+  };
+}
+
 export interface ProductionGroupDeliveryDeployerDeps {
   readonly pool: pg.Pool;
   readonly secrets: SecretStore;
@@ -70,6 +97,8 @@ export interface ProductionGroupDeliveryDeployerDeps {
   readonly proofBackedWebDemo?: ProofBackedWebDemo;
   readonly urlProbe?: UrlReachabilityProbe;
   readonly verifyPoll?: VerifyPollPolicy;
+  /** Injectable DeployAdapter (tests); defaults to the production `direct_api` adapter per drive. */
+  readonly deployAdapter?: DeployAdapter;
 }
 
 /** The `deploy.<provider>` provider kind maps onto the `deployRef.provider`. */
@@ -126,8 +155,8 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       integrationNodeId: plan.tailRunId,
       behaviorRevisionIds,
     });
-    // Preview-safe readiness: poll status to READY + smoke-check the URL (NO markLive).
-    await this.verifyReadiness(plan, target, preview.deploymentId);
+    // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
+    // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
     const release = await this.readBackRelease(plan, target, preview.deploymentId);
     return {
       release: {
@@ -137,6 +166,17 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       },
       previewDeploymentId: preview.deploymentId,
     };
+  }
+
+  async verifyPreview(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    preview: GroupPreview;
+    heartbeat?: () => Promise<void>;
+  }): Promise<void> {
+    // Preview-safe readiness: poll status to READY + smoke-check the URL (NO markLive). Throws
+    // LOUD when the preview never becomes reachable (the core tears it down → preview_failed).
+    await this.verifyReadiness(input.plan, input.target, input.preview.previewDeploymentId, input.heartbeat);
   }
 
   async demo(input: {
@@ -184,6 +224,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
     preview: GroupPreview;
+    heartbeat?: () => Promise<void>;
   }): Promise<GroupProduction> {
     const { plan, target, artifact, preview } = input;
     const ref = this.ref(target);
@@ -198,7 +239,18 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       previousReleaseInstanceId: prior?.releaseInstanceId ?? null,
     });
     // Production verify (the markLive path is correct here — the release IS production now).
-    await this.verifyReadiness(plan, target, transition.deploymentId);
+    const verified = await this.verifyReadiness(plan, target, transition.deploymentId, input.heartbeat);
+    // Finding 2: durably emit the GROUP's `deploy.verified` on the tail run so mq-15 seals +
+    // ds-6 joins from the group's evidence (in-17's per-run delivery — the sole other emitter —
+    // is membership-guarded off for group members, so this is the ONLY deploy.verified a land
+    // group gets). The shape is exactly what mq-15/ds-6 read (provider/appId/deploymentId/url/
+    // state + smoke + audit envelope), bound to the LIVE production deployment.
+    await this.emitGroupDeployVerified(plan, target, {
+      deploymentId: transition.deploymentId,
+      url: verified.url,
+      state: verified.state,
+      smokeStatus: verified.smokeStatus,
+    });
     const release = await this.readBackRelease(plan, target, transition.deploymentId);
     return {
       release: {
@@ -209,14 +261,44 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     };
   }
 
+  /** Append the group's `deploy.verified` on the tail run (the shape mq-15 / ds-6 read). */
+  private async emitGroupDeployVerified(
+    plan: GroupDeliveryPlan,
+    target: ResolvedGroupDeployTarget,
+    verified: { deploymentId: string; url: string; state: string; smokeStatus: number },
+  ): Promise<void> {
+    await runWithJobOrgId(plan.orgId, async () => {
+      await this.deps.eventStore.append({
+        runId: plan.tailRunId,
+        specId: plan.tailSpecId,
+        projectId: plan.projectId,
+        orgId: plan.orgId,
+        eventType: "deploy.verified",
+        payload: groupDeployVerifiedPayload(plan, target, verified),
+      });
+    });
+  }
+
   async currentPriorGood(input: {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     exceptReleaseInstanceId: string;
   }): Promise<PriorGoodRelease | undefined> {
-    const record = await this.currentLiveRecord(input.plan, input.target, input.exceptReleaseInstanceId);
-    if (record === undefined) return undefined;
-    return { releaseInstanceId: record.releaseInstanceId, artifactDigest: record.artifactDigest };
+    const { plan } = input;
+    // Finding 1: the prior-good is the release the just-promoted production release SUPERSEDED
+    // — it is now state `superseded` (promote demoted it), so a `latestLive` (state='live')
+    // lookup would ALWAYS miss it and the loop would never roll back. Read the DURABLE promote
+    // lineage instead: the production release records the release it superseded as its
+    // `previousReleaseInstanceId`. A null predecessor is a genuine no-prior-good (first-ever
+    // release, nothing to roll back to) ⇒ undefined ⇒ the core ends needs_attention.
+    return runWithOrgScope(this.deps.pool, plan.orgId, async (client): Promise<PriorGoodRelease | undefined> => {
+      const production = await ReleaseInstancesStore.getById(client, plan.orgId, input.exceptReleaseInstanceId);
+      const priorId = production?.previousReleaseInstanceId ?? null;
+      if (priorId === null) return undefined;
+      const prior = await ReleaseInstancesStore.getById(client, plan.orgId, priorId);
+      if (prior === undefined) return undefined;
+      return { releaseInstanceId: prior.releaseInstanceId, artifactDigest: prior.artifactDigest };
+    });
   }
 
   async rollback(input: {
@@ -241,6 +323,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   // ---- private wiring -----------------------------------------------------------------
 
   private adapter(plan: GroupDeliveryPlan): DeployAdapter {
+    if (this.deps.deployAdapter !== undefined) return this.deps.deployAdapter;
     return buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
       releaseInstances: this.releaseInstances,
@@ -278,16 +361,26 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     return grant;
   }
 
-  /** Poll the provider deployment status to READY (unbounded while advancing) + smoke-check the URL. */
+  /**
+   * Poll the provider deployment status to READY (unbounded while advancing) + smoke-check the
+   * URL. Returns the verification (final state + resolved URL + smoke status) so the caller can
+   * bind the group's `deploy.verified` to the live deployment. Throws LOUD on a failure/stuck
+   * terminal or an unreachable URL.
+   */
   private async verifyReadiness(
     plan: GroupDeliveryPlan,
     target: ResolvedGroupDeployTarget,
     deploymentId: string,
-  ): Promise<void> {
+    heartbeat?: () => Promise<void>,
+  ): Promise<{ state: string; url: string; smokeStatus: number }> {
     const ref = this.ref(target);
     const adapter = this.adapter(plan);
     const { poll } = await pollUntilTerminal<{ state: string; ready: boolean; failed: boolean; url: string }>({
       readState: async () => {
+        // Per-poll liveness sign-of-life: an unbounded-but-progressing verify keeps the delivery
+        // claim fresh so a live owner is NEVER taken over (Finding 5 — no double-deploy). A lost
+        // claim throws here, aborting the drive before any further external effect.
+        if (heartbeat !== undefined) await heartbeat();
         const grant = await this.grant(plan, target, "deploy", { resourceId: target.appId, deploymentId });
         const status = await adapter.status(grant, ref, deploymentId);
         return { state: status.state, ready: status.ready, failed: status.failed, url: status.url };
@@ -312,6 +405,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
         `land-group delivery: deployment '${deploymentId}' URL '${poll.url}' not reachable (HTTP ${String(smoke)})`,
       );
     }
+    return { state: poll.state, url: poll.url, smokeStatus: smoke };
   }
 
   private async readBackRelease(

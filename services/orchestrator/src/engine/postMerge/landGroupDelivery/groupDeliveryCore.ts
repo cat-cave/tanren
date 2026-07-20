@@ -97,12 +97,28 @@ export interface PriorGoodRelease {
 export interface GroupDeliveryDeployer {
   /** BUILD exactly ONE artifact from the group main SHA; mint its canonical SP-3 digest. */
   buildArtifact(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<GroupArtifact>;
-  /** Apply a PREVIEW of the built artifact, verify it live, and persist the preview release. */
+  /**
+   * Apply a PREVIEW of the built artifact + persist the preview release (does NOT verify —
+   * verification is the separate {@link verifyPreview} step so a verify failure can be caught
+   * and torn down without leaking the preview).
+   */
   applyPreview(input: {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
   }): Promise<GroupPreview>;
+  /**
+   * VERIFY the applied preview is live (poll-to-ready + URL smoke). Throws LOUD when the
+   * preview never becomes reachable — the caller tears the preview down and records
+   * `preview_failed` (no leaked preview, no needs_attention for an ordinary preview failure).
+   */
+  verifyPreview(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    preview: GroupPreview;
+    /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
+    heartbeat?: () => Promise<void>;
+  }): Promise<void>;
   /** Run the PROOF-BACKED demo against a release; a load/observe failure folds to `ok:false`. */
   demo(input: {
     plan: GroupDeliveryPlan;
@@ -122,6 +138,8 @@ export interface GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
     preview: GroupPreview;
+    /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
+    heartbeat?: () => Promise<void>;
   }): Promise<GroupProduction>;
   /** The current LIVE production release (prior-good) EXCLUDING the just-promoted one, or undefined. */
   currentPriorGood(input: {
@@ -187,36 +205,62 @@ export async function runGroupDelivery(deps: {
   readonly attribution: GroupRegressionAttribution;
   readonly plan: GroupDeliveryPlan;
   readonly target: ResolvedGroupDeployTarget;
+  /**
+   * A progress sign-of-life the loop calls between phases to RENEW its liveness lease (Finding
+   * 5); it THROWS if the claim was taken over (a stale owner) so this drive aborts before
+   * finalizing alongside the new owner. Optional (unit tests pass none — a no-op heartbeat).
+   */
+  readonly heartbeat?: () => Promise<void>;
 }): Promise<GroupDeliveryOutcome> {
   const { deployer, attribution, plan, target } = deps;
+  const beat = deps.heartbeat ?? (async (): Promise<void> => undefined);
 
   // 1. Build ONE artifact for the whole completed group (single call ⇒ exactly one artifact).
+  await beat();
   const artifact = await deployer.buildArtifact({ plan, target });
 
-  // 2. Apply a preview of the built artifact + verify it live.
+  // 2. Apply a preview of the built artifact (persists the preview release; does NOT verify).
+  await beat();
   const preview = await deployer.applyPreview({ plan, target, artifact });
+  const previewFailed = (): GroupDeliveryOutcome => ({
+    state: "preview_failed",
+    disposition: "none",
+    artifactDigest: artifact.artifactDigest,
+    previewReleaseInstanceId: preview.release.releaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  });
 
-  // 3. PROOF-BACKED preview demo. A failed preview proof ⇒ NO promote + tear the preview down
+  // 3. VERIFY the preview is live. A verify failure ⇒ tear the preview DOWN + `preview_failed`
+  //    (Finding 4: an applied-but-unverifiable preview must never leak nor degrade to
+  //    needs_attention — it is an ordinary preview failure, cleaned up and recorded).
+  await beat();
+  try {
+    await deployer.verifyPreview({ plan, target, preview, heartbeat: beat });
+  } catch {
+    await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+    return previewFailed();
+  }
+
+  // 4. PROOF-BACKED preview demo. A failed preview proof ⇒ NO promote + tear the preview down
   //    (the gravest fail-open — promoting a failed preview as if the group were verified — is
   //    prohibited here).
+  await beat();
   const previewDemo = await deployer.demo({ plan, target, release: preview.release, environment: "preview" });
   if (!previewDemo.ok) {
     await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
-    return {
-      state: "preview_failed",
-      disposition: "none",
-      artifactDigest: artifact.artifactDigest,
-      previewReleaseInstanceId: preview.release.releaseInstanceId,
-      productionReleaseInstanceId: null,
-      rollbackReleaseInstanceId: null,
-      attributedRunId: null,
-    };
+    return previewFailed();
   }
 
-  // 4. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production + verify live.
-  const production = await deployer.promote({ plan, target, artifact, preview });
+  // 5. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production + verify live
+  //    (the promote step durably emits the GROUP's `deploy.verified` on the tail run so mq-15
+  //    seals + ds-6 joins from the group's evidence).
+  await beat();
+  const production = await deployer.promote({ plan, target, artifact, preview, heartbeat: beat });
 
-  // 5. PROOF-BACKED production demo (the group's `demo.completed` on the tail run).
+  // 6. PROOF-BACKED production demo (the group's `demo.completed` on the tail run).
+  await beat();
   const productionDemo = await deployer.demo({ plan, target, release: production.release, environment: "production" });
   if (productionDemo.ok) {
     return {

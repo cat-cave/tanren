@@ -193,14 +193,24 @@ export async function resolveGroupDeployTarget(
 }
 
 /**
- * THE MEMBERSHIP GUARD. Whether `runId` is a member of ANY land group — the guard the in-17
- * per-run delivery driver consults so a group member's per-run deploy/demo NO-OPS (the group
- * loop owns the ONE group-level delivery). Reads `land_group_members` under the passed scope.
- * A solo (non-group) run returns false and keeps its per-run delivery unchanged.
+ * THE MEMBERSHIP GUARD. Whether `runId` is a member of a COMPLETED land group — the guard the
+ * in-17 per-run delivery driver consults so a group member's per-run deploy/demo NO-OPS (the
+ * group loop owns the ONE group-level delivery).
+ *
+ * SCOPED TO `completed` (Finding 3): the LandGroupDeliveryLoop ONLY delivers COMPLETED groups
+ * (it activates on `merge.land_group.completed`). A member of a formed/failed/partial group is
+ * NOT delivered by the loop, so it must KEEP its normal per-run delivery — suppressing it would
+ * strand that member with zero delivery forever. So this returns true ONLY when the run's group
+ * is `completed` (the exact state set the loop handles). A solo (non-group) run, or a member of
+ * a non-completed group, returns false and keeps its per-run delivery.
  */
 export async function isLandGroupMember(client: ReadClient, orgId: string, runId: string): Promise<boolean> {
   const result = await client.query<{ one: number }>(
-    "SELECT 1 AS one FROM land_group_members WHERE org_id = $1 AND run_id = $2 LIMIT 1",
+    `SELECT 1 AS one
+       FROM land_group_members m
+       JOIN land_groups g ON g.org_id = m.org_id AND g.id = m.land_group_id
+      WHERE m.org_id = $1 AND m.run_id = $2 AND g.state = 'completed'
+      LIMIT 1`,
     [orgId, runId],
   );
   return result.rows[0] !== undefined;

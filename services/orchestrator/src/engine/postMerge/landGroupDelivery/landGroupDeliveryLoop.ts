@@ -23,7 +23,7 @@ import {
   type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
 import { resolveCompletedGroup, resolveGroupDeployTarget } from "./landGroupDeliveryReads.js";
-import { PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
+import { LandGroupDeliveryClaimLostError, PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
 
 const log = createLogger("land-group-delivery");
 
@@ -93,27 +93,47 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
     }
 
     // 4. Own the delivery: drive the fail-closed decision tree, then persist the terminal receipt.
+    // A per-phase HEARTBEAT renews the liveness lease so a live-but-slow owner is never taken
+    // over; if the claim WAS taken over (this owner went stale), the heartbeat throws and this
+    // drive aborts WITHOUT finalizing (the new owner drives to terminal — never double-finalize).
+    const { token } = claim;
+    const heartbeat = async (): Promise<void> => {
+      if (!(await this.store.renewClaim(plan.orgId, plan.landGroupId, token))) {
+        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+      }
+    };
     try {
       const outcome = await runGroupDelivery({
         deployer: this.deps.deployer,
         attribution: this.deps.attribution,
         plan,
         target,
+        heartbeat,
       });
-      await this.store.finalize({ plan, token: claim.token, outcome, reason: OUTCOME_REASON[outcome.state] });
+      await this.store.finalize({ plan, token, outcome, reason: OUTCOME_REASON[outcome.state] });
       log.info("land group delivery finalized", {
         landGroupId: plan.landGroupId,
         state: outcome.state,
         disposition: outcome.disposition,
       });
     } catch (error) {
+      if (error instanceof LandGroupDeliveryClaimLostError) {
+        // A fresh worker took over this stale claim — abort WITHOUT finalizing (the new owner
+        // owns the terminal decision). The finalize below is fenced anyway, but returning here
+        // keeps the intent explicit + avoids a needless fenced no-op write.
+        log.warn("land group delivery claim taken over mid-drive — deferring to the new owner", {
+          landGroupId: plan.landGroupId,
+        });
+        return;
+      }
       // An UNEXPECTED throw (a stage the deployer could not confirm) — record a durable
       // needs_attention receipt so the group never stays stranded `in_progress`, and re-throw
-      // so the subscriber's isolation `.catch` logs it (never silently swallowed).
+      // so the subscriber's isolation `.catch` logs it (never silently swallowed). The finalize
+      // is FENCED on the token: if the claim was lost, it is a safe no-op.
       log.error("land group delivery failed unexpectedly", { landGroupId: plan.landGroupId }, error);
       await this.store.finalize({
         plan,
-        token: claim.token,
+        token,
         outcome: needsAttentionOutcome(),
         reason: "land group delivery loop failed before reaching a terminal decision",
       });

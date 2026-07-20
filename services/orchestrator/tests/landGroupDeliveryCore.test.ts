@@ -53,6 +53,7 @@ interface FakeOptions {
   priorGood?: PriorGoodRelease | undefined;
   rollbackThrows?: boolean;
   buildThrows?: boolean;
+  previewVerifyThrows?: boolean;
 }
 
 class FakeDeployer implements GroupDeliveryDeployer {
@@ -73,6 +74,11 @@ class FakeDeployer implements GroupDeliveryDeployer {
   async applyPreview(): Promise<GroupPreview> {
     this.calls.push("applyPreview");
     return PREVIEW;
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async verifyPreview(): Promise<void> {
+    this.calls.push("verifyPreview");
+    if (this.opts.previewVerifyThrows === true) throw new Error("preview never became reachable");
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async demo(input: { environment: "preview" | "production" }): Promise<GroupDemoOutcome> {
@@ -131,7 +137,14 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
     const outcome = await drive(deployer, UNATTRIBUTED);
     // exactly ONE artifact per completed group
     expect(deployer.buildCount).toBe(1);
-    expect(deployer.calls).toEqual(["build", "applyPreview", "demo:preview", "promote", "demo:production"]);
+    expect(deployer.calls).toEqual([
+      "build",
+      "applyPreview",
+      "verifyPreview",
+      "demo:preview",
+      "promote",
+      "demo:production",
+    ]);
     expect(outcome.state).toBe("completed");
     expect(outcome.disposition).toBe("none");
     expect(outcome.productionReleaseInstanceId).toBe("rel-prod");
@@ -141,12 +154,24 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
   it("failed preview demo → NO promote + preview teardown (gravest fail-open blocked)", async () => {
     const deployer = new FakeDeployer({ previewDemoOk: false });
     const outcome = await drive(deployer, UNATTRIBUTED);
-    expect(deployer.calls).toEqual(["build", "applyPreview", "demo:preview", "teardown"]);
+    expect(deployer.calls).toEqual(["build", "applyPreview", "verifyPreview", "demo:preview", "teardown"]);
     // never promotes a failed preview
     expect(deployer.calls).not.toContain("promote");
     expect(deployer.teardownCount).toBe(1);
     expect(outcome.state).toBe("preview_failed");
     expect(outcome.productionReleaseInstanceId).toBeNull();
+  });
+
+  it("preview VERIFY failure → teardown + preview_failed, never needs_attention or a leaked preview (Finding 4)", async () => {
+    const deployer = new FakeDeployer({ previewVerifyThrows: true });
+    const outcome = await drive(deployer, UNATTRIBUTED);
+    expect(deployer.calls).toEqual(["build", "applyPreview", "verifyPreview", "teardown"]);
+    // a failed preview VERIFY tears down the preview and never promotes or demos it
+    expect(deployer.calls).not.toContain("promote");
+    expect(deployer.calls).not.toContain("demo:preview");
+    expect(deployer.teardownCount).toBe(1);
+    expect(outcome.state).toBe("preview_failed");
+    expect(outcome.previewReleaseInstanceId).toBe("rel-preview");
   });
 
   it("production regression with prior-good → REAL rollback to prior-good lineage + repair route", async () => {

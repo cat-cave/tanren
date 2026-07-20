@@ -26,6 +26,24 @@ export type ClaimResult =
   | { readonly kind: "owned"; readonly token: string }
   | { readonly kind: "exists"; readonly state: LandGroupDeliveryState };
 
+/**
+ * The LIVENESS LEASE (Finding 5): the max span an owner's claim may go WITHOUT a progress
+ * sign-of-life before a fresh worker may TAKE OVER a strand ed `in_progress` row (a dead owner).
+ * This is a sign-of-life liveness bound (the ActivityWatchdog pattern), NOT a work deadline —
+ * the delivery work itself is unbounded, and the OWNER RENEWS this lease between phases
+ * (`renewClaim`) so a live-but-slow owner keeps its claim fresh and is never taken over. A
+ * SQL interval literal (passed as a parameter), so no wall-clock timer bounds any work.
+ */
+const CLAIM_LIVENESS_LEASE = "15 minutes";
+
+/** Thrown by the loop's heartbeat when an owner's claim was TAKEN OVER — the owner must abort. */
+export class LandGroupDeliveryClaimLostError extends Error {
+  public override readonly name = "LandGroupDeliveryClaimLostError";
+  public constructor(landGroupId: string) {
+    super(`land-group delivery claim for '${landGroupId}' was taken over by another worker`);
+  }
+}
+
 function deliveryId(landGroupId: string): string {
   return `ldl-${landGroupId}`;
 }
@@ -120,6 +138,22 @@ export class PgLandGroupDeliveryStore {
         [input.orgId, id, input.projectId, input.landGroupId, input.mainSha, idempotencyKey, token],
       );
       if (inserted.rows[0] !== undefined) return { kind: "owned", token };
+      // A row exists. If it is a STALE `in_progress` claim (a dead owner — no progress
+      // sign-of-life within the liveness lease), TAKE IT OVER with a fresh token (Finding 5:
+      // a crashed owner must not strand the group forever). The fenced UPDATE's
+      // `updated_at < now() - lease` predicate makes takeover ATOMIC — two racing takeovers:
+      // the first wins + bumps updated_at, the second's predicate no longer matches ⇒ 0 rows.
+      // A TERMINAL row (idempotent no-op) or a FRESH in_progress row (a live owner) is never
+      // taken over — so a live-but-slow owner (which renews between phases) never double-deploys.
+      const takeover = await client.query<{ id: string }>(
+        `UPDATE land_group_delivery_loops
+            SET fencing_token = $3, updated_at = now()
+          WHERE org_id = $1 AND land_group_id = $2 AND state = 'in_progress'
+            AND updated_at < now() - $4::interval
+          RETURNING id`,
+        [input.orgId, input.landGroupId, token, CLAIM_LIVENESS_LEASE],
+      );
+      if (takeover.rows[0] !== undefined) return { kind: "owned", token };
       const existing = (
         await client.query<{ state: string }>(
           "SELECT state FROM land_group_delivery_loops WHERE org_id = $1 AND land_group_id = $2",
@@ -127,6 +161,24 @@ export class PgLandGroupDeliveryStore {
         )
       ).rows[0];
       return { kind: "exists", state: (existing?.state ?? "in_progress") as LandGroupDeliveryState };
+    });
+  }
+
+  /**
+   * Renew the owner's LIVENESS LEASE — a progress sign-of-life the loop calls between delivery
+   * phases so a live owner's claim stays fresh (and is never taken over). Returns false when the
+   * claim was TAKEN OVER (the token no longer owns the in_progress row) — the caller MUST abort
+   * to avoid double-driving alongside the new owner. FENCED on the token.
+   */
+  async renewClaim(orgId: string, landGroupId: string, token: string): Promise<boolean> {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const renewed = await client.query<{ id: string }>(
+        `UPDATE land_group_delivery_loops SET updated_at = now()
+          WHERE org_id = $1 AND land_group_id = $2 AND fencing_token = $3 AND state = 'in_progress'
+          RETURNING id`,
+        [orgId, landGroupId, token],
+      );
+      return renewed.rows[0] !== undefined;
     });
   }
 

@@ -6,214 +6,45 @@
 // the membership guard sees a group member (so the per-run delivery no-ops).
 
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
-import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ActorContext } from "../src/auth/schemas.js";
-import type { ActorContextEnv } from "../src/middleware/auth.js";
-import { createLandGroupDeliveryRoutes } from "../src/routes/mergeQueue/landGroupDelivery.js";
 import { PgLandGroupDeliveryStore } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryStore.js";
 import { isLandGroupMember } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryReads.js";
 import { LandGroupDeliveryLoop } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryLoop.js";
-import type {
-  GroupArtifact,
-  GroupAttributionResult,
-  GroupDeliveryDeployer,
-  GroupDemoOutcome,
-  GroupPreview,
-  GroupProduction,
-  GroupRegressionAttribution,
-} from "../src/engine/postMerge/landGroupDelivery/groupDeliveryCore.js";
+import {
+  groupDeployVerifiedPayload,
+  ProductionGroupDeliveryDeployer,
+} from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { MergeTrainArtifactWatcher } from "../src/engine/postMerge/mergeTrainArtifactWatcher.js";
+import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
+import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
+import {
+  ADMIN,
+  ADMIN_URL,
+  APP_PASSWORD,
+  APP_ROLE,
+  basePlan,
+  connectionUrl,
+  databaseName,
+  HappyFakeDeployer,
+  insertEvents,
+  LG,
+  LG_STALE,
+  MAIN,
+  NoopAttribution,
+  ORG,
+  OTHER_ORG,
+  PROJECT,
+  routeApp,
+  RUN,
+  RUN_A,
+  RUN_FORMING,
+  seedTenant,
+  TARGET,
+} from "./helpers/landGroupDeliveryFixture.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
-const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
-const APP_ROLE = "tanren_app";
-const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
-
-const ORG = "org_mqdlv";
-const OTHER_ORG = "org_mqdlv_other";
-const PROJECT = "project_mqdlv";
-const NODE = "inode_mqdlv";
-const DECISION = "decision-inode_mqdlv-headsha";
-const LG = "lg_mqdlv";
-const RUN = "run_mqdlv";
-const RUN_A = "run_mqdlv_a";
-const SPEC = "spec_mqdlv";
-const SPEC_A = "spec_mqdlv_a";
-const MAIN = "mainsha_mqdlv";
-const HEAD = "headsha_mqdlv";
-const EXPECTED_MAIN = "expmain_mqdlv";
-const ARTIFACT_DIGEST = `sha256:${"c".repeat(64)}`;
-
-function databaseName(): string {
-  return `tanren_mqdlv_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-}
-function connectionUrl(database: string, role?: { user: string; password: string }): string {
-  const parsed = new URL(ADMIN_URL);
-  parsed.pathname = `/${database}`;
-  if (role !== undefined) {
-    parsed.username = role.user;
-    parsed.password = role.password;
-  }
-  return parsed.toString();
-}
-
-async function seedTenant(owner: Pool): Promise<void> {
-  for (const org of [ORG, OTHER_ORG]) {
-    await owner.query(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
-      [org],
-    );
-  }
-  await owner.query(
-    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
-     VALUES ($1, 'p', 'https://github.com/acme/web.git', 'main', 'runner:v0', $2,
-             '{"version":1,"deployProvider":"deploy.vercel","deployAppId":"app1"}'::jsonb)`,
-    [PROJECT, ORG],
-  );
-  for (const [spec, run] of [
-    [SPEC_A, RUN_A],
-    [SPEC, RUN],
-  ] as const) {
-    await owner.query(
-      `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status, created_at)
-       VALUES ($1,$2,$3,'t','d','[]'::jsonb,'in_flight','2026-07-20T00:00:00.000Z')`,
-      [spec, PROJECT, ORG],
-    );
-    await owner.query(
-      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, pr_url)
-       VALUES ($1,$2,$3,$4,'cli','tanren/x','completed','https://github.com/acme/web/pull/1')`,
-      [run, spec, PROJECT, ORG],
-    );
-  }
-  await owner.query(
-    `INSERT INTO authority_decisions
-       (org_id, project_id, id, integration_node_id, subject_kind, head_sha, expected_main_sha,
-        artifact_digest, proof_root, member_set_hash, policy_version, decision)
-     VALUES ($1,$2,$3,$4,'integration_node',$5,$6,$7,$8,$9,'1','authorized')`,
-    [ORG, PROJECT, DECISION, NODE, HEAD, EXPECTED_MAIN, ARTIFACT_DIGEST, `sha256:${"a".repeat(64)}`, "msh"],
-  );
-  await owner.query(
-    `INSERT INTO land_groups (org_id, id, decision_id, expected_main_sha, authorized_sha, state, main_sha, reconcile_token)
-     VALUES ($1,$2,$3,$4,$5,'completed',$6,$7)`,
-    [ORG, LG, DECISION, EXPECTED_MAIN, HEAD, MAIN, `land-group-${LG}`],
-  );
-  for (const [key, run, spec] of [
-    ["mk-a", RUN_A, SPEC_A],
-    ["mk-b", RUN, SPEC],
-  ] as const) {
-    await owner.query(
-      `INSERT INTO land_group_members (org_id, land_group_id, member_key, pr_number, run_id, spec_id, outcome)
-       VALUES ($1,$2,$3,'1',$4,$5,'landed')`,
-      [ORG, LG, key, run, spec],
-    );
-  }
-  // The completed event lives on the TAIL run — the loop's detection entry point.
-  await owner.query(
-    `INSERT INTO events (run_id, spec_id, project_id, org_id, event_type, payload)
-     VALUES ($1,$2,$3,$4,'merge.land_group.completed',$5::jsonb)`,
-    [
-      RUN,
-      SPEC,
-      PROJECT,
-      ORG,
-      JSON.stringify({
-        projectId: PROJECT,
-        landGroupId: LG,
-        decisionId: DECISION,
-        expectedMainSha: EXPECTED_MAIN,
-        authorizedSha: HEAD,
-        mainSha: MAIN,
-        memberKeys: ["mk-a", "mk-b"],
-      }),
-    ],
-  );
-  // The preview + production release instances the fake deployer returns (the FK targets the
-  // completed receipt's preview/production release ids reference).
-  await owner.query(
-    `INSERT INTO cas_artifacts (org_id, digest, byte_size, media_type, storage_backend, inline_bytes)
-     VALUES ($1,$2,0,'application/octet-stream','inline_pg',$3) ON CONFLICT (org_id, digest) DO NOTHING`,
-    [ORG, ARTIFACT_DIGEST, Buffer.from([0])],
-  );
-  for (const [id, env, deploymentId, state] of [
-    ["rel-preview", "preview", "dep-preview", "preview"],
-    ["rel-prod", "production", "dep-prod", "live"],
-  ] as const) {
-    await owner.query(
-      `INSERT INTO release_instances
-         (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref, artifact_digest,
-          integration_node_id, state)
-       VALUES ($1,$2,$3,'deploy.vercel','app1',$4,$5,$6,$7,$8,$9)`,
-      [ORG, id, PROJECT, env, deploymentId, MAIN, ARTIFACT_DIGEST, NODE, state],
-    );
-  }
-}
-
-const ARTIFACT: GroupArtifact = { artifactDigest: ARTIFACT_DIGEST, deploymentId: "dep-build" };
-const PREVIEW: GroupPreview = {
-  release: { releaseInstanceId: "rel-preview", deploymentId: "dep-preview", artifactDigest: ARTIFACT_DIGEST },
-  previewDeploymentId: "dep-preview",
-};
-const PRODUCTION: GroupProduction = {
-  release: { releaseInstanceId: "rel-prod", deploymentId: "dep-prod", artifactDigest: ARTIFACT_DIGEST },
-};
-
-/** A happy-path fake deployer: build → preview → demo(ok) → promote → production demo(ok). */
-class HappyFakeDeployer implements GroupDeliveryDeployer {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async buildArtifact(): Promise<GroupArtifact> {
-    return ARTIFACT;
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async applyPreview(): Promise<GroupPreview> {
-    return PREVIEW;
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async demo(): Promise<GroupDemoOutcome> {
-    return { ok: true, reason: "" };
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async teardownPreview(): Promise<void> {}
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async promote(): Promise<GroupProduction> {
-    return PRODUCTION;
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async currentPriorGood(): Promise<undefined> {
-    return undefined;
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async rollback(): Promise<void> {}
-}
-
-class NoopAttribution implements GroupRegressionAttribution {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async attribute(): Promise<GroupAttributionResult> {
-    return { kind: "unattributed", reason: "n/a" };
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async route(): Promise<void> {}
-}
-
-const ADMIN: ActorContext = {
-  userId: "admin",
-  orgId: ORG,
-  projectId: null,
-  scopes: ["platform:admin"],
-  source: "session",
-};
-
-function routeApp(pool: Pool, actor: ActorContext): Hono<ActorContextEnv> {
-  const app = new Hono<ActorContextEnv>();
-  app.use("*", async (c, next) => {
-    c.set("actor", actor);
-    await next();
-  });
-  app.route("/orgs", createLandGroupDeliveryRoutes({ pool }));
-  return app;
-}
 
 describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () => {
   const database = databaseName();
@@ -244,21 +75,114 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     await admin.end();
   });
 
-  async function rowCount(): Promise<number> {
+  async function rowCount(landGroupId: string): Promise<number> {
     return runWithOrgScope(app, ORG, async (client) => {
       const r = await client.query<{ n: string }>(
-        "SELECT count(*)::text AS n FROM land_group_delivery_loops WHERE org_id = $1",
-        [ORG],
+        "SELECT count(*)::text AS n FROM land_group_delivery_loops WHERE org_id = $1 AND land_group_id = $2",
+        [ORG, landGroupId],
       );
       return Number(r.rows[0]?.n ?? "0");
     });
   }
 
-  it("the membership guard sees a group member (per-run delivery no-ops)", async () => {
-    const member = await runWithOrgScope(app, ORG, (client) => isLandGroupMember(client, ORG, RUN_A));
+  it("the membership guard suppresses ONLY completed-group members; formed/solo members still deliver (Finding 3)", async () => {
+    const completedMember = await runWithOrgScope(app, ORG, (client) => isLandGroupMember(client, ORG, RUN_A));
     const solo = await runWithOrgScope(app, ORG, (client) => isLandGroupMember(client, ORG, "run_not_in_group"));
-    expect(member).toBe(true);
+    // Finding 3: a member of a NON-completed (forming) group is NOT suppressed — it keeps its
+    // per-run delivery (the loop never delivers a non-completed group, so suppressing would
+    // strand it with zero delivery forever).
+    const formingMember = await runWithOrgScope(app, ORG, (client) => isLandGroupMember(client, ORG, RUN_FORMING));
+    expect(completedMember).toBe(true);
     expect(solo).toBe(false);
+    expect(formingMember).toBe(false);
+  });
+
+  it("currentPriorGood resolves the SUPERSEDED prior from the promote lineage, not latestLive (Finding 1)", async () => {
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+    });
+    const plan = { ...basePlan(), landGroupId: LG };
+    // rel-prod (live) records rel-prior-P (now `superseded`) as its predecessor → the prior-good
+    // is P, which a state='live' lookup would miss. A regression must roll back TO P.
+    const prior = await deployer.currentPriorGood({ plan, target: TARGET, exceptReleaseInstanceId: "rel-prod" });
+    expect(prior?.releaseInstanceId).toBe("rel-prior-P");
+    // A release with NO predecessor (first-ever) → genuine no-prior-good → undefined (needs_attention).
+    const none = await deployer.currentPriorGood({ plan, target: TARGET, exceptReleaseInstanceId: "rel-preview" });
+    expect(none).toBeUndefined();
+  });
+
+  it("a STALE in_progress claim is reclaimable (takeover) and the new owner finishes (Finding 5)", async () => {
+    // A dead owner left an in_progress row (token 'dead') that has not progressed within the
+    // liveness lease (updated_at = 1 hour ago). A fresh claim TAKES IT OVER with a new token.
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query(
+        `INSERT INTO land_group_delivery_loops
+           (org_id, id, project_id, land_group_id, main_sha, state, disposition, idempotency_key,
+            fencing_token, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'in_progress','none',$6,'dead', now() - interval '1 hour')`,
+        [ORG, `ldl-${LG_STALE}`, PROJECT, LG_STALE, MAIN, `key-${LG_STALE}`],
+      ),
+    );
+    const store = new PgLandGroupDeliveryStore(app);
+    const takeover = await store.claim({ orgId: ORG, projectId: PROJECT, landGroupId: LG_STALE, mainSha: MAIN });
+    expect(takeover.kind).toBe("owned");
+    if (takeover.kind !== "owned") throw new Error("expected takeover");
+    expect(takeover.token).not.toBe("dead");
+    // A FRESH (non-stale) in_progress claim by the dead token is NOT reclaimable (the new owner holds it).
+    const staleRenew = await store.renewClaim(ORG, LG_STALE, "dead");
+    expect(staleRenew).toBe(false);
+    // The new owner renews + finalizes to a terminal state (the group no longer strands).
+    expect(await store.renewClaim(ORG, LG_STALE, takeover.token)).toBe(true);
+    await store.finalize({
+      plan: { ...basePlan(), landGroupId: LG_STALE },
+      token: takeover.token,
+      outcome: {
+        state: "needs_attention",
+        disposition: "needs_attention",
+        artifactDigest: null,
+        previewReleaseInstanceId: null,
+        productionReleaseInstanceId: null,
+        rollbackReleaseInstanceId: null,
+        attributedRunId: null,
+      },
+      reason: "reclaimed stale delivery",
+    });
+    const row = await runWithOrgScope(app, ORG, (client) =>
+      PgLandGroupDeliveryStore.getByLandGroup(client, ORG, PROJECT, LG_STALE),
+    );
+    expect(row?.state).toBe("needs_attention");
+  });
+
+  it("mq-15 SEALS a merge-train artifact from the GROUP's deploy.verified + demo.completed (Finding 2)", async () => {
+    // The group loop emits the group's deploy.verified (via groupDeployVerifiedPayload) +
+    // demo.completed on the tail run. With in-17 muted for group members, this is the ONLY
+    // evidence a land group gets — mq-15 must be able to seal from it (else land groups starve).
+    const plan = { ...basePlan(), landGroupId: LG };
+    const deployVerified = groupDeployVerifiedPayload(plan, TARGET, {
+      deploymentId: "dep-prod",
+      url: "https://app1.example.com",
+      state: "live",
+      smokeStatus: 200,
+    });
+    await insertEvents(owner, RUN, [
+      ["deploy.verified", deployVerified],
+      ["demo.completed", { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 }],
+    ]);
+    const cas = new PgCasByteStore(app);
+    const substrate = new TestProofSubstrate(app, cas);
+    const watcher = new MergeTrainArtifactWatcher({ pool: app, proofSubstrate: substrate, casByteStore: cas });
+    await watcher.check(RUN);
+    const sealed = await runWithOrgScope(app, ORG, (client) =>
+      client.query<{ land_group_id: string }>(
+        "SELECT land_group_id FROM merge_train_artifacts WHERE org_id = $1 AND land_group_id = $2",
+        [ORG, LG],
+      ),
+    );
+    expect(sealed.rows).toHaveLength(1);
+    expect(sealed.rows[0]?.land_group_id).toBe(LG);
   });
 
   it("drives the FULL loop for a completed group → completed receipt + frozen event; a re-check is idempotent", async () => {
@@ -269,7 +193,7 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
       store: new PgLandGroupDeliveryStore(app),
     });
     await loop.check(RUN);
-    expect(await rowCount()).toBe(1);
+    expect(await rowCount(LG)).toBe(1);
     const row = await runWithOrgScope(app, ORG, (client) =>
       PgLandGroupDeliveryStore.getByLandGroup(client, ORG, PROJECT, LG),
     );
@@ -285,7 +209,7 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     expect(event.rows).toHaveLength(1);
     // A re-check is a clean idempotent no-op — still exactly ONE row, still completed.
     await loop.check(RUN);
-    expect(await rowCount()).toBe(1);
+    expect(await rowCount(LG)).toBe(1);
   });
 
   it("FORCE RLS: a cross-org scope sees ZERO delivery rows", async () => {
@@ -303,7 +227,8 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     expect(((await single.json()) as { delivery: { state: string } }).delivery.state).toBe("completed");
     const list = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-group-deliveries`);
     expect(list.status).toBe(200);
-    expect(((await list.json()) as { deliveries: unknown[] }).deliveries).toHaveLength(1);
+    const deliveries = ((await list.json()) as { deliveries: { landGroupId: string }[] }).deliveries;
+    expect(deliveries.some((d) => d.landGroupId === LG)).toBe(true);
 
     const crossOrg = routeApp(app, { ...ADMIN, orgId: OTHER_ORG });
     const denied = await crossOrg.request(
