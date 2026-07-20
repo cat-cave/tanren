@@ -136,6 +136,10 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     // wakes this pass via the subscriber, so re-admission is genuinely event-driven.
     await this.deps.queue.reAdmitGrantCovered?.(projectId);
     await this.deps.queue.parkGrantBlocked?.(projectId);
+    // MQ-14 production policy binding: the policy controller reconciles queued
+    // rows before mq-9 receives its fresh comparator snapshot. A hold is durable,
+    // so neither the scheduler nor its checker can treat it as an empty-set pass.
+    await this.deps.queue.reconcilePolicy?.(projectId);
 
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
     const queueDepth = snapshot.entries.length;

@@ -114,6 +114,26 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });
 
+  it("FINAL CLAIM FENCE: a freeze arriving after authorization but before CAS blocks host land", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    let fenceCalls = 0;
+    const disposition = await authorizeAndLand({
+      ...gateInput(host),
+      // Simulates QueuePolicyController.apply(claim) observing a freeze/blackout
+      // after proof completion. The callback is invoked after authorizeLand and
+      // immediately before authority.land / CodeHost CAS.
+      confirmBeforeAuthorityCas: async () => {
+        fenceCalls += 1;
+        return false;
+      },
+    });
+    expect(fenceCalls).toBe(1);
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
   it("a CAS rejection (main raced ahead between read and land) → cas_rejected (benign race)", async () => {
     // A host whose ref reads succeed (so prepare resolves the target) but whose
     // landAuthorizedRef throws the typed CAS rejection — main raced ahead between the

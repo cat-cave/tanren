@@ -194,9 +194,6 @@ async function landViaAuthorityAttempt(
   if (claimWasLost(deps)) {
     return ops.result("blocked", { message: "native merge claim ownership was lost before host land" });
   }
-  if (deps.input.confirmClaimBeforeLand !== undefined && !(await deps.input.confirmClaimBeforeLand())) {
-    return ops.result("blocked", { message: "native merge claim ownership was lost at the host land fence" });
-  }
   const disposition = await runAuthorityLand({
     bundle: landBundle,
     mergeability,
@@ -212,6 +209,9 @@ async function landViaAuthorityAttempt(
     },
     integration: ops.mergeLabel(),
     auditEnvelope: ops.auditEnvelope(),
+    ...(deps.input.confirmClaimBeforeLand === undefined
+      ? {}
+      : { confirmBeforeAuthorityCas: deps.input.confirmClaimBeforeLand }),
   });
 
   switch (disposition.kind) {

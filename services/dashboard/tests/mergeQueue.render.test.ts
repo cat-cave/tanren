@@ -127,11 +127,12 @@ function stubPool(): pg.Pool {
 
 let metricsPayload: unknown = METRICS_FULL;
 let statsPayload: unknown = STATS_FULL;
+let commandPayload: unknown;
 // When true, the two metrics endpoints return 500 so the client yields undefined.
 let failReads = false;
 
 function mockOrchestrator(): void {
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) {
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
@@ -151,6 +152,49 @@ function mockOrchestrator(): void {
         ? new Response("boom", { status: 500 })
         : new Response(JSON.stringify({ stats: statsPayload }), { status: 200 });
     }
+    if (url.endsWith("/merge-queue/policy")) {
+      return new Response(
+        JSON.stringify({
+          id: "policy_1",
+          version: 1,
+          compiledHash: "sha256:policy",
+          policy: {
+            schemaVersion: "queue_policy.v1",
+            routes: [
+              {
+                name: "main",
+                targetBranch: "main",
+                priority: { base: "P1" },
+                partition: { mode: "serial", capacity: 1, batchLimit: 1 },
+                requiredWindows: ["business"],
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith("/merge-queue/windows")) {
+      return new Response(
+        JSON.stringify({
+          windows: [
+            {
+              id: "window_1",
+              name: "business",
+              kind: "allow",
+              timezone: "UTC",
+              scope: { projectId: "project_easy" },
+              intervals: [],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith("/merge-queue/commands") && init?.method === "POST") {
+      commandPayload = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ result: { state: "frozen", affected: 0 } }), { status: 200 });
+    }
     if (url.includes("/projects")) {
       return new Response(JSON.stringify({ projects: PROJECTS }), { status: 200 });
     }
@@ -163,6 +207,7 @@ beforeEach(() => {
   metricsPayload = METRICS_FULL;
   statsPayload = STATS_FULL;
   failReads = false;
+  commandPayload = undefined;
   mockOrchestrator();
 });
 
@@ -181,6 +226,34 @@ describe("merge-queue panel (/merge-queue)", () => {
     const html = await (await app.request("/merge-queue")).text();
     expect(html).toContain("how work merges");
     expect(html).not.toContain("documented placeholder");
+  });
+
+  it("renders QueuePolicyV1 windows and only bounded queue controls", async () => {
+    const app = await build();
+    const html = await (await app.request("/merge-queue")).text();
+    expect(html).toContain("queue policy v1");
+    expect(html).toContain("allow:business");
+    expect(html).toContain('action="/merge-queue/commands/freeze"');
+    expect(html).not.toContain("authorizeLand");
+    expect(html).not.toContain("/land");
+  });
+
+  it("proxies a valid scoped freeze command and never adds a land capability", async () => {
+    const app = await build();
+    const result = await app.request("/merge-queue/commands/freeze", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ projectId: "project_easy", reason: "operator freeze" }),
+    });
+    expect(result.status).toBe(303);
+    expect(result.headers.get("location")).toBe("/merge-queue?queuePolicy=applied");
+    expect(commandPayload).toMatchObject({
+      schemaVersion: "queue_command.v1",
+      command: "freeze",
+      scope: { projectId: "project_easy" },
+      reason: "operator freeze",
+    });
+    expect(commandPayload).not.toHaveProperty("land");
   });
 
   it("renders rebase-vs-rebuild economics with the cheaper verdict", async () => {

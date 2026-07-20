@@ -88,6 +88,8 @@ export interface MergeQueueEntry {
   partitionId?: string;
   /** Stable semantic scope used to select the member's partition. */
   scopeFingerprint?: string;
+  /** Immutable route snapshot limit; mq-9 takes the strictest selected member limit. */
+  policyBatchLimit?: number;
 }
 
 /**
@@ -238,6 +240,12 @@ export interface MergeQueueModel {
 
   /** Record an ActivityWatchdog-proven progress heartbeat for this process's live claim. */
   renewClaim?(queueId: string): Promise<boolean>;
+
+  /** Re-check queue policy through the current claim fence immediately before host CAS. */
+  confirmPolicyBeforeLand?(queueId: string): Promise<boolean>;
+
+  /** Reconciles queue-policy eligibility before the mq-9 comparator reads a snapshot. */
+  reconcilePolicy?(projectId: string): Promise<void>;
 
   /**
    * Mark this process's claimed entry as terminally MERGED (merging → merged).

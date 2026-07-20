@@ -50,6 +50,43 @@ async function seedMember(owner: Pool, id: string): Promise<void> {
   );
 }
 
+async function seedQueuePolicy(owner: Pool): Promise<void> {
+  const policyId = "policy_mq4";
+  await owner.query(
+    `INSERT INTO merge_queue_policies
+       (org_id, id, project_id, target_branch, version, schema_version, body, compiled_hash, active)
+     VALUES ($1, $2, $3, '*', 1, 'queue_policy.v1', $4::jsonb, 'sha256:mq4', true)`,
+    [
+      ORG,
+      policyId,
+      PROJECT,
+      JSON.stringify({
+        schemaVersion: "queue_policy.v1",
+        routes: [
+          {
+            name: "main",
+            targetBranch: "main",
+            matcher: { kind: "branch", equals: "main" },
+            priority: { base: "P1", aging: { enabled: true, step: 1 } },
+            partition: { mode: "scoped", capacity: 2, batchLimit: 2, deployGroupLimit: 1 },
+            interruption: { mode: "hold" },
+            requiredWindows: ["business"],
+          },
+        ],
+      }),
+    ],
+  );
+  await owner.query(
+    `INSERT INTO merge_queue_windows
+       (org_id, id, policy_id, project_id, name, timezone, intervals, kind)
+     VALUES ($1, 'window_mq4', $2, $3, 'business', 'UTC',
+             jsonb_build_array(jsonb_build_object('startsAt', to_char(now() - interval '1 hour', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                                                   'endsAt', to_char(now() + interval '1 hour', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))),
+             'allow')`,
+    [ORG, policyId, PROJECT],
+  );
+}
+
 describeDb("MQ-4 partition leases under tanren_app RLS", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -75,6 +112,7 @@ describeDb("MQ-4 partition leases under tanren_app RLS", () => {
        VALUES ($1, 'mq-4', 'https://example.com/mq-4.git', $2)`,
       [PROJECT, ORG],
     );
+    await seedQueuePolicy(ownerPool);
     for (const member of ["a", "b", "orphan", "fenced", "poison", "sibling"]) await seedMember(ownerPool, member);
     const events = new PgMergeQueueEventEmitter(appPool, new DirectRunStateWriter(appPool));
     queue = new PgMergeQueueModel(appPool, events);

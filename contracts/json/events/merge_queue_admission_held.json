@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "enum": [
+        "admission",
+        "coordinate",
+        "claim"
+      ],
+      "type": "string"
+    },
+    "queueId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "missing_policy",
+        "malformed_policy",
+        "route_unmatched",
+        "window_closed",
+        "blackout",
+        "partition_not_active",
+        "policy_revised"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "queueId",
+    "reason",
+    "phase"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.queue.admission_held"
+}

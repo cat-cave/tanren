@@ -31,6 +31,8 @@ import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 import { EvidenceContractPanel } from "./EvidenceContractPanel.js";
 import type { MergeQueueScheduleResponse } from "../../api/mergeQueueSchedule.js";
 import { SemanticSchedulePanel } from "./SemanticSchedulePanel.js";
+import type { MergeQueuePolicyResponse, MergeQueueWindowsResponse } from "../../api/mergeQueuePolicy.js";
+import { QueuePolicyPanel } from "./QueuePolicyPanel.js";
 
 export interface MergeQueueBodyProps {
   /** Rebase/rebuild metrics, or `undefined` when the read failed / no project. */
@@ -53,6 +55,11 @@ export interface MergeQueueBodyProps {
   eagerBeams: MergeQueueEagerBeamsResponse | undefined;
   /** mq-9 semantic partition/cap/lease read model. */
   semanticSchedule: MergeQueueScheduleResponse | undefined;
+  /** mq-14 active QueuePolicyV1 and named queue windows. */
+  queuePolicy: MergeQueuePolicyResponse | undefined;
+  queueWindows: MergeQueueWindowsResponse | undefined;
+  /** Post/redirect/get result from a bounded queue command. */
+  queuePolicyNotice?: string;
   /** Org id for the mq-15 artifact links. */
   orgId: string;
   /** Project id for the mq-15 artifact links. */
@@ -190,6 +197,9 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
     evidenceContract,
     eagerBeams,
     semanticSchedule,
+    queuePolicy,
+    queueWindows,
+    queuePolicyNotice,
     orgId,
     projectId,
     windowDays,
@@ -230,6 +240,12 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
               <EvidenceContractPanel projection={evidenceContract} />
               <EagerBeamPanel projection={eagerBeams} />
               <SemanticSchedulePanel projection={semanticSchedule} />
+              <QueuePolicyPanel
+                policy={queuePolicy}
+                windows={queueWindows}
+                projectId={projectId}
+                commandNotice={queuePolicyNotice}
+              />
               <MultiMemberAuthorityPanel projection={authorityEvaluations} />
               <RepairRouteLineagePanel projection={repairRoutes} />
               <AuthoritySignalPanel projection={authoritySignals} />

@@ -12,42 +12,53 @@
  * loadShellContext + renderShell; never touches the chrome.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Context, Hono } from "hono";
-import { MergeQueueClient } from "../../api/mergeQueueClient.js";
-import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import {
+  MergeQueueClient,
+  type IntegrationMetrics,
+  type QueueStats,
   MergeQueueAuthorityEvaluationsClient,
   type MergeQueueAuthorityEvaluationsListResponse,
-} from "../../api/mergeQueueAuthorityEvaluations.js";
-import {
   MergeQueueAuthoritySignalsClient,
   type MergeQueueAuthoritySignalsListResponse,
-} from "../../api/mergeQueueAuthoritySignals.js";
-import {
   MergeQueueRepairRoutesClient,
   type MergeQueueRepairRoutesListResponse,
-} from "../../api/mergeQueueRepairRoutes.js";
-import { MergeQueueTrainClient, type MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
-import {
+  MergeQueueTrainClient,
+  type MergeTrainListResponse,
   MergeQueueGroupDeliveryClient,
   type LandGroupDeliveryListResponse,
-} from "../../api/mergeQueueGroupDelivery.js";
-import {
   MergeQueueEvidenceContractsClient,
   type MergeQueueEvidenceContractResponse,
-} from "../../api/mergeQueueEvidenceContracts.js";
-import { MergeQueueEagerBeamsClient, type MergeQueueEagerBeamsResponse } from "../../api/mergeQueueEagerBeams.js";
-import { MergeQueueScheduleClient, type MergeQueueScheduleResponse } from "../../api/mergeQueueSchedule.js";
+  MergeQueueEagerBeamsClient,
+  type MergeQueueEagerBeamsResponse,
+  MergeQueueScheduleClient,
+  type MergeQueueScheduleResponse,
+  MergeQueuePolicyClient,
+  type MergeQueuePolicyResponse,
+  type MergeQueueWindowsResponse,
+} from "../../api/mergeQueueScreen.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
+import { formField } from "../formField.js";
 
 const VALID_WINDOWS = new Set([7, 30, 90]);
 const DEFAULT_WINDOW_DAYS = 30;
+const QUEUE_COMMANDS = new Set(["freeze", "unfreeze", "pause", "resume", "drain"]);
 
 /** Parse the `windowDays` pill, falling back to 30d for anything unexpected. */
 function parseWindowDays(raw: string | undefined): number {
   const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
   return VALID_WINDOWS.has(parsed) ? parsed : DEFAULT_WINDOW_DAYS;
+}
+
+function commandNotice(raw: string | undefined): string | undefined {
+  if (raw === "applied") return "Queue command recorded; it remains subject to the final claim-time policy fence.";
+  if (raw === "rejected") return "Queue command was rejected by the orchestrator; no success is implied.";
+  if (raw === "invalid") return "Invalid command input was rejected before an orchestrator write.";
+  if (raw === "no_project") return "The requested project was not visible; no command was sent.";
+  return undefined;
 }
 
 export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
@@ -66,6 +77,8 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let evidenceContract: MergeQueueEvidenceContractResponse | undefined;
     let eagerBeams: MergeQueueEagerBeamsResponse | undefined;
     let semanticSchedule: MergeQueueScheduleResponse | undefined;
+    let queuePolicy: MergeQueuePolicyResponse | undefined;
+    let queueWindows: MergeQueueWindowsResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -102,6 +115,10 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
+      const policyClient = new MergeQueuePolicyClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
       [
         metrics,
         stats,
@@ -112,6 +129,8 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         eagerBeams,
         semanticSchedule,
         groupDelivery,
+        queuePolicy,
+        queueWindows,
       ] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
@@ -122,6 +141,8 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         eagerBeamClient.listEagerBeams(ctx.org.id, project.projectId),
         scheduleClient.getSchedule(ctx.org.id, project.projectId),
         groupDeliveryClient.listDeliveries(ctx.org.id, project.projectId),
+        policyClient.getPolicy(ctx.org.id, project.projectId),
+        policyClient.listWindows(ctx.org.id, project.projectId),
       ]);
       const nodeId = mergeTrain?.artifacts?.[0]?.integrationNodeId;
       if (nodeId !== undefined) {
@@ -148,6 +169,9 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         evidenceContract={evidenceContract}
         eagerBeams={eagerBeams}
         semanticSchedule={semanticSchedule}
+        queuePolicy={queuePolicy}
+        queueWindows={queueWindows}
+        queuePolicyNotice={commandNotice(c.req.query("queuePolicy"))}
         orgId={ctx.org?.id ?? ""}
         projectId={project?.projectId ?? ""}
         windowDays={windowDays}
@@ -155,5 +179,35 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         noProject={project === undefined}
       />,
     );
+  });
+
+  app.post("/merge-queue/commands/:command", async (c: Context) => {
+    const command = c.req.param("command");
+    const form = await c.req.parseBody();
+    const projectId = formField(form, "projectId").trim();
+    const reason = formField(form, "reason").trim();
+    if (
+      command === undefined ||
+      !QUEUE_COMMANDS.has(command) ||
+      projectId === "" ||
+      reason === "" ||
+      reason.length > 500
+    ) {
+      return c.redirect("/merge-queue?queuePolicy=invalid", 303);
+    }
+    const ctx = await loadShellContext(c, deps, { activeNavId: "mergeQueue", projectId });
+    const project = ctx.projects.find((candidate) => candidate.projectId === projectId);
+    if (ctx.org === undefined || project === undefined) {
+      return c.redirect("/merge-queue?queuePolicy=no_project", 303);
+    }
+    const client = new MergeQueuePolicyClient(await clientDepsFor(c, deps));
+    const result = await client.applyCommand(ctx.org.id, projectId, {
+      schemaVersion: "queue_command.v1",
+      command,
+      idempotencyKey: `dashboard:${randomUUID()}`,
+      scope: { projectId },
+      reason,
+    });
+    return c.redirect(`/merge-queue?queuePolicy=${result.ok ? "applied" : "rejected"}`, 303);
   });
 }
