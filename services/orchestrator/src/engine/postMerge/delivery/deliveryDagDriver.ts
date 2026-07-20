@@ -80,10 +80,10 @@ export async function driveDeliveryStagePlan(input: {
   const { store, stages, lineage, deliveryRunId, token } = input;
   const orgId = lineage.orgId;
   const progress = await store.loadStageProgress(orgId, deliveryRunId);
-  // A prior drive that already reached the stimulate stage is the durable demo pre-effect
-  // marker (Finding 2): the demo stage will refuse to re-fire if no terminal demo exists.
-  const demoPreviouslyStarted = (progress.get("stimulate")?.attemptsSoFar ?? 0) >= 1;
-  const memo = newDriveMemo(demoPreviouslyStarted);
+  // Demo re-fire is gated by the durable EFFECT-BOUNDARY intent marker (inside the demo
+  // stage), NOT by the attempt count — a never-fired demo (crash before fire / lock held /
+  // pending) resumes and RUNS, never sticking degraded.
+  const memo = newDriveMemo();
 
   for (const stage of DELIVERY_STAGES) {
     const prior = progress.get(stage);
@@ -104,10 +104,12 @@ export async function driveDeliveryStagePlan(input: {
       continue;
     }
 
-    // DEGRADE: flip the run to `degraded` under the fence FIRST (a stale owner is rejected);
-    // only the winning writer narrates `delivery.degraded`. STOP — never advance past an
-    // unconfirmed external effect.
-    await store.degradeStageAttempt(orgId, deliveryRunId, token, attemptId, outcome.classification);
+    // DEGRADE: settle the stage attempt AND flip the run to `degraded` — both FENCED. A lost
+    // fence on EITHER write (Finding 2: the degradeStageAttempt boolean is checked too) aborts
+    // so a stale owner never leaves a half-written degrade while the live owner continues.
+    // STOP — never advance past an unconfirmed external effect.
+    if (!(await store.degradeStageAttempt(orgId, deliveryRunId, token, attemptId, outcome.classification)))
+      return "claim_lost";
     if (!(await store.markDegraded(orgId, deliveryRunId, token, outcome.classification))) return "claim_lost";
     await recordDeliveryDegraded({ eventStore: input.eventStore }, lineage, {
       deliveryRunId,

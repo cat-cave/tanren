@@ -34,6 +34,10 @@ export const deliveryDagSensitivityRules: SensitivityRule[] = [
     ["classification", "public"],
     ["detail", "public"],
   ]),
+  ...rulesFor("delivery.demo_stimulus_started", [
+    ["deliveryRunId", "public"],
+    ["mergeSha", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

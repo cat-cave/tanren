@@ -178,9 +178,11 @@ export class DeliveryRunStore {
   ): Promise<boolean> {
     const result = await runWithOrgScope(this.pool, orgId, (client) =>
       client.query(
+        // Precondition `status = 'running'` (Finding 3): a `succeeded` attempt can never be
+        // re-settled, even under the live token, if an attempt id were reused.
         `UPDATE delivery_stage_attempts
             SET status = $4, failure_classification = $5, completed_at = now()
-          WHERE org_id = $1 AND id = $2
+          WHERE org_id = $1 AND id = $2 AND status = 'running'
             AND EXISTS (SELECT 1 FROM delivery_runs WHERE org_id = $1 AND id = $3 AND claim_owner = $6 AND status = 'running')`,
         [orgId, attemptId, deliveryRunId, status, classification, token],
       ),
@@ -203,12 +205,14 @@ export class DeliveryRunStore {
   ): Promise<boolean> {
     const result = await runWithOrgScope(this.pool, orgId, (client) =>
       client.query(
+        // The evidence EXISTS is scoped to THIS deliveryRunId (Finding 4: `payload->>'deliveryRunId'`)
+        // so a sibling delivery's `delivery.completed` on the same run can never satisfy this one.
         `UPDATE delivery_runs
             SET status = 'completed', completed_at = now(), claim_owner = NULL, claim_expires_at = NULL,
                 failure_classification = NULL, updated_at = now()
           WHERE org_id = $1 AND id = $2 AND claim_owner = $3 AND status = 'running'
             AND EXISTS (SELECT 1 FROM events WHERE org_id = $1 AND run_id = $4 AND project_id = $5
-                          AND event_type = 'delivery.completed')`,
+                          AND event_type = 'delivery.completed' AND payload->>'deliveryRunId' = $2)`,
         [orgId, deliveryRunId, token, runId, projectId],
       ),
     );

@@ -38,6 +38,12 @@ export interface DeliverySignals {
   deliveryCompletedExists(lineage: DeliveryLineage): Promise<boolean>;
   /** Whether a TERMINAL demo event (`demo.completed` OR `demo.failed`) exists — the demo effect committed. */
   demoTerminalExists(lineage: DeliveryLineage): Promise<boolean>;
+  /**
+   * Whether the durable demo INTENT MARKER (`delivery.demo_stimulus_started`) exists — the
+   * effect-boundary marker recorded immediately before the demo effect fires. Absent ⇒ the
+   * effect never fired (safe to fire); present without a terminal ⇒ it MAY have fired mid-crash.
+   */
+  demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean>;
 }
 
 const DEPLOY_TRAIL_EVENTS = [
@@ -162,5 +168,16 @@ export class PgDeliverySignals implements DeliverySignals {
       presentEventTypes(client, lineage, DEMO_TRAIL_EVENTS),
     );
     return present.has("demo.completed") || present.has("demo.failed");
+  }
+
+  async demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean> {
+    const result = await runWithSystemScope(this.pool, (client) =>
+      client.query<{ id: string }>(
+        `SELECT id FROM events WHERE run_id = $1 AND org_id = $2 AND project_id = $3
+           AND event_type = 'delivery.demo_stimulus_started' LIMIT 1`,
+        [lineage.runId, lineage.orgId, lineage.projectId],
+      ),
+    );
+    return result.rows[0] !== undefined;
   }
 }

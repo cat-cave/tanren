@@ -25,9 +25,9 @@ import type { Severity } from "./schemas.js";
 // the rows off without forcing the operator to discover them.
 
 const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
-  // in-17 delivery DAG: a degraded delivery is operator-actionable; completion is info.
   "delivery.degraded": "warn",
   "delivery.completed": "info",
+  "delivery.demo_stimulus_started": "info",
   // Run lifecycle
   "run.queued": "info",
   "run.started": "info",

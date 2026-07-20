@@ -1,4 +1,8 @@
-import { DeliveryCompletedPayload, DeliveryDegradedPayload } from "./deliveryDag.js";
+import {
+  DeliveryCompletedPayload,
+  DeliveryDegradedPayload,
+  DeliveryDemoStimulusStartedPayload,
+} from "./deliveryDag.js";
 import { deploymentEventRegistry } from "./deploymentVocabulary.js";
 import { gateEventRegistry } from "./gateVocabulary.js";
 import { githubEventRegistry } from "./githubVocabulary.js";
@@ -18,4 +22,5 @@ export const deliveryEventRegistry = {
   // in-17 durable post-merge delivery DAG (release activation after the authorized land).
   "delivery.completed": DeliveryCompletedPayload,
   "delivery.degraded": DeliveryDegradedPayload,
+  "delivery.demo_stimulus_started": DeliveryDemoStimulusStartedPayload,
 } as const;

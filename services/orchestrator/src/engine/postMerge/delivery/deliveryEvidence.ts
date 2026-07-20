@@ -119,6 +119,28 @@ export async function appendDeliveryCompleted(
   return evidence;
 }
 
+/**
+ * Append the durable demo INTENT MARKER (`delivery.demo_stimulus_started`) — recorded
+ * under the advisory lock IMMEDIATELY BEFORE the demo effect fires, so a crash mid-fire
+ * leaves a durable trace that blocks a re-fire (Finding-1 effect-boundary idempotency).
+ */
+export async function appendDemoStimulusStarted(
+  deps: Pick<RecordEvidenceDeps, "eventStore">,
+  lineage: DeliveryLineage,
+  deliveryRunId: string,
+): Promise<void> {
+  await runWithJobOrgId(lineage.orgId, () =>
+    deps.eventStore.append({
+      runId: lineage.runId,
+      specId: lineage.specId,
+      projectId: lineage.projectId,
+      orgId: lineage.orgId,
+      eventType: "delivery.demo_stimulus_started",
+      payload: { deliveryRunId, mergeSha: lineage.mergeSha },
+    }),
+  );
+}
+
 /** Append the durable `delivery.degraded` narration (one per degraded settle; not deduped). */
 export async function recordDeliveryDegraded(
   deps: Pick<RecordEvidenceDeps, "eventStore">,
