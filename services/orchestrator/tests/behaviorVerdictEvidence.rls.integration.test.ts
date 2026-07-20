@@ -27,11 +27,17 @@ const OTHER_ORG = "org_verdict_evidence_other";
 const PROJECT = "project_verdict_evidence";
 const D = `sha256:${"c".repeat(64)}`;
 const CAS = `sha256:${"a".repeat(64)}`;
+const PLAN_HASH = `sha256:${"b".repeat(64)}`;
 const RUN_ID = "verdict_evidence_run";
 const ENV_ID = "venv_verdict_evidence";
 const NODE_ID = "inode_verdict_evidence";
 const BEHAVIOR_REVISION = "br_verdict_evidence";
 const PERSONA_REVISION = "pr_verdict_evidence";
+const PLAN_ID = "plan_verdict_evidence";
+
+// rv-10: traceability is now MANDATORY — a verdict must name a real producing attempt. A single
+// real attempt (seeded in beforeAll) backs every verdict this evidence-linkage test records.
+let seededAttemptId = "";
 
 function databaseName(): string {
   return `tanren_verdict_evidence_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -115,6 +121,7 @@ function verdictInput(
     runtimeBehaviorContextHash: parseDigest(D),
     assertionEvidence: [{ assertionId: "a1", executed: true, passed: true }],
     attemptEvidence: [{ attemptOrdinal: 1, outcome: "passed" }],
+    attemptTrace: { kind: "attempted", producingAttemptId: seededAttemptId },
     ...overrides,
   };
 }
@@ -140,6 +147,31 @@ describeDb("rv-9 behavior_verdict_evidence — durable capture linkage (FINDING 
     await seedTenant(owner);
     store = new PgAcceptanceRunStore(app);
     captures = new PgVerificationCaptureStore(app, new PgCasByteStore(app));
+    // rv-10: seed the plan referent + the ONE real attempt every verdict below traces to, so the
+    // now-mandatory traceability assertion is satisfied (this test is about the evidence ledger).
+    await store.ensureVerificationPlan({
+      orgId: ORG,
+      projectId: PROJECT,
+      planId: PLAN_ID,
+      behaviorRevisionId: BEHAVIOR_REVISION,
+      planHash: PLAN_HASH,
+      planJson: { planId: PLAN_ID },
+    });
+    seededAttemptId = await store.recordAttempt({
+      orgId: ORG,
+      projectId: PROJECT,
+      runId: RUN_ID,
+      behaviorRevisionId: BEHAVIOR_REVISION,
+      planId: PLAN_ID,
+      exampleHash: D,
+      matrixHash: D,
+      shard: 0,
+      seed: "seed-verdict-evidence",
+      outcome: "passed",
+      classification: "product_resolved",
+      startedAt: "2026-07-19T00:00:00.000Z",
+      finishedAt: "2026-07-19T00:00:01.000Z",
+    });
   }, 60_000);
 
   afterAll(async () => {

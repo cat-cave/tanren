@@ -79,6 +79,14 @@ export interface CaptureArtifactInput {
    * never diverge from the content it names).
    */
   readonly expectedDigest?: Digest;
+  /**
+   * rv-10: the real attempt (behavior_verification_attempts) this capture was produced by.
+   * When present it is persisted as `verification_artifacts.producing_attempt_id` (FK-bound),
+   * so a captured artifact traces to a real attempt instead of a NULL. Absent ⇒ NULL (the
+   * standalone capture path with no run/attempt context). A non-existent id fails closed on
+   * the FK. Content-addressed dedupe keeps the FIRST producing attempt on the row.
+   */
+  readonly producingAttemptId?: string;
 }
 
 export interface CapturedArtifactRef {
@@ -170,19 +178,27 @@ export class PgVerificationCaptureStore implements VerificationCaptureStore {
     //    identical content of the same kind onto one address via the PK.
     return this.withOrgScope(input.orgId, async (client) => {
       await this.assertProject(client, input.orgId, input.projectId);
-      // `proof_unit_digest` and `producing_attempt_id` are NULL BY DESIGN on the acceptance-run
-      // path: both are FK-bound (→ proof_units / behavior_verification_attempts), and an
-      // acceptance run materializes NEITHER referent — it records a behavior_verdict, not a
-      // behavior_verification_attempts row, and compiles no proof unit. Fabricating an id would
-      // violate the FK (fail-closed), so these stay NULL. The DURABLE verdict→capture linkage
-      // does NOT live here; it lives in `behavior_verdict_evidence`, written by the verdict store
-      // in the same run, so a later proof resolves this artifact from the ledger by verdict id.
-      const inserted = await client.query(
+      // `proof_unit_digest` stays NULL on the acceptance-run path (no proof unit is compiled
+      // here). rv-10: `producing_attempt_id`, once NULL by design, is the real attempt the run
+      // recorded (behavior_verification_attempts) when the caller threads it — so a captured
+      // artifact traces to a real attempt. It is FK-bound: a non-existent id fails closed. Absent
+      // ⇒ NULL (the standalone capture path outside a run). rv-10 FINDING 3: on a content-addressed
+      // dedupe conflict, BACKFILL `producing_attempt_id` when the existing row is still NULL and
+      // this write supplies one (COALESCE keeps an already-set attempt — never overwrites it). So a
+      // prior standalone/NULL capture of the same (project, digest, kind) can no longer strand a
+      // later production write (which passes attemptId) with a NULL producing attempt. The DURABLE
+      // verdict→capture linkage still lives in `behavior_verdict_evidence` (verdict-scoped); this
+      // attempt link is orthogonal provenance. `xmax = 0` distinguishes a fresh insert from a
+      // conflict-update so `deduped` stays accurate.
+      const inserted = await client.query<{ inserted: boolean }>(
         `INSERT INTO verification_artifacts
            (org_id, id, project_id, cas_digest, proof_unit_digest, kind, media_type,
             byte_size, redaction_class, retention_class, producing_attempt_id)
-         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, NULL)
-         ON CONFLICT (org_id, id) DO NOTHING`,
+         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (org_id, id) DO UPDATE
+           SET producing_attempt_id =
+                 COALESCE(verification_artifacts.producing_attempt_id, EXCLUDED.producing_attempt_id)
+         RETURNING (xmax = 0) AS inserted`,
         [
           input.orgId,
           id,
@@ -193,9 +209,10 @@ export class PgVerificationCaptureStore implements VerificationCaptureStore {
           ref.byteSize,
           input.redactionClass,
           input.retentionClass ?? "standard",
+          input.producingAttemptId ?? null,
         ],
       );
-      const deduped = (inserted.rowCount ?? 0) === 0;
+      const deduped = inserted.rows[0]?.inserted !== true;
       const row = await this.selectRow(client, input.orgId, id);
       if (row === undefined) throw new VerificationArtifactNotFoundError(input.orgId, id);
       // Defense in depth: a pre-existing row addressed by this id MUST carry the
