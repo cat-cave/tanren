@@ -18,7 +18,7 @@ import {
   MERGE_TRAIN_ARTIFACT_MEDIA_TYPE,
   type MergeTrainArtifactV1,
 } from "../../engine/contracts/mergeTrainArtifact.js";
-import { PgMergeTrainArtifactStore } from "../../engine/postMerge/mergeTrainArtifactStore.js";
+import { filterVerifiedSummaries, PgMergeTrainArtifactStore } from "../../engine/postMerge/mergeTrainArtifactStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
@@ -76,12 +76,27 @@ export function createMergeTrainArtifactRoutes(options: TrainArtifactRoutesOptio
     if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "merge_train_not_found" }, 404);
     const limit = parseLimit(c.req.query("limit"));
     if (limit === undefined) return c.json({ error: "invalid_limit", min: 1, max: MAX_LIMIT }, 400);
+    const projectId = c.req.param("projectId");
     const artifacts = await withProject({
       pool: options.pool,
       actor,
       orgId,
-      projectId: c.req.param("projectId"),
-      read: (client) => PgMergeTrainArtifactStore.list(client, orgId, c.req.param("projectId"), limit),
+      projectId,
+      // A row is listed as a verified sealed delivery ONLY after its persisted bundle
+      // passes a `ProofSubstrate.verify` — the same gate as the detail/bytes export. With
+      // NO substrate injected, NOTHING is served as verified (empty list); the panel then
+      // shows `unknown`, never green. A row whose bundle is missing or fails re-verify is
+      // excluded (never surfaced as a verified delivery).
+      read: async (client) => {
+        const substrate = options.proofSubstrate;
+        if (substrate === undefined) return [];
+        const summaries = await PgMergeTrainArtifactStore.list(client, orgId, projectId, limit);
+        return filterVerifiedSummaries({
+          summaries,
+          loadBundle: (bundleId) => PgMergeTrainArtifactStore.loadSealedBundle(client, orgId, bundleId),
+          verify: (bundle) => substrate.verify(bundle),
+        });
+      },
     });
     if (artifacts === null) return c.json({ error: "merge_train_not_found" }, 404);
     return c.json({ artifacts });

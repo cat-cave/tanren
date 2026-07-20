@@ -22,6 +22,7 @@ const SUMMARY: MergeTrainArtifactSummary = {
   demoSurfaceKind: "web_url",
   demoBehaviorCount: 3,
   demoPassed: 3,
+  bundleId: "bundle-1",
   bundleDigest: SHA("b"),
   contentHash: SHA("f"),
   createdAt: "2026-07-20T00:00:00.000Z",

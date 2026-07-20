@@ -21,7 +21,11 @@ import {
   type MergeTrainSealSink,
   sealEvidence,
 } from "../src/engine/postMerge/mergeTrainArtifactSeal.js";
-import { PgMergeTrainArtifactStore } from "../src/engine/postMerge/mergeTrainArtifactStore.js";
+import {
+  filterVerifiedSummaries,
+  type MergeTrainArtifactSummary,
+  PgMergeTrainArtifactStore,
+} from "../src/engine/postMerge/mergeTrainArtifactStore.js";
 import { evidenceFixture } from "./mergeTrainArtifactContract.test.js";
 
 const SHA = (c: string): Digest => `sha256:${c.repeat(64)}` as Digest;
@@ -326,6 +330,7 @@ describe("mq-15 PgMergeTrainArtifactStore reads", () => {
     demo_surface_kind: "web_url",
     demo_behavior_count: 3,
     demo_passed: 3,
+    bundle_id: "bundle-1",
     bundle_digest: `sha256:${"b".repeat(64)}`,
     content_hash: `sha256:${"f".repeat(64)}`,
     created_at: new Date("2026-07-20T00:00:00Z"),
@@ -336,6 +341,7 @@ describe("mq-15 PgMergeTrainArtifactStore reads", () => {
     const summaries = await PgMergeTrainArtifactStore.list(client, "org1", "proj1", 20);
     expect(summaries).toHaveLength(1);
     expect(summaries[0]?.landGroupId).toBe("lg1");
+    expect(summaries[0]?.bundleId).toBe("bundle-1");
     expect(summaries[0]?.createdAt).toBe("2026-07-20T00:00:00.000Z");
   });
 
@@ -349,5 +355,41 @@ describe("mq-15 PgMergeTrainArtifactStore reads", () => {
     await expect(PgMergeTrainArtifactStore.getByLandGroup(corrupt, "org1", "proj1", "lg1")).rejects.toThrow(
       /invalid/iu,
     );
+  });
+
+  it("filterVerifiedSummaries keeps ONLY rows whose bundle re-verifies", async () => {
+    const summary = (id: string): MergeTrainArtifactSummary => ({
+      id,
+      landGroupId: id,
+      authorityDecisionId: "d",
+      integrationNodeId: "n",
+      proofRoot: SHA("a"),
+      receiptMainSha: "m",
+      deployDeploymentId: "dep",
+      demoSurfaceKind: "web_url",
+      demoBehaviorCount: 1,
+      demoPassed: 1,
+      bundleId: `bundle-${id}`,
+      bundleDigest: SHA("b"),
+      contentHash: SHA("f"),
+      createdAt: "2026-07-20T00:00:00.000Z",
+    });
+    const bundle = { bundleId: "b" } as unknown as ProofBundleSealed;
+    const verified = await filterVerifiedSummaries({
+      summaries: [summary("ok"), summary("missing"), summary("bad")],
+      // "missing" has no persisted bundle → dropped; the others resolve a bundle.
+      loadBundle: async (bundleId) => (bundleId === "bundle-missing" ? undefined : bundle),
+      // "bad" fails re-verify → dropped; only "ok" survives.
+      verify: async () => ({ valid: false }),
+    });
+    // verify fails for every resolved bundle → none survive.
+    expect(verified).toHaveLength(0);
+    const allPass = await filterVerifiedSummaries({
+      summaries: [summary("ok"), summary("missing")],
+      loadBundle: async (bundleId) => (bundleId === "bundle-missing" ? undefined : bundle),
+      verify: async () => ({ valid: true }),
+    });
+    // "missing" (no persisted bundle) is still dropped even when verify passes.
+    expect(allPass.map((s) => s.id)).toEqual(["ok"]);
   });
 });

@@ -22,6 +22,7 @@ export interface MergeTrainArtifactSummary {
   readonly demoSurfaceKind: string;
   readonly demoBehaviorCount: number;
   readonly demoPassed: number;
+  readonly bundleId: string;
   readonly bundleDigest: string;
   readonly contentHash: string;
   readonly createdAt: string;

@@ -322,16 +322,21 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
     expect(denied.status).toBe(404);
   });
 
-  it("NEGATIVE CONTROL (Finding 1): a SEALED artifact is NOT served without a re-verifying substrate", async () => {
+  it("NEGATIVE CONTROL (Finding 1): NEITHER the train list NOR the artifact serves a sealed row without a substrate", async () => {
     // A sealed row exists, but the route has NO substrate to cryptographically re-verify it.
-    // Content-hash + shape validation alone must NOT serve the signed artifact → 404.
+    // Content-hash + shape validation alone must NOT serve/label it verified.
     const dormant = routeApp(app, ADMIN);
+    // The train LIST serves NO verified row (empty) — the panel then shows unknown, never green.
+    const list = await dormant.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/train`);
+    expect(list.status).toBe(200);
+    expect(((await list.json()) as { artifacts: unknown[] }).artifacts).toHaveLength(0);
+    // The single-artifact GET is 404.
     expect(
       (await dormant.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`)).status,
     ).toBe(404);
   });
 
-  it("NEGATIVE CONTROL (Finding 4): a tampered bundle signature makes the export re-verify FAIL", async () => {
+  it("NEGATIVE CONTROL (Finding 4): a tampered bundle signature fails re-verify on BOTH the list and the artifact", async () => {
     // Tamper the persisted bundle's root signature (proof_bundles is not immutable-locked).
     await owner.query("UPDATE proof_bundles SET root_signature = $1 WHERE org_id = $2", [
       Buffer.from([0, 0, 0, 0]),
@@ -339,6 +344,10 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
     ]);
     // The strict manifest is still valid, but the substrate re-verify now fails → fail-closed.
     const owned = routeApp(app, ADMIN, substrate);
+    // The train LIST drops the row (per-row re-verify fails) — never surfaced as verified.
+    const list = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/train`);
+    expect(((await list.json()) as { artifacts: unknown[] }).artifacts).toHaveLength(0);
+    // The single-artifact GET is 404.
     const artifact = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`);
     expect(artifact.status).toBe(404);
   });

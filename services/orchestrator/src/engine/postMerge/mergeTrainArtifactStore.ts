@@ -24,6 +24,7 @@ export interface MergeTrainArtifactSummary {
   readonly demoSurfaceKind: string;
   readonly demoBehaviorCount: number;
   readonly demoPassed: number;
+  readonly bundleId: string;
   readonly bundleDigest: string;
   readonly contentHash: string;
   readonly createdAt: string;
@@ -40,6 +41,7 @@ interface ArtifactRow {
   readonly demo_surface_kind: string;
   readonly demo_behavior_count: number;
   readonly demo_passed: number;
+  readonly bundle_id: string;
   readonly bundle_digest: string;
   readonly content_hash: string;
   readonly created_at: Date | string;
@@ -48,10 +50,30 @@ interface ArtifactRow {
 
 const SUMMARY_COLUMNS = `id, land_group_id, authority_decision_id, integration_node_id, proof_root,
    receipt_main_sha, deploy_deployment_id, demo_surface_kind, demo_behavior_count, demo_passed,
-   bundle_digest, content_hash, created_at`;
+   bundle_id, bundle_digest, content_hash, created_at`;
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+/**
+ * Keep only the summaries whose persisted bundle passes a `ProofSubstrate.verify` — the
+ * SAME cryptographic gate the detail/bytes export uses. A row whose bundle is missing or
+ * fails re-verify is dropped (never surfaced as a verified delivery). DB-free (the DB
+ * touches are the injected `loadBundle`), so the list gate unit-tests without a database.
+ */
+export async function filterVerifiedSummaries(input: {
+  summaries: readonly MergeTrainArtifactSummary[];
+  loadBundle: (bundleId: string) => Promise<ProofBundleSealed | undefined>;
+  verify: (bundle: ProofBundleSealed) => Promise<{ readonly valid: boolean }>;
+}): Promise<MergeTrainArtifactSummary[]> {
+  const verified: MergeTrainArtifactSummary[] = [];
+  for (const summary of input.summaries) {
+    const bundle = await input.loadBundle(summary.bundleId);
+    if (bundle === undefined) continue;
+    if ((await input.verify(bundle)).valid) verified.push(summary);
+  }
+  return verified;
 }
 
 function toSummary(row: ArtifactRow): MergeTrainArtifactSummary {
@@ -66,6 +88,7 @@ function toSummary(row: ArtifactRow): MergeTrainArtifactSummary {
     demoSurfaceKind: row.demo_surface_kind,
     demoBehaviorCount: row.demo_behavior_count,
     demoPassed: row.demo_passed,
+    bundleId: row.bundle_id,
     bundleDigest: row.bundle_digest,
     contentHash: row.content_hash,
     createdAt: toIso(row.created_at),
