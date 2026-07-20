@@ -12,14 +12,19 @@ import type { DesignRenderVerdictRow } from "../src/engine/design/render/designR
 import { assertVerdictAssertionCoverage } from "../src/engine/contracts/runtimeVerificationInvariants.js";
 import {
   AcceptanceOrchestrator,
+  recordAttemptedVerdictSequential,
   type AcceptanceEventSink,
   type AcceptancePlan,
   type AcceptanceRunStore,
   type AcceptanceSurfaceDriver,
   type CompleteAcceptanceRunInput,
   type DesignRenderVerdictReader,
+  type EnsureVerificationPlanInput,
   type RecordAcceptanceRunInput,
+  type RecordAttemptInput,
   type RecordAcceptanceVerdictInput,
+  type RecordAttemptedVerdictInput,
+  type RecordAttemptedVerdictResult,
   type StoredAcceptanceVerdict,
 } from "../src/engine/verification/acceptance/index.js";
 import { PreviewBehaviorGateProducer } from "../src/engine/verification/preMerge/preMergeBehaviorGateProducer.js";
@@ -54,12 +59,21 @@ class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
   public completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {
     return Promise.resolve();
   }
+  public ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return Promise.resolve(input.planId);
+  }
+  public recordAttempt(_input: RecordAttemptInput): Promise<string> {
+    return Promise.resolve("attempt_mem_1");
+  }
   public recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
     // The SAME coverage guard the Pg store enforces — the overlay must never forge a pass.
     assertVerdictAssertionCoverage(input);
     const verdictId = `verdict_mem_${(this.seq += 1)}`;
     this.verdicts.push({ ...input, verdictId });
     return Promise.resolve(verdictId);
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
     return Promise.resolve([]);

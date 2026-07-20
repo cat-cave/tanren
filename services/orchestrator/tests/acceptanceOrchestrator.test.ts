@@ -11,13 +11,18 @@ import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import {
   AcceptanceOrchestrator,
+  recordAttemptedVerdictSequential,
   type AcceptanceEventSink,
   type AcceptancePlan,
   type AcceptanceRunStore,
   type AcceptanceSurfaceDriver,
   type CompleteAcceptanceRunInput,
+  type EnsureVerificationPlanInput,
   type RecordAcceptanceRunInput,
   type RecordAcceptanceVerdictInput,
+  type RecordAttemptInput,
+  type RecordAttemptedVerdictInput,
+  type RecordAttemptedVerdictResult,
   type StoredAcceptanceVerdict,
 } from "../src/engine/verification/acceptance/index.js";
 import { assertVerdictAssertionCoverage } from "../src/engine/contracts/runtimeVerificationInvariants.js";
@@ -29,6 +34,8 @@ const ARTIFACT = `sha256:${"a".repeat(64)}` as Digest;
 // orchestrator's outcome, it only persists what the orchestrator decided.
 class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
   public readonly verdicts: (RecordAcceptanceVerdictInput & { readonly verdictId: string })[] = [];
+  public readonly plans: EnsureVerificationPlanInput[] = [];
+  public readonly attempts: (RecordAttemptInput & { readonly attemptId: string })[] = [];
   public completed = false;
   private seq = 0;
 
@@ -39,11 +46,43 @@ class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
     this.completed = true;
     return Promise.resolve();
   }
+  public ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    this.plans.push(input);
+    return Promise.resolve(input.planId);
+  }
+  public recordAttempt(input: RecordAttemptInput): Promise<string> {
+    const attemptId = `attempt_mem_${(this.seq += 1)}`;
+    this.attempts.push({ ...input, attemptId });
+    return Promise.resolve(attemptId);
+  }
   public recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
     assertVerdictAssertionCoverage(input);
+    // rv-10: mirror the Pg store's fail-closed traceability — a verdict that names a
+    // producing attempt only seals if a real attempt with the verdict's key was recorded.
+    const backing = this.attempts.filter(
+      (a) =>
+        a.runId === input.runId &&
+        a.behaviorRevisionId === input.behaviorRevisionId &&
+        a.exampleHash === input.exampleHash &&
+        a.matrixHash === input.matrixHash,
+    );
+    if (input.attemptTrace.kind === "attempted") {
+      const producingAttemptId = input.attemptTrace.producingAttemptId;
+      const named = backing.find((a) => a.attemptId === producingAttemptId);
+      if (named === undefined) throw new Error(`orphan verdict: producing attempt ${producingAttemptId} not recorded`);
+      if (backing.length !== input.attemptCount) {
+        throw new Error(`verdict attempt count ${input.attemptCount} != ${backing.length} real attempts`);
+      }
+    } else if (backing.length > 0) {
+      // An attemptless verdict must have NO real backing attempts for its natural key.
+      throw new Error(`attemptless verdict has ${backing.length} real attempts for its key`);
+    }
     const verdictId = `verdict_mem_${(this.seq += 1)}`;
     this.verdicts.push({ ...input, verdictId });
     return Promise.resolve(verdictId);
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
     return Promise.resolve(
@@ -150,6 +189,33 @@ describe("AcceptanceOrchestrator — executable acceptance A1", () => {
     const verdictPayload = verdictEvent?.payload as { outcome: string; executedAssertionCount: number };
     expect(verdictPayload.outcome).toBe("passed");
     expect(verdictPayload.executedAssertionCount).toBe(2);
+  });
+
+  it("rv-10 lifecycle: records a plan + real attempt and binds the verdict to that producing attempt", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new RecordingEventSink(),
+      now: () => "2026-07-19T00:00:00.000Z",
+      drivers: [driver([observation("status", 200)])],
+    });
+    const result = await orchestrator.execute(
+      request([plan([{ assertionId: "a1", subject: "status", comparisonOperator: "equals", expected: 200 }])]),
+    );
+    // A run → attempt → verdict lifecycle: exactly one plan ensured, one real attempt, one verdict.
+    expect(store.plans).toHaveLength(1);
+    expect(store.attempts).toHaveLength(1);
+    expect(store.verdicts).toHaveLength(1);
+    const attempt = store.attempts[0]!;
+    const verdict = store.verdicts[0]!;
+    // The attempt carries the behavior's resolved outcome + classification and its run key.
+    expect(attempt.outcome).toBe("passed");
+    expect(attempt.classification).toBe("product_resolved");
+    expect(attempt.runId).toBe(verdict.runId);
+    expect(attempt.behaviorRevisionId).toBe(verdict.behaviorRevisionId);
+    // The verdict is traceable to the attempt that produced it.
+    expect(verdict.attemptTrace).toEqual({ kind: "attempted", producingAttemptId: attempt.attemptId });
+    expect(result.behaviors[0]?.outcome).toBe("passed");
   });
 
   it("DECISIVE false-green: fewer assertions executed than required is never passed", async () => {

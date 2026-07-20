@@ -42,6 +42,7 @@ import {
   PgAcceptanceRunStore,
   PgReleaseInstanceBaseUrlResolver,
   PgVerificationCaptureStore,
+  recordAttemptedVerdictSequential,
   type AcceptanceBehaviorResult,
   type AcceptanceEventSink,
   type AcceptancePlan,
@@ -50,8 +51,12 @@ import {
   type AcceptanceRunResult,
   type AcceptanceRunStore,
   type CompleteAcceptanceRunInput,
+  type EnsureVerificationPlanInput,
   type RecordAcceptanceRunInput,
   type RecordAcceptanceVerdictInput,
+  type RecordAttemptedVerdictInput,
+  type RecordAttemptedVerdictResult,
+  type RecordAttemptInput,
   type StoredAcceptanceVerdict,
 } from "../verification/acceptance/index.js";
 import { PgCasByteStore } from "../cas/pgCasByteStore.js";
@@ -271,8 +276,19 @@ export class EphemeralAcceptanceRunStore implements AcceptanceRunStore {
   // eslint-disable-next-line @typescript-eslint/require-await
   public async completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {}
   // eslint-disable-next-line @typescript-eslint/require-await
+  public async ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return input.planId;
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  public async recordAttempt(_input: RecordAttemptInput): Promise<string> {
+    return `demo_acceptance_attempt_${randomUUID()}`;
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
   public async recordVerdict(_input: RecordAcceptanceVerdictInput): Promise<string> {
     return `demo_acceptance_verdict_${randomUUID()}`;
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   public async listVerdicts(_input: {

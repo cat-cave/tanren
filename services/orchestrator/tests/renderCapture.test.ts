@@ -26,14 +26,19 @@ import {
   HttpAcceptanceSurfaceDriver,
   PgVerificationCaptureStore,
   captureArtifactId,
+  recordAttemptedVerdictSequential,
   type AcceptanceBaseUrlResolver,
   type AcceptanceDriveInput,
   type AcceptanceEventSink,
   type AcceptancePlan,
   type AcceptanceRunStore,
   type CompleteAcceptanceRunInput,
+  type EnsureVerificationPlanInput,
   type RecordAcceptanceRunInput,
   type RecordAcceptanceVerdictInput,
+  type RecordAttemptInput,
+  type RecordAttemptedVerdictInput,
+  type RecordAttemptedVerdictResult,
   type StoredAcceptanceVerdict,
 } from "../src/engine/verification/acceptance/index.js";
 
@@ -79,6 +84,7 @@ interface FakeRow {
   kind: string;
   redaction_class: string;
   retention_class: string;
+  producing_attempt_id: string | null;
 }
 
 /** Minimal in-memory `verification_artifacts` table honoring the store's 3 statements. */
@@ -89,11 +95,21 @@ class FakeDb {
     op: (client: Pick<pg.PoolClient, "query">) => Promise<T>,
   ): Promise<T> => {
     const client = {
-      query: (text: string, params: readonly unknown[] = []): Promise<{ rows: FakeRow[]; rowCount: number }> => {
+      query: (
+        text: string,
+        params: readonly unknown[] = [],
+      ): Promise<{ rows: readonly unknown[]; rowCount: number }> => {
         if (text.includes("FROM projects")) return Promise.resolve({ rows: [], rowCount: 1 });
         if (text.startsWith("INSERT INTO verification_artifacts")) {
           const key = `${String(params[0])}\n${String(params[1])}`;
-          if (this.rows.has(key)) return Promise.resolve({ rows: [], rowCount: 0 });
+          const attempt = params[9] === null || params[9] === undefined ? null : String(params[9]);
+          const existing = this.rows.get(key);
+          if (existing !== undefined) {
+            // rv-10 FINDING 3: ON CONFLICT DO UPDATE COALESCE — backfill only a NULL producing
+            // attempt; `xmax != 0` (a conflict-update) reports `inserted = false`.
+            if (existing.producing_attempt_id === null && attempt !== null) existing.producing_attempt_id = attempt;
+            return Promise.resolve({ rows: [{ inserted: false }], rowCount: 1 });
+          }
           this.rows.set(key, {
             id: String(params[1]),
             cas_digest: String(params[3]),
@@ -102,8 +118,9 @@ class FakeDb {
             byte_size: Number(params[6]),
             redaction_class: String(params[7]),
             retention_class: String(params[8]),
+            producing_attempt_id: attempt,
           });
-          return Promise.resolve({ rows: [], rowCount: 1 });
+          return Promise.resolve({ rows: [{ inserted: true }], rowCount: 1 });
         }
         if (text.includes("FROM verification_artifacts")) {
           const row = this.rows.get(`${String(params[0])}\n${String(params[1])}`);
@@ -241,8 +258,17 @@ class NoopStore implements AcceptanceRunStore {
   public completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {
     return Promise.resolve();
   }
+  public ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return Promise.resolve(input.planId);
+  }
+  public recordAttempt(_input: RecordAttemptInput): Promise<string> {
+    return Promise.resolve("attempt_1");
+  }
   public recordVerdict(_input: RecordAcceptanceVerdictInput): Promise<string> {
     return Promise.resolve("verdict_1");
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
     return Promise.resolve([]);
@@ -349,9 +375,18 @@ class RecordingStore implements AcceptanceRunStore {
   public completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {
     return Promise.resolve();
   }
+  public ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return Promise.resolve(input.planId);
+  }
+  public recordAttempt(_input: RecordAttemptInput): Promise<string> {
+    return Promise.resolve("attempt_1");
+  }
   public recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
     this.verdicts.push(input);
     return Promise.resolve("verdict_1");
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
     return Promise.resolve([]);
