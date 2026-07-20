@@ -2,6 +2,7 @@ import type { PrincipalVerificationPermit } from "../contracts/integrationAuthor
 import { assertPrincipalVerificationPermit } from "./integrationAuthorityImpl.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import {
+  exactSecretRef,
   generationSecretRef,
   integrationStagedSecretRef,
   type ExactSecretCoordinate,
@@ -69,9 +70,7 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
 
   async getExact(coordinate: ExactSecretCoordinate): Promise<string | undefined> {
     this.getExactCalls += 1;
-    const baseRef = coordinate.ref.replace(/\/g\/\d+$/u, "");
-    const ref = generationSecretRef(baseRef, coordinate.generation);
-    const secret = await this.secrets.get(ref);
+    const secret = await this.secrets.get(exactSecretRef(coordinate.ref, coordinate.generation));
     return secret?.value;
   }
 

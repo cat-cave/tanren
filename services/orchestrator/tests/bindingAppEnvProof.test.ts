@@ -164,6 +164,21 @@ describe("in-15 appEnvHash proof gate — verdicts", () => {
     expect(verdict.status).toBe("output_shape_mismatch");
   });
 
+  it("BLOCKS a value_ref redirect: value_ref /g/N != secret_generation (proof/attach byte divergence)", async () => {
+    const { db, secrets } = await materialized();
+    // Redirect ONLY the value_ref's embedded generation (…/g/1 -> …/g/2), leaving
+    // secret_generation = 1. Pre-fix the proof digested g/1 (getExact rebinds to the
+    // column) while attach shipped g/2 (value_ref as-is) — unproven bytes. Now BLOCKED.
+    const token = db.appEnv.find((r) => r["key"] === "SLACK_BOT_TOKEN");
+    token!["value_ref"] = (token!["value_ref"] as string).replace("/g/1", "/g/2");
+
+    const verdict = await verifyBindingAppEnvProof(db, secrets, SCOPE, BIND);
+    expect(verdict.status).toBe("value_ref_generation_mismatch");
+    if (verdict.status !== "value_ref_generation_mismatch") return;
+    expect(verdict.embedded).toBe(2);
+    expect(verdict.secretGeneration).toBe(1);
+  });
+
   it("verifies a binding whose output scopes DEFAULT via scopesOf (record == stored == verify)", async () => {
     // Empty scopes are normalized by scopesOf to ["runtime"] at WRITE time; the
     // recorded desired_state_hash must use the SAME defaulted form or the gate would

@@ -17,6 +17,7 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { generationSecretRef } from "../src/engine/contracts/integrationSecretStore.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import { materializeBinding, type ResolvedBinding } from "../src/engine/integrations/bindingMaterializer.js";
+import { resolveAppEnvForScope } from "../src/engine/workflow/resolveAppEnv.js";
 import {
   assertReadyProjectBindingProofs,
   BindingAppEnvProofFailedError,
@@ -252,6 +253,41 @@ describeDb("in-15 appEnvHash proof gate — real Postgres", () => {
     }
   });
 
+  it("BLOCKS a value_ref redirect: value_ref /g/N != secret_generation (proof/attach byte alignment)", async () => {
+    // Redirect ONLY value_ref's embedded generation (…/g/1 -> …/g/2), leaving
+    // secret_generation = 1. The proof digests the {value_ref, secret_generation}
+    // coordinate; attach resolves the SAME coordinate via exactSecretRef — a value_ref
+    // redirect is a fail-closed mismatch, not a way to ship unproven bytes.
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      client.query(
+        `UPDATE project_app_env SET value_ref = replace(value_ref, '/g/1', '/g/2'), updated_at = now()
+          WHERE org_id=$1 AND project_id=$2 AND environment='production' AND key='SLACK_BOT_TOKEN'`,
+        [ORG_A, PROJECT_A],
+      ),
+    );
+    try {
+      const verdict = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+        verifyBindingAppEnvProof(client, secrets, SCOPE_A, BIND_A),
+      );
+      expect(verdict.status).toBe("value_ref_generation_mismatch");
+      await expect(
+        runWithOrgScope(runtimePool, ORG_A, (client) => assertReadyProjectBindingProofs(client, secrets, SCOPE_A)),
+      ).rejects.toBeInstanceOf(BindingAppEnvProofFailedError);
+    } finally {
+      await runWithOrgScope(runtimePool, ORG_A, (client) =>
+        client.query(
+          `UPDATE project_app_env SET value_ref = replace(value_ref, '/g/2', '/g/1'), updated_at = now()
+            WHERE org_id=$1 AND project_id=$2 AND environment='production' AND key='SLACK_BOT_TOKEN'`,
+          [ORG_A, PROJECT_A],
+        ),
+      );
+    }
+    const restored = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      verifyBindingAppEnvProof(client, secrets, SCOPE_A, BIND_A),
+    );
+    expect(restored.status).toBe("verified");
+  });
+
   it("BLOCKS a binding with no ready generation (missing) and is org-scoped (cross-org zero)", async () => {
     const absent = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       verifyBindingAppEnvProof(client, secrets, SCOPE_A, "bind-nonexistent"),
@@ -302,5 +338,60 @@ describeDb("in-15 appEnvHash proof gate — real Postgres", () => {
       assertReadyProjectBindingProofs(client, secrets, SCOPE_A),
     );
     expect(restored).toHaveLength(1);
+  });
+
+  it("PRODUCTION attach enforces the FROZEN binding_env scopes — pae.scopes cannot promote a build-only key to runtime", async () => {
+    // Materialize a build-only plain key alongside the runtime outputs.
+    const withBuildKey: ResolvedBinding = {
+      ...buildResolved(),
+      outputs: [
+        ...buildResolved().outputs,
+        { logicalKey: "BUILD_FLAG", secret: false, required: false, scopes: ["build"], plainValue: "on" },
+      ],
+    };
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      materializeBinding(client, secrets, withBuildKey, systemActor),
+    );
+
+    // Attacker mutates the MUTABLE project_app_env.scopes to add "runtime".
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      client.query(
+        `UPDATE project_app_env SET scopes = ARRAY['build','runtime']::text[], updated_at = now()
+          WHERE org_id=$1 AND project_id=$2 AND environment='production' AND key='BUILD_FLAG'`,
+        [ORG_A, PROJECT_A],
+      ),
+    );
+
+    // The REAL attach resolution (resolveAppEnvForScope) uses the FROZEN
+    // integration_binding_env scopes (["build"]) — the mutated pae.scopes is ignored,
+    // so BUILD_FLAG never reaches the runtime env. The runtime secret/plain keys do.
+    const runtimeEnv = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      resolveAppEnvForScope({
+        client,
+        secrets: backing,
+        orgId: ORG_A,
+        projectId: PROJECT_A,
+        environment: "production",
+        scope: "runtime",
+        actor: systemActor,
+      }),
+    );
+    expect(runtimeEnv).not.toHaveProperty("BUILD_FLAG");
+    expect(runtimeEnv).toHaveProperty("SLACK_CHANNEL_ID");
+    expect(runtimeEnv["SLACK_BOT_TOKEN"]).toBe(TOKEN_MATERIAL);
+
+    // BUILD_FLAG is still correctly present for the build phase (its frozen scope).
+    const buildEnv = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      resolveAppEnvForScope({
+        client,
+        secrets: backing,
+        orgId: ORG_A,
+        projectId: PROJECT_A,
+        environment: "production",
+        scope: "build",
+        actor: systemActor,
+      }),
+    );
+    expect(buildEnv["BUILD_FLAG"]).toBe("on");
   });
 });

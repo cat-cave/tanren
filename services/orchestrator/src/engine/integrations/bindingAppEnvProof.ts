@@ -26,7 +26,11 @@ import {
   type IntegrationBindingContractOutputV1,
   type IntegrationBindingContractV1,
 } from "../contracts/integrationBindingContract.js";
-import type { ExactSecretCoordinate, IntegrationSecretStore } from "../contracts/integrationSecretStore.js";
+import {
+  embeddedRefGeneration,
+  type ExactSecretCoordinate,
+  type IntegrationSecretStore,
+} from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { APP_ENV_SCOPES, type AppEnvScope } from "../repositories/appEnvironment.js";
 import type { BindingEnvironment } from "./bindingMaterializerStore.js";
@@ -71,6 +75,19 @@ export type BindingAppEnvProofVerdict =
       readonly bindingId: string;
       readonly generation: number;
       readonly detail: string;
+    }
+  | {
+      /**
+       * A secret row whose `value_ref` embeds a `/g/N` that disagrees with its
+       * `secret_generation` column — a value_ref redirect that would make the proof
+       * and the deploy attach resolve DIFFERENT secret bytes. Fail-closed BLOCK.
+       */
+      readonly status: "value_ref_generation_mismatch";
+      readonly bindingId: string;
+      readonly generation: number;
+      readonly key: string;
+      readonly embedded: number | undefined;
+      readonly secretGeneration: number;
     }
   | {
       /**
@@ -256,6 +273,22 @@ export async function verifyBindingAppEnvProof(
           bindingId,
           generation,
           detail: `secret output '${out.key}' has no materialized project_app_env coordinate`,
+        };
+      }
+      // FAIL-CLOSED: the proof digests the coordinate `{ value_ref, secret_generation }`
+      // (secret_generation is the authority) and the deploy attach resolves the SAME
+      // coordinate via `exactSecretRef`. If `value_ref`'s embedded `/g/N` disagrees with
+      // `secret_generation`, that is a value_ref redirect — the proof and attach would
+      // otherwise resolve DIFFERENT bytes. BLOCK before resolving.
+      const embedded = embeddedRefGeneration(out.value_ref);
+      if (embedded !== out.secret_generation) {
+        return {
+          status: "value_ref_generation_mismatch",
+          bindingId,
+          generation,
+          key: out.key,
+          embedded,
+          secretGeneration: out.secret_generation,
         };
       }
       const coordinate: ExactSecretCoordinate = { ref: out.value_ref, generation: out.secret_generation };

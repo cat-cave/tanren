@@ -43,6 +43,25 @@ export function generationSecretRef(baseRef: string, generation: number): string
   return `${baseRef}/g/${generation}`;
 }
 
+/**
+ * The canonical Vault ref for a generation-addressed secret coordinate: strip any
+ * embedded `/g/N` off the ref and re-append the AUTHORITATIVE `generation`. This is
+ * the SINGLE secret-resolution both the in-15 proof gate (via
+ * {@link IntegrationSecretStore.getExact}) and the deploy attach
+ * (`resolveAppEnvForScope`) use, so the bytes PROVEN equal the bytes SHIPPED — a
+ * `value_ref` that embeds a different `/g/M` can never redirect attach off the
+ * proven coordinate (the generation column is the authority, not the ref suffix).
+ */
+export function exactSecretRef(valueRef: string, generation: number): string {
+  return generationSecretRef(valueRef.replace(/\/g\/\d+$/u, ""), generation);
+}
+
+/** The generation embedded in a `value_ref`'s trailing `/g/N`, or undefined if none. */
+export function embeddedRefGeneration(valueRef: string): number | undefined {
+  const match = /\/g\/(\d+)$/u.exec(valueRef);
+  return match === null ? undefined : Number(match[1]);
+}
+
 export function integrationStagedSecretRef(operationId: string): string {
   return `secret://integration-stage/${encodeURIComponent(operationId)}`;
 }
