@@ -9,6 +9,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 describe("mq-8 production coordinator insertion point", () => {
   it("runs EAGER plan/build after stale-claim recovery and before the fresh queue snapshot", async () => {
@@ -23,6 +24,7 @@ describe("mq-8 production coordinator insertion point", () => {
     });
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
+      scheduler: makeTestIntegrationGraphScheduler(),
       queue,
       runner: new ScriptedMergeRunner(),
       checker: new InMemoryBatchChecker(),

@@ -14,14 +14,23 @@
 
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
-import { BatchMergeCoordinator, buildEagerIntegrationBeamPlanner } from "./batchCoordinator.js";
+// ds-6's design-delivery coordinator (pre_merge `bindDesignDelivery` seam below) is
+// re-exported off `batchCoordinator.js` so it rides an already-imported module; mq-9
+// replaced the old formBatch/`resolveMaxBatchSize` selection with
+// `buildIntegrationGraphScheduler` (which bounds batch size itself), so this file no
+// longer imports `batchMaxSize.js` at all — both nodes' seams stay under the import cap.
+import {
+  BatchMergeCoordinator,
+  buildEagerIntegrationBeamPlanner,
+  buildDesignAwareDeliveryCoordinator,
+} from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
-import { buildDesignAwareDeliveryCoordinator, resolveMaxBatchSize } from "./batchMaxSize.js";
 import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
+import { buildIntegrationGraphScheduler } from "./integrationGraphSchedulerBuild.js";
 import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
 import { PgMultiMemberAuthorityEvaluator } from "./multiMemberAuthorityGatherPg.js";
 import { PgAutonomousRepairRouter } from "./respecRouterPg.js";
@@ -89,7 +98,10 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.
     holdCeilingStore: new PgHoldCeilingStore(deps.pool),
-    resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
+    // MQ-9's real selection binding: subscriber → coordinator → fresh RLS queue
+    // snapshot → CodeHost heads/diffs + fenced lease/proof facts → schedule(). The
+    // scheduler has no checker, runner, or MergeAuthority capability.
+    scheduler: buildIntegrationGraphScheduler(deps),
     // mq-8's only production binding: subscriber → coordinate → recover stale
     // claims → EAGER plan/build → fresh queue snapshot. The planner is preparation
     // only; it receives no queue runner or authority evaluator.

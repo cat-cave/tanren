@@ -16,6 +16,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_mq2_cutover";
 
@@ -83,7 +84,7 @@ function coordinator(input: { checker: BatchChecker; authorityEvaluator: BatchAu
     escalator: new RecordingSpecEscalator(queue),
     gateRework,
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
-    resolveMaxBatchSize: () => Promise.resolve(5),
+    scheduler: makeTestIntegrationGraphScheduler(5),
     sleep: () => Promise.resolve(),
   });
   return { instance, queue, runner, gateRework };

@@ -19,7 +19,7 @@ import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySi
 import { createMergeQueueRepairRouteRoutes } from "../mergeQueue/repairRoutes.js";
 import { createMergeTrainArtifactRoutes } from "../mergeQueue/trainArtifact.js";
 import { createMergeQueueEvidenceContractRoutes } from "../mergeQueue/evidenceContracts.js";
-import { createMergeQueueEagerBeamRoutes } from "../mergeQueue/eagerBeams.js";
+import { mountMergeQueueReadRoutes } from "../mergeQueue/scheduleMount.js";
 import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
@@ -72,7 +72,9 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   app.route("/orgs", createMergeQueueEvidenceContractRoutes({ pool: deps.pool }));
   // mq-8 advisory speculative-build evidence. Read-only and org-scoped; it has no
   // authority endpoint and cannot advance a queue member.
-  app.route("/orgs", createMergeQueueEagerBeamRoutes({ pool: deps.pool }));
+  // mq-9's scoped semantic partition/lease explanation follows the mq-8 advisory
+  // beam read model. The production coordinator always revalidates CodeHost facts.
+  mountMergeQueueReadRoutes(app, deps.pool);
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

@@ -26,6 +26,7 @@ import {
   type MergeCoordinatorConformanceHarness,
 } from "./mergeCoordinatorConformance.js";
 import { allowExactBatchAuthority } from "../helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "../helpers/integrationGraphScheduler.js";
 
 describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
   make(): MergeCoordinatorConformanceHarness {
@@ -34,6 +35,7 @@ describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
     const events = new RecordingMergeQueueEventEmitter();
     const escalator = new RecordingSpecEscalator();
     const coordinator = new BatchMergeCoordinator({
+      scheduler: makeTestIntegrationGraphScheduler(1),
       authorityEvaluator: allowExactBatchAuthority(),
       queue,
       runner,
@@ -43,7 +45,6 @@ describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
       escalator,
       recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
       // Conformance suite asserts one-at-a-time selection; batch size 1 preserves that.
-      resolveMaxBatchSize: async () => 1,
     });
     return {
       coordinator,
@@ -87,6 +88,7 @@ it("routes an authorized two-member batch through the synced atomic land-group f
   const landGroups = new RecordingLandGroupReconciler();
   const authority = allowExactBatchAuthority();
   const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(2),
     authorityEvaluator: { ...authority, landAuthorizedGroup: (input) => landGroups.land(input) },
     queue,
     runner,
@@ -95,7 +97,6 @@ it("routes an authorized two-member batch through the synced atomic land-group f
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(queue),
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, new RecordingMergeQueueEventEmitter()),
-    resolveMaxBatchSize: async () => 2,
   });
   queue.seed({ runId: "run_group_a", specId: "spec_group_a", dependsOn: [], priority: "P1" });
   queue.seed({ runId: "run_group_b", specId: "spec_group_b", dependsOn: [], priority: "P1" });

@@ -27,6 +27,8 @@ import type { MergeQueueEagerBeamsResponse } from "../../api/mergeQueueEagerBeam
 import { EagerBeamPanel } from "./EagerBeamPanel.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 import { EvidenceContractPanel } from "./EvidenceContractPanel.js";
+import type { MergeQueueScheduleResponse } from "../../api/mergeQueueSchedule.js";
+import { SemanticSchedulePanel } from "./SemanticSchedulePanel.js";
 
 export interface MergeQueueBodyProps {
   /** Rebase/rebuild metrics, or `undefined` when the read failed / no project. */
@@ -45,6 +47,8 @@ export interface MergeQueueBodyProps {
   evidenceContract: MergeQueueEvidenceContractResponse | undefined;
   /** mq-8 advisory eager integration builds (undefined on a failed read). */
   eagerBeams: MergeQueueEagerBeamsResponse | undefined;
+  /** mq-9 semantic partition/cap/lease read model. */
+  semanticSchedule: MergeQueueScheduleResponse | undefined;
   /** Org id for the mq-15 artifact links. */
   orgId: string;
   /** Project id for the mq-15 artifact links. */
@@ -180,6 +184,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
     mergeTrain,
     evidenceContract,
     eagerBeams,
+    semanticSchedule,
     orgId,
     projectId,
     windowDays,
@@ -218,6 +223,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
               <MergeTrainPanel projection={mergeTrain} orgId={orgId} projectId={projectId} />
               <EvidenceContractPanel projection={evidenceContract} />
               <EagerBeamPanel projection={eagerBeams} />
+              <SemanticSchedulePanel projection={semanticSchedule} />
               <MultiMemberAuthorityPanel projection={authorityEvaluations} />
               <RepairRouteLineagePanel projection={repairRoutes} />
               <AuthoritySignalPanel projection={authoritySignals} />

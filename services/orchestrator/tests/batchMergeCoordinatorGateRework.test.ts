@@ -29,6 +29,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_batch_gate_rework";
 
@@ -59,7 +60,7 @@ function makeHarness(): Harness {
     escalator: new RecordingSpecEscalator(),
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
-    resolveMaxBatchSize: () => Promise.resolve(5),
+    scheduler: makeTestIntegrationGraphScheduler(5),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents, gateRework };
@@ -169,7 +170,7 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
       batchEvents: new RecordingBatchMergeEventEmitter(),
       escalator,
       recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
-      resolveMaxBatchSize: () => Promise.resolve(5),
+      scheduler: makeTestIntegrationGraphScheduler(5),
       sleep: () => Promise.resolve(),
     });
     queue.seed({ runId: "run_spec_a", specId: "spec_a", dependsOn: [], priority: "tbd" });

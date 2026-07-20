@@ -5,7 +5,6 @@ import {
   type BatchFormation,
   type BatchGateReworkRouter,
   DEFAULT_MAX_BATCH_SIZE,
-  formBatch,
 } from "../contracts/batchMergeCoordinator.js";
 import {
   type CoordinateResult,
@@ -37,8 +36,14 @@ import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
 import { createLogger } from "../observability/logger.js";
 import { BatchBisector } from "./batchBisector.js";
 import { buildEagerIntegrationBeamPlanner, type EagerIntegrationBeamPlanner } from "./eagerIntegrationBeamPlanner.js";
+import type { IntegrationGraphScheduler } from "./integrationGraphScheduler.js";
 export { DEFAULT_MAX_BATCH_SIZE };
 export { buildEagerIntegrationBeamPlanner };
+// Re-exported off this coordinator-builder barrel so the composition root
+// (`batchCoordinatorBuild`) wires the ds-6 pre_merge design-delivery seam AND mq-9's
+// integration-graph scheduler from a single already-imported module — keeping that
+// build file within its runtime-import cap after the two nodes merged.
+export { buildDesignAwareDeliveryCoordinator } from "../design/queue/designAwareDeliveryCoordinator.js";
 const log = createLogger("batch-coordinator");
 const INFRA_RETRY_BACKOFF_MS = 500;
 const PENDING_RECHECK_MS = 15_000;
@@ -92,8 +97,8 @@ export interface BatchMergeCoordinatorDeps {
   recoverySettlement?: RecoveryOwnedSettlementWriter;
   /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
   holdCeilingStore?: HoldCeilingStore;
-  /** Per-project max batch size resolver. Default → `DEFAULT_MAX_BATCH_SIZE`; prod reads `projects.config.maxBatchSize`. */
-  resolveMaxBatchSize?: (projectId: string) => Promise<number>;
+  /** The sole candidate-selection path; production wires real RLS + CodeHost facts. */
+  scheduler: IntegrationGraphScheduler;
   /** Test seam: the sleep between infra-error re-polls. Defaults to a real timer; a test injects a no-op/recording sleep so re-polls run instantly. */
   sleep?: (ms: number) => Promise<void>;
   /** mq-8 advisory build-only planner. Production always supplies the real PG/jj implementation. */
@@ -102,14 +107,12 @@ export interface BatchMergeCoordinatorDeps {
 
 /** Production BatchMergeCoordinator: speculative batch-check + bisect over the native queue. */
 export class BatchMergeCoordinator implements MergeCoordinator {
-  private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly bisector: BatchBisector;
   /** Cross-pass consecutive-infra-hold ceiling (runaway guard). */
   private readonly infraHolds: BatchInfraHoldCeiling;
 
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
-    this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
     this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
     this.bisector = new BatchBisector(deps.checker);
     // Audit RC-7: back both runaway-guard ceilings with the injected durable store (survives a restart).
@@ -134,11 +137,14 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     await this.deps.queue.reAdmitGrantCovered?.(projectId);
     await this.deps.queue.parkGrantBlocked?.(projectId);
 
-    const maxBatchSize = await this.resolveMaxBatchSize(projectId);
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
     const queueDepth = snapshot.entries.length;
-
-    const formation = formBatch(snapshot, maxBatchSize);
+    // MQ-9 is the sole selector: it binds live CodeHost diff/head facts, semantic
+    // partitions, current leases, and exact proof-node facts to this fresh snapshot.
+    // It only proposes; the unchanged checker + MergeAuthority still prove and land.
+    const scheduled = await this.deps.scheduler.schedule(snapshot);
+    const formation = scheduled.formation;
+    const maxBatchSize = scheduled.plan.dynamicCapacity.maximum;
     if (formation.batch.length === 0) {
       const holdReason = snapshot.mergingInFlight
         ? "serialized"
@@ -172,6 +178,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     maxBatchSize: number,
   ): Promise<CoordinateResult> {
     let current = formation;
+    let currentMaximum = maxBatchSize;
     const excludedSpecIds = new Set<string>();
     const maxIterations = formation.eligibleCount + 1;
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
@@ -185,10 +192,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       if (current.capped) {
         // The cap LOG (operator visibility — never a SILENT truncation): the remainder keeps its position for next pass.
-        const cap = { projectId, batchSize: current.batch.length, eligible: current.eligibleCount, maxBatchSize };
+        const cap = {
+          projectId,
+          batchSize: current.batch.length,
+          eligible: current.eligibleCount,
+          maxBatchSize: currentMaximum,
+        };
         log.info("batch CAPPED; remainder re-considered next pass", cap);
       }
-      const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize);
+      const checked = await this.checkBatchWithInfraRetry(projectId, current, currentMaximum);
       if (checked.kind === "infra-terminal") {
         return this.terminalInfraBlock(projectId, current.batch, checked.message, queueDepth, checked.cause);
       }
@@ -290,9 +302,11 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       // RE-FORM without the culprit (reload so it is gone + a newly-eligible entry can join), re-check next loop.
       const refreshed = await this.deps.queue.loadSnapshot(projectId);
-      const reformed = formBatch(refreshed, maxBatchSize);
+      const rescheduled = await this.deps.scheduler.schedule(refreshed);
+      const reformed = rescheduled.formation;
       reformed.batch = reformed.batch.filter((e) => !excludedSpecIds.has(e.specId));
       current = reformed;
+      currentMaximum = rescheduled.plan.dynamicCapacity.maximum;
     }
 
     // The loop bound was hit (a logic guard — unreachable since each fail removes one entry). Hold.

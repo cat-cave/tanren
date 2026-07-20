@@ -18,6 +18,7 @@ import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoor
 import { fakeBatchAuthorityBinding } from "../../helpers/mq2BatchAuthority.js";
 
 export { allowExactBatchAuthority } from "../../helpers/mq2BatchAuthority.js";
+export { makeTestIntegrationGraphScheduler } from "../../helpers/integrationGraphScheduler.js";
 
 /**
  * An in-memory batch checker. By default every entry-set PASSES. A test marks a spec

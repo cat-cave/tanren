@@ -23,6 +23,7 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_batch";
 
@@ -52,7 +53,7 @@ function makeHarness(maxBatchSize = 5): Harness {
     batchEvents,
     escalator,
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
-    resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
+    scheduler: makeTestIntegrationGraphScheduler(maxBatchSize),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents, escalator };

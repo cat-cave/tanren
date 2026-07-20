@@ -8,6 +8,7 @@ import { driveOutcomeFromRecoverySettlement } from "../../src/engine/merge/drive
 import { MergeCoordinatorSubscriber } from "../../src/engine/merge/subscriber.js";
 import { MergeAmbiguousError } from "../../src/engine/providers/mergeOutcomeErrors.js";
 import { allowExactBatchAuthority } from "../helpers/mq2BatchAuthority.js";
+import { makeTestIntegrationGraphScheduler } from "../helpers/integrationGraphScheduler.js";
 
 export type CoordinatorDeps = ConstructorParameters<typeof BatchMergeCoordinator>[0];
 export type RecoveryWriter = NonNullable<CoordinatorDeps["recoverySettlement"]> &
@@ -21,6 +22,7 @@ export function productionCoordinator(
 ): BatchMergeCoordinator {
   const queue = new PgMergeQueueModel(pool);
   return new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(),
     authorityEvaluator: allowExactBatchAuthority(),
     queue,
     checker,

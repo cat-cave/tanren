@@ -48,8 +48,11 @@ interface QueueEntryRow {
 // (stays under import/max-dependencies).
 export { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+function requireNonBlankStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new Error(`${field} must be an array of non-blank strings`);
+  }
+  return value;
 }
 
 /**
@@ -191,7 +194,9 @@ export class PgMergeQueueModel implements MergeQueueModel {
         specId: row.spec_id,
         prUrl: row.pr_url,
         prNumber: Number(row.pr_number),
-        dependsOn: asStringArray(row.depends_on),
+        // Never coerce corrupt dependency data to an empty set: that would make a
+        // malformed spec look dependency-free and let it enter a merge proposal.
+        dependsOn: requireNonBlankStringArray(row.depends_on, `spec ${row.spec_id} depends_on`),
         priority: SpecPriority.parse(row.priority),
         orderKey: Number(row.rn),
         ...(row.partition_id === null ? {} : { partitionId: row.partition_id }),
