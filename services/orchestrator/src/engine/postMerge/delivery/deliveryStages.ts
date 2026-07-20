@@ -29,6 +29,7 @@ import type { RunMergeWatcher } from "../subscriber.js";
 import type { DeliverySignals, DemoReach, DeployReach } from "./deliverySignals.js";
 import {
   appendDeliveryCompleted,
+  appendDemoStimulusAborted,
   appendDemoStimulusStarted,
   type ObservedEffect,
   type RecordEvidenceDeps,
@@ -232,19 +233,20 @@ export class DeliveryStages {
   }
 
   /**
-   * Drive the demo effect AT MOST ONCE per drive, with EFFECT-BOUNDARY idempotency (Finding 1
-   * — the marker is at the FIRE boundary, never the attempt boundary, so a never-fired demo
-   * always resumes and RUNS instead of sticking degraded):
-   *  1. A terminal demo event already exists ⇒ the effect committed; do NOT re-invoke.
-   *  2. Else acquire the cross-process advisory lock (serializes concurrent fires). Not
-   *     acquired ⇒ demoLockHeld (the stage degrades this pass; a later wake re-checks).
-   *  3. UNDER the lock, re-check the durable state authoritatively:
-   *       • a terminal now exists (a racing worker fired) ⇒ return;
-   *       • the durable INTENT MARKER exists without a terminal ⇒ a possible mid-crash fire ⇒
-   *         demoInFlightUnknown; do NOT re-fire;
-   *       • otherwise record the INTENT MARKER at the effect boundary (only when a verified
-   *         deploy gives a live surface to exercise — a no-op demo records no intent, so it
-   *         never false-degrades), then fire the idempotent runner.
+   * Drive the demo effect AT MOST ONCE per drive, with a TIGHT effect-boundary intent marker
+   * (Finding HIGH — a never-fired demo must RE-FIRE, only a genuine crash mid-dispatch may
+   * degrade):
+   *  1. A terminal demo event already exists ⇒ committed; do NOT re-invoke.
+   *  2. Else acquire the cross-process advisory lock (serializes concurrent fires); not
+   *     acquired ⇒ demoLockHeld (degrade this pass; a later wake re-checks).
+   *  3. UNDER the lock: a terminal now exists ⇒ return; a LIVE fire-intent (started > aborted)
+   *     without a terminal ⇒ a genuine crash mid-dispatch ⇒ demoInFlightUnknown, never re-fire.
+   *  4. Only a VERIFIED deploy has a live surface (a no-op demo records NO intent and never
+   *     false-degrades). Record the fire-intent (RESILIENT: a post-commit notify failure whose
+   *     durable INSERT landed is treated as success); if the intent can't be recorded at all,
+   *     do NOT fire (re-fire next wake). Fire the runner. Then RESOLVE: if the runner left NO
+   *     terminal demo event (proving the external effect never dispatched — the only pre-terminal
+   *     awaitable is a pure read), append the ABORT marker so the intent is not live ⇒ re-fire.
    */
   private async ensureDemoClusterDriven(
     lineage: DeliveryLineage,
@@ -260,25 +262,75 @@ export class DeliveryStages {
     const gate = await this.deps.demoGate.run(lineage.runId, async () => {
       // Authoritative re-checks UNDER the lock (another worker may have raced to fire).
       if (await this.deps.signals.demoTerminalExists(lineage)) return;
-      if (await this.deps.signals.demoStimulusIntentExists(lineage)) {
-        // A prior fire-intent with no terminal ⇒ the effect may have fired mid-crash — never re-fire.
+      if (await this.deps.signals.demoStimulusIntentLive(lineage)) {
+        // A live fire-intent with no terminal ⇒ the effect may have dispatched mid-crash — never re-fire.
         memo.demoInFlightUnknown = true;
         return;
       }
-      // Only a VERIFIED deploy has a live surface to exercise; otherwise the runner is a clean
-      // no-op and we must NOT record a fire-intent (which would false-degrade on resume).
+      // A non-verified deploy has no live surface: the runner is a clean no-op — fire it (no-op)
+      // and record NO intent, so a resume never false-degrades a no-op demo.
       const deployReach = await this.deps.signals.deployReach(lineage, memo.deployRunnerThrew);
-      if (deployReach === "verified") {
-        await appendDemoStimulusStarted(this.deps.evidence, lineage, deliveryRunId);
+      if (deployReach !== "verified") {
+        await this.fireDemoRunner(lineage, memo);
+        return;
       }
-      try {
-        await this.deps.demoRunner.check(lineage.runId);
-      } catch (error) {
+      // Verified: record the fire-intent immediately before the dispatch. RESILIENT to a
+      // post-commit notify failure (the durable INSERT is source of truth); a pre-commit
+      // failure leaves NO live intent ⇒ do NOT fire (re-fire next wake).
+      if (!(await this.recordFireIntentDurably(lineage, deliveryRunId))) {
         memo.demoRunnerThrew = true;
-        log.error("demo cluster runner failed", { runId: lineage.runId }, error);
+        return;
+      }
+      await this.fireDemoRunner(lineage, memo);
+      // RESOLVE the intent: alive + NO terminal ⇒ the effect never dispatched (a pre-dispatch
+      // read failed / no-op) ⇒ clear the intent so re-entry re-fires. A crash before here leaves
+      // the live intent ⇒ degrade.
+      if (!(await this.deps.signals.demoTerminalExists(lineage))) {
+        await this.abortFireIntent(lineage, deliveryRunId, "no_terminal_after_run");
       }
     });
     if (!gate.acquired) memo.demoLockHeld = true;
+  }
+
+  private async fireDemoRunner(lineage: DeliveryLineage, memo: DriveMemo): Promise<void> {
+    try {
+      await this.deps.demoRunner.check(lineage.runId);
+    } catch (error) {
+      memo.demoRunnerThrew = true;
+      log.error("demo cluster runner failed", { runId: lineage.runId }, error);
+    }
+  }
+
+  /** Append the fire-intent, tolerating a post-commit notify failure (durable INSERT wins). */
+  private async recordFireIntentDurably(lineage: DeliveryLineage, deliveryRunId: string): Promise<boolean> {
+    try {
+      await appendDemoStimulusStarted(this.deps.evidence, lineage, deliveryRunId);
+      return true;
+    } catch (error) {
+      // The INSERT may have committed before a NOTIFY/connection failure (orgScopingPool runs
+      // each statement in its own txn). Since no live intent existed before this append, a live
+      // intent now proves the durable row landed — treat it as success.
+      if (await this.deps.signals.demoStimulusIntentLive(lineage)) {
+        log.error(
+          "demo fire-intent notify failed post-commit; proceeding on the durable row",
+          { runId: lineage.runId },
+          error,
+        );
+        return true;
+      }
+      log.error("demo fire-intent could not be recorded; will re-fire next wake", { runId: lineage.runId }, error);
+      return false;
+    }
+  }
+
+  private async abortFireIntent(lineage: DeliveryLineage, deliveryRunId: string, reason: string): Promise<void> {
+    try {
+      await appendDemoStimulusAborted(this.deps.evidence, lineage, deliveryRunId, reason);
+    } catch (error) {
+      // Best-effort: a rare abort-append failure leaves a live intent ⇒ a conservative degrade
+      // next wake (fail-closed, never a double-fire).
+      log.error("demo fire-intent abort could not be recorded", { runId: lineage.runId }, error);
+    }
   }
 
   private async recordEvidence(

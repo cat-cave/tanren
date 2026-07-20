@@ -39,11 +39,13 @@ export interface DeliverySignals {
   /** Whether a TERMINAL demo event (`demo.completed` OR `demo.failed`) exists — the demo effect committed. */
   demoTerminalExists(lineage: DeliveryLineage): Promise<boolean>;
   /**
-   * Whether the durable demo INTENT MARKER (`delivery.demo_stimulus_started`) exists — the
-   * effect-boundary marker recorded immediately before the demo effect fires. Absent ⇒ the
-   * effect never fired (safe to fire); present without a terminal ⇒ it MAY have fired mid-crash.
+   * Whether a LIVE demo fire-intent exists — more `delivery.demo_stimulus_started` than
+   * `delivery.demo_stimulus_aborted`. A live intent WITHOUT a terminal demo event means the
+   * external effect MAY have dispatched (a genuine crash mid-dispatch) ⇒ never re-fire. When
+   * a `started` was cleared by an `aborted` (a proven pre-dispatch failure), the intent is NOT
+   * live ⇒ the demo is able to re-fire.
    */
-  demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean>;
+  demoStimulusIntentLive(lineage: DeliveryLineage): Promise<boolean>;
 }
 
 const DEPLOY_TRAIL_EVENTS = [
@@ -170,14 +172,19 @@ export class PgDeliverySignals implements DeliverySignals {
     return present.has("demo.completed") || present.has("demo.failed");
   }
 
-  async demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean> {
+  async demoStimulusIntentLive(lineage: DeliveryLineage): Promise<boolean> {
     const result = await runWithSystemScope(this.pool, (client) =>
-      client.query<{ id: string }>(
-        `SELECT id FROM events WHERE run_id = $1 AND org_id = $2 AND project_id = $3
-           AND event_type = 'delivery.demo_stimulus_started' LIMIT 1`,
+      client.query<{ started: string; aborted: string }>(
+        `SELECT
+           count(*) FILTER (WHERE event_type = 'delivery.demo_stimulus_started')::text AS started,
+           count(*) FILTER (WHERE event_type = 'delivery.demo_stimulus_aborted')::text AS aborted
+         FROM events
+         WHERE run_id = $1 AND org_id = $2 AND project_id = $3
+           AND event_type IN ('delivery.demo_stimulus_started', 'delivery.demo_stimulus_aborted')`,
         [lineage.runId, lineage.orgId, lineage.projectId],
       ),
     );
-    return result.rows[0] !== undefined;
+    const row = result.rows[0];
+    return row !== undefined && Number(row.started) > Number(row.aborted);
   }
 }

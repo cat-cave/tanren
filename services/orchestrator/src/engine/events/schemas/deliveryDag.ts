@@ -15,11 +15,15 @@ import { z } from "zod";
 //                          in an explicit durable DEGRADED state (resumable next wake), NOT
 //                          silently reported complete.
 //   - delivery.demo_stimulus_started → the durable INTENT MARKER recorded (under the
-//                          cross-process advisory lock) IMMEDIATELY BEFORE the demo behavior
-//                          effect fires. On a resume: absent ⇒ the effect never fired ⇒ FIRE;
-//                          present without a terminal demo event ⇒ the effect MAY have fired
-//                          mid-crash ⇒ degrade (never re-fire). This is the effect-boundary
-//                          idempotency marker (never the attempt boundary).
+//                          cross-process advisory lock) before the demo behavior effect is
+//                          dispatched. A LIVE intent = more `started` than `aborted`.
+//   - delivery.demo_stimulus_aborted → clears a `started` intent when the drive PROVED the
+//                          external effect never dispatched (the runner returned/threw leaving
+//                          NO terminal demo event, so the only pre-terminal awaitable — a pure
+//                          read — failed). This makes a never-fired demo able to re-fire instead of
+//                          stranding it degraded. On resume: a LIVE intent (started>aborted)
+//                          without a terminal ⇒ a genuine crash mid-dispatch ⇒ degrade (never
+//                          re-fire); otherwise the demo FIRES.
 
 const Sha256Digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 
@@ -71,5 +75,14 @@ export const DeliveryDemoStimulusStartedPayload = z
     deliveryRunId: z.string(),
     /** The merged commit SHA the delivery activates. */
     mergeSha: z.string(),
+  })
+  .strict();
+
+export const DeliveryDemoStimulusAbortedPayload = z
+  .object({
+    /** The durable `delivery_runs` row whose fire-intent is cleared (effect never dispatched). */
+    deliveryRunId: z.string(),
+    /** The machine-parseable reason the effect proved not-dispatched (e.g. `no_terminal_after_run`). */
+    reason: z.string(),
   })
   .strict();
