@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
+import type { DeployTriggerGate } from "../src/engine/postMerge/deployTriggerGate.js";
 import {
   driveDeliveryStagePlan,
   type DeliveryStagePlanStore,
@@ -60,6 +61,7 @@ function fakeSignals(overrides: Partial<DeliverySignals> = {}): DeliverySignals 
     provisionedProductionSecretRefs: async () => [],
     verifiedDeploymentId: async () => {},
     deliveryCompletedExists: async () => false,
+    demoTerminalExists: async () => false,
     ...overrides,
   };
 }
@@ -75,6 +77,14 @@ function fakeRunner(onCheck?: () => Promise<void>): { check: (runId: string) => 
   };
 }
 
+/** An advisory-gate fake — acquires by default; `acquired=false` simulates a lock held elsewhere. */
+function fakeGate(acquired = true): DeployTriggerGate {
+  return {
+    run: async <T>(_runId: string, work: () => Promise<T>) =>
+      acquired ? { acquired: true, value: await work() } : { acquired: false },
+  };
+}
+
 function stagesDeps(overrides: Partial<DeliveryStageDeps> = {}): {
   deps: DeliveryStageDeps;
   events: RecordingEventStore;
@@ -86,6 +96,7 @@ function stagesDeps(overrides: Partial<DeliveryStageDeps> = {}): {
     demoRunner: fakeRunner(),
     saga: { driveForOrg: async () => ({ stateUnknown: 0, needsAttention: 0 }) },
     evidence: { eventStore: events, signer: contentAddressedEvidenceSigner },
+    demoGate: fakeGate(),
     ...overrides,
   };
   return { deps, events };
@@ -308,42 +319,68 @@ describe("record_evidence stage (the fail-closed completion gate)", () => {
 
 // ---- driveDeliveryStagePlan (resume / degrade / complete) with a fake store + stages ----
 
+/** A fenced fake store. `loseFenceAt` makes the named fenced write return `false` (superseded). */
 class FakeStore implements DeliveryStagePlanStore {
   readonly started: DeliveryStage[] = [];
   readonly succeeded: string[] = [];
   readonly degraded: string[] = [];
   markCompletedCalls = 0;
   markDegradedCalls: string[] = [];
-  constructor(private readonly preSucceeded: Set<DeliveryStage> = new Set()) {}
+  markCompletedResult = true;
+  constructor(
+    private readonly preSucceeded: Set<DeliveryStage> = new Set(),
+    private readonly loseFenceAt?: "renew" | "start" | "succeed",
+    private readonly demoPreviouslyStarted = false,
+  ) {}
   // eslint-disable-next-line @typescript-eslint/require-await
   async loadStageProgress(): Promise<Map<DeliveryStage, StageProgress>> {
     const m = new Map<DeliveryStage, StageProgress>();
     for (const s of DELIVERY_STAGES)
       m.set(s, { succeeded: this.preSucceeded.has(s), attemptsSoFar: this.preSucceeded.has(s) ? 1 : 0 });
+    if (this.demoPreviouslyStarted) m.set("stimulate", { succeeded: false, attemptsSoFar: 1 });
     return m;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async startStageAttempt(_o: string, _d: string, stage: DeliveryStage, attempt: number): Promise<string> {
+  async renewClaim(): Promise<boolean> {
+    return this.loseFenceAt !== "renew";
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async startStageAttempt(
+    _o: string,
+    _d: string,
+    _t: string,
+    stage: DeliveryStage,
+    attempt: number,
+  ): Promise<string | undefined> {
+    if (this.loseFenceAt === "start") return undefined;
     this.started.push(stage);
     return `${stage}:${attempt}`;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async succeedStageAttempt(_o: string, id: string): Promise<void> {
+  async succeedStageAttempt(_o: string, _d: string, _t: string, id: string): Promise<boolean> {
+    if (this.loseFenceAt === "succeed") return false;
     this.succeeded.push(id);
+    return true;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async degradeStageAttempt(_o: string, id: string): Promise<void> {
+  async degradeStageAttempt(_o: string, _d: string, _t: string, id: string): Promise<boolean> {
     this.degraded.push(id);
+    return true;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markCompleted(): Promise<void> {
+  async markCompleted(): Promise<boolean> {
     this.markCompletedCalls += 1;
+    return this.markCompletedResult;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markDegraded(_o: string, _d: string, c: string): Promise<void> {
+  async markDegraded(_o: string, _d: string, _t: string, c: string): Promise<boolean> {
     this.markDegradedCalls.push(c);
+    return true;
   }
 }
+
+const plan = (store: DeliveryStagePlanStore, stages: DeliveryStagesLike, events: RecordingEventStore) =>
+  driveDeliveryStagePlan({ store, stages, eventStore: events, lineage, deliveryRunId: "d-1", token: "tok-1" });
 
 function fakeStages(
   outcomes: Partial<Record<DeliveryStage, StageOutcome>>,
@@ -364,8 +401,7 @@ describe("driveDeliveryStagePlan", () => {
     const store = new FakeStore();
     const stages = fakeStages({});
     const events = new RecordingEventStore();
-    const result = await driveDeliveryStagePlan({ store, stages, eventStore: events, lineage, deliveryRunId: "d-1" });
-    expect(result).toBe("completed");
+    expect(await plan(store, stages, events)).toBe("completed");
     expect(stages.ran).toEqual([...DELIVERY_STAGES]);
     expect(store.markCompletedCalls).toBe(1);
     expect(store.degraded).toHaveLength(0);
@@ -374,8 +410,7 @@ describe("driveDeliveryStagePlan", () => {
   it("RESUMES: never re-runs a durably-succeeded stage", async () => {
     const store = new FakeStore(new Set<DeliveryStage>(["reconcile_binding", "mint_lease"]));
     const stages = fakeStages({});
-    const events = new RecordingEventStore();
-    await driveDeliveryStagePlan({ store, stages, eventStore: events, lineage, deliveryRunId: "d-1" });
+    await plan(store, stages, new RecordingEventStore());
     expect(stages.ran).not.toContain("reconcile_binding");
     expect(stages.ran).not.toContain("mint_lease");
     // resumed exactly at the first unfinished stage
@@ -388,8 +423,7 @@ describe("driveDeliveryStagePlan", () => {
       observe: { kind: "degraded", classification: "demo_effect_not_observed", detail: "x" },
     });
     const events = new RecordingEventStore();
-    const result = await driveDeliveryStagePlan({ store, stages, eventStore: events, lineage, deliveryRunId: "d-1" });
-    expect(result).toBe("degraded");
+    expect(await plan(store, stages, events)).toBe("degraded");
     // the gravest fail-open is impossible here
     expect(store.markCompletedCalls).toBe(0);
     expect(store.markDegradedCalls).toEqual(["demo_effect_not_observed"]);
@@ -397,5 +431,70 @@ describe("driveDeliveryStagePlan", () => {
     expect(stages.ran).not.toContain("record_evidence");
     expect(events.appended.map((e) => e.eventType)).toContain("delivery.degraded");
     expect(events.appended.map((e) => e.eventType)).not.toContain("delivery.completed");
+  });
+
+  it("ABORTS (claim_lost) when the fence renew is superseded — no stage runs, nothing terminal", async () => {
+    const store = new FakeStore(new Set(), "renew");
+    const stages = fakeStages({});
+    const events = new RecordingEventStore();
+    expect(await plan(store, stages, events)).toBe("claim_lost");
+    expect(stages.ran).toHaveLength(0);
+    expect(store.markCompletedCalls).toBe(0);
+    expect(store.markDegradedCalls).toHaveLength(0);
+    expect(events.appended).toHaveLength(0);
+  });
+
+  it("ABORTS (claim_lost) when a stage-attempt succeed is superseded mid-drive", async () => {
+    const store = new FakeStore(new Set(), "succeed");
+    const stages = fakeStages({});
+    const events = new RecordingEventStore();
+    expect(await plan(store, stages, events)).toBe("claim_lost");
+    // never completes on a lost fence
+    expect(store.markCompletedCalls).toBe(0);
+  });
+
+  it("does NOT report completed when markCompleted's evidence gate/fence returns false", async () => {
+    const store = new FakeStore();
+    // no durable delivery.completed evidence, or superseded
+    store.markCompletedResult = false;
+    const stages = fakeStages({});
+    expect(await plan(store, stages, new RecordingEventStore())).toBe("claim_lost");
+    expect(store.markCompletedCalls).toBe(1);
+  });
+});
+
+describe("demo stage idempotency (Finding 2)", () => {
+  it("REFUSES to re-fire and degrades when a prior demo attempt has no terminal event", async () => {
+    const demoRunner = fakeRunner();
+    const { deps } = stagesDeps({ demoRunner, signals: fakeSignals({ demoTerminalExists: async () => false }) });
+    const memo = newDriveMemo(true);
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", memo);
+    expect(out).toMatchObject({ kind: "degraded", classification: "demo_effect_in_flight_unknown" });
+    // NEVER re-fired the committed-maybe effect
+    expect(demoRunner.calls).toHaveLength(0);
+  });
+
+  it("does NOT re-fire when a terminal demo event already exists (reads the committed outcome)", async () => {
+    const demoRunner = fakeRunner();
+    const { deps } = stagesDeps({
+      demoRunner,
+      signals: fakeSignals({
+        demoTerminalExists: async () => true,
+        deployReach: async () => "verified",
+        demoReach: async () => "observed",
+      }),
+    });
+    const out = await new DeliveryStages(deps).run("observe", lineage, "d-1", newDriveMemo(true));
+    expect(out.kind).toBe("confirmed");
+    expect(demoRunner.calls).toHaveLength(0);
+  });
+
+  it("degrades this pass when another worker holds the demo advisory lock", async () => {
+    const demoRunner = fakeRunner();
+    const { deps } = stagesDeps({ demoRunner, demoGate: fakeGate(false) });
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    expect(out).toMatchObject({ kind: "degraded", classification: "demo_locked_elsewhere" });
+    // lock not acquired ⇒ did not fire
+    expect(demoRunner.calls).toHaveLength(0);
   });
 });

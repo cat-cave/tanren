@@ -2,15 +2,17 @@
 // that REPLACES the old fixed subscriber chain (issue → deploy → demo, catch-and-log).
 //
 // On each `merge.completed` wake it resolves the merged run's lineage, CLAIMS the in-16
-// `delivery_runs` outbox row (keyed on the merge SHA), and drives the nine stages IN
-// ORDER — skipping stages already durably SUCCEEDED (crash resume), recording each
-// attempt to `delivery_stage_attempts`. A stage that cannot confirm its external effect
-// DEGRADES the delivery (explicit durable state, resumed next wake) and STOPS the DAG. The
-// delivery reaches `completed` ONLY after record_evidence's fail-closed gate recorded the
-// signed evidence of the independently-observed effect — never on a partial/unverified
-// chain. MergeAuthority remains the sole land decision; this driver never lands code.
+// `delivery_runs` outbox row (keyed on the merge SHA) with a fresh FENCING TOKEN, and
+// drives the nine stages IN ORDER — skipping stages already durably SUCCEEDED (crash
+// resume), recording each attempt to `delivery_stage_attempts`. Every durable write is
+// CAS-guarded on the fencing token: before each stage the driver RENEWS its claim (a
+// progress-based sign-of-life, not a timer); a lost fence ABORTS the drive, recording
+// NOTHING terminal (the live owner keeps ownership). A stage that cannot confirm its
+// external effect DEGRADES the delivery (durable, resumed next wake) and STOPS the DAG.
+// The delivery reaches `completed` ONLY when markCompleted's fenced statement finds the
+// durable signed `delivery.completed` evidence row — never on a partial/unverified chain.
+// MergeAuthority remains the sole land decision; this driver never lands code.
 
-import { randomUUID } from "node:crypto";
 import { createLogger } from "../../observability/logger.js";
 import { mergeShaFromPayload } from "../deployOnMergeReads.js";
 import { loadValidatedRunEvent } from "../runLineage.js";
@@ -22,14 +24,33 @@ import { recordDeliveryDegraded, type RecordEvidenceDeps } from "./deliveryEvide
 import { DeliveryStages, newDriveMemo, type DeliveryStageDeps, type DriveMemo } from "./deliveryStages.js";
 import { DELIVERY_STAGES, type DeliveryLineage, type DeliveryStage, type StageOutcome } from "./stageModel.js";
 
-/** The store subset the stage-plan driver needs (injectable for DB-free unit tests). */
+/** The fenced store subset the stage-plan driver needs (injectable for DB-free unit tests). */
 export interface DeliveryStagePlanStore {
   loadStageProgress(orgId: string, deliveryRunId: string): Promise<Map<DeliveryStage, StageProgress>>;
-  startStageAttempt(orgId: string, deliveryRunId: string, stage: DeliveryStage, attempt: number): Promise<string>;
-  succeedStageAttempt(orgId: string, attemptId: string): Promise<void>;
-  degradeStageAttempt(orgId: string, attemptId: string, classification: string): Promise<void>;
-  markCompleted(orgId: string, deliveryRunId: string): Promise<void>;
-  markDegraded(orgId: string, deliveryRunId: string, classification: string): Promise<void>;
+  renewClaim(orgId: string, deliveryRunId: string, token: string): Promise<boolean>;
+  startStageAttempt(
+    orgId: string,
+    deliveryRunId: string,
+    token: string,
+    stage: DeliveryStage,
+    attempt: number,
+  ): Promise<string | undefined>;
+  succeedStageAttempt(orgId: string, deliveryRunId: string, token: string, attemptId: string): Promise<boolean>;
+  degradeStageAttempt(
+    orgId: string,
+    deliveryRunId: string,
+    token: string,
+    attemptId: string,
+    classification: string,
+  ): Promise<boolean>;
+  markCompleted(
+    orgId: string,
+    deliveryRunId: string,
+    token: string,
+    runId: string,
+    projectId: string,
+  ): Promise<boolean>;
+  markDegraded(orgId: string, deliveryRunId: string, token: string, classification: string): Promise<boolean>;
 }
 
 /** The stage executor subset the plan driver needs (injectable). */
@@ -37,12 +58,16 @@ export interface DeliveryStagesLike {
   run(stage: DeliveryStage, lineage: DeliveryLineage, deliveryRunId: string, memo: DriveMemo): Promise<StageOutcome>;
 }
 
+/** The terminal disposition of one drive. `claim_lost` ⇒ superseded; record nothing terminal. */
+export type DriveDisposition = "completed" | "degraded" | "claim_lost";
+
 /**
- * Drive the ordered stage plan for one claimed delivery, RESUMING from the last durable
- * success and STOPPING fail-closed at the first stage that cannot confirm its effect. Pure
- * orchestration over injected collaborators — the durable-substrate + effect seams are the
- * injectable boundary, so every branch (resume-skip, confirm, degrade-and-stop, complete) is
- * unit-testable without a database. Returns the terminal delivery disposition.
+ * Drive the ordered stage plan for one claimed delivery under its FENCING TOKEN, RESUMING
+ * from the last durable success and STOPPING fail-closed at the first stage that cannot
+ * confirm its effect. Every durable write is CAS-guarded on the token and its affected-row
+ * count is checked: a lost fence returns `claim_lost` and the driver records NOTHING
+ * terminal (the live owner keeps the run). Pure orchestration over injected collaborators —
+ * every branch is unit-testable without a database.
  */
 export async function driveDeliveryStagePlan(input: {
   store: DeliveryStagePlanStore;
@@ -50,52 +75,63 @@ export async function driveDeliveryStagePlan(input: {
   eventStore: RecordEvidenceDeps["eventStore"];
   lineage: DeliveryLineage;
   deliveryRunId: string;
-}): Promise<"completed" | "degraded"> {
-  const { store, stages, lineage, deliveryRunId } = input;
-  const progress = await store.loadStageProgress(lineage.orgId, deliveryRunId);
-  const memo = newDriveMemo();
+  token: string;
+}): Promise<DriveDisposition> {
+  const { store, stages, lineage, deliveryRunId, token } = input;
+  const orgId = lineage.orgId;
+  const progress = await store.loadStageProgress(orgId, deliveryRunId);
+  // A prior drive that already reached the stimulate stage is the durable demo pre-effect
+  // marker (Finding 2): the demo stage will refuse to re-fire if no terminal demo exists.
+  const demoPreviouslyStarted = (progress.get("stimulate")?.attemptsSoFar ?? 0) >= 1;
+  const memo = newDriveMemo(demoPreviouslyStarted);
 
   for (const stage of DELIVERY_STAGES) {
     const prior = progress.get(stage);
     // Resume: never re-run a durably-succeeded stage.
     if (prior?.succeeded === true) continue;
 
+    // FENCE + sign-of-life: re-assert ownership before any effect/write. Lost ⇒ abort.
+    if (!(await store.renewClaim(orgId, deliveryRunId, token))) return "claim_lost";
+
     const attempt = (prior?.attemptsSoFar ?? 0) + 1;
-    const attemptId = await store.startStageAttempt(lineage.orgId, deliveryRunId, stage, attempt);
+    const attemptId = await store.startStageAttempt(orgId, deliveryRunId, token, stage, attempt);
+    if (attemptId === undefined) return "claim_lost";
+
     const outcome = await stages.run(stage, lineage, deliveryRunId, memo);
 
     if (outcome.kind === "confirmed") {
-      await store.succeedStageAttempt(lineage.orgId, attemptId);
+      if (!(await store.succeedStageAttempt(orgId, deliveryRunId, token, attemptId))) return "claim_lost";
       continue;
     }
 
-    // DEGRADE: durable non-terminal. Record the attempt, narrate it, park the delivery in
-    // `degraded`, and STOP the DAG — never advance past an unconfirmed external effect.
-    await store.degradeStageAttempt(lineage.orgId, attemptId, outcome.classification);
+    // DEGRADE: flip the run to `degraded` under the fence FIRST (a stale owner is rejected);
+    // only the winning writer narrates `delivery.degraded`. STOP — never advance past an
+    // unconfirmed external effect.
+    await store.degradeStageAttempt(orgId, deliveryRunId, token, attemptId, outcome.classification);
+    if (!(await store.markDegraded(orgId, deliveryRunId, token, outcome.classification))) return "claim_lost";
     await recordDeliveryDegraded({ eventStore: input.eventStore }, lineage, {
       deliveryRunId,
       stage,
       classification: outcome.classification,
       detail: outcome.detail,
     });
-    await store.markDegraded(lineage.orgId, deliveryRunId, outcome.classification);
     return "degraded";
   }
 
-  // Every stage confirmed AND record_evidence appended the signed `delivery.completed`
-  // attestation — only now is the delivery durably marked complete.
-  await store.markCompleted(lineage.orgId, deliveryRunId);
-  return "completed";
+  // Every stage confirmed; markCompleted's fenced statement also asserts the durable signed
+  // `delivery.completed` evidence row exists (record_evidence appended it) — completion is
+  // the evidence's consequence. A lost fence or missing evidence ⇒ NOT completed.
+  return (await store.markCompleted(orgId, deliveryRunId, token, lineage.runId, lineage.projectId))
+    ? "completed"
+    : "claim_lost";
 }
 
 const log = createLogger("delivery-dag");
 
-export interface DeliveryDagDriverDeps extends DeliveryStageDeps {
+export type DeliveryDagDriverDeps = DeliveryStageDeps & {
   /** The runtime pool — the driver's own lineage read + the delivery-run store's scope. */
   readonly pool: pg.Pool;
-  /** Stable per-process claim owner; defaults to a fresh uuid. */
-  readonly claimOwner?: string;
-}
+};
 
 /**
  * Drives the delivery DAG for a merged run. Implements {@link RunMergeWatcher} so the
@@ -107,7 +143,7 @@ export class DeliveryDagDriver implements RunMergeWatcher {
   private readonly stages: DeliveryStages;
 
   constructor(private readonly deps: DeliveryDagDriverDeps) {
-    this.store = new DeliveryRunStore(deps.pool, deps.claimOwner ?? `delivery-${randomUUID()}`);
+    this.store = new DeliveryRunStore(deps.pool);
     this.stages = new DeliveryStages(deps);
   }
 
@@ -119,7 +155,7 @@ export class DeliveryDagDriver implements RunMergeWatcher {
 
     const claimed = await this.store.claim(lineage.orgId, lineage.projectId, lineage.mergeSha);
     if (claimed === undefined) {
-      // No outbox row for this merge, already completed, or another worker holds the lease.
+      // No outbox row for this merge, or the run is already `completed` (terminal).
       return;
     }
 
@@ -130,12 +166,13 @@ export class DeliveryDagDriver implements RunMergeWatcher {
         eventStore: this.deps.evidence.eventStore,
         lineage,
         deliveryRunId: claimed.id,
+        token: claimed.token,
       });
     } catch (error) {
       // An UNEXPECTED driver-level failure (not a stage's confirmed degrade) — record a
-      // durable needs_attention and release the claim, never a silent stall.
+      // FENCED needs_attention; if the fence was lost the live owner keeps the run (no-op).
       log.error("delivery DAG driver failed", { runId, deliveryRunId: claimed.id }, error);
-      await this.store.markNeedsAttention(lineage.orgId, claimed.id, "delivery_driver_error");
+      await this.store.markNeedsAttention(lineage.orgId, claimed.id, claimed.token, "delivery_driver_error");
     }
   }
 

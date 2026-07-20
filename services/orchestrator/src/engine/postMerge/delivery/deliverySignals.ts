@@ -36,6 +36,8 @@ export interface DeliverySignals {
   verifiedDeploymentId(lineage: DeliveryLineage): Promise<string | undefined>;
   /** Whether a `delivery.completed` was already appended for this run (resume idempotency). */
   deliveryCompletedExists(lineage: DeliveryLineage): Promise<boolean>;
+  /** Whether a TERMINAL demo event (`demo.completed` OR `demo.failed`) exists — the demo effect committed. */
+  demoTerminalExists(lineage: DeliveryLineage): Promise<boolean>;
 }
 
 const DEPLOY_TRAIL_EVENTS = [
@@ -153,5 +155,12 @@ export class PgDeliverySignals implements DeliverySignals {
       ),
     );
     return result.rows[0] !== undefined;
+  }
+
+  async demoTerminalExists(lineage: DeliveryLineage): Promise<boolean> {
+    const present = await runWithSystemScope(this.pool, (client) =>
+      presentEventTypes(client, lineage, DEMO_TRAIL_EVENTS),
+    );
+    return present.has("demo.completed") || present.has("demo.failed");
   }
 }
