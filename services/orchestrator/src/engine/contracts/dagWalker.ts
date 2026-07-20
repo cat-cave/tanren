@@ -454,3 +454,14 @@ export interface WalkResult {
 export interface DagWalker {
   walk(projectId: string): Promise<WalkResult>;
 }
+
+/**
+ * The DagWalker INTEGRATION PHASE seam (in-9/in-10 capability_prepare). The walker
+ * runs it once per walk of an active project, before spec planning, so a spec that
+ * depends on a prepared integration binding sees fresh capability state. The
+ * production impl is the `CapabilityPrepareDriver`; the walker depends only on this
+ * capability so it never imports the concrete integrations module.
+ */
+export interface IntegrationPhase {
+  prepare(projectId: string): Promise<unknown>;
+}
