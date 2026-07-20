@@ -17,7 +17,7 @@ coordinator just hand-renumbered 5 files, a recurring pain the chain guarantees.
 **zero users and a single live database baseline**, every intermediate migration is
 dead weight: it is never replayed against a real deployed DB (there is none to
 preserve), yet it must be kept ordered, snapshot-consistent, and drift-clean forever.
-Note `0000_collapsed_baseline.sql` is itself the *residue of the prior v21 collapse* —
+Note `0000_collapsed_baseline.sql` is itself the _residue of the prior v21 collapse_ —
 94 files re-accreted on top of it. This is the **next, final** squash.
 
 The collapse: replace all 94 files with ONE `0001_baseline.sql` that is the exact live
@@ -73,8 +73,8 @@ surfaces as an `event_types` FK violation on first insert.
 ## Size
 
 ~1 large generated `0001_baseline.sql` + 1 snapshot + journal; **−94 files**. The SQL
-is machine-dumped, not hand-written line-by-line, so the review surface is the *diff
-proof* (zero-diff dump) not the raw line count. Justified single-file exception per
+is machine-dumped, not hand-written line-by-line, so the review surface is the _diff
+proof_ (zero-diff dump) not the raw line count. Justified single-file exception per
 orchestration Rule 0: an irreducible foundation artifact.
 
 ## CRITICAL sequencing
@@ -83,7 +83,7 @@ orchestration Rule 0: an irreducible foundation artifact.
 barrier (orchestration §4). Because every consumer node that adds a migration lands in
 the `0041+` band, this squash can only be authored once the final `NNNN` slot is
 claimed and merged — otherwise it races an in-flight migration and the baseline is
-stale on arrival. It is the **first** of the capstone series (the other cap-* nodes
+stale on arrival. It is the **first** of the capstone series (the other cap-\* nodes
 delete code the migrations no longer need to describe, but the schema truth must be
 frozen first). DANGER: this rewrites the entire migration history — if the zero-diff
 proof is skipped, a silently-dropped RLS policy becomes a tenant-isolation hole that

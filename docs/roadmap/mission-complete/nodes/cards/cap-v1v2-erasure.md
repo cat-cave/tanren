@@ -43,7 +43,7 @@ family (`CiConfigV1`, `ProjectConfigV1`, `OrgConfigV1`, `RespecPacketV1`,
 `IntegrationRequirementV1`, `AffectedSelection*V1`, `DesignFragment*V1`, `AcceptanceSpecV1`,
 etc.). These carry NO live old path — dropping the suffix is a **pure rename** (or a
 deliberate keep if the suffix is a wire/schema discriminant coordinated with
-cap-schema-versions). This card only *renames* them for honesty; it deletes no behavior.
+cap-schema-versions). This card only _renames_ them for honesty; it deletes no behavior.
 Renames are mechanical and high-blast-radius, so they may be split into their own PR or
 deferred — the load-bearing work of this card is the DesignContract V1 deletion.
 

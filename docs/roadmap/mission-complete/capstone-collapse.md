@@ -4,7 +4,7 @@
 
 **The final work item of the mission-complete build — runs AFTER all 142 consumer
 nodes merge, immediately BEFORE the apex-v97 acceptance trial.** It is the most
-destructive pass in the whole program, and it is only safe *because* it runs last, on a
+destructive pass in the whole program, and it is only safe _because_ it runs last, on a
 fully-built engine, against the real-Postgres smoke + RLS suites as ground truth.
 
 ## Why this is worth doing (and why now)
@@ -26,12 +26,12 @@ is to harden the engine that apex will test — doing it earlier would just re-a
 
 ## The survey (grounded on `main`, non-test)
 
-| Collapse target | Quantified surface |
-| --- | --- |
-| **Migrations** | **94** `db/migrations/*.sql` (`0000_collapsed_baseline` → `0095`), **94**-entry journal, **94** snapshots. `0000` is itself the prior v21-collapse residue; 94 re-accreted. |
-| **Schema-format versions** | **58** `schema_version`/`schemaVersion`/`SCHEMA_VERSION` hits; **17** single-constant `_SCHEMA_VERSION` literals; **65** `version: 1`/`z.literal(1)` discriminants — all single-valued on one baseline. |
+| Collapse target                | Quantified surface                                                                                                                                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Migrations**                 | **94** `db/migrations/*.sql` (`0000_collapsed_baseline` → `0095`), **94**-entry journal, **94** snapshots. `0000` is itself the prior v21-collapse residue; 94 re-accreted.                                                                                                                                         |
+| **Schema-format versions**     | **58** `schema_version`/`schemaVersion`/`SCHEMA_VERSION` hits; **17** single-constant `_SCHEMA_VERSION` literals; **65** `version: 1`/`z.literal(1)` discriminants — all single-valued on one baseline.                                                                                                             |
 | **V1/V2 with a LIVE old path** | **1** genuine: `DesignContractV1` persisted in `design_contracts`, upgraded on every read by `migrateDesignContractV1ToV2` (`composeProjectWebDesignSystem.ts:119`). The rest (`MergeAuthorityV2`, `GateProofBundleV2`, ~30 single-version `*V1`) are **name-only** — no sibling, no migrator → rename, not delete. |
-| **Silent fallbacks** | **56** jsonb literal defaults across **26** files (18 `db/src` + 8 services; `schemaCore.ts` is the named latent-500 source); a tenant-critical subset of **2195** `??` sites; **181** legacy/deprecated/fallback markers (most are LLM prompt copy — excluded); **15** TODO/FIXME. `catch`-and-swallow: **0**. |
+| **Silent fallbacks**           | **56** jsonb literal defaults across **26** files (18 `db/src` + 8 services; `schemaCore.ts` is the named latent-500 source); a tenant-critical subset of **2195** `??` sites; **181** legacy/deprecated/fallback markers (most are LLM prompt copy — excluded); **15** TODO/FIXME. `catch`-and-swallow: **0**.     |
 
 **Headline:** 94 migrations → 1; exactly **1** V1/V2 duality carries a live old path to
 delete; ~**56** jsonb-default silent-fallback sites (plus a triaged `??` subset) to make
@@ -57,7 +57,7 @@ fail-loud.
   many nodes touch — they are hard barriers (orchestration §4) and cannot run concurrently
   with each other or with any consumer node. They land only after the 142 are merged.
 - **Every deletion needs a three-word justification: "no user, no caller, superseded"** —
-  and it must be *proven*, not asserted, by green CI + the real-Postgres RLS smoke. The
+  and it must be _proven_, not asserted, by green CI + the real-Postgres RLS smoke. The
   suites are the ground-truth safety net: anything that only "worked" via a fallback now
   fails loud, and a test must assert that failure.
 - **The one guarantee we must not weaken: tenant isolation.** Every collapse (dropped RLS

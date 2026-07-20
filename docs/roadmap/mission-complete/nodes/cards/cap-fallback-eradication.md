@@ -16,7 +16,7 @@ unscoped, an unhandled case silently no-ops. CLAUDE.md's residual-hardening item
 `schemaCore.ts` jsonb defaults as a latent-500 source; this card is the systematic
 sweep of that whole class.
 
-**Boundary:** this is a *behavior-preserving-for-the-happy-path, fail-loud-for-the-sad-path*
+**Boundary:** this is a _behavior-preserving-for-the-happy-path, fail-loud-for-the-sad-path_
 change. It does not add features. Each site is triaged: a fallback that supplies a
 genuinely-optional value with a real domain default STAYS (and is documented as
 intentional); a fallback that masks a missing REQUIRED input is deleted and replaced
@@ -49,7 +49,7 @@ with a typed throw. The full test suite + RLS smoke is the net: anything that on
   (`OrgScope` discriminated mode) — this card applies the SAME pattern to the remaining
   tenant-critical `??`/`?.` sites.
 - **Legacy/compat markers — 181 hits** of `legacy|deprecated|backcompat|fallback|compat
-  shim` (services + db, non-test). Most are LLM prompt copy (e.g.
+shim` (services + db, non-test). Most are LLM prompt copy (e.g.
   `answererPrompts.ts` 12, `designOraclePrompt.ts` 5) and are NOT code — exclude those.
   The real targets are the code-path markers (`projectSpecRowSchema.ts`,
   `plannerRunJjLocalBootstrap.ts`, `reviewMerge/*`, `ci/schema.ts`,
