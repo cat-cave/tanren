@@ -36,6 +36,7 @@ import {
 import { buildDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../deploy/buildDeployAdapter.js";
 import { type SecretStore, type DeployHttpTransport, type FlyImageBuilder } from "./deployOnMergeDeployDeps.js";
 import { attachRuntimeAppEnv, loadDeployOperationGrant, missingDeployGrantError } from "./deployOnMergeRuntime.js";
+import { materializeProductionBindingsForDeploy } from "./materializeProjectBindings.js";
 import { PgDeployTriggerGate, type DeployTriggerGate } from "./deployTriggerGate.js";
 const log = createLogger("deploy-on-merge");
 
@@ -260,6 +261,12 @@ export class DeployOnMergeWatcher {
       releaseInstances: this.releaseInstances,
       integrationNodeId: merged.runId,
     });
+
+    // MATERIALIZE BINDINGS BEFORE ENV: reconcile resolved integration bindings into
+    // `project_app_env` (immutable generation + scoped Vault ref per secret) before the
+    // env attach reads it. Idempotent; FAIL-CLOSED on an unresolvable required secret.
+    const { pool, secrets } = this.deps;
+    await materializeProductionBindingsForDeploy(pool, secrets, target.orgId, merged.projectId, systemActor);
 
     // ENV BEFORE TRIGGER: attach the project's RUNTIME-scoped app env onto the app FIRST,
     // so the build/release picks it up — a trigger-then-attach order would release a
