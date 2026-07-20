@@ -25,6 +25,7 @@ import type pg from "pg";
 import { canonicalJson, contentDigestOf } from "../contracts/cas.js";
 import {
   DirectIntegrationStateWriter,
+  type CompleteIntegrationReconciliationInput,
   type IntegrationReconciliationPhase,
   type IntegrationStateWriter,
 } from "../contracts/integrationStateWriter.js";
@@ -141,7 +142,18 @@ export class ReconciliationSagaDriver {
     const row = await this.claimSource.readClaimed(orgId, reconciliationId);
     if (row === undefined) return "skipped";
 
-    const observation = await this.observeFailClosed(buildContext(orgId, row));
+    // FAIL-CLOSED on a malformed persisted phase (a corrupt/unknown value must not be
+    // silently cast and driven). The DB CHECK makes this unreachable in practice; if it
+    // is ever reached, halt for attention rather than reconcile against a bad coordinate.
+    const phase = parseReconciliationPhase(row.phase);
+    if (phase === undefined) {
+      await this.markStateUnknown(orgId, reconciliationId, claimOwner, `invalid_reconciliation_phase:${row.phase}`, {
+        phase: row.phase,
+      });
+      return "state_unknown";
+    }
+
+    const observation = await this.observeFailClosed(buildContext(orgId, row, phase));
     return this.settleObservation(orgId, reconciliationId, claimOwner, row, observation);
   }
 
@@ -154,44 +166,51 @@ export class ReconciliationSagaDriver {
     observation: ReconcileObservation,
   ): Promise<ReconcileOutcome> {
     const decision = decideReconcile(observation, parseAttemptHistory(row.compensationState));
+    const base = { orgId, reconciliationId, claimOwner };
     switch (decision.action) {
       case "fixed_point":
-        await this.stateWriter.complete({
-          orgId,
-          reconciliationId,
-          claimOwner,
-          status: "fixed_point",
-          progressSignature: signatureDigest(decision.signature),
-          compensationState: { attemptHistory: decision.history },
-          observedState: observation.observedState,
-        });
-        return "fixed_point";
+        return this.completeOrRecordUnknown(
+          {
+            ...base,
+            status: "fixed_point",
+            progressSignature: signatureDigest(decision.signature),
+            compensationState: { attemptHistory: decision.history },
+            observedState: observation.observedState,
+          },
+          "fixed_point",
+        );
       case "retry":
-        await this.stateWriter.complete({
-          orgId,
-          reconciliationId,
-          claimOwner,
-          status: "retry_scheduled",
-          retryAfterMs: this.retrySpacingMs,
-          progressSignature: signatureDigest(decision.signature),
-          compensationState: { attemptHistory: decision.history },
-          observedState: observation.observedState,
-        });
-        return "retry_scheduled";
+        return this.completeOrRecordUnknown(
+          {
+            ...base,
+            status: "retry_scheduled",
+            retryAfterMs: this.retrySpacingMs,
+            progressSignature: signatureDigest(decision.signature),
+            compensationState: { attemptHistory: decision.history },
+            observedState: observation.observedState,
+          },
+          "retry_scheduled",
+        );
       case "needs_attention":
-        await this.stateWriter.complete({
+        return this.completeOrRecordUnknown(
+          {
+            ...base,
+            status: "needs_attention",
+            progressSignature: signatureDigest(decision.signature),
+            failureClassification: decision.classification,
+            compensationState: { attemptHistory: decision.history },
+            observedState: observation.observedState,
+          },
+          "needs_attention",
+        );
+      case "state_unknown":
+        await this.markStateUnknown(
           orgId,
           reconciliationId,
           claimOwner,
-          status: "needs_attention",
-          progressSignature: signatureDigest(decision.signature),
-          failureClassification: decision.classification,
-          compensationState: { attemptHistory: decision.history },
-          observedState: observation.observedState,
-        });
-        return "needs_attention";
-      case "state_unknown":
-        await this.markStateUnknown(orgId, reconciliationId, claimOwner, decision.classification, observation);
+          decision.classification,
+          observation.observedState,
+        );
         return "state_unknown";
       default:
         return assertNeverAction(decision);
@@ -199,23 +218,52 @@ export class ReconciliationSagaDriver {
   }
 
   /**
+   * Complete the reconciliation, honoring the writer's claim-fence boolean. `complete`
+   * returns false when this owner no longer holds the live claim (lease expired / the
+   * row was re-claimed / already settled). In that case we MUST NOT report success — a
+   * lost-claim settle fail-closes to `state_unknown` (the provisioningPersistence
+   * discipline), so a later reclaim cannot advance on a stale in-flight observation.
+   */
+  private async completeOrRecordUnknown(
+    input: CompleteIntegrationReconciliationInput,
+    successOutcome: ReconcileOutcome,
+  ): Promise<ReconcileOutcome> {
+    const completed = await this.stateWriter.complete(input);
+    if (completed) return successOutcome;
+    log.error("reconcile complete lost its claim mid-settle; recording state_unknown", {
+      orgId: input.orgId,
+      reconciliationId: input.reconciliationId,
+      status: input.status,
+    });
+    await this.markStateUnknown(
+      input.orgId,
+      input.reconciliationId,
+      input.claimOwner,
+      `claim_lost_during_settle:${input.status}`,
+      input.observedState ?? {},
+    );
+    return "state_unknown";
+  }
+
+  /**
    * The ambiguous halt: record `state_unknown`, do NOT advance. Fenced to this owner's
    * live claim; if the lease was lost mid-observation, the claim-lost variant still
-   * records the ambiguity rather than letting the row look resolved or assuming success.
+   * records the ambiguity (against a still-claimed row) rather than letting the row look
+   * resolved or assuming success.
    */
   private async markStateUnknown(
     orgId: string,
     reconciliationId: string,
     claimOwner: string,
     classification: string,
-    observation: ReconcileObservation,
+    observedState: Record<string, unknown>,
   ): Promise<void> {
     const marked = await this.stateWriter.stateUnknown({
       orgId,
       reconciliationId,
       claimOwner,
       failureClassification: classification,
-      observedState: observation.observedState,
+      observedState,
     });
     if (!marked) {
       await this.stateWriter.stateUnknownAfterClaimLost({
@@ -223,7 +271,7 @@ export class ReconciliationSagaDriver {
         reconciliationId,
         claimOwner,
         failureClassification: classification,
-        observedState: observation.observedState,
+        observedState,
       });
     }
   }
@@ -271,12 +319,33 @@ function assertNeverAction(decision: never): never {
   throw new Error(`unhandled reconcile decision: ${JSON.stringify(decision)}`);
 }
 
-function buildContext(orgId: string, row: ClaimedReconciliationRow): Parameters<ReconcileProbe["observe"]>[0] {
+const RECONCILIATION_PHASES: ReadonlySet<string> = new Set<IntegrationReconciliationPhase>([
+  "discover",
+  "authorize",
+  "select",
+  "provision",
+  "bind",
+  "observe",
+  "materialize",
+  "reconcile",
+  "teardown",
+]);
+
+/** Parse a persisted phase against the known enum; unknown → undefined (fail-closed upstream). */
+function parseReconciliationPhase(phase: string): IntegrationReconciliationPhase | undefined {
+  return RECONCILIATION_PHASES.has(phase) ? (phase as IntegrationReconciliationPhase) : undefined;
+}
+
+function buildContext(
+  orgId: string,
+  row: ClaimedReconciliationRow,
+  phase: IntegrationReconciliationPhase,
+): Parameters<ReconcileProbe["observe"]>[0] {
   return {
     orgId,
     projectId: row.projectId,
     requirementId: row.requirementId,
-    phase: row.phase as IntegrationReconciliationPhase,
+    phase,
     attempt: row.attempt,
     bindingId: row.bindingId,
     bindingGeneration: row.bindingGeneration,

@@ -77,23 +77,35 @@ describe("decideReconcile", () => {
 });
 
 describe("interpretSnapshot", () => {
+  const DESIRED = `sha256:${"d".repeat(64)}`;
   const base = {
-    observed_state_hash: `sha256:${"b".repeat(64)}`,
+    observed_state_hash: DESIRED,
     provider_cursor: null,
     provider_etag: null,
     sanitized_snapshot: {},
   };
 
-  it("maps a healthy resource to converged", () => {
-    expect(interpretSnapshot({ ...base, health: "healthy" }).kind).toBe("converged");
+  it("maps a healthy resource whose observed hash EXACTLY matches desired to converged", () => {
+    expect(interpretSnapshot({ ...base, health: "healthy" }, DESIRED).kind).toBe("converged");
+  });
+
+  it("maps a healthy-but-DRIFTED resource (observed hash ≠ desired) to progressing, NOT converged", () => {
+    // The fail-open the layer-2 audit caught: a health flag is not desired-state
+    // confirmation. A different observed hash must NEVER converge/ready the node.
+    const drifted = interpretSnapshot(
+      { ...base, observed_state_hash: `sha256:${"f".repeat(64)}`, health: "healthy" },
+      DESIRED,
+    );
+    expect(drifted.kind).toBe("progressing");
+    expect((drifted as Extract<ReconcileObservation, { kind: "progressing" }>).signal).toMatch(/^drift:/u);
   });
 
   it("maps missing / degraded to progressing with distinct signals", () => {
-    const missing = interpretSnapshot({ ...base, health: "missing" }) as Extract<
+    const missing = interpretSnapshot({ ...base, health: "missing" }, DESIRED) as Extract<
       ReconcileObservation,
       { kind: "progressing" }
     >;
-    const degraded = interpretSnapshot({ ...base, health: "degraded" }) as Extract<
+    const degraded = interpretSnapshot({ ...base, health: "degraded" }, DESIRED) as Extract<
       ReconcileObservation,
       { kind: "progressing" }
     >;
@@ -103,16 +115,16 @@ describe("interpretSnapshot", () => {
   });
 
   it("maps an undeterminable health to unconfirmable (the 504/ambiguous analog)", () => {
-    expect(interpretSnapshot({ ...base, health: "unknown" }).kind).toBe("unconfirmable");
-    expect(interpretSnapshot({ ...base, health: "weird" }).kind).toBe("unconfirmable");
+    expect(interpretSnapshot({ ...base, health: "unknown" }, DESIRED).kind).toBe("unconfirmable");
+    expect(interpretSnapshot({ ...base, health: "weird" }, DESIRED).kind).toBe("unconfirmable");
   });
 
   it("folds provider cursor/etag into the progressing signal so real motion reads as progress", () => {
-    const a = interpretSnapshot({ ...base, health: "missing", provider_cursor: "c1" }) as Extract<
+    const a = interpretSnapshot({ ...base, health: "missing", provider_cursor: "c1" }, DESIRED) as Extract<
       ReconcileObservation,
       { kind: "progressing" }
     >;
-    const b = interpretSnapshot({ ...base, health: "missing", provider_cursor: "c2" }) as Extract<
+    const b = interpretSnapshot({ ...base, health: "missing", provider_cursor: "c2" }, DESIRED) as Extract<
       ReconcileObservation,
       { kind: "progressing" }
     >;

@@ -32,6 +32,7 @@ const FINGERPRINT = `sha256:${"a".repeat(64)}`;
 
 interface MemReconciliation {
   id: string;
+  phase: string;
   status: string;
   attempt: number;
   claimOwner: string | null;
@@ -57,6 +58,7 @@ class MemStore {
   seedReconciliation(id: string, over: Partial<MemReconciliation> = {}): void {
     this.reconciliations.set(id, {
       id,
+      phase: "discover",
       status: "pending",
       attempt: 0,
       claimOwner: null,
@@ -173,7 +175,7 @@ class MemClaimSource implements ReconciliationClaimSource {
     return {
       projectId: PROJECT,
       requirementId: REQUIREMENT,
-      phase: "discover",
+      phase: row.phase,
       attempt: row.attempt,
       requestFingerprint: FINGERPRINT,
       bindingId: null,
@@ -363,5 +365,42 @@ describe("ReconciliationSagaDriver", () => {
     const summary = await d.driveForOrg(ORG, PROJECT);
     expect(summary.stateUnknown).toBe(1);
     expect(store.reconciliations.get("rec1")?.status).toBe("state_unknown");
+  });
+
+  it("does NOT report success when complete() lost its claim mid-settle — records state_unknown", async () => {
+    store.seedReconciliation("rec1");
+    store.seedNode("enqueued");
+    // A converged observation would normally fixed_point + ready the node — but the
+    // claim was lost, so complete() returns false. The settle must fail-closed to
+    // state_unknown, NOT report a terminal success, and NOT advance the node.
+    const inner = new MemStateWriter(store);
+    const lostClaimWriter: IntegrationStateWriter = {
+      claim: (i) => inner.claim(i),
+      heartbeat: (i) => inner.heartbeat(i),
+      complete: () => Promise.resolve(false),
+      stateUnknown: () => Promise.resolve(false),
+      stateUnknownAfterClaimLost: (i) => inner.stateUnknownAfterClaimLost(i),
+    };
+    const d = new ReconciliationSagaDriver({} as never, {
+      stateWriter: lostClaimWriter,
+      claimSource: new MemClaimSource(store),
+      probe: new ScriptedProbe([{ kind: "converged", observedStateHash: FINGERPRINT, observedState: {} }]),
+      leaseMs: 30_000,
+    });
+    const summary = await d.driveForOrg(ORG, PROJECT);
+    expect(summary.fixedPoint).toBe(0);
+    expect(summary.stateUnknown).toBe(1);
+    expect(summary.readied).toBe(0);
+    expect(store.reconciliations.get("rec1")?.status).toBe("state_unknown");
+    expect(store.nodes[0]?.status).toBe("enqueued");
+  });
+
+  it("fail-closes a malformed persisted phase to state_unknown (no silent cast)", async () => {
+    store.seedReconciliation("rec1", { phase: "not_a_real_phase" });
+    const summary = await driver([progressing("x")]).driveForOrg(ORG, PROJECT);
+    expect(summary.stateUnknown).toBe(1);
+    const row = store.reconciliations.get("rec1")!;
+    expect(row.status).toBe("state_unknown");
+    expect(row.failureClassification).toBe("invalid_reconciliation_phase:not_a_real_phase");
   });
 });
