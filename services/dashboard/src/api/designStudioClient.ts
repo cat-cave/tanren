@@ -8,9 +8,11 @@
 import {
   DesignBindingResponseSchema,
   DesignCatalogResponseSchema,
+  DesignDeliveryResponseSchema,
   DesignEvidenceResponseSchema,
   DesignExportsResponseSchema,
   type BindingWriteResult,
+  type DesignDeliveryProof,
   type DesignEvidenceVerdict,
   type DesignExportFile,
   type DesignSystemCatalogEntry,
@@ -57,6 +59,16 @@ export class DesignStudioClient extends OrchestratorHttpClient {
     );
     if (!parsed.success || parsed.data.orgId !== orgId || parsed.data.projectId !== projectId) return undefined;
     return parsed.data.verdict;
+  }
+
+  /** ds-6 — the project's verified-join delivery trace (A4 ≡ demo); `undefined` = BLOCKED.
+   * A non-200, a laundered/mismatched payload, or a scope-id mismatch all fail closed. */
+  async getDeliveryProof(orgId: string, projectId: string): Promise<DesignDeliveryProof | undefined> {
+    const parsed = DesignDeliveryResponseSchema.safeParse(
+      await this.read200(`${projectBase(orgId, projectId)}/design-delivery-proof`),
+    );
+    if (!parsed.success || parsed.data.orgId !== orgId || parsed.data.projectId !== projectId) return undefined;
+    return parsed.data.proof;
   }
 
   /** The downloadable export projections for an artifact (undefined = BLOCKED). */

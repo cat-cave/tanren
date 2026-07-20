@@ -6,6 +6,9 @@ import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
 import { DEFAULT_MAX_BATCH_SIZE } from "./batchCoordinator.js";
+// ds-6: re-exported here so `buildBatchMergeCoordinator` wires the design-delivery pre_merge
+// binder through an existing import (the coordinator-assembly root's runtime-import cap).
+export { buildDesignAwareDeliveryCoordinator } from "../design/queue/designAwareDeliveryCoordinator.js";
 
 /**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system scope — the

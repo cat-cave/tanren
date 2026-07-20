@@ -33,6 +33,9 @@ export {
   buildMergeTrainArtifactWatcher,
   type CasByteStore,
 } from "./deployOnMerge.js";
+// ds-6: re-exported here so the autonomy-loop composition root wires the design-delivery
+// coordinator through the SAME post-merge builder import (the runtime-import cap).
+export { buildDesignAwareDeliveryCoordinator } from "../design/queue/designAwareDeliveryCoordinator.js";
 
 const log = createLogger("post-merge");
 
@@ -74,6 +77,16 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
    * own).
    */
   mergeTrainArtifactWatcher?: RunMergeWatcher;
+  /**
+   * The ds-6 DesignAwareDeliveryCoordinator (production phase): driven on the SAME wake, AFTER
+   * the delivery DAG driver (in-17) AND the mq-15 merge-train watcher, so by the time it runs
+   * the deploy + demo evidence (`deploy.verified` / `demo.completed`) the delivery DAG durably
+   * emitted is present. It links the LIVE production artifact/deployment + proof-backed
+   * behavior verdict to the pre-merge design matrix ONLY when the deployed artifact + scenario
+   * set EQUAL the pre-merge binding (A4 ≡ demo); a blocked/mismatched/partial join records
+   * NOTHING. ISOLATED — a failure is logged and never suppresses the other watchers. Optional.
+   */
+  designDeliveryCoordinator?: RunMergeWatcher;
 }
 
 /**
@@ -86,6 +99,7 @@ export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
   private readonly deliveryDriver: RunMergeWatcher | undefined;
   private readonly mergeTrainArtifactWatcher: RunMergeWatcher | undefined;
+  private readonly designDeliveryCoordinator: RunMergeWatcher | undefined;
   private reconnectHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -95,6 +109,7 @@ export class PostMergeSubscriber {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
     this.deliveryDriver = deps.deliveryDriver;
     this.mergeTrainArtifactWatcher = deps.mergeTrainArtifactWatcher;
+    this.designDeliveryCoordinator = deps.designDeliveryCoordinator;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -191,6 +206,14 @@ export class PostMergeSubscriber {
       if (this.mergeTrainArtifactWatcher !== undefined) {
         await this.mergeTrainArtifactWatcher.check(runId).catch((error: unknown) => {
           log.error("merge-train-artifact failed", { runId }, error);
+        });
+      }
+      // ds-6 design-delivery coordinator (production phase): runs LAST so the delivery DAG's
+      // deploy + demo evidence is durable. It links A4 ≡ demo ONLY on an exact artifact +
+      // scenario-set match; otherwise it records nothing. ISOLATED — never suppresses others.
+      if (this.designDeliveryCoordinator !== undefined) {
+        await this.designDeliveryCoordinator.check(runId).catch((error: unknown) => {
+          log.error("design-delivery-coordinator failed", { runId }, error);
         });
       }
     } while (this.rePending.has(runId));

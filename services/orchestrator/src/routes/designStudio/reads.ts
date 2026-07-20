@@ -29,6 +29,12 @@ import {
 import { DesignBindingTargetError, DesignStudioStore } from "../../engine/design/system/designStudioStore.js";
 import { readLatestDesignRenderVerdictForProject } from "../../engine/design/render/designRenderVerdictStore.js";
 import type { DesignRenderVerdictRow } from "../../engine/design/render/designRenderVerdictStore.js";
+import {
+  gatherDesignDeliveryEvidence,
+  resolveLatestProjectDelivery,
+} from "../../engine/design/queue/designDeliveryProofReads.js";
+import { buildDesignDeliveryProof } from "../../engine/design/queue/designDeliveryProofGates.js";
+import { DESIGN_DELIVERY_PROOF_SCHEMA_VERSION } from "../../engine/design/queue/designDeliveryProof.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
@@ -168,6 +174,39 @@ export function createDesignStudioRoutes(options: DesignStudioRoutesOptions) {
       projectId: scope.projectId,
       verdict: row === undefined ? null : verdictToWire(row),
     });
+  });
+
+  // ds-6 delivery trace: the VERIFIED-JOIN DesignDeliveryProofV1 (A4 ≡ demo) for the
+  // project's latest production delivery. A read-only projection — NEVER a run-command
+  // control. Fail-closed: no live production delivery yields a `blocked_no_live_release`
+  // trace, never a fabricated A4 ≡ demo. Every field served is non-secret (no live URL,
+  // no provider body, screenshots referenced by CAS digest only).
+  app.get("/:orgId/projects/:projectId/design-delivery-proof", async (c) => {
+    const scope = await authorizeProject(c, options.pool);
+    if (isResponse(scope)) return scope;
+    const delivery = await resolveLatestProjectDelivery(options.pool, scope.orgId, scope.projectId);
+    if (delivery === undefined) {
+      return c.json({
+        version: DS_STUDIO_SURFACE_VERSION,
+        orgId: scope.orgId,
+        projectId: scope.projectId,
+        proof: {
+          version: 1 as const,
+          schemaVersion: DESIGN_DELIVERY_PROOF_SCHEMA_VERSION,
+          orgId: scope.orgId,
+          projectId: scope.projectId,
+          runId: "",
+          integrationNodeId: "",
+          equivalence: "blocked_no_live_release" as const,
+          preMerge: null,
+          production: null,
+          boundKey: null,
+        },
+      });
+    }
+    const evidence = await gatherDesignDeliveryEvidence(options.pool, delivery.coords, delivery.integrationNodeId);
+    const proof = buildDesignDeliveryProof(evidence);
+    return c.json({ version: DS_STUDIO_SURFACE_VERSION, orgId: scope.orgId, projectId: scope.projectId, proof });
   });
 
   // Export index: the downloadable projections persisted in an artifact bundle.

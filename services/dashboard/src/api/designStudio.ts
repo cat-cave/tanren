@@ -94,6 +94,91 @@ export const DesignExportsResponseSchema = z.object({
   ),
 });
 
+// ds-6 — the DesignDeliveryProofV1 delivery-trace wire schema (A4 ≡ demo). Read-only; a
+// laundered/partial payload is rejected by safeParse before rendering. `equivalence` is the
+// closed-vocab DERIVED verdict — the client never receives (nor sends) a success boolean.
+export const DesignDeliveryEquivalenceSchema = z.enum([
+  "equivalent",
+  "blocked_pre_merge_incomplete",
+  "blocked_no_live_release",
+  "blocked_artifact_mismatch",
+  "blocked_scenario_mismatch",
+  "blocked_node_mismatch",
+  "blocked_render_not_passed",
+  "blocked_demo_not_passed",
+  "blocked_deploy_unverified",
+]);
+
+export const DesignDeliveryProofSchema = z.object({
+  version: z.literal(1),
+  schemaVersion: z.literal("design_delivery_proof.v1"),
+  orgId: z.string(),
+  projectId: z.string(),
+  runId: z.string(),
+  integrationNodeId: z.string(),
+  equivalence: DesignDeliveryEquivalenceSchema,
+  preMerge: z
+    .object({
+      integrationNodeId: z.string(),
+      proofRoot: z.string(),
+      releaseId: z.string(),
+      designSystemId: z.string(),
+      contractDigest: z.string(),
+      designContractVersion: z.string(),
+      renderOutcome: z.enum(["passed", "failed_visual", "inconclusive_infrastructure", "not_applicable"]),
+      adapterTarget: z.string(),
+      artifactDigest: z.string(),
+      fragmentDigests: z.array(z.string()),
+      scenarioKeys: z.array(z.string()),
+      cells: z.array(
+        z.object({
+          scenarioKey: z.string(),
+          renderVerdict: z.enum(["passed", "failed", "unknown"]),
+          screenshotDigest: z.string().optional(),
+          designProofKey: z.string(),
+          proofUnitId: z.string(),
+          reused: z.boolean(),
+        }),
+      ),
+    })
+    .nullable(),
+  production: z
+    .object({
+      releaseInstanceId: z.string(),
+      integrationNodeId: z.string(),
+      provider: z.string(),
+      environment: z.literal("production"),
+      deploymentId: z.string(),
+      artifactDigest: z.string(),
+      deployedProductDigest: z.string(),
+      sourceRef: z.string(),
+      behaviorCount: z.number().int(),
+      behaviorsPassed: z.number().int(),
+      behaviorsFailed: z.number().int(),
+      scenarioKeys: z.array(z.string()),
+    })
+    .nullable(),
+  boundKey: z
+    .object({
+      releaseDigest: z.string(),
+      fragmentDigests: z.array(z.string()),
+      adapterTarget: z.string(),
+      environment: z.string(),
+      scenarioKey: z.string(),
+      artifactDigest: z.string(),
+    })
+    .nullable(),
+});
+
+export const DesignDeliveryResponseSchema = z.object({
+  version: z.literal(DS_STUDIO_SURFACE_VERSION),
+  orgId: z.string(),
+  projectId: z.string(),
+  proof: DesignDeliveryProofSchema,
+});
+
+export type DesignDeliveryProof = z.infer<typeof DesignDeliveryProofSchema>;
+
 export type DesignSystemCatalogEntry = z.infer<typeof DesignSystemCatalogEntrySchema>;
 export type ProjectDesignBinding = z.infer<typeof ProjectDesignBindingSchema>;
 export type DesignEvidenceVerdict = z.infer<typeof DesignEvidenceVerdictSchema>;
@@ -108,6 +193,8 @@ export interface DesignStudioView {
   readonly binding: ProjectDesignBinding | null | undefined;
   readonly evidence: DesignEvidenceVerdict | null | undefined;
   readonly exports: readonly DesignExportFile[] | undefined;
+  /** ds-6 — the verified-join delivery trace (A4 ≡ demo); `undefined` ⇒ BLOCKED section. */
+  readonly delivery: DesignDeliveryProof | undefined;
 }
 
 export interface BindingWriteResult {

@@ -87,6 +87,20 @@ export interface PgBatchCheckerDeps {
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
   runStateWriter: RunStateWriter;
+  /**
+   * ds-6 pre_merge seam (injected so this file stays under the runtime-import cap): after a
+   * passing jj-local integration, bind the composed design system's eager render matrix to
+   * the just-integrated node (immutable design proof-units, keyed by the frozen six-input
+   * design proof key). ADVISORY — a project with no design system is a clean no-op; any
+   * failure is isolated so it never perturbs the native gate verdict. Wired by
+   * `buildBatchMergeCoordinator`; absent in unit fixtures (no-op).
+   */
+  bindDesignDelivery?: (input: {
+    orgId: string;
+    projectId: string;
+    integrationNodeId: string;
+    runId: string;
+  }) => Promise<void>;
 }
 
 export class PgBatchChecker implements BatchChecker {
@@ -205,6 +219,7 @@ export class PgBatchChecker implements BatchChecker {
     quarantine: Awaited<ReturnType<typeof loadActiveQuarantine>>;
   }): Promise<BatchCheckVerdict> {
     const { orgId, projectId, project, ordered, installation, staticRef, repo, tailSpecId, integrationRef } = args;
+    const tailRunId = ordered.at(-1)?.runId ?? "";
     const baseSha = await args.codeHost.fetchRef({
       repo,
       remoteBranch: project.default_branch,
@@ -234,8 +249,8 @@ export class PgBatchChecker implements BatchChecker {
       appEnv: quarantineAppEnv,
       quarantinedStepNames: args.quarantine.checkNames,
     } as const;
-    return runWithJobOrgId(orgId, () =>
-      driveBatchThroughNode(
+    return runWithJobOrgId(orgId, async () => {
+      const verdict = await driveBatchThroughNode(
         {
           orgId,
           projectId,
@@ -277,8 +292,30 @@ export class PgBatchChecker implements BatchChecker {
           ...batchFragmentEvidenceWiring(this.deps.pool),
           materializeReadyNode: buildCoverageAuthorityReadyNodeMaterializer(this.deps.pool),
         },
-      ),
-    );
+      );
+      // ds-6 pre_merge seam: after a passing jj-local integration, bind the composed design
+      // system's eager render matrix to THIS integration node (immutable design proof-units,
+      // keyed by the frozen six-input design proof key). ADVISORY to merge authority — a
+      // project with no composed design system is a clean no-op, and any failure is isolated
+      // (logged) so it never perturbs the native gate verdict the coordinator returns.
+      if (
+        verdict.result === "pass" &&
+        verdict.authorityBinding !== undefined &&
+        this.deps.bindDesignDelivery !== undefined
+      ) {
+        try {
+          await this.deps.bindDesignDelivery({
+            orgId,
+            projectId,
+            integrationNodeId: verdict.authorityBinding.nodeId,
+            runId: tailRunId,
+          });
+        } catch (error) {
+          log.error("ds-6 pre_merge design-delivery binding failed (isolated)", { projectId }, error);
+        }
+      }
+      return verdict;
+    });
   }
 
   private async loadProject(client: pg.PoolClient, projectId: string): Promise<BatchProjectRow> {

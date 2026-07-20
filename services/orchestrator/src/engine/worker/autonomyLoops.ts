@@ -23,6 +23,7 @@ import {
   buildDemoOnDeployWatcher,
   buildDeliveryDagDriver,
   buildMergeTrainArtifactWatcher,
+  buildDesignAwareDeliveryCoordinator,
   type CasByteStore,
 } from "../postMerge/subscriber.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
@@ -272,6 +273,11 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     proofSubstrate,
     casByteStore,
   });
+  // ds-6 design-delivery coordinator (production phase): a `RunMergeWatcher` driven LAST in
+  // the post-merge chain (after the delivery DAG + merge-train watcher). It links the LIVE
+  // production artifact/deploy + proof-backed behavior verdict to the pre-merge design matrix
+  // (A4 ≡ demo) ONLY on an exact artifact + scenario-set match; a blocked join records nothing.
+  const designDeliveryCoordinator = buildDesignAwareDeliveryCoordinator(deps.pool, deps.runStateWriter);
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
@@ -279,6 +285,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     githubHttp: deps.githubHttp,
     deliveryDriver,
     mergeTrainArtifactWatcher,
+    designDeliveryCoordinator,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
