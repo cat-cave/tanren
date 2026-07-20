@@ -1,10 +1,9 @@
 import { listEventNames, type EventName } from "../events/index.js";
 import type { Severity } from "./schemas.js";
 
-// Map every event name in the registry to a default
-// severity. The matrix UI consumes this map to render the event row's
-// default level; the dispatcher consults it at fire time to decide whether
-// a route's minSeverity floor is met.
+// Map every event name in the registry to a default severity. The matrix UI
+// consumes this map to render the event row's default level; the dispatcher
+// consults it at fire time to decide whether a route's minSeverity floor is met.
 //
 // Severity taxonomy:
 //   ok    - happy-path completion that an operator wants to celebrate
@@ -17,8 +16,7 @@ import type { Severity } from "./schemas.js";
 //           regardless of opt-in.
 //   fail  - run-halting / lost-work signals (run.failed, cost.unattributed,
 //           task.failed). The persisted run status may be `halted` while the
-//           terminal event operators receive is `run.failed`. These should be
-//           reachable on every operator's pager-style channel by default.
+//           terminal event is `run.failed`; reachable on every pager channel.
 //
 // A few events are not operator-actionable (allocator internals,
 // notification.* meta-events) and stay at `info` so the matrix UI defaults
