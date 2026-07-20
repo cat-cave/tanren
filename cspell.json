@@ -32,6 +32,7 @@
     "capprep",
     "depfail",
     "depok",
+    "insuff",
     "ireconcile",
     "mqeval",
     "mqgrp",

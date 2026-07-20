@@ -41,8 +41,11 @@ export interface CapabilityPrepareSummary {
   readonly blocked: number;
 }
 
-/** The evaluable subset — nodes whose status the prepare/wake pass may still move. */
-const MUTABLE_STATUSES = ["pending", "awaiting_grant"] as const;
+// The evaluable subset — nodes whose status the prepare pass may still move.
+// `needs_attention` is INCLUDED so a DEP-caused failure re-evaluates when its parent
+// recovers (finding-2); a genuine terminal failure (no dep edges) stays put, guarded
+// inside evaluateAndApply.
+const MUTABLE_STATUSES = ["pending", "awaiting_grant", "needs_attention"] as const;
 
 interface RequirementRow {
   id: string;

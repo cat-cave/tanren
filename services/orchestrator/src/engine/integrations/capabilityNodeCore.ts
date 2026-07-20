@@ -80,19 +80,28 @@ export function capabilityDesiredStateHash(input: {
   return contentDigestOf(new TextEncoder().encode(body));
 }
 
-type DepResolution = "satisfied" | "blocked" | "failed";
+export type DepResolution = "satisfied" | "blocked" | "failed";
+
+/** A dependency resolution plus the number of edges it was computed over (in-10). */
+export interface DependencyState {
+  readonly resolution: DepResolution;
+  /** How many `capability_node_dependencies` edges this node has (0 = no deps). */
+  readonly edgeCount: number;
+}
 
 /**
  * Resolve a capability node's `capability_node_dependencies` edges (in-10).
  * Fail-closed: a parent in `needs_attention` fails this node; any parent not yet
- * `ready` blocks it; zero edges (the common case) is trivially satisfied.
+ * `ready` blocks it; zero edges (the common case) is trivially satisfied. The edge
+ * count lets the caller tell a DEP-caused needs_attention (recoverable) apart from a
+ * genuine terminal failure (no edges).
  */
 export async function resolveDependencies(
   client: QueryRunner,
   orgId: string,
   projectId: string,
   nodeId: string,
-): Promise<DepResolution> {
+): Promise<DependencyState> {
   const result = await client.query<{ parent_status: string }>(
     `SELECT n.status AS parent_status
        FROM capability_node_dependencies d
@@ -102,28 +111,50 @@ export async function resolveDependencies(
       WHERE d.org_id = $1 AND d.project_id = $2 AND d.capability_node_id = $3`,
     [orgId, projectId, nodeId],
   );
-  if (result.rows.some((r) => r.parent_status === "needs_attention")) return "failed";
-  if (result.rows.some((r) => r.parent_status !== "ready")) return "blocked";
-  return "satisfied";
+  const edgeCount = result.rows.length;
+  if (result.rows.some((r) => r.parent_status === "needs_attention")) return { resolution: "failed", edgeCount };
+  if (result.rows.some((r) => r.parent_status !== "ready")) return { resolution: "blocked", edgeCount };
+  return { resolution: "satisfied", edgeCount };
+}
+
+/** A grant-coverage verdict: satisfied, or a precise fail-closed reason. */
+export type GrantEvaluation = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+interface GrantCandidateRow {
+  capabilities: string[];
+  operations: string[];
+  provider_scopes: string[];
+  grant_gen_status: string;
+  auth_gen_status: string;
+  grant_expired: boolean;
+  auth_expired: boolean;
 }
 
 /**
- * Is a product/control grant present that satisfies this node? A single query
- * joins the project's pinned grant selection → the active grant (matching plane +
- * the node's environment) → the active pinned grant generation. Zero rows = absent
- * (fail-closed → `awaiting_grant`).
+ * Does a pinned grant GENUINELY cover this node? (in-9 privilege gate.) The single
+ * query resolves each allowed provider's selection → active grant (matching plane +
+ * environment) → the EXACT pinned grant + auth generations, and returns their
+ * capability/operation/scope arrays, statuses, and (DB-clock) expiry. Coverage is
+ * then verified in `grantCovers`: an insufficient, expired, or inactive grant
+ * fail-closes with a precise reason (never a loose presence pass). Deterministic
+ * (ORDER BY provider): any covering candidate wins; else the first candidate's
+ * reason (or `grant_absent` when no candidate exists at all).
  */
-export async function grantSatisfied(
+export async function evaluateGrant(
   client: QueryRunner,
   orgId: string,
-  projectId: string,
+  node: CapabilityNodeForEval,
   providers: readonly string[],
-  plane: string,
-  environment: string,
-): Promise<boolean> {
-  if (providers.length === 0) return false;
-  const result = await client.query(
-    `SELECT 1
+): Promise<GrantEvaluation> {
+  if (providers.length === 0) return { ok: false, reason: "no_provider_policy" };
+  const ds = readObject(node.desiredState) ?? {};
+  const requiredOperations = readStringArray(ds["requiredOperations"]);
+  const requiredScopes = readStringArray(ds["requiredScopes"]);
+  const result = await client.query<GrantCandidateRow>(
+    `SELECT gg.capabilities, gg.operations, gg.provider_scopes,
+            gg.status AS grant_gen_status, ag.status AS auth_gen_status,
+            (gg.expires_at IS NOT NULL AND gg.expires_at <= now()) AS grant_expired,
+            (ag.expires_at IS NOT NULL AND ag.expires_at <= now()) AS auth_expired
        FROM project_integration_grant_selections s
        JOIN org_integration_grants g
          ON g.org_id = s.org_id AND g.provider_kind = s.provider_kind
@@ -132,14 +163,46 @@ export async function grantSatisfied(
          ON gg.org_id = s.org_id AND gg.provider_kind = s.provider_kind
         AND gg.connection_id = s.connection_id AND gg.grant_id = s.grant_id
         AND gg.generation = s.grant_generation
+       JOIN org_integration_connection_auth_generations ag
+         ON ag.org_id = s.org_id AND ag.provider_kind = s.provider_kind
+        AND ag.connection_id = s.connection_id AND ag.generation = s.auth_generation
       WHERE s.org_id = $1 AND s.project_id = $2
         AND s.provider_kind = ANY($3::text[])
         AND g.status = 'active' AND g.plane = $4 AND g.environment = $5
-        AND gg.status = 'active'
-      LIMIT 1`,
-    [orgId, projectId, [...providers], plane, environment],
+      ORDER BY s.provider_kind`,
+    [orgId, node.projectId, [...providers], node.plane, node.environment],
   );
-  return result.rows.length > 0;
+  if (result.rows.length === 0) return { ok: false, reason: "grant_absent" };
+  let firstReason: string | undefined;
+  for (const row of result.rows) {
+    const verdict = grantCovers(row, node.capability, requiredOperations, requiredScopes);
+    if (verdict.ok) return { ok: true };
+    firstReason ??= verdict.reason;
+  }
+  return { ok: false, reason: firstReason ?? "grant_absent" };
+}
+
+/** Verify one candidate grant genuinely covers the node — capability, ops, scopes, liveness. */
+function grantCovers(
+  row: GrantCandidateRow,
+  capability: string,
+  requiredOperations: readonly string[],
+  requiredScopes: readonly string[],
+): GrantEvaluation {
+  if (row.grant_gen_status !== "active" || row.auth_gen_status !== "active") {
+    return { ok: false, reason: "grant_inactive" };
+  }
+  if (row.grant_expired || row.auth_expired) return { ok: false, reason: "grant_expired" };
+  if (!row.capabilities.includes(capability)) return { ok: false, reason: "capability_not_covered" };
+  if (!isSubset(requiredOperations, row.operations)) return { ok: false, reason: "insufficient_operations" };
+  if (!isSubset(requiredScopes, row.provider_scopes)) return { ok: false, reason: "insufficient_scopes" };
+  return { ok: true };
+}
+
+/** Every element of `required` is present in `granted`. Empty required ⇒ trivially true. */
+function isSubset(required: readonly string[], granted: readonly string[]): boolean {
+  const have = new Set(granted);
+  return required.every((r) => have.has(r));
 }
 
 /**
@@ -164,11 +227,21 @@ export async function evaluateAndApply(
   node: CapabilityNodeForEval,
 ): Promise<CapabilityEvalOutcome> {
   const deps = await resolveDependencies(client, orgId, node.projectId, node.id);
-  if (deps === "failed") {
+  if (deps.resolution === "failed") {
     return applyStatus(client, orgId, node, "needs_attention", null);
   }
-  if (deps === "blocked") {
+  if (deps.resolution === "blocked") {
     return applyStatus(client, orgId, node, "pending", null);
+  }
+
+  // GENUINE-FAILURE GUARD (in-10 finding-2): a node ALREADY in needs_attention with
+  // NO dependency edges is a genuine terminal failure (e.g. no provider policy), not a
+  // DEP-caused block — never silently recover it. A needs_attention node WITH edges
+  // whose deps are now satisfied IS dep-caused and falls through to re-evaluate
+  // (parent recovered → child recovers). (A future in-11 provider-failure must record
+  // its cause on the reconciliation, not by flipping the capability node here.)
+  if (node.status === "needs_attention" && deps.edgeCount === 0) {
+    return "unchanged";
   }
 
   const providers = allowedProviders(node.desiredState);
@@ -177,14 +250,17 @@ export async function evaluateAndApply(
     return applyStatus(client, orgId, node, "needs_attention", null);
   }
 
-  const satisfied = await grantSatisfied(client, orgId, node.projectId, providers, node.plane, node.environment);
-  if (!satisfied) {
-    const waitReason = `grant_absent:${providers.join(",")}:${node.plane}/${node.environment}`;
+  const grant = await evaluateGrant(client, orgId, node, providers);
+  if (!grant.ok) {
+    // A grant that is absent, expired, inactive, or does NOT genuinely cover this
+    // node's capability/operations/scopes fails closed to awaiting_grant with a
+    // precise reason — it NEVER enqueues provider work under an insufficient grant.
+    const waitReason = `${grant.reason}:${providers.join(",")}:${node.plane}/${node.environment}`;
     const outcome = await applyStatus(client, orgId, node, "awaiting_grant", waitReason);
     if (outcome === "awaiting_grant") {
       // Only fires on the TRANSITION into awaiting_grant (applyStatus returns
-      // "unchanged" when it was already parked) — so the actionable request is
-      // emitted once, not on every re-evaluation.
+      // "unchanged" when it was already parked with the same reason) — so the
+      // actionable request is emitted once, not on every re-evaluation.
       await emitGrantRequested(client, orgId, node, providers[0]!);
     }
     return outcome;

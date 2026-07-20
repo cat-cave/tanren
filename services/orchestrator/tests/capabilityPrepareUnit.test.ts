@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateAndApply,
-  grantSatisfied,
+  evaluateGrant,
   resolveDependencies,
   type CapabilityNodeForEval,
   type QueryRunner,
@@ -68,40 +68,95 @@ function node(overrides: Partial<CapabilityNodeForEval> = {}): CapabilityNodeFor
   };
 }
 
+function coveringGrantRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    capabilities: ["messaging.send"],
+    operations: ["chat.postMessage"],
+    provider_scopes: ["chat:write"],
+    grant_gen_status: "active",
+    auth_gen_status: "active",
+    grant_expired: false,
+    auth_expired: false,
+    ...overrides,
+  };
+}
+
 describe("resolveDependencies", () => {
   it("is satisfied with no edges", async () => {
     const c = new FakeClient([{ match: "capability_node_dependencies", rows: [] }]);
-    expect(await resolveDependencies(c.as(), "o", "p", "n")).toBe("satisfied");
+    expect(await resolveDependencies(c.as(), "o", "p", "n")).toEqual({ resolution: "satisfied", edgeCount: 0 });
   });
   it("is satisfied when every parent is ready", async () => {
     const c = new FakeClient([{ match: "capability_node_dependencies", rows: [{ parent_status: "ready" }] }]);
-    expect(await resolveDependencies(c.as(), "o", "p", "n")).toBe("satisfied");
+    expect(await resolveDependencies(c.as(), "o", "p", "n")).toEqual({ resolution: "satisfied", edgeCount: 1 });
   });
   it("is blocked when a parent is not ready", async () => {
     const c = new FakeClient([
       { match: "capability_node_dependencies", rows: [{ parent_status: "ready" }, { parent_status: "enqueued" }] },
     ]);
-    expect(await resolveDependencies(c.as(), "o", "p", "n")).toBe("blocked");
+    expect(await resolveDependencies(c.as(), "o", "p", "n")).toEqual({ resolution: "blocked", edgeCount: 2 });
   });
   it("fails when a parent needs attention", async () => {
     const c = new FakeClient([{ match: "capability_node_dependencies", rows: [{ parent_status: "needs_attention" }] }]);
-    expect(await resolveDependencies(c.as(), "o", "p", "n")).toBe("failed");
+    expect(await resolveDependencies(c.as(), "o", "p", "n")).toEqual({ resolution: "failed", edgeCount: 1 });
   });
 });
 
-describe("grantSatisfied", () => {
-  it("is false with no providers (fail-closed)", async () => {
+describe("evaluateGrant (genuine coverage)", () => {
+  it("fails closed with no providers", async () => {
     const c = new FakeClient([]);
-    expect(await grantSatisfied(c.as(), "o", "p", [], "product", "test")).toBe(false);
+    expect(await evaluateGrant(c.as(), "o", node(), [])).toEqual({ ok: false, reason: "no_provider_policy" });
     expect(c.issued).toHaveLength(0);
   });
-  it("is true when the join returns a row", async () => {
-    const c = new FakeClient([{ match: "project_integration_grant_selections", rows: [{ ok: 1 }] }]);
-    expect(await grantSatisfied(c.as(), "o", "p", ["slack"], "product", "test")).toBe(true);
-  });
-  it("is false when the join is empty", async () => {
+  it("is absent when no candidate grant exists", async () => {
     const c = new FakeClient([{ match: "project_integration_grant_selections", rows: [] }]);
-    expect(await grantSatisfied(c.as(), "o", "p", ["slack"], "product", "test")).toBe(false);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "grant_absent" });
+  });
+  it("is ok when the grant genuinely covers the node", async () => {
+    const c = new FakeClient([{ match: "project_integration_grant_selections", rows: [coveringGrantRow()] }]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: true });
+  });
+  it("fails closed on a missing required scope", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ provider_scopes: [] })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "insufficient_scopes" });
+  });
+  it("fails closed on a missing required operation", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ operations: [] })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({
+      ok: false,
+      reason: "insufficient_operations",
+    });
+  });
+  it("fails closed when the capability is not covered", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ capabilities: ["errors.capture"] })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({
+      ok: false,
+      reason: "capability_not_covered",
+    });
+  });
+  it("fails closed on an expired grant generation", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ grant_expired: true })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "grant_expired" });
+  });
+  it("fails closed on an expired auth generation", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ auth_expired: true })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "grant_expired" });
+  });
+  it("fails closed on an inactive grant generation", async () => {
+    const c = new FakeClient([
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ grant_gen_status: "revoked" })] },
+    ]);
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "grant_inactive" });
   });
 });
 
@@ -131,13 +186,46 @@ describe("evaluateAndApply", () => {
     expect(c.did("INSERT INTO integration_reconciliations")).toBe(false);
   });
 
-  it("enqueues provider work when deps + grant are satisfied", async () => {
+  it("enqueues provider work when deps + a genuinely-covering grant are present", async () => {
     const c = new FakeClient([
       { match: "capability_node_dependencies", rows: [] },
-      { match: "project_integration_grant_selections", rows: [{ ok: 1 }] },
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow()] },
     ]);
     expect(await evaluateAndApply(c.as(), "o", node())).toBe("enqueued");
     expect(c.did("INSERT INTO integration_reconciliations")).toBe(true);
+  });
+
+  it("parks (never enqueues) when the grant is present but missing a required scope", async () => {
+    const c = new FakeClient([
+      { match: "capability_node_dependencies", rows: [] },
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ provider_scopes: [] })] },
+    ]);
+    expect(await evaluateAndApply(c.as(), "o", node())).toBe("awaiting_grant");
+    expect(c.did("INSERT INTO integration_reconciliations")).toBe(false);
+  });
+
+  it("parks (never enqueues) when the grant is expired", async () => {
+    const c = new FakeClient([
+      { match: "capability_node_dependencies", rows: [] },
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow({ grant_expired: true })] },
+    ]);
+    expect(await evaluateAndApply(c.as(), "o", node())).toBe("awaiting_grant");
+    expect(c.did("INSERT INTO integration_reconciliations")).toBe(false);
+  });
+
+  it("re-evaluates a DEP-caused needs_attention when the parent recovers", async () => {
+    // needs_attention node WITH a (now-ready) dependency edge → recovers to enqueued.
+    const c = new FakeClient([
+      { match: "capability_node_dependencies", rows: [{ parent_status: "ready" }] },
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow()] },
+    ]);
+    expect(await evaluateAndApply(c.as(), "o", node({ status: "needs_attention" }))).toBe("enqueued");
+  });
+
+  it("does NOT recover a genuine needs_attention with no dependency edges", async () => {
+    const c = new FakeClient([{ match: "capability_node_dependencies", rows: [] }]);
+    expect(await evaluateAndApply(c.as(), "o", node({ status: "needs_attention" }))).toBe("unchanged");
+    expect(c.did("project_integration_grant_selections")).toBe(false);
   });
 
   it("is a no-op when the status is unchanged (idempotent)", async () => {
@@ -195,12 +283,16 @@ describe("evaluateNodes", () => {
             desired_state_hash: DIGEST,
             plane: "product",
             capability: "messaging.send",
-            desired_state: { providerPolicy: { allowed: ["slack"] }, requiredOperations: ["x"], requiredScopes: ["y"] },
+            desired_state: {
+              providerPolicy: { allowed: ["slack"] },
+              requiredOperations: ["chat.postMessage"],
+              requiredScopes: ["chat:write"],
+            },
           },
         ],
       },
       { match: "capability_node_dependencies", rows: [] },
-      { match: "project_integration_grant_selections", rows: [{ ok: 1 }] },
+      { match: "project_integration_grant_selections", rows: [coveringGrantRow()] },
     ]);
     const tally = await evaluateNodes(c.as(), "o", "proj_1", ["pending"]);
     expect(tally.enqueued).toBe(1);

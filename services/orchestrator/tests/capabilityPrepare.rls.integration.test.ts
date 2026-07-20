@@ -9,6 +9,7 @@ import { migrate, resetSystemPool, setSystemPool } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CapabilityPrepareDriver } from "../src/engine/integrations/capabilityPrepare.js";
+import { buildDagWalker } from "../src/engine/dag/walker.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -84,6 +85,23 @@ describeDb("capability_prepare (in-9/in-10) — tenant-scoped materialize + gran
     await seedCapabilityNode(ownerPool, ORG_A, "proj_dep_ok", "req_depok_parent", "ready");
     await seedCapabilityNode(ownerPool, ORG_A, "proj_dep_ok", "req_depok_child", "pending");
     await seedCapabilityDep(ownerPool, ORG_A, "proj_dep_ok", "req_depok_child", "req_depok_parent");
+
+    // Insufficient grant: present + active but MISSING the required chat:write scope.
+    await seedOrgProject(ownerPool, ORG_A, "proj_insuff");
+    await seedRequirement(ownerPool, ORG_A, "proj_insuff", "req_insuff", "messaging.send", "product");
+    await seedGrantLineage(ownerPool, ORG_A, "proj_insuff", "slack", "product", "test", { scopes: ["channels:read"] });
+
+    // Expired grant: covers scopes/ops/capability but the grant generation is expired.
+    await seedOrgProject(ownerPool, ORG_A, "proj_expired");
+    await seedRequirement(ownerPool, ORG_A, "proj_expired", "req_expired", "messaging.send", "product");
+    await seedGrantLineage(ownerPool, ORG_A, "proj_expired", "slack", "product", "test", {
+      grantExpiresSql: "now() - interval '1 hour'",
+    });
+
+    // Production-seam pin: an ACTIVE project walked through the real buildDagWalker.
+    await seedOrgProject(ownerPool, ORG_A, "proj_walker");
+    await seedRequirement(ownerPool, ORG_A, "proj_walker", "req_walker", "messaging.send", "product");
+    await seedGrantLineage(ownerPool, ORG_A, "proj_walker", "slack", "product", "test");
 
     // Cross-org control: org B has its own requirement; org-A driver runs must never
     // touch it.
@@ -195,7 +213,36 @@ describeDb("capability_prepare (in-9/in-10) — tenant-scoped materialize + gran
     expect(reconAfter.rows[0]?.n).toBe("1");
   });
 
-  it("fails closed when a capability dependency is unresolved (parent needs_attention)", async () => {
+  it("parks awaiting_grant (never enqueues) when a present grant lacks a required scope", async () => {
+    const summary = await driver.prepare("proj_insuff");
+    expect(summary.awaitingGrant).toBe(1);
+    expect(summary.enqueued).toBe(0);
+    const node = await ownerPool.query<{ status: string; wait_reason: string | null }>(
+      "SELECT status, wait_reason FROM capability_nodes WHERE org_id = $1 AND project_id = 'proj_insuff'",
+      [ORG_A],
+    );
+    expect(node.rows[0]?.status).toBe("awaiting_grant");
+    expect(node.rows[0]?.wait_reason).toMatch(/^insufficient_scopes:/u);
+    const recon = await ownerPool.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM integration_reconciliations WHERE org_id = $1 AND project_id = 'proj_insuff'",
+      [ORG_A],
+    );
+    expect(recon.rows[0]?.n).toBe("0");
+  });
+
+  it("parks awaiting_grant (never enqueues) when the grant is expired", async () => {
+    const summary = await driver.prepare("proj_expired");
+    expect(summary.awaitingGrant).toBe(1);
+    expect(summary.enqueued).toBe(0);
+    const node = await ownerPool.query<{ status: string; wait_reason: string | null }>(
+      "SELECT status, wait_reason FROM capability_nodes WHERE org_id = $1 AND project_id = 'proj_expired'",
+      [ORG_A],
+    );
+    expect(node.rows[0]?.status).toBe("awaiting_grant");
+    expect(node.rows[0]?.wait_reason).toMatch(/^grant_expired:/u);
+  });
+
+  it("fails closed when a capability dependency is unresolved, then recovers when the parent recovers", async () => {
     const summary = await driver.prepare("proj_dep_fail");
     expect(summary.needsAttention).toBe(1);
     expect(summary.enqueued).toBe(0);
@@ -210,6 +257,28 @@ describeDb("capability_prepare (in-9/in-10) — tenant-scoped materialize + gran
       [ORG_A],
     );
     expect(recon.rows[0]?.n).toBe("0");
+
+    // A second prepare while the parent is STILL needs_attention leaves the child stuck.
+    await driver.prepare("proj_dep_fail");
+    const stillStuck = await ownerPool.query<{ status: string }>(
+      "SELECT status FROM capability_nodes WHERE org_id = $1 AND id = 'capnode_req_depfail_child_test'",
+      [ORG_A],
+    );
+    expect(stillStuck.rows[0]?.status).toBe("needs_attention");
+
+    // Parent recovers to ready (as the reconciliation saga would) → the dep-caused
+    // child re-evaluates and prepares.
+    await ownerPool.query(
+      "UPDATE capability_nodes SET status = 'ready' WHERE org_id = $1 AND id = 'capnode_req_depfail_parent_test'",
+      [ORG_A],
+    );
+    const recovered = await driver.prepare("proj_dep_fail");
+    expect(recovered.enqueued).toBe(1);
+    const childAfter = await ownerPool.query<{ status: string }>(
+      "SELECT status FROM capability_nodes WHERE org_id = $1 AND id = 'capnode_req_depfail_child_test'",
+      [ORG_A],
+    );
+    expect(childAfter.rows[0]?.status).toBe("enqueued");
   });
 
   it("prepares a node whose dependency is satisfied (parent ready) and grant present", async () => {
@@ -226,6 +295,25 @@ describeDb("capability_prepare (in-9/in-10) — tenant-scoped materialize + gran
       [ORG_A],
     );
     expect(recon.rows.map((r) => r.requirement_id)).toEqual(["req_depok_child"]);
+  });
+
+  it("runs the integration phase through the real production walker seam (finding-3 pin)", async () => {
+    // The production construction seam: buildDagWalker wiring a real
+    // CapabilityPrepareDriver, walking an ACTIVE project. The walk must materialize +
+    // enqueue the capability graph via the integration phase (never a dead path).
+    const walker = buildDagWalker(appPool, { integrationPhase: new CapabilityPrepareDriver(appPool) });
+    await walker.walk("proj_walker");
+
+    const nodes = await ownerPool.query<{ id: string; status: string }>(
+      "SELECT id, status FROM capability_nodes WHERE org_id = $1 AND project_id = 'proj_walker'",
+      [ORG_A],
+    );
+    expect(nodes.rows).toEqual([{ id: "capnode_req_walker_test", status: "enqueued" }]);
+    const recon = await ownerPool.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM integration_reconciliations WHERE org_id = $1 AND project_id = 'proj_walker'",
+      [ORG_A],
+    );
+    expect(recon.rows[0]?.n).toBe("1");
   });
 
   it("never touches another org's rows (cross-org isolation)", async () => {
@@ -280,6 +368,13 @@ async function seedRequirement(
   );
 }
 
+interface GrantLineageOptions {
+  /** Granted provider scopes (default covers the golden requirement's chat:write). */
+  scopes?: string[];
+  /** Grant-generation expiry (default none). Pass a past interval string to expire it. */
+  grantExpiresSql?: string;
+}
+
 async function seedGrantLineage(
   pool: Pool,
   orgId: string,
@@ -287,9 +382,12 @@ async function seedGrantLineage(
   providerKind: string,
   plane: string,
   environment: string,
+  options: GrantLineageOptions = {},
 ): Promise<void> {
   const connectionId = `conn_${projectId}`;
   const grantId = `grant_${projectId}`;
+  const scopes = options.scopes ?? ["chat:write"];
+  const expiresSql = options.grantExpiresSql ?? "NULL";
   await pool.query(
     `INSERT INTO org_integration_connections
        (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
@@ -312,10 +410,10 @@ async function seedGrantLineage(
   await pool.query(
     `INSERT INTO org_integration_grant_generations
        (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
-        provider_scopes, policy_revision, consent_revision, consent_actor_id, consented_at, status)
+        provider_scopes, policy_revision, consent_revision, consent_actor_id, consented_at, expires_at, status)
      VALUES ($1, $2, $3, $4, 1, ARRAY['messaging.send'], ARRAY['chat.postMessage'],
-             ARRAY['chat:write'], 'policy.v1', 'consent.v1', 'admin', now(), 'active')`,
-    [orgId, providerKind, connectionId, grantId],
+             $5::text[], 'policy.v1', 'consent.v1', 'admin', now(), ${expiresSql}, 'active')`,
+    [orgId, providerKind, connectionId, grantId, scopes],
   );
   await pool.query(
     `INSERT INTO project_integration_grant_selections
