@@ -37,7 +37,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
-import { CapabilityPrepareDriver } from "../integrations/capabilityPrepare.js";
+import { IntegrationLifecyclePhase } from "../integrations/reconciliationSaga.js";
 import { createLogger } from "../observability/logger.js";
 import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 // Re-exported so autonomyLoops (which already imports startDagWalkerSubscriber here)
@@ -158,9 +158,12 @@ export class DagWalkerSubscriber {
       // Plane-split: route the walker's run-creation + dag.* events through the
       // control plane when a writer is wired; else direct on the pool.
       ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
-      // in-9/in-10: the capability_prepare integration phase the walker runs before
-      // spec planning on every active-project walk.
-      integrationPhase: new CapabilityPrepareDriver(this.deps.pool),
+      // in-9/in-10 + in-11: the capability_prepare integration phase (materialize +
+      // enqueue) followed by the durable reconciliation saga (claim → observe →
+      // reconcile → settle) the walker runs before spec planning on every
+      // active-project walk. The walk + backstop cadence IS the saga's durable
+      // re-drive loop (one attempt per claimable row per walk; no in-process loop).
+      integrationPhase: new IntegrationLifecyclePhase(this.deps.pool),
     });
   }
 
