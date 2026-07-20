@@ -17,7 +17,7 @@ import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator, buildEagerIntegrationBeamPlanner } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
-import { resolveMaxBatchSize } from "./batchMaxSize.js";
+import { buildDesignAwareDeliveryCoordinator, resolveMaxBatchSize } from "./batchMaxSize.js";
 import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
@@ -51,6 +51,10 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       runStateWriter,
+      // ds-6 pre_merge seam: bind the composed design system's eager render matrix to the
+      // just-integrated node (injected so batchChecker stays under the runtime-import cap).
+      bindDesignDelivery: (input) =>
+        buildDesignAwareDeliveryCoordinator(deps.pool, runStateWriter).run({ phase: "pre_merge", ...input }),
     }),
     authorityEvaluator: new PgMultiMemberAuthorityEvaluator({
       pool: deps.pool,

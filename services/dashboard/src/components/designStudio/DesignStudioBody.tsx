@@ -5,6 +5,7 @@
 // 200 response) — never a fabricated empty/green.
 
 import type {
+  DesignDeliveryProof,
   DesignEvidenceVerdict,
   DesignExportFile,
   DesignStudioView,
@@ -221,6 +222,59 @@ function ExportsPanel(props: { readonly exports: readonly DesignExportFile[] | u
   );
 }
 
+/** ds-6 — the delivery trace: eager matrix → proof key/root → release/deploy → proof-backed
+ * demo. A read-only PROJECTION (no run-command control). Any missing cell, failed assertion,
+ * or unobservable behavior renders as blocked/unknown — NEVER a fabricated A4 ≡ demo. */
+function DeliveryTrace(props: { readonly delivery: DesignDeliveryProof | undefined }) {
+  const delivery = props.delivery;
+  const equivalent = delivery?.equivalence === "equivalent";
+  return (
+    <section class="panel">
+      <div class="panel-pad">
+        <div class="mini-eyebrow">delivery trace · queue → deploy → demo (A4 ≡ demo)</div>
+        {delivery === undefined ? (
+          <Blocked what="Delivery proof" />
+        ) : (
+          <>
+            <div class="row-head">
+              <span class={`tag ${equivalent ? "pass" : "warn"}`}>
+                {equivalent ? "A4 ≡ demo" : delivery.equivalence}
+              </span>
+              <code>node · {delivery.integrationNodeId || "unbound"}</code>
+              {delivery.boundKey === null ? null : <code>key · {delivery.boundKey.scenarioKey}</code>}
+            </div>
+            {delivery.preMerge === null ? (
+              <div class="empty">No pre-merge design matrix bound to this delivery — trace BLOCKED, not empty.</div>
+            ) : (
+              <div class="row-head">
+                <span class={`tag ${delivery.preMerge.renderOutcome === "passed" ? "pass" : "warn"}`}>
+                  pre-merge · {delivery.preMerge.renderOutcome}
+                </span>
+                <code>root · {delivery.preMerge.proofRoot}</code>
+                <span>{delivery.preMerge.cells.length} eager cell(s)</span>
+                <code>artifact · {delivery.preMerge.artifactDigest}</code>
+              </div>
+            )}
+            {delivery.production === null ? (
+              <div class="empty">No live production release/demo linked yet — trace BLOCKED, not empty.</div>
+            ) : (
+              <div class="row-head">
+                <span class={`tag ${equivalent ? "pass" : "warn"}`}>
+                  live · {delivery.production.provider}/{delivery.production.environment}
+                </span>
+                <code>artifact · {delivery.production.artifactDigest}</code>
+                <span>
+                  demo {delivery.production.behaviorsPassed}/{delivery.production.behaviorCount} behavior(s) passed
+                </span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function DesignStudioBody(props: DesignStudioBodyProps) {
   return (
     <>
@@ -260,6 +314,7 @@ export function DesignStudioBody(props: DesignStudioBodyProps) {
                 csrfToken={props.csrfToken}
               />
               <EvidenceLab evidence={props.view.evidence} />
+              <DeliveryTrace delivery={props.view.delivery} />
               <ExportsPanel exports={props.view.exports} />
             </>
           )}
