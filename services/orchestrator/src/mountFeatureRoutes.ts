@@ -301,7 +301,14 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
-  mountReportRoutes(app, { pool: scopedPool, ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }) });
+  mountReportRoutes(app, {
+    pool: scopedPool,
+    // SP-3 × mq-15 connect-up: the mq-15 merge-train export route re-verifies each served
+    // bundle via the sole production `PgProofSubstrate`, built inside the report mount from
+    // this secret store (keeping this table's runtime-import count in check).
+    secrets,
+    ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }),
+  });
   // Codex H3 Surface 6 #17/#18: hand the API-plane secrets store to the route
   // factory so it can build the SAME production channel registry the worker
   // boot did and reject POSTs that route to an unwired channel. Both surfaces

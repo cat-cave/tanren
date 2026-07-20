@@ -21,6 +21,17 @@ import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { PostMergeWatcher, type PostMergeWatcherDeps } from "./watcher.js";
 import { createLogger } from "../observability/logger.js";
 import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
+// The post-merge deploy/demo/merge-train watcher builders are direct collaborators of
+// this subscriber (they run inside its chain); re-exported here so the autonomy-loop
+// composition root imports the whole post-merge builder set — including mq-15's
+// merge-train artifact watcher + its CAS byte-store type — from one module (the
+// runtime-import cap).
+export {
+  buildDeployOnMergeWatcher,
+  buildDemoOnDeployWatcher,
+  buildMergeTrainArtifactWatcher,
+  type CasByteStore,
+} from "./deployOnMerge.js";
 
 const log = createLogger("post-merge");
 

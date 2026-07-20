@@ -17,14 +17,13 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/build.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
-import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import {
+  startPostMergeSubscriber,
   buildDeployOnMergeWatcher,
   buildDemoOnDeployWatcher,
   buildMergeTrainArtifactWatcher,
   type CasByteStore,
-  type ProofSubstrate,
-} from "../postMerge/deployOnMerge.js";
+} from "../postMerge/subscriber.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
@@ -35,6 +34,7 @@ import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
 import { buildSourceSyncWorker } from "./sourceSyncWorkerBuild.js";
 import { startWorkerNotifications } from "./notificationAutonomy.js";
+import { PgProofSubstrate, PgCasByteStore, PROOF_SIGNING_KEY_REF, resolveSigningKey } from "../cas/pgProofSubstrate.js";
 
 const log = createLogger("run-worker");
 
@@ -60,15 +60,6 @@ export interface AutonomyLoopsDeps {
    * over mTLS when TANREN_DATA_PLANE_REMOTE_WRITES=1.
    */
   runStateWriter: RunStateWriter;
-  /**
-   * mq-15: the sole `ProofSubstrate` (engine/contracts/cas.ts) + its CAS byte store,
-   * injected so the merge-train artifact watcher can SEAL a completed land group into a
-   * signed delivery projection. The watcher adds NO signer of its own — absent a
-   * substrate it is simply not constructed, so no artifact ever seals and the read/UI
-   * stay `unknown` (fail-closed). Wired here only when the boot supplies a substrate.
-   */
-  proofSubstrate?: ProofSubstrate;
-  casByteStore?: CasByteStore;
 }
 
 export interface AutonomyLoops {
@@ -105,6 +96,17 @@ export interface AutonomyLoops {
    * the actual capacity test (re-pauses on a still-exhausted window).
    */
   pausedRunResumeProber: PausedRunResumeProber;
+  /**
+   * SP-3: the SOLE production `ProofSubstrate` (`PgProofSubstrate`), constructed
+   * once here over the shared runtime pool + secret store. It is the canonical
+   * proof-sealing/verification substrate the merge-train / gate-proof consumers
+   * inject (e.g. mq-15's merge-train artifact watcher). It is ALWAYS constructed;
+   * its signing key is resolved lazily from the platform secret ref, and a
+   * consumer calling `seal`/`verify` without a provisioned key fails LOUD
+   * (`ProofSigningKeyUnavailableError`) — never a silent no-op. Boot probes the
+   * key once and logs whether sealing is live or pending provisioning.
+   */
+  proofSubstrate: PgProofSubstrate;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
 }
@@ -220,18 +222,41 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
   });
+  // SP-3 × mq-15 CONNECT-UP: construct the sole production `ProofSubstrate`
+  // (`PgProofSubstrate`) over the shared pool + secret store, over a SINGLE shared
+  // `PgCasByteStore` (so the substrate's own proof/bundle bytes and the watcher's
+  // sealed-artifact bytes land in the same CAS). This is the REAL substrate the
+  // merge-train artifact watcher (below) and future gate-proof consumers seal/verify
+  // with — no external injection, no dormant optional. Probe the signing key ONCE so
+  // the operator sees an observable line: sealing is LIVE, or PENDING key provisioning
+  // (still constructed + wired — any seal/verify then fails LOUD, never a silent no-op).
+  const casByteStore: CasByteStore = new PgCasByteStore(deps.pool);
+  const proofSubstrate = new PgProofSubstrate(deps.pool, deps.secrets, { casByteStore });
+  try {
+    const signingKey = await resolveSigningKey(deps.secrets, PROOF_SIGNING_KEY_REF);
+    log.info("proof substrate constructed; ed25519 signing key resolved — bundle sealing is LIVE", {
+      signingKeyId: signingKey.signingKeyId,
+      signingKeyRef: PROOF_SIGNING_KEY_REF,
+    });
+  } catch (error) {
+    // Observable, LOUD dormancy — NOT a silent "no substrate". The substrate is still
+    // constructed and injected into the watcher; any seal/verify fails loud with the
+    // same typed error until the platform signing key is provisioned.
+    log.error("proof substrate constructed but signing key is NOT provisioned — seal/verify will fail loud", {
+      signingKeyRef: PROOF_SIGNING_KEY_REF,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
   // mq-15 merge-train artifact watcher: a sealed-delivery PROJECTION driven AFTER the
-  // demo watcher. Constructed ONLY when the sole ProofSubstrate + CAS byte store are
-  // injected (it invents no signer); absent them it is not wired, so a completed land
-  // group never seals and the read/UI stay `unknown` (fail-closed by construction).
-  const mergeTrainArtifactWatcher =
-    deps.proofSubstrate !== undefined && deps.casByteStore !== undefined
-      ? buildMergeTrainArtifactWatcher({
-          pool: deps.pool,
-          proofSubstrate: deps.proofSubstrate,
-          casByteStore: deps.casByteStore,
-        })
-      : undefined;
+  // demo watcher. It invents NO signer — sealing/verification are DELEGATED to the sole
+  // production `PgProofSubstrate` constructed just above (its seal path is now LIVE, not
+  // dormant). A completed land group seals into a signed delivery artifact; missing the
+  // signing key fails LOUD at seal time (fail-closed), never silently no-ops.
+  const mergeTrainArtifactWatcher = buildMergeTrainArtifactWatcher({
+    pool: deps.pool,
+    proofSubstrate,
+    casByteStore,
+  });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
@@ -239,7 +264,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     githubHttp: deps.githubHttp,
     deployWatcher,
     demoWatcher,
-    ...(mergeTrainArtifactWatcher !== undefined && { mergeTrainArtifactWatcher }),
+    mergeTrainArtifactWatcher,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
@@ -330,6 +355,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     intake,
     ciInsights,
     pausedRunResumeProber,
+    proofSubstrate,
     stop,
   };
 }

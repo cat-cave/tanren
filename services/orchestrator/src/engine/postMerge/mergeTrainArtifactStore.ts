@@ -220,7 +220,7 @@ export class PgMergeTrainArtifactStore implements MergeTrainSealSink {
     if (bundle === undefined) return undefined;
     const units = (
       await client.query<BundleUnitRow>(
-        `SELECT u.proof_unit_digest, u.ordinal, p.kind, p.verdict
+        `SELECT u.id, u.proof_unit_digest, u.ordinal, p.kind, p.verdict
            FROM proof_bundle_units u
            JOIN proof_units p ON p.org_id = u.org_id AND p.proof_unit_digest = u.proof_unit_digest
           WHERE u.org_id = $1 AND u.bundle_id = $2
@@ -234,7 +234,10 @@ export class PgMergeTrainArtifactStore implements MergeTrainSealSink {
       bundleDigest: parseDigest(bundle.bundle_digest),
       proofRoot: parseDigest(bundle.proof_root),
       members: units.map((unit) => ({
-        bundleUnitId: `${bundleId}-${unit.ordinal}`,
+        // The PERSISTED per-row id verbatim — never a re-derived shape. The sole substrate's
+        // `verify` binds each member id to `bundleUnitId(bundleId, ordinal)` (`${bundleId}.u${n}`);
+        // reconstructing a different scheme here made every real-substrate re-verify fail closed.
+        bundleUnitId: unit.id,
         unitDigest: parseDigest(unit.proof_unit_digest),
         kind: unit.kind as ProofUnitKind,
         verdict: unit.verdict as ProofUnitVerdict,
@@ -276,6 +279,7 @@ interface BundleRow {
 }
 
 interface BundleUnitRow {
+  readonly id: string;
   readonly proof_unit_digest: string;
   readonly ordinal: number;
   readonly kind: string;
