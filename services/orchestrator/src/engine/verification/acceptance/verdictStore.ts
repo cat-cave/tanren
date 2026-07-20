@@ -12,6 +12,8 @@ import { runWithOrgScope } from "@tanren/db";
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { Digest } from "../../contracts/cas.js";
+import { parseDigest } from "../../contracts/cas.js";
+import type { VerificationArtifactId } from "../../contracts/runtimeVerificationPlan.js";
 import { assertVerdictAssertionCoverage } from "../../contracts/runtimeVerificationInvariants.js";
 import type {
   BehaviorVerdictOutcome,
@@ -57,6 +59,26 @@ export interface VerdictAttemptEvidence {
   readonly outcome: BehaviorVerdictOutcome;
 }
 
+/**
+ * rv-9: a DURABLE link from a verdict to a content-addressed capture artifact. Persisting
+ * this onto the ledger (behavior_verdict_evidence) is what lets a later proof resolve the
+ * capture's address from the verdict alone — the address no longer lives only on the
+ * ephemeral run result. The FK to `verification_artifacts` guarantees no orphan link.
+ */
+export interface VerdictEvidenceLink {
+  readonly verificationArtifactId: VerificationArtifactId;
+  readonly casDigest: Digest;
+  readonly mediaType: string;
+}
+
+/** A verdict evidence link read back from the durable ledger. */
+export interface StoredVerdictEvidenceLink {
+  readonly ordinal: number;
+  readonly verificationArtifactId: VerificationArtifactId;
+  readonly casDigest: Digest;
+  readonly mediaType: string;
+}
+
 export interface RecordAcceptanceVerdictInput {
   readonly orgId: string;
   readonly projectId: string;
@@ -77,6 +99,12 @@ export interface RecordAcceptanceVerdictInput {
   readonly assertionEvidence: readonly VerdictAssertionEvidence[];
   /** Every actual execution attempt; this, not a caller scalar, backs attemptCount. */
   readonly attemptEvidence: readonly VerdictAttemptEvidence[];
+  /**
+   * rv-9: content-addressed capture artifacts to DURABLY link to this verdict. Persisted in
+   * the same org-scoped transaction as the verdict, so the capture's address is resolvable
+   * from the ledger — not just the ephemeral run result. Absent/empty ⇒ no links written.
+   */
+  readonly evidenceLinks?: readonly VerdictEvidenceLink[];
 }
 
 export interface StoredAcceptanceVerdict {
@@ -258,7 +286,52 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
           [input.orgId, id, assertion.assertionId, assertion.executed, assertion.passed ?? null],
         );
       }
+      // rv-9: durably link each content-addressed capture to this verdict. The FK to
+      // verification_artifacts rejects any link whose artifact row is absent (no orphan
+      // linkage); identical captures within a verdict collapse via the PK (idempotent).
+      let evidenceOrdinal = 0;
+      for (const link of input.evidenceLinks ?? []) {
+        await client.query(
+          `INSERT INTO behavior_verdict_evidence
+             (org_id, verdict_id, ordinal, verification_artifact_id, cas_digest, media_type)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (org_id, verdict_id, verification_artifact_id) DO NOTHING`,
+          [input.orgId, id, evidenceOrdinal, link.verificationArtifactId, link.casDigest, link.mediaType],
+        );
+        evidenceOrdinal += 1;
+      }
       return id;
+    });
+  }
+
+  /**
+   * rv-9: read a verdict's DURABLE capture-evidence links straight from the ledger. This is
+   * the discovery path a later proof uses: given only the verdict id, it resolves each
+   * content-addressed capture's artifact id + CAS address without the ephemeral run result.
+   */
+  public async listVerdictEvidence(input: {
+    readonly orgId: string;
+    readonly verdictId: string;
+  }): Promise<readonly StoredVerdictEvidenceLink[]> {
+    return this.withOrgScope(input.orgId, async (client) => {
+      const result = await client.query<{
+        ordinal: number;
+        verification_artifact_id: string;
+        cas_digest: string;
+        media_type: string;
+      }>(
+        `SELECT ordinal, verification_artifact_id, cas_digest, media_type
+           FROM behavior_verdict_evidence
+          WHERE org_id = $1 AND verdict_id = $2
+          ORDER BY ordinal ASC`,
+        [input.orgId, input.verdictId],
+      );
+      return result.rows.map((row) => ({
+        ordinal: row.ordinal,
+        verificationArtifactId: row.verification_artifact_id as VerificationArtifactId,
+        casDigest: parseDigest(row.cas_digest),
+        mediaType: row.media_type,
+      }));
     });
   }
 

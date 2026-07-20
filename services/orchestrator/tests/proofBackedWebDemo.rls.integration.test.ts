@@ -303,6 +303,30 @@ describeDb("rv-18 A2 proof-backed web demo — real Pg resolver + real HTTP, end
     expect(passed!.req).toBeGreaterThanOrEqual(1);
     const failed = verdicts.find((row) => row.behavior_revision_id === FAIL_BR);
     expect(failed!.outcome).toBe("failed_product");
+
+    // rv-9 FINDING 1: this REAL production factory now content-addresses the drive's response
+    // capture and DURABLY links it onto the persisted verdict (behavior_verdict_evidence) — the
+    // merge-critical demo path is no longer a dead capture path. Resolve it from the ledger alone.
+    const evidence = await runWithOrgScope(app, ORG, async (client) => {
+      const rows = await client.query<{ verification_artifact_id: string; cas_digest: string }>(
+        `SELECT e.verification_artifact_id, e.cas_digest
+           FROM behavior_verdict_evidence e
+           JOIN behavior_verdicts v ON v.org_id = e.org_id AND v.id = e.verdict_id
+          WHERE v.org_id = $1 AND v.behavior_revision_id = $2`,
+        [ORG, PASS_BR],
+      );
+      return rows.rows;
+    });
+    expect(evidence.length).toBeGreaterThanOrEqual(1);
+    expect(evidence[0]!.cas_digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    // The linked artifact row exists (FK-guaranteed) — a real verification_artifacts capture landed.
+    const artifact = await runWithOrgScope(app, ORG, (client) =>
+      client.query(`SELECT 1 FROM verification_artifacts WHERE org_id = $1 AND id = $2`, [
+        ORG,
+        evidence[0]!.verification_artifact_id,
+      ]),
+    );
+    expect(artifact.rowCount).toBe(1);
   });
 
   it("org isolation: another org sees ZERO of this org's release + behaviors (RLS denies cross-org reads)", async () => {

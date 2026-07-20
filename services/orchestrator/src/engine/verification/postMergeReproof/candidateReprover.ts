@@ -92,6 +92,10 @@ export class RealCandidateBehaviorReprover implements CandidateBehaviorReprover 
 
     const orchestrator = new AcceptanceOrchestrator({
       // Non-persisting: the diagnostic re-probe never lands in the production verdict ledger.
+      // rv-9: DELIBERATELY no `renderCapture` here. This bisection re-probe records no durable
+      // verdict, so content-addressing its captures would write verification_artifacts/cas rows
+      // that no durable verdict references (behavior_verdict_evidence) — the exact orphan-CAS
+      // class the rv-9 audit flags. Capture belongs only on the ledger-persisting paths.
       store: new EphemeralAcceptanceRunStore(),
       events: new EphemeralAcceptanceEventSink(),
       drivers: [
