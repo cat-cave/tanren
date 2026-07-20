@@ -36,6 +36,11 @@ import {
   RELAY_MESSAGING_PROVIDER_KIND,
   type ProductRelayTransport,
 } from "../integrations/product/relayMessagingProvisioner.js";
+import {
+  SlackProductProvisioner,
+  SLACK_PRODUCT_MESSAGE_PROVIDER_KIND,
+  type SlackProductTransportFactory,
+} from "../integrations/product/slackProductProvisioner.js";
 
 /**
  * The provider-neutral provisioning plan compiled from a typed
@@ -172,7 +177,9 @@ export interface ApplicationIntegrationProvisioner {
 export interface ApplicationIntegrationProvisionerDeps {
   /** The managed-relay transport the relay-messaging provisioner runs over. */
   relay?: ProductRelayTransport;
-  /** The SecretStore the org grant's relay control credential is resolved against. */
+  /** Factory for a lease-scoped direct PRODUCT Slack API transport. */
+  slackProductTransportFactory?: SlackProductTransportFactory;
+  /** The SecretStore that resolves the lease-authorized product credential. */
   secrets?: SecretStore;
 }
 
@@ -244,6 +251,24 @@ function makeRelayMessagingProvisioner(deps: ApplicationIntegrationProvisionerDe
   return new RelayMessagingProvisioner(deps.relay, deps.secrets);
 }
 
+/** Construct the direct PRODUCT Slack provisioner from its isolated deps slice. */
+function makeSlackProductProvisioner(deps: ApplicationIntegrationProvisionerDeps): ApplicationIntegrationProvisioner {
+  if (deps.slackProductTransportFactory === undefined) {
+    throw new ProductProvisionFailedError(
+      "provision",
+      `buildApplicationIntegrationProvisioner('${SLACK_PRODUCT_MESSAGE_PROVIDER_KIND}') requires ` +
+        "deps.slackProductTransportFactory (a lease-scoped product Slack transport factory)",
+    );
+  }
+  if (deps.secrets === undefined) {
+    throw new ProductProvisionFailedError(
+      "provision",
+      `buildApplicationIntegrationProvisioner('${SLACK_PRODUCT_MESSAGE_PROVIDER_KIND}') requires deps.secrets (a SecretStore)`,
+    );
+  }
+  return new SlackProductProvisioner(deps.slackProductTransportFactory, deps.secrets);
+}
+
 /**
  * The UNIFIED product-provisioner registry: a Map from every registered product
  * provider kind to its factory. A new product provider lands as ONE new entry here
@@ -253,7 +278,10 @@ function makeRelayMessagingProvisioner(deps: ApplicationIntegrationProvisionerDe
 const PRODUCT_PROVISIONER_REGISTRY: ReadonlyMap<string, ApplicationProvisionerFactory> = new Map<
   string,
   ApplicationProvisionerFactory
->([[RELAY_MESSAGING_PROVIDER_KIND, (deps) => makeRelayMessagingProvisioner(deps)]]);
+>([
+  [RELAY_MESSAGING_PROVIDER_KIND, (deps) => makeRelayMessagingProvisioner(deps)],
+  [SLACK_PRODUCT_MESSAGE_PROVIDER_KIND, (deps) => makeSlackProductProvisioner(deps)],
+]);
 
 /** The registered product provider kinds, in registration order (stable diagnostics). */
 export function registeredApplicationProviderKinds(): readonly string[] {

@@ -28,6 +28,10 @@ import {
   type RelayBinding,
 } from "../../src/engine/integrations/product/relayMessagingProvisioner.js";
 import {
+  SlackProductProvisioner,
+  SLACK_PRODUCT_MESSAGE_PROVIDER_KIND,
+} from "../../src/engine/integrations/product/slackProductProvisioner.js";
+import {
   PRODUCT_RELAY_URL_ENV,
   resolveProductionApplicationProvisioner,
 } from "../../src/engine/integrations/product/applicationProvisionerProduction.js";
@@ -43,6 +47,7 @@ import {
 } from "../../src/engine/contracts/integrationAuthority.js";
 import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { ScriptedProductRelayTransport } from "./fakes/scriptedProductRelayTransport.js";
+import { ScriptedSlackProductTransport } from "./fakes/scriptedSlackProductTransport.js";
 import { InMemoryApplicationIntegrationProvisioner } from "./fakes/inMemoryApplicationIntegrationProvisioner.js";
 import { describeApplicationIntegrationProvisionerConformance } from "./applicationIntegrationProvisionerConformance.js";
 import { RELAY_TOKEN_BASE, relayGrant, relayProjectCtx as projectCtx } from "./fakes/relayProvisionerFixtures.js";
@@ -70,6 +75,66 @@ describeApplicationIntegrationProvisionerConformance("RelayMessagingProvisioner 
   grant: relayGrant,
   projectCtx,
   seededResourceId: RELAY_SEED.bindingId,
+});
+
+// --- Real direct PRODUCT Slack provisioner over a scripted Slack transport -----
+const DIRECT_TOKEN_BASE = "secret://org/direct-product-slack-token";
+const DIRECT_SEED = { id: "C_DIRECT_SEED", name: "direct-seeded", isMember: true };
+
+function directRequirement(): IntegrationRequirementV1 {
+  return {
+    ...goldenProductMessagingRequirement(),
+    requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join", "channels:history"],
+    bindingOutputs: [
+      {
+        version: 1,
+        kind: "product.messaging.bot_token_ref",
+        logicalKey: "SLACK_BOT_TOKEN",
+        classification: "secret_ref",
+        required: true,
+      },
+      {
+        version: 1,
+        kind: "product.messaging.channel_id",
+        logicalKey: "SLACK_CHANNEL_ID",
+        classification: "plain",
+        required: true,
+      },
+    ],
+  };
+}
+
+function makeDirect(): SlackProductProvisioner {
+  const secrets = new InMemorySecretStore();
+  void secrets.put({ ref: generationSecretRef(DIRECT_TOKEN_BASE, 1), value: "xoxb-direct-product-token" });
+  const transport = new ScriptedSlackProductTransport({ channels: [DIRECT_SEED] });
+  return new SlackProductProvisioner(() => transport, secrets);
+}
+
+const directGrant = (
+  operation: IntegrationPrivilegedOperation,
+  ctx: ProjectContext,
+  target: IntegrationOperationTarget,
+): Promise<OrgGrant> =>
+  testOrgGrant({
+    providerKind: "slack",
+    capability: "messaging.send",
+    operation,
+    target,
+    credentialRef: generationSecretRef(DIRECT_TOKEN_BASE, 1),
+    metadata: { workspaceId: "T123" },
+    orgId: ctx.orgId,
+    projectId: ctx.projectId,
+  });
+
+describeApplicationIntegrationProvisionerConformance("SlackProductProvisioner (scripted direct Slack)", {
+  make: makeDirect,
+  requirement: directRequirement,
+  grant: directGrant,
+  projectCtx,
+  seededResourceId: DIRECT_SEED.id,
+  supportsProviderCredentialRotation: false,
+  supportsProviderTeardown: false,
 });
 
 // --- In-memory fake exercising a secret_ref output -----------------------------
@@ -154,12 +219,34 @@ describe("ApplicationIntegrationProvisioner vertical materialization (in-14 seam
     expect(result.materializedKeys).toContain("PRODUCT_SLACK_WEBHOOK_URL_REF");
     expect(result.materializedKeys).toContain("PRODUCT_SLACK_CHANNEL_ID");
   });
+
+  it("materializes the direct Slack bot token into project_app_env without exposing its plaintext", async () => {
+    const ctx = projectCtx("proj_direct_mat");
+    const provisioner = makeDirect();
+    const plan = provisioner.plan(directRequirement(), ctx);
+    const grant = await directGrant("provision", ctx, projectIntegrationOperationTarget(ctx));
+    const artifact = await provisioner.provision(grant, plan, ctx);
+    expect(JSON.stringify(artifact)).not.toContain("xoxb-direct-product-token");
+    const resolved = applicationArtifactToResolvedBinding(artifact, grant, ctx, plan);
+    const backing = new InMemorySecretStore();
+    const source = resolved.outputs.find((output) => output.logicalKey === "SLACK_BOT_TOKEN")?.secretSource;
+    expect(source).toBeDefined();
+    await backing.put({ ref: source?.ref as string, value: "xoxb-direct-product-token" });
+    const result = await materializeBinding(
+      new BindingMaterializerMemoryDb(),
+      new GenerationAddressedIntegrationSecretStore(backing),
+      resolved,
+      systemActor,
+    );
+    expect(result.materializedKeys).toEqual(["SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"]);
+  });
 });
 
 // --- Registry + production resolver ---------------------------------------------
 describe("buildApplicationIntegrationProvisioner registry", () => {
   it("exposes the registered product kinds", () => {
     expect(registeredApplicationProviderKinds()).toContain(RELAY_MESSAGING_PROVIDER_KIND);
+    expect(registeredApplicationProviderKinds()).toContain(SLACK_PRODUCT_MESSAGE_PROVIDER_KIND);
   });
 
   it("builds the real RelayMessagingProvisioner from relay + secrets deps", () => {
@@ -175,6 +262,14 @@ describe("buildApplicationIntegrationProvisioner registry", () => {
     expect(() =>
       buildApplicationIntegrationProvisioner(RELAY_MESSAGING_PROVIDER_KIND, { secrets: new InMemorySecretStore() }),
     ).toThrow(ProductProvisionFailedError);
+  });
+
+  it("builds the real direct Slack product provisioner from its transport factory + secrets", () => {
+    const provisioner = buildApplicationIntegrationProvisioner(SLACK_PRODUCT_MESSAGE_PROVIDER_KIND, {
+      slackProductTransportFactory: () => new ScriptedSlackProductTransport(),
+      secrets: new InMemorySecretStore(),
+    });
+    expect(provisioner).toBeInstanceOf(SlackProductProvisioner);
   });
 
   it("an unregistered kind resolves to the hard-throw Unconfigured provisioner", () => {
@@ -215,6 +310,20 @@ describe("resolveProductionApplicationProvisioner (production wiring)", () => {
       expect(() =>
         resolveProductionApplicationProvisioner(RELAY_MESSAGING_PROVIDER_KIND, new InMemorySecretStore()),
       ).toThrow(ProductProvisionFailedError);
+    } finally {
+      restoreEnv(PRODUCT_RELAY_URL_ENV, prior);
+    }
+  });
+
+  it("resolves direct Slack without requiring the managed-relay URL", () => {
+    const prior = process.env[PRODUCT_RELAY_URL_ENV];
+    delete process.env[PRODUCT_RELAY_URL_ENV];
+    try {
+      const provisioner = resolveProductionApplicationProvisioner(
+        SLACK_PRODUCT_MESSAGE_PROVIDER_KIND,
+        new InMemorySecretStore(),
+      );
+      expect(provisioner).toBeInstanceOf(SlackProductProvisioner);
     } finally {
       restoreEnv(PRODUCT_RELAY_URL_ENV, prior);
     }
