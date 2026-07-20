@@ -46,6 +46,16 @@ export const SPEC_FORMING = "spec_mqdlv_forming";
 // Finding 5: a completed group used to prove a stale in_progress claim is reclaimable.
 export const LG_STALE = "lg_mqdlv_stale";
 export const DEC_STALE = "decision_mqdlv_stale";
+// Finding A: a completed group used to prove the continuous heartbeat keeps a live owner's claim fresh.
+export const LG_HB = "lg_mqdlv_hb";
+export const DEC_HB = "decision_mqdlv_hb";
+
+/** A test delay (no kill verb — a plain wakeup, not a work deadline). */
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 export const TARGET: ResolvedGroupDeployTarget = {
   provider: "deploy.vercel",
@@ -210,6 +220,7 @@ export async function seedTenant(owner: Pool): Promise<void> {
   });
   // Finding 5: a COMPLETED group used for the stale-claim takeover test (no members needed).
   await seedGroup(owner, { lg: LG_STALE, decision: DEC_STALE, state: "completed" });
+  await seedGroup(owner, { lg: LG_HB, decision: DEC_HB, state: "completed" });
 }
 
 /** Seed a decision + a land group (+ an optional member run) for the non-primary-group tests. */

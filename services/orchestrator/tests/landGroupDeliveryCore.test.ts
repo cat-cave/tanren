@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  LandGroupDeliveryClaimLostError,
   runGroupDelivery,
   type GroupArtifact,
   type GroupAttributionResult,
@@ -230,5 +231,21 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
   it("an unexpected stage throw propagates (the loop shell records needs_attention)", async () => {
     const deployer = new FakeDeployer({ buildThrows: true });
     await expect(drive(deployer, UNATTRIBUTED)).rejects.toThrow("build failed");
+  });
+
+  it("claim LOST after applyPreview → the preview is torn down before aborting, no leak (Finding B)", async () => {
+    const deployer = new FakeDeployer();
+    // A heartbeat that throws a claim-loss on the FIRST beat AFTER the preview was applied (the
+    // pre-verify fence-recheck) — the owner was taken over mid-drive.
+    const heartbeat = async (): Promise<void> => {
+      if (deployer.calls.includes("applyPreview")) throw new LandGroupDeliveryClaimLostError("lg-1");
+    };
+    await expect(
+      runGroupDelivery({ deployer, attribution: UNATTRIBUTED, plan: PLAN, target: TARGET, heartbeat }),
+    ).rejects.toThrow(LandGroupDeliveryClaimLostError);
+    expect(deployer.calls).toContain("applyPreview");
+    // never promoted after the claim was lost; the applied preview was torn down (no leak)
+    expect(deployer.calls).not.toContain("promote");
+    expect(deployer.teardownCount).toBe(1);
   });
 });

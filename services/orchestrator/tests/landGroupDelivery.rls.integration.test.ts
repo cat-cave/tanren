@@ -15,8 +15,10 @@ import {
   groupDeployVerifiedPayload,
   ProductionGroupDeliveryDeployer,
 } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { startClaimHeartbeat } from "../src/engine/postMerge/landGroupDelivery/claimHeartbeat.js";
 import { MergeTrainArtifactWatcher } from "../src/engine/postMerge/mergeTrainArtifactWatcher.js";
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
+import type { DeployAdapter } from "../src/engine/contracts/deployAdapter.js";
 import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
 import {
   ADMIN,
@@ -26,9 +28,11 @@ import {
   basePlan,
   connectionUrl,
   databaseName,
+  delay,
   HappyFakeDeployer,
   insertEvents,
   LG,
+  LG_HB,
   LG_STALE,
   MAIN,
   NoopAttribution,
@@ -154,6 +158,81 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
       PgLandGroupDeliveryStore.getByLandGroup(client, ORG, PROJECT, LG_STALE),
     );
     expect(row?.state).toBe("needs_attention");
+  });
+
+  it("idempotent promote: an already-committed group promote is a NO-OP — no double external deploy (Finding A)", async () => {
+    // rel-prod is already the live production release for THIS group (artifact + main SHA). A
+    // takeover's re-promote must detect the committed release and NEVER call adapter.promote again.
+    let promoteCalls = 0;
+    const guardAdapter = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async promote() {
+        promoteCalls += 1;
+        throw new Error("adapter.promote MUST NOT be called on the idempotent path");
+      },
+    } as unknown as DeployAdapter;
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: guardAdapter,
+    });
+    const production = await deployer.promote({
+      plan: { ...basePlan(), landGroupId: LG },
+      target: TARGET,
+      artifact: { artifactDigest: `sha256:${"c".repeat(64)}`, deploymentId: "dep-build" },
+      preview: {
+        release: {
+          releaseInstanceId: "rel-preview",
+          deploymentId: "dep-preview",
+          artifactDigest: `sha256:${"c".repeat(64)}`,
+        },
+        previewDeploymentId: "dep-preview",
+      },
+      heartbeat: async () => {
+        /* still owned */
+      },
+    });
+    // NO re-promote — the committed live release was detected
+    expect(promoteCalls).toBe(0);
+    expect(production.release.releaseInstanceId).toBe("rel-prod");
+  });
+
+  it("continuous heartbeat keeps a LIVE owner fresh (not taken over); a DEAD owner is reclaimed (Finding A)", async () => {
+    const store = new PgLandGroupDeliveryStore(app);
+    const ownerClaim = await store.claim({ orgId: ORG, projectId: PROJECT, landGroupId: LG_HB, mainSha: MAIN });
+    expect(ownerClaim.kind).toBe("owned");
+    if (ownerClaim.kind !== "owned") throw new Error("expected owned");
+    const hb = startClaimHeartbeat({
+      renewer: store,
+      orgId: ORG,
+      landGroupId: LG_HB,
+      token: ownerClaim.token,
+      intervalMs: 20,
+    });
+    // While the owner's heartbeat renews every 20ms, a concurrent worker with a SHORT 100ms lease
+    // sees the claim FRESH → does NOT take over (a live owner is never taken over mid-work).
+    await delay(180);
+    const live = await store.claim({
+      orgId: ORG,
+      projectId: PROJECT,
+      landGroupId: LG_HB,
+      mainSha: MAIN,
+      leaseInterval: "100 milliseconds",
+    });
+    expect(live.kind).toBe("exists");
+    // The owner DIES (heartbeat stopped) → after the lease ages out, the claim is reclaimable.
+    hb.stop();
+    await delay(180);
+    const reclaimed = await store.claim({
+      orgId: ORG,
+      projectId: PROJECT,
+      landGroupId: LG_HB,
+      mainSha: MAIN,
+      leaseInterval: "100 milliseconds",
+    });
+    expect(reclaimed.kind).toBe("owned");
   });
 
   it("mq-15 SEALS a merge-train artifact from the GROUP's deploy.verified + demo.completed (Finding 2)", async () => {

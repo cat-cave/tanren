@@ -16,6 +16,7 @@ import type pg from "pg";
 import { createLogger } from "../../observability/logger.js";
 import type { RunMergeWatcher } from "../subscriber.js";
 import {
+  LandGroupDeliveryClaimLostError,
   runGroupDelivery,
   type GroupDeliveryDeployer,
   type GroupDeliveryOutcome,
@@ -23,7 +24,8 @@ import {
   type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
 import { resolveCompletedGroup, resolveGroupDeployTarget } from "./landGroupDeliveryReads.js";
-import { LandGroupDeliveryClaimLostError, PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
+import { PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
+import { startClaimHeartbeat } from "./claimHeartbeat.js";
 
 const log = createLogger("land-group-delivery");
 
@@ -33,6 +35,10 @@ export interface LandGroupDeliveryLoopDeps {
   readonly attribution: GroupRegressionAttribution;
   /** Injectable durable store (defaults to the Pg store over `pool`). */
   readonly store?: PgLandGroupDeliveryStore;
+  /** The continuous-renew cadence for the liveness heartbeat (tests set a tiny value). */
+  readonly heartbeatIntervalMs?: number;
+  /** The takeover lease a STALE in_progress claim may be reclaimed past (SQL interval; tests tiny). */
+  readonly claimLeaseInterval?: string;
 }
 
 /** The fixed, non-secret reason each terminal disposition records on the delivery event. */
@@ -83,6 +89,7 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
       projectId: plan.projectId,
       landGroupId: plan.landGroupId,
       mainSha: plan.mainSha,
+      ...(this.deps.claimLeaseInterval !== undefined && { leaseInterval: this.deps.claimLeaseInterval }),
     });
     if (claim.kind === "exists") {
       log.info("land group delivery already claimed/terminal — no-op", {
@@ -92,23 +99,27 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
       return;
     }
 
-    // 4. Own the delivery: drive the fail-closed decision tree, then persist the terminal receipt.
-    // A per-phase HEARTBEAT renews the liveness lease so a live-but-slow owner is never taken
-    // over; if the claim WAS taken over (this owner went stale), the heartbeat throws and this
-    // drive aborts WITHOUT finalizing (the new owner drives to terminal — never double-finalize).
+    // 4. Own the delivery. A CONTINUOUS background HEARTBEAT (Finding A) renews the liveness lease
+    // throughout the whole drive — INCLUDING during the long external calls (build/applyPreview/
+    // promote/demo) — so a genuinely-LIVE owner NEVER ages out and is never taken over mid-effect.
+    // `heartbeat()` is the authoritative fence-recheck the drive calls before each irreversible
+    // external effect (and per verify poll): a lost claim throws and aborts WITHOUT finalizing (the
+    // new owner drives to terminal — never a double external effect, never a double finalize).
     const { token } = claim;
-    const heartbeat = async (): Promise<void> => {
-      if (!(await this.store.renewClaim(plan.orgId, plan.landGroupId, token))) {
-        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
-      }
-    };
+    const beat = startClaimHeartbeat({
+      renewer: this.store,
+      orgId: plan.orgId,
+      landGroupId: plan.landGroupId,
+      token,
+      ...(this.deps.heartbeatIntervalMs !== undefined && { intervalMs: this.deps.heartbeatIntervalMs }),
+    });
     try {
       const outcome = await runGroupDelivery({
         deployer: this.deps.deployer,
         attribution: this.deps.attribution,
         plan,
         target,
-        heartbeat,
+        heartbeat: () => beat.assertOwned(),
       });
       await this.store.finalize({ plan, token, outcome, reason: OUTCOME_REASON[outcome.state] });
       log.info("land group delivery finalized", {
@@ -138,6 +149,9 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
         reason: "land group delivery loop failed before reaching a terminal decision",
       });
       throw error;
+    } finally {
+      // Stop the background renew loop — the drive reached a terminal (finalize) or aborted.
+      beat.stop();
     }
   }
 }

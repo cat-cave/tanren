@@ -27,22 +27,15 @@ export type ClaimResult =
   | { readonly kind: "exists"; readonly state: LandGroupDeliveryState };
 
 /**
- * The LIVENESS LEASE (Finding 5): the max span an owner's claim may go WITHOUT a progress
- * sign-of-life before a fresh worker may TAKE OVER a strand ed `in_progress` row (a dead owner).
- * This is a sign-of-life liveness bound (the ActivityWatchdog pattern), NOT a work deadline —
- * the delivery work itself is unbounded, and the OWNER RENEWS this lease between phases
- * (`renewClaim`) so a live-but-slow owner keeps its claim fresh and is never taken over. A
- * SQL interval literal (passed as a parameter), so no wall-clock timer bounds any work.
+ * The default LIVENESS LEASE (Finding 5 / Finding A): the max span an owner's claim may go
+ * WITHOUT a progress sign-of-life before a fresh worker may TAKE OVER a stranded `in_progress`
+ * row (a genuinely DEAD owner). This is a sign-of-life liveness bound (the ActivityWatchdog
+ * pattern), NOT a work deadline — the delivery work itself is unbounded, and a LIVE owner
+ * CONTINUOUSLY renews this lease from a background heartbeat (`renewClaim`) that runs THROUGHOUT
+ * the drive (incl. during long external calls), so a live owner is NEVER taken over mid-work.
+ * A SQL interval literal (passed as a parameter), so no wall-clock timer bounds any work.
  */
-const CLAIM_LIVENESS_LEASE = "15 minutes";
-
-/** Thrown by the loop's heartbeat when an owner's claim was TAKEN OVER — the owner must abort. */
-export class LandGroupDeliveryClaimLostError extends Error {
-  public override readonly name = "LandGroupDeliveryClaimLostError";
-  public constructor(landGroupId: string) {
-    super(`land-group delivery claim for '${landGroupId}' was taken over by another worker`);
-  }
-}
+export const DEFAULT_CLAIM_LIVENESS_LEASE = "15 minutes";
 
 function deliveryId(landGroupId: string): string {
   return `ldl-${landGroupId}`;
@@ -124,7 +117,15 @@ export class PgLandGroupDeliveryStore {
    * fresh insert, else `exists` with the current durable state (the caller no-ops on a terminal
    * state, and conservatively no-ops on a non-terminal `in_progress` — another owner is driving).
    */
-  async claim(input: { orgId: string; projectId: string; landGroupId: string; mainSha: string }): Promise<ClaimResult> {
+  async claim(input: {
+    orgId: string;
+    projectId: string;
+    landGroupId: string;
+    mainSha: string;
+    /** The liveness lease a STALE `in_progress` claim may be taken over past (SQL interval). */
+    leaseInterval?: string;
+  }): Promise<ClaimResult> {
+    const lease = input.leaseInterval ?? DEFAULT_CLAIM_LIVENESS_LEASE;
     const id = deliveryId(input.landGroupId);
     const token = `${id}#${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     const idempotencyKey = landGroupDeliveryIdempotencyKey(input.landGroupId, input.mainSha);
@@ -151,7 +152,7 @@ export class PgLandGroupDeliveryStore {
           WHERE org_id = $1 AND land_group_id = $2 AND state = 'in_progress'
             AND updated_at < now() - $4::interval
           RETURNING id`,
-        [input.orgId, input.landGroupId, token, CLAIM_LIVENESS_LEASE],
+        [input.orgId, input.landGroupId, token, lease],
       );
       if (takeover.rows[0] !== undefined) return { kind: "owned", token };
       const existing = (

@@ -228,7 +228,33 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   }): Promise<GroupProduction> {
     const { plan, target, artifact, preview } = input;
     const ref = this.ref(target);
-    const prior = await this.currentLiveRecord(plan, target);
+    const current = await this.currentLiveRecord(plan, target);
+    // IDEMPOTENT PROMOTE (Finding A.2): if THIS group's artifact is ALREADY the live production
+    // release (bound to this landed commit), the promote has already COMMITTED — a takeover race
+    // detected the prior owner's effect. NO-OP (never a double external promote/deploy, never a
+    // second `deploy.verified`); return the committed release. The current live release is for
+    // THIS group only when its artifact digest AND source ref match the landed group.
+    if (
+      current !== undefined &&
+      current.artifactDigest === artifact.artifactDigest &&
+      current.sourceRef === plan.mainSha
+    ) {
+      log.info("group promote already committed — idempotent no-op (takeover-safe)", {
+        landGroupId: plan.landGroupId,
+        releaseInstanceId: current.releaseInstanceId,
+      });
+      return {
+        release: {
+          releaseInstanceId: current.releaseInstanceId,
+          deploymentId: current.deploymentId,
+          artifactDigest: artifact.artifactDigest,
+        },
+      };
+    }
+    // FENCE-RECHECK before the IRREVERSIBLE promote: re-assert the claim is still owned (a lost
+    // claim throws LandGroupDeliveryClaimLostError and aborts BEFORE the external effect fires).
+    if (input.heartbeat !== undefined) await input.heartbeat();
+    const prior = current;
     const grant = await this.grant(plan, target, "promote", {
       resourceId: target.appId,
       deploymentId: preview.previewDeploymentId,

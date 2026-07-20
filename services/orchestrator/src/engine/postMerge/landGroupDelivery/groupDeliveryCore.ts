@@ -22,6 +22,18 @@
 
 import type { LandGroupDeliveryDisposition, LandGroupDeliveryState } from "../../contracts/landGroupDeliveryReceipt.js";
 
+/**
+ * Thrown by the loop's liveness heartbeat when the owner's claim was TAKEN OVER (this owner
+ * went stale/dead) — the owner must abort WITHOUT finalizing. Lives here (not the store) so the
+ * fail-closed orchestrator can catch it to tear a leaked preview down before aborting (Finding B).
+ */
+export class LandGroupDeliveryClaimLostError extends Error {
+  public override readonly name = "LandGroupDeliveryClaimLostError";
+  public constructor(landGroupId: string) {
+    super(`land-group delivery claim for '${landGroupId}' was taken over by another worker`);
+  }
+}
+
 /** The resolved plan for one completed land group's delivery (NON-SECRET identities). */
 export interface GroupDeliveryPlan {
   readonly orgId: string;
@@ -232,16 +244,62 @@ export async function runGroupDelivery(deps: {
     attributedRunId: null,
   });
 
-  // 3. VERIFY the preview is live. A verify failure ⇒ tear the preview DOWN + `preview_failed`
-  //    (Finding 4: an applied-but-unverifiable preview must never leak nor degrade to
-  //    needs_attention — it is an ordinary preview failure, cleaned up and recorded).
-  await beat();
+  // From here on a preview EXISTS: any abort must tear it down so it never leaks. A CLAIM LOSS
+  // (Finding B) — the owner was taken over mid-drive — tears the preview down before re-throwing
+  // so the new owner is not left with a stranded preview env; every other abort/return handles
+  // its own teardown inline. Ordinary infra throws (build/promote/rollback provider errors)
+  // propagate to the loop shell (→ needs_attention).
   try {
-    await deployer.verifyPreview({ plan, target, preview, heartbeat: beat });
-  } catch {
-    await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
-    return previewFailed();
+    // 3. VERIFY the preview is live. A verify FAILURE ⇒ tear the preview DOWN + `preview_failed`
+    //    (Finding 4: an applied-but-unverifiable preview must never leak nor degrade to
+    //    needs_attention — it is an ordinary preview failure, cleaned up and recorded). A CLAIM
+    //    LOSS during verify propagates to the outer teardown-and-abort.
+    await beat();
+    let previewVerified = false;
+    try {
+      await deployer.verifyPreview({ plan, target, preview, heartbeat: beat });
+      previewVerified = true;
+    } catch (error) {
+      if (error instanceof LandGroupDeliveryClaimLostError) throw error;
+    }
+    if (!previewVerified) {
+      await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+      return previewFailed();
+    }
+
+    return await driveFromVerifiedPreview({ deployer, attribution, plan, target, artifact, preview, beat });
+  } catch (error) {
+    if (error instanceof LandGroupDeliveryClaimLostError) {
+      await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+    }
+    throw error;
   }
+}
+
+/**
+ * Steps 4–7 (preview demo → promote → production demo → rollback/repair) — extracted so the
+ * `runGroupDelivery` wrapper stays readable while its outer try tears the preview down on a claim
+ * loss (Finding B). Every branch is a unit-testable trap-class control.
+ */
+async function driveFromVerifiedPreview(deps: {
+  readonly deployer: GroupDeliveryDeployer;
+  readonly attribution: GroupRegressionAttribution;
+  readonly plan: GroupDeliveryPlan;
+  readonly target: ResolvedGroupDeployTarget;
+  readonly artifact: GroupArtifact;
+  readonly preview: GroupPreview;
+  readonly beat: () => Promise<void>;
+}): Promise<GroupDeliveryOutcome> {
+  const { deployer, attribution, plan, target, artifact, preview, beat } = deps;
+  const previewFailed = (): GroupDeliveryOutcome => ({
+    state: "preview_failed",
+    disposition: "none",
+    artifactDigest: artifact.artifactDigest,
+    previewReleaseInstanceId: preview.release.releaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  });
 
   // 4. PROOF-BACKED preview demo. A failed preview proof ⇒ NO promote + tear the preview down
   //    (the gravest fail-open — promoting a failed preview as if the group were verified — is
