@@ -183,4 +183,55 @@ describeDb("in-7 integration fragment RLS", () => {
       "integration.author.succeeded",
     ]);
   });
+
+  it("in-8: drives the SAME derive seam from a `.tanren/integrations.yml` manifest body (F2 authors the missing definition)", async () => {
+    const store = new IntegrationFragmentStore(runtimePool);
+    const response = await app(runtimePool).request(`/orgs/${orgA}/projects/${projectA}/integrations/derive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ manifestYaml: integrationsManifestYaml() }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { ok: boolean; snapshot: Array<{ providerKind: string }> };
+    expect(payload.ok).toBe(true);
+    expect(payload.snapshot.map((entry) => entry.providerKind)).toEqual(["slack"]);
+    expect((await store.listValidated(orgA)).map((row) => row.draft.spec.providerKind)).toEqual(["slack"]);
+  });
+
+  it("in-8: a malformed manifest body is rejected fail-closed (400 invalid_integrations_manifest), no fragments persisted", async () => {
+    const store = new IntegrationFragmentStore(runtimePool);
+    const before = (await store.listValidated(orgA)).length;
+    const response = await app(runtimePool).request(`/orgs/${orgA}/projects/${projectA}/integrations/derive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // capability messaging.send declared on the control plane — a plane/capability mismatch.
+      body: JSON.stringify({ manifestYaml: integrationsManifestYaml().replace("plane: product", "plane: control") }),
+    });
+    expect(response.status).toBe(400);
+    const payload = (await response.json()) as { error: string; issues: Array<{ message: string }> };
+    expect(payload.error).toBe("invalid_integrations_manifest");
+    expect(payload.issues.length).toBeGreaterThan(0);
+    expect((await store.listValidated(orgA)).length).toBe(before);
+  });
 });
+
+function integrationsManifestYaml(): string {
+  return `apiVersion: tanren.dev/integrations/v1
+version: 1
+integrations:
+  - name: product-slack
+    capability: messaging.send
+    provider: slack
+    providerVersion: 1.0.0
+    plane: product
+    direction: outbound
+    environments:
+      - test
+      - production
+    operations:
+      - chat.postMessage
+    scopes:
+      - chat:write
+    criticality: release_required
+`;
+}

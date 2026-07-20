@@ -21,9 +21,16 @@ import {
   ProviderPolicyV1Schema,
 } from "../../contracts/integrationRequirement.js";
 
-const Capability = z.string().regex(/^[a-z][a-z0-9._-]{0,127}$/u);
-const ProviderKind = z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/u);
-const Version = z.string().regex(/^\d+\.\d+\.\d+$/u);
+// The frozen lexical vocabularies for a provider-integration identity. Exported so
+// the repo-sourced `.tanren/integrations.yml` manifest (in-8) declares capability /
+// provider / version with the SAME shapes the fragment identity uses — a manifest
+// entry projects 1:1 onto an IntegrationFragmentSpec with no second regex family.
+export const CapabilitySchema = z.string().regex(/^[a-z][a-z0-9._-]{0,127}$/u);
+export const ProviderKindSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/u);
+export const ProviderVersionSchema = z.string().regex(/^\d+\.\d+\.\d+$/u);
+const Capability = CapabilitySchema;
+const ProviderKind = ProviderKindSchema;
+const Version = ProviderVersionSchema;
 const Operation = z.string().min(1).max(128);
 
 export const IntegrationFragmentSpecSchema = z
