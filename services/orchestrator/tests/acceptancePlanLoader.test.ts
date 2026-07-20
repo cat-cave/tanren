@@ -7,7 +7,12 @@ import type { BehaviorRevisionId } from "../src/engine/contracts/behaviorRevisio
 import { MalformedAcceptanceSpecError, compileAcceptancePlan } from "../src/engine/verification/acceptance/index.js";
 
 function revision(acceptance: Readonly<Record<string, unknown>>) {
-  return { id: "br_loader_rv6" as BehaviorRevisionId, acceptance };
+  return {
+    id: "br_loader_rv6" as BehaviorRevisionId,
+    personaRevisionId: "persona_revision_loader_rv6",
+    behaviorRevisionHash: `sha256:${"a".repeat(64)}`,
+    acceptance,
+  };
 }
 
 const FAITHFUL_SPEC = {

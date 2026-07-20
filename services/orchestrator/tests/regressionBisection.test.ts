@@ -36,7 +36,12 @@ const ACCEPTANCE = {
 };
 
 function planLoader(): { loadPlans: () => Promise<readonly AcceptancePlan[]> } {
-  const plan = compileAcceptancePlan({ id: BEHAVIOR, acceptance: ACCEPTANCE });
+  const plan = compileAcceptancePlan({
+    id: BEHAVIOR,
+    personaRevisionId: "persona_revision_bisect",
+    behaviorRevisionHash: `sha256:${"a".repeat(64)}`,
+    acceptance: ACCEPTANCE,
+  });
   return { loadPlans: () => Promise.resolve([plan]) };
 }
 
