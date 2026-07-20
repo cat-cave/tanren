@@ -114,6 +114,26 @@ describe("selectFragmentConfig — fail-loud unresolvable lifecycle", () => {
   it("throws on an empty stack (never silently defaults)", () => {
     expect(() => deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "" }))).toThrow(UnresolvableLifecycleError);
   });
+
+  it("derives uncommon runtime, frontend, database, and deploy aliases without silently changing the selected slots", () => {
+    expect(
+      deriveTemplateConfigFromLifecycle(
+        tsLifecycle({ stack: "ruby bundler + react router + postgres-prisma", deploy: "vercel deploy" }),
+      ).config,
+    ).toMatchObject({ runtime: "ruby-bundler", frontend: "react-router", db: "postgres-prisma", deploy: "vercel" });
+    expect(
+      deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "rails + sqlite", deploy: "none" })).config,
+    ).toMatchObject({ runtime: "ruby-bundler", frontend: "rails", db: "sqlite", deploy: "none" });
+    expect(
+      deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "custom + remix + prisma", deploy: "none" })).config,
+    ).toMatchObject({ runtime: "custom", frontend: "remix", db: "postgres-prisma" });
+  });
+
+  it("rejects punctuation-only stacks instead of deriving an empty runtime label", () => {
+    expect(() => deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "/-+", deploy: "none" }))).toThrow(
+      UnresolvableLifecycleError,
+    );
+  });
 });
 
 describe("selectFragmentConfig — unknown deploy halts loud (Codex H3 #1)", () => {
@@ -218,6 +238,13 @@ describe("selectFragmentConfig — per-runtime testRunner required contract (Cod
     expect(runtimeSpec).toBeDefined();
     expect(runtimeSpec?.requiredContract.testRunner).toBe("cargo-test");
     expect(runtimeSpec?.requiredContract.reportPath).toBe("reports/junit.xml");
+    expect(runtimeSpec?.requiredContract.evidence).toMatchObject({
+      schemaVersion: "fragment_evidence.v1",
+      junitReportPath: "reports/junit.xml",
+      testSelector: { path: ".tanren/test-selector.json", format: "json" },
+      behaviorManifest: { path: ".tanren/behavior-manifest.json", format: "json" },
+    });
+    expect(runtimeSpec?.requiredContract.evidence?.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   });
 
   it("stamps testRunner: go-test on the missing-runtime FragmentSpec for a Go stack", () => {

@@ -41,7 +41,7 @@ import { GitHubCodeHost, parseGitHubRepository } from "../providers/githubCodeHo
 import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
-import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
+import { batchFragmentEvidenceWiring, driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig, batchProofUnitGraph } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
@@ -271,6 +271,10 @@ export class PgBatchChecker implements BatchChecker {
           },
           resolveConfig: batchNodeResolveConfig(gateDeps),
           gate: batchNodeGate(gateDeps),
+          // mq-12 live trigger: every jj-local batch resolves its composed F2
+          // evidence immediately before proof-unit evaluation. This adapter only
+          // reads typed data; `batchNodeGate` remains the sole executable authority.
+          ...batchFragmentEvidenceWiring(this.deps.pool),
           materializeReadyNode: buildCoverageAuthorityReadyNodeMaterializer(this.deps.pool),
         },
       ),

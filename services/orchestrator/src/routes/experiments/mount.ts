@@ -18,6 +18,7 @@ import { createMergeQueueAuthorityEvaluationRoutes } from "../mergeQueue/authori
 import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySignals.js";
 import { createMergeQueueRepairRouteRoutes } from "../mergeQueue/repairRoutes.js";
 import { createMergeTrainArtifactRoutes } from "../mergeQueue/trainArtifact.js";
+import { createMergeQueueEvidenceContractRoutes } from "../mergeQueue/evidenceContracts.js";
 import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
@@ -65,6 +66,9 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
       proofSubstrate: new PgProofSubstrate(deps.pool, deps.secrets),
     }),
   );
+  // mq-12 read-only selected-F2 evidence projection. It exposes immutable
+  // metadata and the proof-unit observation only; there is no run/control route.
+  app.route("/orgs", createMergeQueueEvidenceContractRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

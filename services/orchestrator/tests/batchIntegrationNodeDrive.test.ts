@@ -303,4 +303,157 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     expect(store.nodes.size).toBe(0);
     expect(gate).not.toHaveBeenCalled();
   });
+
+  it("maps a resolver exception to a full-gate fallback observation instead of allowing evidence to bypass the gate", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "fail" as const, message: "native gate still failed" },
+      passed: false,
+    }));
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.resolveFragmentEvidence = async () => {
+      throw new Error("manifest transport failed");
+    };
+
+    await expect(driveBatchThroughNode(FACTS, driven)).resolves.toEqual({
+      result: "fail",
+      message: "native gate still failed",
+    });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(
+      store.proofUnits.db.integrationProofUnits.some(
+        (unit) => unit.subject_id === "fragment_evidence:fallback:manifest_unreadable" && unit.verdict === "fail",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves a passing native-gate verdict when best-effort evidence capture throws", async () => {
+    const store = new FakeNodeStore();
+    const capture = vi.fn<() => Promise<void>>(async () => {
+      throw new Error("CAS unavailable");
+    });
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "pass" as const, integrationBranch: "x" },
+      passed: true,
+    }));
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.resolveFragmentEvidence = async () =>
+      ({
+        kind: "selected",
+        selector: { path: ".tanren/test-selector.json", format: "json", tests: ["tests/changed.test.ts"] },
+        behaviorManifest: {
+          path: ".tanren/behavior-manifest.json",
+          format: "json",
+          behaviors: ["changed behavior"],
+        },
+        artifactDigest: "sha256:" + "a".repeat(64),
+        inputHash: "sha256:" + "b".repeat(64),
+        manifest: {},
+      }) as never;
+    driven.captureFragmentEvidence = capture;
+
+    await expect(driveBatchThroughNode(FACTS, driven)).resolves.toMatchObject({ result: "pass" });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a jj-reported conflict typed as a conflict instead of attempting a gate", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>();
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.integrate = async () =>
+      ({
+        outcome: "conflict",
+        message: "spec_a conflicts with main",
+        conflictBetween: { specId: "spec_a", otherSpecId: "main" },
+      }) as never;
+
+    await expect(driveBatchThroughNode(FACTS, driven)).resolves.toEqual({
+      result: "conflict",
+      message: "spec_a conflicts with main",
+      conflictsWithBase: true,
+      conflictBetween: { specId: "spec_a", otherSpecId: "main" },
+    });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it("runs the full gate if the materialized node cannot be read back under its exact member key", async () => {
+    const store = new FakeNodeStore();
+    store.findByMemberKey = async () => {};
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "fail" as const, message: "node read-back requires a re-gate" },
+      passed: false,
+    }));
+
+    await expect(driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), gate))).resolves.toEqual({
+      result: "fail",
+      message: "node read-back requires a re-gate",
+    });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(store.proofs.size).toBe(0);
+  });
+
+  it("runs the full gate when a proof-key identity component is absent", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "fail" as const, message: "policy identity is unresolved" },
+      passed: false,
+    }));
+
+    await expect(
+      driveBatchThroughNode({ ...FACTS, policyVersion: undefined }, deps(store, new RecordingEventStore(), gate)),
+    ).resolves.toEqual({ result: "fail", message: "policy identity is unresolved" });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(store.proofs.size).toBe(0);
+  });
+
+  it("fails loud if the proof graph omits the authoritative native pre-merge unit", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>();
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.proofUnits = { evaluate: async () => ({ units: [] }) } as never;
+
+    await expect(driveBatchThroughNode(FACTS, driven)).rejects.toThrow(/no pre_merge unit/u);
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a corrupted reused native unit is non-passing", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>();
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.proofUnits = {
+      evaluate: async () => ({
+        units: [{ kind: "native_ci_tier", subjectId: "pre_merge", verdict: "skipped", reused: true }],
+      }),
+    } as never;
+
+    await expect(driveBatchThroughNode(FACTS, driven)).resolves.toEqual({
+      result: "fail",
+      message: "reused non-passing pre_merge proof unit (skipped)",
+    });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it("negative control: an excluded changed test records only a fallback observation, runs the full gate, and cannot return a mergeable pass", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "fail" as const, message: "unselected changed test failed" },
+      passed: false,
+    }));
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.resolveFragmentEvidence = async () => ({ kind: "fallback", reason: "selector_set_mismatch" });
+
+    const verdict = await driveBatchThroughNode(FACTS, driven);
+
+    expect(verdict).toEqual({ result: "fail", message: "unselected changed test failed" });
+    expect(gate).toHaveBeenCalledTimes(1);
+    const evidenceUnits = store.proofUnits.db.integrationProofUnits.filter(
+      (unit) => unit.subject_id === "fragment_evidence:fallback:selector_set_mismatch",
+    );
+    expect(evidenceUnits).toHaveLength(1);
+    expect(evidenceUnits[0]?.verdict).toBe("fail");
+    expect(
+      evidenceUnits.some((unit) => unit.subject_id === "fragment_evidence:selected" && unit.verdict === "pass"),
+    ).toBe(false);
+  });
 });

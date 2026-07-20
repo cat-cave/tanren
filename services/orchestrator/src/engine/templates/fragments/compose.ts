@@ -63,6 +63,7 @@ import { TemplateComposeError, type TemplateComposePhase } from "./composeError.
 import { assertDependsOnRuntimeMatchesConfig } from "./dependencyRuntimeCheck.js";
 import { hasMeaningfulAssertion, isCandidateTestPath, SCENARIO_HEADER } from "./functionalTestRecognizer.js";
 import { BASE_FRAGMENT_ID, BASE_JUSTFILE_TARGETS, BASE_PROTECTED_FILES } from "./library/base.js";
+import { processFragmentEvidenceContract } from "./composeFragmentEvidence.js";
 import {
   type Fragment,
   type FragmentContract,
@@ -209,6 +210,7 @@ export async function composeTemplate(config: TemplateConfig, library: FragmentL
     processEnvVars(vfs);
     processJustfile(vfs);
     processCiYml(vfs, applied);
+    processFragmentEvidenceContract(vfs, applied);
     processReadme(vfs, config);
     assertBaseInvariantsHeld(vfs);
     assertRuntimeAddedFunctionalTest(vfs);

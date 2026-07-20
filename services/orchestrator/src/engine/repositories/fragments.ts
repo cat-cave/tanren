@@ -15,9 +15,9 @@
 // declare a testRunner / dbMigrationsDir / …?" queries.
 
 import type pg from "pg";
-import { z } from "zod";
 import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
+import { FragmentContractSchema, type FragmentContractShape } from "../templates/fragments/fragmentEvidenceContract.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -28,15 +28,7 @@ export type FragmentStatus = (typeof FRAGMENT_STATUSES)[number];
 /** The declared `FragmentContract` mirrored into jsonb. Mirrors the type in
  * `engine/templates/fragments/types.ts` — must stay in lock-step (a fragment
  * whose body declares a contract field the schema rejects fails to register). */
-export const FragmentContractSchema = z
-  .object({
-    testRunner: z.string().min(1).optional(),
-    reportPath: z.string().min(1).optional(),
-    dbMigrationsDir: z.string().min(1).optional(),
-    ciTier2: z.string().min(1).optional(),
-  })
-  .strict();
-export type FragmentContractShape = z.infer<typeof FragmentContractSchema>;
+export { FragmentContractSchema, type FragmentContractShape };
 
 /** A fragment row in domain shape. */
 export interface FragmentRow {
