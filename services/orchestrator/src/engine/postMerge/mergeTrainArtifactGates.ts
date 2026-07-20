@@ -78,10 +78,16 @@ interface MemberRow {
 interface ReleaseRow {
   readonly source_ref: string;
   readonly state: string;
+  readonly environment: string;
 }
 
-/** Release states that are NOT a live delivery of the sealed tip (fail-closed). */
-const DEAD_RELEASE_STATES = new Set(["failed", "rolled_back", "torn_down", "superseded"]);
+// A POSITIVE allow-list: only a genuinely-live PRODUCTION release satisfies the deploy
+// gate. The release_instances state enum is
+// built/preview/promoting/live/superseded/rolled_back/torn_down/failed — `live` is the
+// sole "serving in production" state (what the deploy adapters set on a verified prod
+// deploy). Every other state (including the intermediate built/preview/promoting) blocks.
+const LIVE_RELEASE_STATE = "live";
+const PRODUCTION_ENVIRONMENT = "production";
 
 /** Everything the seal needs, gathered under one org-scoped read. Absent ⇒ no-op. */
 export interface Evidence {
@@ -140,14 +146,20 @@ function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
   return sortedA.every((value, index) => value === sortedB[index]);
 }
 
+/** A required durable identity is present only when it is a non-blank string. */
+function isPresentIdentity(value: string | null): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
 /**
  * Resolve the land group's members with EXACT-SET enforcement — the gravest fail-open
  * here is sealing a partial/reordered/foreign-member train as a full delivery. It fails
  * closed unless the durable `land_group_members` set is EXACTLY the completed +
  * group.formed member sets (same count, no missing, no extra), EVERY member is
- * `outcome='landed'`, and every member has durable run identity. Order is CANONICALIZED
- * (sorted by member key), so a reordered payload yields the identical artifact rather
- * than a divergent one.
+ * `outcome='landed'` with NON-BLANK run/spec identity (an empty-string identity is
+ * rejected HERE, before any ingest/construct/persist, so no orphan bundle is ever left
+ * behind), and the member key is non-blank. Order is CANONICALIZED (sorted by member
+ * key), so a reordered payload yields the identical artifact rather than a divergent one.
  */
 export function resolveExactMembers(input: {
   rows: readonly MemberRow[];
@@ -161,8 +173,18 @@ export function resolveExactMembers(input: {
   // The recomputed member-set digest must agree across every source.
   const digest = memberSetDigest(tableKeys);
   if (memberSetDigest(input.completedKeys) !== digest || memberSetDigest(input.formedKeys) !== digest) return undefined;
-  // Every member must have LANDED and carry durable run identity.
-  if (input.rows.some((row) => row.outcome !== "landed" || row.run_id === null || row.spec_id === null)) {
+  // Every member must have LANDED and carry NON-BLANK durable identity (member key +
+  // run + spec). An empty/whitespace identity is blocked at the gate — it must never
+  // reach ingest/construct/persist (which would leave an orphan proof bundle).
+  if (
+    input.rows.some(
+      (row) =>
+        row.outcome !== "landed" ||
+        !isPresentIdentity(row.member_key) ||
+        !isPresentIdentity(row.run_id) ||
+        !isPresentIdentity(row.spec_id),
+    )
+  ) {
     return undefined;
   }
   return [...input.rows]
@@ -179,11 +201,17 @@ export function resolveExactMembers(input: {
     });
 }
 
-/** The release for this deployment must exist, be alive, and be FOR the sealed tip. */
+/**
+ * The deploy gate's positive live-production allow-list: the release for this deployment
+ * must exist, be `live` in `production`, and be FOR the sealed tip (its `source_ref` is
+ * the land's main or authorized SHA). An intermediate state (built/preview/promoting) or
+ * a non-production environment does NOT satisfy the gate.
+ */
 export function releaseBindsToLand(release: ReleaseRow | undefined, completed: CompletedData): release is ReleaseRow {
   return (
     release !== undefined &&
-    !DEAD_RELEASE_STATES.has(release.state) &&
+    release.state === LIVE_RELEASE_STATE &&
+    release.environment === PRODUCTION_ENVIRONMENT &&
     (release.source_ref === completed.mainSha || release.source_ref === completed.authorizedSha)
   );
 }
@@ -287,7 +315,7 @@ export async function gatherEvidenceFromClient(
   // Bind the deploy to the sealed tip via its release_instances row.
   const release = (
     await client.query<ReleaseRow>(
-      `SELECT source_ref, state FROM release_instances
+      `SELECT source_ref, state, environment FROM release_instances
          WHERE org_id = $1 AND deployment_id = $2
          ORDER BY created_at DESC LIMIT 1`,
       [lineage.orgId, deploy.data.deploymentId],

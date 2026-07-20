@@ -322,12 +322,16 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
     expect(denied.status).toBe(404);
   });
 
-  it("NEGATIVE CONTROL (Finding 4): a tampered bundle signature makes the export re-verify FAIL", async () => {
-    // Without a substrate the route serves the strict-revalidated manifest.
+  it("NEGATIVE CONTROL (Finding 1): a SEALED artifact is NOT served without a re-verifying substrate", async () => {
+    // A sealed row exists, but the route has NO substrate to cryptographically re-verify it.
+    // Content-hash + shape validation alone must NOT serve the signed artifact → 404.
     const dormant = routeApp(app, ADMIN);
     expect(
       (await dormant.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`)).status,
-    ).toBe(200);
+    ).toBe(404);
+  });
+
+  it("NEGATIVE CONTROL (Finding 4): a tampered bundle signature makes the export re-verify FAIL", async () => {
     // Tamper the persisted bundle's root signature (proof_bundles is not immutable-locked).
     await owner.query("UPDATE proof_bundles SET root_signature = $1 WHERE org_id = $2", [
       Buffer.from([0, 0, 0, 0]),
@@ -387,5 +391,60 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
       return r.rows.length;
     });
     expect(present).toBe(0);
+  });
+
+  it("NEGATIVE CONTROL (Finding 3): an empty member identity leaves NO artifact + NO orphan bundle", async () => {
+    const LG3 = "lg_mqtrain_blank";
+    const RUN3 = "run_mqtrain_blank";
+    const bundleCount = () =>
+      runWithOrgScope(app, ORG, async (client) => {
+        const r = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM proof_bundles WHERE org_id = $1", [
+          ORG,
+        ]);
+        return r.rows[0]!.n;
+      });
+    const before = await bundleCount();
+    await owner.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, pr_url)
+       VALUES ($1,$2,$3,$4,'cli','tanren/z','completed','https://example.com/pr/3')`,
+      [RUN3, SPEC, PROJECT, ORG],
+    );
+    await owner.query(
+      `INSERT INTO land_groups (org_id, id, decision_id, expected_main_sha, authorized_sha, state, main_sha, reconcile_token)
+       VALUES ($1,$2,$3,$4,$5,'completed',$6,$7)`,
+      [ORG, LG3, DECISION, EXPECTED_MAIN, HEAD, MAIN, `land-group-${LG3}`],
+    );
+    // mk-a3 carries an EMPTY run_id — the orphan-inducing identity that must be rejected
+    // at the gate, before any ingest/construct/persistBundle.
+    for (const [key, run, spec, pr] of [
+      ["mk-a3", "", "spec-a", "5"],
+      ["mk-b3", RUN3, SPEC, "6"],
+    ] as const) {
+      await owner.query(
+        `INSERT INTO land_group_members (org_id, land_group_id, member_key, pr_number, run_id, spec_id, outcome)
+         VALUES ($1,$2,$3,$4,$5,$6,'landed')`,
+        [ORG, LG3, key, pr, run, spec],
+      );
+    }
+    await seedReceipt(owner, LG3, "audit_mqtrain3");
+    await seedRelease(owner, "dep3", MAIN, "live");
+    await insertEvents(
+      owner,
+      RUN3,
+      buildEvents({
+        landGroupId: LG3,
+        runId: RUN3,
+        memberKeys: ["mk-a3", "mk-b3"],
+        deploymentId: "dep3",
+        demo: { passed: 3, failed: 0 },
+      }),
+    );
+    await watcher.check(RUN3);
+    const artifacts = await runWithOrgScope(app, ORG, (client) =>
+      client.query("SELECT 1 FROM merge_train_artifacts WHERE org_id = $1 AND land_group_id = $2", [ORG, LG3]),
+    );
+    expect(artifacts.rows).toHaveLength(0);
+    // The gate blocked BEFORE seal, so NO proof bundle was persisted (no orphan).
+    expect(await bundleCount()).toBe(before);
   });
 });

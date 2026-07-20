@@ -184,6 +184,15 @@ describe("mq-15 pure fail-closed gates", () => {
     expect(
       resolveExactMembers({ rows: landedRows, completedKeys: ["mk-a", "mk-b"], formedKeys: ["mk-a", "mk-x"] }),
     ).toBeUndefined();
+    // (e) Finding 3: an empty-string / whitespace run identity is rejected AT THE GATE.
+    const blankId = [landedRows[0]!, { ...landedRows[1]!, run_id: "" }];
+    expect(
+      resolveExactMembers({ rows: blankId, completedKeys: ["mk-a", "mk-b"], formedKeys: ["mk-a", "mk-b"] }),
+    ).toBeUndefined();
+    const blankSpec = [landedRows[0]!, { ...landedRows[1]!, spec_id: "   " }];
+    expect(
+      resolveExactMembers({ rows: blankSpec, completedKeys: ["mk-a", "mk-b"], formedKeys: ["mk-a", "mk-b"] }),
+    ).toBeUndefined();
   });
 
   it("memberSetDigest is order-insensitive over the resolved set", () => {
@@ -191,13 +200,18 @@ describe("mq-15 pure fail-closed gates", () => {
     expect(memberSetDigest(["mk-a", "mk-b"])).not.toBe(memberSetDigest(["mk-a", "mk-c"]));
   });
 
-  it("releaseBindsToLand requires an alive release FOR the sealed tip", () => {
-    expect(releaseBindsToLand({ source_ref: "mainsha1", state: "live" }, completed)).toBe(true);
-    expect(releaseBindsToLand({ source_ref: "headsha", state: "live" }, completed)).toBe(true);
+  it("releaseBindsToLand requires a LIVE production release FOR the sealed tip", () => {
+    const live = { source_ref: "mainsha1", state: "live", environment: "production" };
+    expect(releaseBindsToLand(live, completed)).toBe(true);
+    expect(releaseBindsToLand({ ...live, source_ref: "headsha" }, completed)).toBe(true);
     // A prior/unrelated SHA does not satisfy the gate.
-    expect(releaseBindsToLand({ source_ref: "prior-sha", state: "live" }, completed)).toBe(false);
-    // A dead release for the right SHA is still blocked.
-    expect(releaseBindsToLand({ source_ref: "mainsha1", state: "rolled_back" }, completed)).toBe(false);
+    expect(releaseBindsToLand({ ...live, source_ref: "prior-sha" }, completed)).toBe(false);
+    // Finding 2: an INTERMEDIATE (non-live) state for the tip SHA is blocked.
+    for (const state of ["built", "preview", "promoting", "superseded", "rolled_back", "torn_down", "failed"]) {
+      expect(releaseBindsToLand({ ...live, state }, completed)).toBe(false);
+    }
+    // A live but NON-production (preview) environment is blocked.
+    expect(releaseBindsToLand({ ...live, environment: "preview" }, completed)).toBe(false);
     expect(releaseBindsToLand(undefined, completed)).toBe(false);
   });
 

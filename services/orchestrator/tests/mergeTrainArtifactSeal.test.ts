@@ -186,7 +186,7 @@ function happyRows(): FakeRows {
       { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11", outcome: "landed" },
       { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null, outcome: "landed" },
     ],
-    release_instances: [{ source_ref: "mainsha1", state: "live" }],
+    release_instances: [{ source_ref: "mainsha1", state: "live", environment: "production" }],
     formed: [{ event_type: "merge.group.formed", payload: { groupId: "lg1", memberKeys: ["mk-a", "mk-b"] } }],
     deploy: [
       {
@@ -285,6 +285,29 @@ describe("mq-15 gatherEvidenceFromClient", () => {
   it("fails closed when the deploy's release row is missing", async () => {
     const rows = happyRows();
     rows.release_instances = [];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed on an INTERMEDIATE (non-live) release state for the tip (Finding 2)", async () => {
+    for (const state of ["built", "preview", "promoting"]) {
+      const rows = happyRows();
+      rows.release_instances = [{ source_ref: "mainsha1", state, environment: "production" }];
+      expect(await gather(rows)).toBeUndefined();
+    }
+  });
+
+  it("fails closed on a live but NON-production release environment (Finding 2)", async () => {
+    const rows = happyRows();
+    rows.release_instances = [{ source_ref: "mainsha1", state: "live", environment: "preview" }];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed on an empty-string member identity — no ingest/persist (Finding 3)", async () => {
+    const rows = happyRows();
+    rows.land_group_members = [
+      { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11", outcome: "landed" },
+      { member_key: "mk-b", run_id: "", spec_id: "spec-b", pr_number: null, outcome: "landed" },
+    ];
     expect(await gather(rows)).toBeUndefined();
   });
 });

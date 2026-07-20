@@ -103,19 +103,20 @@ export function createMergeTrainArtifactRoutes(options: TrainArtifactRoutesOptio
         read: async (client): Promise<MergeTrainArtifactV1 | null> => {
           const manifest = await PgMergeTrainArtifactStore.getByLandGroup(client, orgId, projectId, groupId);
           if (manifest === undefined) return null;
-          // Finding 4: a signed-artifact export re-invokes the sole substrate's `verify`
-          // on the persisted bundle. A dangling bundle or a failed re-verification fails
-          // closed (served as not-found), never as a verified delivery.
-          if (options.proofSubstrate !== undefined) {
-            const bundle = await PgMergeTrainArtifactStore.loadSealedBundle(
-              client,
-              orgId,
-              manifest.sealedBundle.bundleId,
-            );
-            if (bundle === undefined) return null;
-            const verification = await options.proofSubstrate.verify(bundle);
-            if (!verification.valid) return null;
-          }
+          // A SEALED artifact is served ONLY after a passing cryptographic re-verification
+          // by the sole substrate — content-hash + shape validation alone is NOT enough.
+          // No substrate to re-verify ⇒ fail-closed (404), never the shape-only manifest.
+          // A dangling bundle or a failed verify ⇒ fail-closed. (The production substrate
+          // is injected by a separate node; without it this route serves nothing.)
+          if (options.proofSubstrate === undefined) return null;
+          const bundle = await PgMergeTrainArtifactStore.loadSealedBundle(
+            client,
+            orgId,
+            manifest.sealedBundle.bundleId,
+          );
+          if (bundle === undefined) return null;
+          const verification = await options.proofSubstrate.verify(bundle);
+          if (!verification.valid) return null;
           return manifest;
         },
       });
