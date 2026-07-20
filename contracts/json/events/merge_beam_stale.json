@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "beamId": {
+      "type": "string"
+    },
+    "frontierRunId": {
+      "type": "string"
+    },
+    "planDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "reason": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "beamId",
+    "frontierRunId",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.beam.stale"
+}

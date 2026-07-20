@@ -5,6 +5,8 @@ import {
   MergeBatchGateReworkRoutedPayload,
   MergeBatchInfraBlockedPayload,
   MergeBatchPassedPayload,
+  MergeBeamPlannedPayload,
+  MergeBeamStalePayload,
   MergeDequeuedPayload,
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
@@ -22,4 +24,6 @@ export const mergeQueueEventRegistry = {
   "merge.batch.gate_rework_routed": MergeBatchGateReworkRoutedPayload,
   "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
+  "merge.beam.planned": MergeBeamPlannedPayload,
+  "merge.beam.stale": MergeBeamStalePayload,
 } as const;

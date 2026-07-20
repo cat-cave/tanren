@@ -24,6 +24,8 @@ const MEMBER_SEPARATOR = "\n";
  * What an integration node IS, in the unified run model:
  *   - `eager_base`   — an eager dependent's dynamic base (main + its unmerged
  *                      ancestors): the dependent's run is created against this.
+ *   - `eager_beam`   — a bounded mq-8 build-only frontier (ancestors + an already
+ *                      published dependent head), never a merge or land candidate.
  *   - `merge_batch`  — a speculative merge-queue batch (several ready heads merged
  *                      together) the gate proves once before the real land.
  *   - `stack_head`   — the head of a stacked / chain PR.
@@ -37,6 +39,7 @@ const MEMBER_SEPARATOR = "\n";
 /** The purpose vocabulary as a tuple (the read seam validates a raw column against it). */
 export const INTEGRATION_NODE_PURPOSES = [
   "eager_base",
+  "eager_beam",
   "merge_batch",
   "stack_head",
   "bisect_prefix",

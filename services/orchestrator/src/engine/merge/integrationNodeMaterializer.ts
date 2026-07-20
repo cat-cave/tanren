@@ -28,6 +28,17 @@ export interface AuthorizedSubsetMaterializationInput {
   readonly purpose?: IntegrationNodePurpose;
   readonly gateConfigHash?: string;
   readonly policyVersion?: string;
+  /**
+   * Resolve facts that are only knowable on the exact integrated workspace before
+   * persistence. A rejection aborts the materialization; callers use it to refuse
+   * a half-known speculative proof identity rather than writing a reusable node.
+   */
+  readonly beforePersist?: (input: {
+    readonly baseSha: string;
+    readonly headSha: string;
+    readonly treeHash: string;
+    readonly members: ReadonlyArray<IntegrationNodeMember>;
+  }) => Promise<{ readonly gateConfigHash?: string; readonly policyVersion?: string }>;
 }
 
 export interface MaterializedIntegrationNodeRecord extends IntegrationNodeUpsert {
@@ -102,7 +113,18 @@ export class IntegrationNodeMaterializer {
     const verified = this.verifyAssembly(input, assembled);
     if (verified !== undefined) return this.failed(input, expectedMemberKey, verified, new Error(verified));
 
+    const resolved =
+      input.beforePersist === undefined
+        ? undefined
+        : await input.beforePersist({
+            baseSha: assembled.baseSha,
+            headSha: assembled.headSha,
+            treeHash: assembled.treeHash,
+            members: input.members,
+          });
     const tail = input.members.at(-1);
+    const gateConfigHash = resolved?.gateConfigHash ?? input.gateConfigHash;
+    const policyVersion = resolved?.policyVersion ?? input.policyVersion;
     const record: MaterializedIntegrationNodeRecord = {
       orgId: input.orgId,
       projectId: input.projectId,
@@ -112,8 +134,8 @@ export class IntegrationNodeMaterializer {
       purpose: input.purpose ?? "merge_batch",
       members: input.members,
       memberKey: expectedMemberKey,
-      ...(input.gateConfigHash !== undefined && { gateConfigHash: input.gateConfigHash }),
-      ...(input.policyVersion !== undefined && { policyVersion: input.policyVersion }),
+      ...(gateConfigHash === undefined ? {} : { gateConfigHash }),
+      ...(policyVersion === undefined ? {} : { policyVersion }),
       headSha: assembled.headSha,
       treeHash: assembled.treeHash,
       status: "building",

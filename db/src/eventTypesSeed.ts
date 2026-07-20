@@ -220,6 +220,8 @@ export const eventTypesSeed = [
   { name: "merge.batch.gate_rework_routed", defaultSeverity: "info" },
   { name: "merge.batch.infra_blocked", defaultSeverity: "info" },
   { name: "merge.batch.passed", defaultSeverity: "info" },
+  { name: "merge.beam.planned", defaultSeverity: "info" },
+  { name: "merge.beam.stale", defaultSeverity: "warn" },
   { name: "merge.behind", defaultSeverity: "info" },
   { name: "merge.blocked", defaultSeverity: "info" },
   { name: "merge.completed", defaultSeverity: "info" },
