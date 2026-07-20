@@ -29,24 +29,60 @@ interface RawRelayBinding {
   created?: unknown;
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
+// (no lenient `asString` coercion — confirmation fields are required non-empty.)
+
+/**
+ * Extract a REQUIRED non-empty confirmation string, fail-closed. A missing/empty
+ * field means the relay did not confirm the external effect — the mutation must NOT
+ * fabricate a success artifact with a coerced `""`.
+ */
+function requiredField(value: unknown, key: string): string {
+  if (typeof value !== "string" || value === "") {
+    throw new ProductProvisionFailedError(
+      "provision",
+      `incomplete_relay_evidence: relay response is missing required confirmation field '${key}'`,
+    );
+  }
+  return value;
 }
 
+/**
+ * Parse a relay binding as CONFIRMED evidence — every field that proves the
+ * external effect (bindingId, channelId, channelName, receiptId) MUST be present +
+ * non-empty, `created` MUST be an explicit boolean ownership signal, and
+ * `workloadGeneration` MUST be a positive integer. No coercion of an absent field
+ * to `""`/`false`/`1`: an incomplete relay response is a fail-closed error, never a
+ * fabricated success.
+ */
 function parseRelayBinding(body: unknown): RelayBinding {
-  const raw = (body ?? {}) as RawRelayBinding;
-  const bindingId = asString(raw.bindingId);
-  if (bindingId === "") {
-    throw new ProductProvisionFailedError("provision", "relay response is missing a bindingId");
+  if (body === null || typeof body !== "object") {
+    throw new ProductProvisionFailedError("provision", "incomplete_relay_evidence: relay returned no binding object");
+  }
+  const raw = body as RawRelayBinding;
+  if (typeof raw.created !== "boolean") {
+    throw new ProductProvisionFailedError(
+      "provision",
+      "incomplete_relay_evidence: relay response has no explicit 'created' ownership signal",
+    );
+  }
+  if (
+    typeof raw.workloadGeneration !== "number" ||
+    !Number.isInteger(raw.workloadGeneration) ||
+    raw.workloadGeneration < 1
+  ) {
+    throw new ProductProvisionFailedError(
+      "provision",
+      "incomplete_relay_evidence: relay response has no valid 'workloadGeneration'",
+    );
   }
   return {
-    bindingId,
-    channelId: asString(raw.channelId),
-    channelName: asString(raw.channelName),
-    stableKey: asString(raw.stableKey),
-    workloadGeneration: typeof raw.workloadGeneration === "number" ? raw.workloadGeneration : 1,
-    receiptId: asString(raw.receiptId),
-    created: raw.created === true,
+    bindingId: requiredField(raw.bindingId, "bindingId"),
+    channelId: requiredField(raw.channelId, "channelId"),
+    channelName: requiredField(raw.channelName, "channelName"),
+    stableKey: requiredField(raw.stableKey, "stableKey"),
+    workloadGeneration: raw.workloadGeneration,
+    receiptId: requiredField(raw.receiptId, "receiptId"),
+    created: raw.created,
   };
 }
 
@@ -66,17 +102,28 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
     return `${this.baseUrl.replace(/\/$/u, "")}${path}`;
   }
 
-  private async send(token: string, method: string, path: string, body?: unknown): Promise<unknown> {
+  /**
+   * Send a relay request. `absentOn404` maps a 404 to `undefined` ONLY for reads
+   * where absence is a legitimate answer (getBinding). Every other non-2xx — and a
+   * 404 on a write/delete — throws, so a mutation can never read an unconfirmed
+   * response as success.
+   */
+  private async send(
+    token: string,
+    method: string,
+    path: string,
+    opts: { body?: unknown; absentOn404?: boolean } = {},
+  ): Promise<unknown> {
     const response = await this.fetchImpl(this.url(path), {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(opts.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
-    if (response.status === 404) {
+    if (opts.absentOn404 === true && response.status === 404) {
       return undefined;
     }
     if (response.status < 200 || response.status >= 300) {
@@ -87,18 +134,25 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
   }
 
   async registerBinding(token: string, req: RegisterRelayBindingRequest): Promise<RelayBinding> {
-    return parseRelayBinding(await this.send(token, "POST", "/v1/bindings", req));
+    return parseRelayBinding(await this.send(token, "POST", "/v1/bindings", { body: req }));
   }
 
   async getBinding(token: string, orgId: string, stableKey: string): Promise<RelayBinding | undefined> {
     const query = `?orgId=${encodeURIComponent(orgId)}&stableKey=${encodeURIComponent(stableKey)}`;
-    const body = await this.send(token, "GET", `/v1/bindings${query}`);
+    const body = await this.send(token, "GET", `/v1/bindings${query}`, { absentOn404: true });
     return body === undefined ? undefined : parseRelayBinding(body);
   }
 
   async listBindings(token: string, orgId: string): Promise<readonly RelayBinding[]> {
     const body = await this.send(token, "GET", `/v1/bindings?orgId=${encodeURIComponent(orgId)}`);
-    return Array.isArray(body) ? body.map((entry) => parseRelayBinding(entry)) : [];
+    if (!Array.isArray(body)) {
+      // A wrong-shape inventory must NOT silently degrade to an empty list — a
+      // caller would read "no resources" and (e.g.) create a duplicate.
+      throw new TypeError(
+        `malformed_relay_inventory: relay list returned a ${body === undefined ? "empty" : "non-array"} body`,
+      );
+    }
+    return body.map((entry) => parseRelayBinding(entry));
   }
 
   async rotateWorkloadCredential(token: string, _orgId: string, bindingId: string): Promise<RelayBinding> {
@@ -106,6 +160,9 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
   }
 
   async revokeBinding(token: string, _orgId: string, bindingId: string): Promise<void> {
+    // No `absentOn404`: a DELETE of a KNOWN binding that returns 404 (or any
+    // non-2xx) is NOT a confirmed deletion — `send` throws, and the provisioner's
+    // teardown surfaces it as `teardown_unconfirmed`.
     await this.send(token, "DELETE", `/v1/bindings/${encodeURIComponent(bindingId)}`);
   }
 }

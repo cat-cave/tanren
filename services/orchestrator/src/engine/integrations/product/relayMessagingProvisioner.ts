@@ -43,6 +43,7 @@ import type { AppBindingOutputV1 } from "../../contracts/integrationBindingOutpu
 import type { IntegrationRequirementV1 } from "../../contracts/integrationRequirement.js";
 import {
   deriveProductProvisionPlan,
+  finalizeProductArtifact,
   PRODUCT_ADAPTER_VERSION,
   ProductProvisionFailedError,
 } from "./applicationProvisionerKit.js";
@@ -244,8 +245,10 @@ export class RelayMessagingProvisioner implements ApplicationIntegrationProvisio
         `relay binding '${binding.bindingId}' was adopted, not created — refusing to tear down a resource Tanren does not own`,
       );
     }
+    // A KNOWN-created binding whose delete is not positively confirmed (404 / any
+    // non-2xx) fails-closed as `teardown_unconfirmed` — never a fabricated success.
     await this.relay.revokeBinding(token, grant.orgId, binding.bindingId).catch((error: unknown) => {
-      throw new ProductProvisionFailedError("teardown", relayError(error));
+      throw new ProductProvisionFailedError("teardown", `teardown_unconfirmed: ${relayError(error)}`);
     });
   }
 
@@ -279,19 +282,27 @@ export class RelayMessagingProvisioner implements ApplicationIntegrationProvisio
     plan: ProductProvisionPlan,
     stage: "provision" | "bind" | "rotate",
   ): ProvisionedApplicationArtifact {
+    // Fail-closed FIRST: a mutation is a confirmed success only when the relay
+    // returned every confirmation-of-external-effect field non-empty. This guards
+    // ANY transport (not only the fetch client's parse) from a fabricated success.
+    assertConfirmedRelayBinding(binding, stage);
     const outputs = plan.bindingOutputs.map((output) => this.resolveOutput(output, binding, stage));
-    return {
-      providerKind: RELAY_MESSAGING_PROVIDER_KIND,
-      adapterVersion: PRODUCT_ADAPTER_VERSION,
-      externalResourceId: binding.bindingId,
-      externalResourceName: binding.channelName,
-      ownership: binding.created ? "created" : "adopted",
-      outputs,
-      receipt: {
-        relayReceiptId: binding.receiptId,
-        workloadGeneration: String(binding.workloadGeneration),
+    // Route through the kit-boundary finalizer so the plane guard is re-asserted.
+    return finalizeProductArtifact(
+      {
+        providerKind: RELAY_MESSAGING_PROVIDER_KIND,
+        adapterVersion: PRODUCT_ADAPTER_VERSION,
+        externalResourceId: binding.bindingId,
+        externalResourceName: binding.channelName,
+        ownership: binding.created ? "created" : "adopted",
+        outputs,
+        receipt: {
+          relayReceiptId: binding.receiptId,
+          workloadGeneration: String(binding.workloadGeneration),
+        },
       },
-    };
+      stage,
+    );
   }
 
   private resolveOutput(
@@ -340,6 +351,25 @@ export class RelayMessagingProvisioner implements ApplicationIntegrationProvisio
       new GenerationAddressedIntegrationSecretStore(this.secrets),
       grant.eligibleOperation,
       expected,
+    );
+  }
+}
+
+/**
+ * Assert a relay binding carries every field that CONFIRMS the external effect —
+ * a non-empty channel id, channel name, and provider receipt. A relay response
+ * missing any of these is incomplete evidence, not a success: the mutation
+ * fails-closed rather than returning an artifact with an empty channel_id / receipt.
+ */
+function assertConfirmedRelayBinding(binding: RelayBinding, stage: "provision" | "bind" | "rotate"): void {
+  const missing: string[] = [];
+  if (binding.channelId === "") missing.push("channelId");
+  if (binding.channelName === "") missing.push("channelName");
+  if (binding.receiptId === "") missing.push("receiptId");
+  if (missing.length > 0) {
+    throw new ProductProvisionFailedError(
+      stage,
+      `incomplete_relay_evidence: relay binding '${binding.bindingId}' is missing confirmation field(s): ${missing.join(", ")}`,
     );
   }
 }

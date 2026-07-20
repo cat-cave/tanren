@@ -23,6 +23,7 @@ import type { IntegrationRequirementV1 } from "../../../src/engine/contracts/int
 import type { AppBindingOutputV1 } from "../../../src/engine/contracts/integrationBindingOutput.js";
 import {
   deriveProductProvisionPlan,
+  finalizeProductArtifact,
   PRODUCT_ADAPTER_VERSION,
   ProductProvisionFailedError,
 } from "../../../src/engine/integrations/product/applicationProvisionerKit.js";
@@ -161,15 +162,18 @@ export class InMemoryApplicationIntegrationProvisioner implements ApplicationInt
   }
 
   private artifactFor(resource: FakeResourceState, plan: ProductProvisionPlan): ProvisionedApplicationArtifact {
-    return {
-      providerKind: FAKE_PROVIDER_KIND,
-      adapterVersion: PRODUCT_ADAPTER_VERSION,
-      externalResourceId: resource.id,
-      externalResourceName: resource.label,
-      ownership: resource.created ? "created" : "adopted",
-      outputs: plan.bindingOutputs.map((output) => resolveGenericOutput(output, resource.id)),
-      receipt: { workloadGeneration: String(resource.workloadGeneration) },
-    };
+    return finalizeProductArtifact(
+      {
+        providerKind: FAKE_PROVIDER_KIND,
+        adapterVersion: PRODUCT_ADAPTER_VERSION,
+        externalResourceId: resource.id,
+        externalResourceName: resource.label,
+        ownership: resource.created ? "created" : "adopted",
+        outputs: plan.bindingOutputs.map((output) => resolveGenericOutput(output, resource.id)),
+        receipt: { workloadGeneration: String(resource.workloadGeneration) },
+      },
+      "provision",
+    );
   }
 }
 

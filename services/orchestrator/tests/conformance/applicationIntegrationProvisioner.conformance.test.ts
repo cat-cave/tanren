@@ -20,17 +20,23 @@ import {
   registeredApplicationProviderKinds,
   UnconfiguredApplicationIntegrationProvisioner,
   type ApplicationIntegrationProvisioner,
+  type ProvisionedApplicationArtifact,
 } from "../../src/engine/contracts/applicationIntegrationProvisioner.js";
 import {
   RelayMessagingProvisioner,
   RELAY_MESSAGING_PROVIDER_KIND,
+  type ProductRelayTransport,
   type RelayBinding,
 } from "../../src/engine/integrations/product/relayMessagingProvisioner.js";
 import {
+  FetchProductRelayTransport,
   PRODUCT_RELAY_URL_ENV,
   resolveProductionApplicationProvisioner,
 } from "../../src/engine/integrations/product/applicationProvisionerProduction.js";
-import { applicationArtifactToResolvedBinding } from "../../src/engine/integrations/product/applicationProvisionerKit.js";
+import {
+  applicationArtifactToResolvedBinding,
+  finalizeProductArtifact,
+} from "../../src/engine/integrations/product/applicationProvisionerKit.js";
 import {
   goldenProductMessagingRequirement,
   type IntegrationRequirementV1,
@@ -261,6 +267,195 @@ describe("RelayMessagingProvisioner fail-closed", () => {
     await expect(
       provisioner.provision(await relayGrant("provision", ctx, projectIntegrationOperationTarget(ctx)), plan, ctx),
     ).rejects.toThrow(ProductProvisionFailedError);
+  });
+});
+
+// --- Audit fail-closed arms: no fabricated success on unconfirmed evidence -----
+
+const INCOMPLETE_BINDING: RelayBinding = {
+  bindingId: "b1",
+  channelId: "",
+  channelName: "",
+  stableKey: "org_conf:proj_ev:messaging.send",
+  workloadGeneration: 1,
+  receiptId: "",
+  created: true,
+};
+const COMPLETE_BINDING: RelayBinding = {
+  bindingId: "b1",
+  channelId: "c1",
+  channelName: "chan",
+  stableKey: "org_conf:proj_td:messaging.send",
+  workloadGeneration: 1,
+  receiptId: "r1",
+  created: true,
+};
+
+/** A transport that returns INCOMPLETE evidence (empty channel/receipt) everywhere. */
+class IncompleteEvidenceTransport implements ProductRelayTransport {
+  registerBinding(): Promise<RelayBinding> {
+    return Promise.resolve(INCOMPLETE_BINDING);
+  }
+  getBinding(): Promise<RelayBinding | undefined> {
+    return Promise.resolve(INCOMPLETE_BINDING);
+  }
+  listBindings(): Promise<readonly RelayBinding[]> {
+    return Promise.resolve([INCOMPLETE_BINDING]);
+  }
+  rotateWorkloadCredential(): Promise<RelayBinding> {
+    return Promise.resolve(INCOMPLETE_BINDING);
+  }
+  revokeBinding(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/** A transport that finds a created binding but whose DELETE is never confirmed. */
+class UnconfirmedTeardownTransport implements ProductRelayTransport {
+  registerBinding(): Promise<RelayBinding> {
+    return Promise.resolve(COMPLETE_BINDING);
+  }
+  getBinding(): Promise<RelayBinding | undefined> {
+    return Promise.resolve(COMPLETE_BINDING);
+  }
+  listBindings(): Promise<readonly RelayBinding[]> {
+    return Promise.resolve([COMPLETE_BINDING]);
+  }
+  rotateWorkloadCredential(): Promise<RelayBinding> {
+    return Promise.resolve(COMPLETE_BINDING);
+  }
+  revokeBinding(): Promise<void> {
+    return Promise.reject(new Error("relay DELETE /v1/bindings/b1 failed: HTTP 404"));
+  }
+}
+
+async function relaySecrets(): Promise<InMemorySecretStore> {
+  const secrets = new InMemorySecretStore();
+  await secrets.put({ ref: generationSecretRef(RELAY_TOKEN_BASE, 1), value: "relay-control-token-value" });
+  return secrets;
+}
+
+/** A fake fetch that always returns the given status + JSON body (or empty). */
+function fetchReturning(status: number, body?: unknown): typeof fetch {
+  return (() =>
+    Promise.resolve(
+      new Response(body === undefined ? null : JSON.stringify(body), { status }),
+    )) as unknown as typeof fetch;
+}
+
+describe("FINDING 1 — provision/bind/rotate fail closed on incomplete relay evidence", () => {
+  it("parseRelayBinding hard-fails when the relay omits confirmation fields (registerBinding)", async () => {
+    const transport = new FetchProductRelayTransport("https://relay.example", fetchReturning(200, { bindingId: "b1" }));
+    await expect(
+      transport.registerBinding("tok", {
+        orgId: "o",
+        projectId: "p",
+        stableKey: "k",
+        providerName: "slack",
+        channelName: "c",
+        providerPrincipalId: "T1",
+        requiredOperations: [],
+        requiredScopes: [],
+      }),
+    ).rejects.toThrow(ProductProvisionFailedError);
+  });
+
+  it("provision, bind, and rotate each reject (no success artifact with empty channel_id)", async () => {
+    const ctx = projectCtx("proj_ev");
+    const provisioner = new RelayMessagingProvisioner(new IncompleteEvidenceTransport(), await relaySecrets());
+    const plan = provisioner.plan(goldenProductMessagingRequirement(), ctx);
+    const provisionGrant = await relayGrant("provision", ctx, projectIntegrationOperationTarget(ctx));
+    await expect(provisioner.provision(provisionGrant, plan, ctx)).rejects.toThrow(ProductProvisionFailedError);
+    await expect(
+      provisioner.bind(await relayGrant("bind", ctx, projectIntegrationOperationTarget(ctx, "b1")), "b1", plan, ctx),
+    ).rejects.toThrow(ProductProvisionFailedError);
+    await expect(provisioner.rotate(provisionGrant, plan, ctx)).rejects.toThrow(ProductProvisionFailedError);
+  });
+
+  it("the vertical seam rejects an empty plain value (empty channel_id cannot reach app env)", () => {
+    const bad: ProvisionedApplicationArtifact = {
+      providerKind: RELAY_MESSAGING_PROVIDER_KIND,
+      adapterVersion: "1.0.0",
+      externalResourceId: "b1",
+      externalResourceName: "chan",
+      ownership: "created",
+      outputs: [
+        {
+          output: {
+            version: 1,
+            kind: "product.messaging.channel_id",
+            logicalKey: "PRODUCT_SLACK_CHANNEL_ID",
+            classification: "plain",
+            required: true,
+          },
+          plainValue: "",
+        },
+      ],
+    };
+    const ctx = projectCtx("proj_seam");
+    // A minimal plan; the seam only needs its ids/environment.
+    const plan = new RelayMessagingProvisioner(new IncompleteEvidenceTransport(), new InMemorySecretStore()).plan(
+      goldenProductMessagingRequirement(),
+      ctx,
+    );
+    const grant = { connectionId: "c", authGeneration: 1, grantId: "g", grantGeneration: 1 } as never;
+    expect(() => applicationArtifactToResolvedBinding(bad, grant, ctx, plan)).toThrow(ProductProvisionFailedError);
+  });
+});
+
+describe("FINDING 2 — teardown fails closed when the delete is not confirmed", () => {
+  it("a 404 DELETE of a known-created binding rejects (teardown_unconfirmed)", async () => {
+    const ctx = projectCtx("proj_td");
+    const provisioner = new RelayMessagingProvisioner(new UnconfirmedTeardownTransport(), await relaySecrets());
+    await expect(
+      provisioner.teardown(await relayGrant("provision", ctx, projectIntegrationOperationTarget(ctx)), ctx),
+    ).rejects.toThrow(/teardown_unconfirmed/u);
+  });
+
+  it("FetchProductRelayTransport.revokeBinding rejects on a 404 (no silent success)", async () => {
+    const transport = new FetchProductRelayTransport("https://relay.example", fetchReturning(404));
+    await expect(transport.revokeBinding("tok", "org", "b1")).rejects.toThrow(/HTTP 404/u);
+  });
+});
+
+describe("FINDING 3 — discover fails closed on a malformed relay inventory", () => {
+  it("a non-array listBindings body rejects (malformed_relay_inventory)", async () => {
+    const transport = new FetchProductRelayTransport("https://relay.example", fetchReturning(200, { not: "an-array" }));
+    await expect(transport.listBindings("tok", "org")).rejects.toThrow(/malformed_relay_inventory/u);
+  });
+
+  it("provision.discover surfaces the malformed inventory as a typed failure", async () => {
+    const ctx = projectCtx("proj_inv");
+    const transport = new FetchProductRelayTransport("https://relay.example", fetchReturning(200, { not: "an-array" }));
+    const provisioner = new RelayMessagingProvisioner(transport, await relaySecrets());
+    await expect(provisioner.discover(await relayGrant("discover", ctx, {}), ctx)).rejects.toThrow(
+      ProductProvisionFailedError,
+    );
+  });
+});
+
+describe("FINDING 4 — the kit boundary rejects a control-plane output on any product artifact", () => {
+  it("finalizeProductArtifact throws on a control.* binding kind", () => {
+    const poisoned: ProvisionedApplicationArtifact = {
+      providerKind: RELAY_MESSAGING_PROVIDER_KIND,
+      adapterVersion: "1.0.0",
+      externalResourceId: "b1",
+      externalResourceName: "chan",
+      ownership: "created",
+      outputs: [
+        {
+          output: {
+            version: 1,
+            kind: "control.notify.bot_token_ref",
+            logicalKey: "SLACK_BOT_TOKEN",
+            classification: "secret_ref",
+            required: true,
+          },
+          secretSource: { ref: "secret://control/bot-token/g/1", generation: 1 },
+        },
+      ],
+    };
+    expect(() => finalizeProductArtifact(poisoned, "provision")).toThrow(ProductProvisionFailedError);
   });
 });
 

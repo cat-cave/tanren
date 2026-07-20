@@ -151,6 +151,21 @@ export function assertProductBindingOutputs(
   }
 }
 
+/**
+ * Kit-boundary finalizer EVERY concrete provisioner routes its mutation artifact
+ * through: it re-asserts the plane guard on the returned outputs so the wrong-plane
+ * invariant is enforced HERE, not per-impl. A future provider copying an
+ * `artifactFor` without the guard still cannot emit a control-plane binding kind on
+ * a product artifact — the invariant lives at the kit boundary.
+ */
+export function finalizeProductArtifact(
+  artifact: ProvisionedApplicationArtifact,
+  stage: ProductProvisionStage,
+): ProvisionedApplicationArtifact {
+  assertProductBindingOutputs(artifact.outputs, stage);
+  return artifact;
+}
+
 /** A stable, generation-independent binding id for a product requirement + env. */
 export function stableProductBindingId(plan: ProductProvisionPlan): string {
   return `app-binding:${plan.requirementId}:${plan.environment}`;
@@ -186,10 +201,13 @@ export function applicationArtifactToResolvedBinding(
         `secret output '${resolved.output.logicalKey}' is missing its secret source coordinate`,
       );
     }
-    if (!secret && resolved.plainValue === undefined) {
+    if (!secret && (resolved.plainValue === undefined || resolved.plainValue === "")) {
+      // An empty plain value (e.g. an unconfirmed, coerced-to-"" channel_id) must
+      // NOT reach project_app_env — the in-14 materializer accepts any defined
+      // plainValue, so this seam is the fail-closed choke point for empty evidence.
       throw new ProductProvisionFailedError(
         "provision",
-        `non-secret output '${resolved.output.logicalKey}' is missing its plain value`,
+        `non-secret output '${resolved.output.logicalKey}' has no value (empty is not a confirmed binding)`,
       );
     }
     return {
