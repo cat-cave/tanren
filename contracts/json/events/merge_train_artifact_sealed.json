@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorityDecisionId": {
+      "type": "string"
+    },
+    "bundleDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "bundleId": {
+      "type": "string"
+    },
+    "bytesDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contentHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "integrationNodeId": {
+      "type": "string"
+    },
+    "landGroupId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "proofRoot": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "signingKeyId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "landGroupId",
+    "authorityDecisionId",
+    "integrationNodeId",
+    "proofRoot",
+    "bundleId",
+    "bundleDigest",
+    "bytesDigest",
+    "signingKeyId",
+    "contentHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.train.artifact.sealed"
+}

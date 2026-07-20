@@ -59,6 +59,18 @@ export const wave4VocabularySensitivityRules: SensitivityRule[] = [
     "memberKeys",
     "memberKeys[]",
   ]),
+  ...publicRules("merge.train.artifact.sealed", [
+    "projectId",
+    "landGroupId",
+    "authorityDecisionId",
+    "integrationNodeId",
+    "proofRoot",
+    "bundleId",
+    "bundleDigest",
+    "bytesDigest",
+    "signingKeyId",
+    "contentHash",
+  ]),
   ...publicRules("governance.tier.created", ["projectId", "tierId", "tierName", "preset", "canonicalHash"]),
   ...publicRules("governance.tier.activated", [
     "projectId",

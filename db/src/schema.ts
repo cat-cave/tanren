@@ -461,7 +461,6 @@ export const specMilestones = pgTable(
     index("spec_milestones_milestone_id").on(table.milestoneId),
   ],
 );
-// Sub-schema files split for file-line-max-500; re-exported as `schema.*`.
 export { specDependencies } from "./schemaSpecGraph.js";
 export { eventTypes } from "./schemaEventTypes.js";
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
@@ -497,3 +496,4 @@ export * from "./schemaWave6.js";
 export * from "./schemaBhCluster.js";
 export { regressionBisections } from "./schemaRegressionBisections.js";
 export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";
+export { mergeTrainArtifacts } from "./schemaMergeTrainArtifacts.js";

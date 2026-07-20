@@ -15,6 +15,7 @@ import { createIntegrationMetricsRoutes } from "../integrationMetrics/index.js";
 import { createMergeQueueAuthorityEvaluationRoutes } from "../mergeQueue/authorityEvaluations.js";
 import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySignals.js";
 import { createMergeQueueRepairRouteRoutes } from "../mergeQueue/repairRoutes.js";
+import { createMergeTrainArtifactRoutes } from "../mergeQueue/trainArtifact.js";
 import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
@@ -44,6 +45,8 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   app.route("/orgs", createMergeQueueAuthorityEvaluationRoutes({ pool: deps.pool }));
   // mq-10 autonomous-repair + respec lineage projection over `merge_repair_routes`.
   app.route("/orgs", createMergeQueueRepairRouteRoutes({ pool: deps.pool }));
+  // mq-15 sealed merge-train delivery projection (train list + one land-group artifact).
+  app.route("/orgs", createMergeTrainArtifactRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

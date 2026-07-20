@@ -89,6 +89,20 @@ export const wave4EventRegistry = {
       memberKeys: z.array(z.string()),
     })
     .strict(),
+  "merge.train.artifact.sealed": z
+    .object({
+      projectId: z.string(),
+      landGroupId: z.string(),
+      authorityDecisionId: z.string(),
+      integrationNodeId: z.string(),
+      proofRoot: Sha256,
+      bundleId: z.string(),
+      bundleDigest: Sha256,
+      bytesDigest: Sha256,
+      signingKeyId: z.string(),
+      contentHash: Sha256,
+    })
+    .strict(),
   "governance.tier.created": z
     .object({
       projectId: z.string(),
