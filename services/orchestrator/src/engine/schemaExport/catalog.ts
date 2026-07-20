@@ -17,6 +17,7 @@
 import { z, type ZodType } from "zod";
 
 import { EventRegistry } from "../events/registry.js";
+import { IntegrationsManifestV1Schema } from "../integrations/manifest/schema.js";
 import { stateEnumCatalog } from "../state/index.js";
 import { answererSchemaCatalog } from "../answerers/schemas/catalog.js";
 import { InsightPayload } from "../insights/types.js";
@@ -94,6 +95,18 @@ const insightEntries: ContractSchemaDescriptor[] = [
   entry("insights", "InsightPayload", "tanren.insights.InsightPayload", InsightPayload),
 ];
 
+// --- Integration manifest ---------------------------------------------------
+// The `.tanren/integrations.yml` per-project manifest contract (in-8), emitted as a
+// language-neutral JSON Schema artifact the same way every other Zod contract is.
+const integrationEntries: ContractSchemaDescriptor[] = [
+  entry(
+    "integrations",
+    "IntegrationsManifestV1",
+    "tanren.integrations.IntegrationsManifestV1",
+    IntegrationsManifestV1Schema,
+  ),
+];
+
 // The full catalog, sorted by generatedFile so the emitted tree and any diff is
 // stable regardless of declaration order above.
 export const contractSchemaCatalog: ReadonlyArray<ContractSchemaDescriptor> = [
@@ -102,6 +115,7 @@ export const contractSchemaCatalog: ReadonlyArray<ContractSchemaDescriptor> = [
   ...answererEntries,
   ...httpEntries,
   ...insightEntries,
+  ...integrationEntries,
 ].sort((a, b) => a.generatedFile.localeCompare(b.generatedFile));
 
 // renderContractJsonSchema is the single chokepoint converting a Zod source

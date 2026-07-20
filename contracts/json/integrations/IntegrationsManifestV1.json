@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "tanren.dev/integrations/v1",
+      "type": "string"
+    },
+    "integrations": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "criticality": {
+            "enum": [
+              "merge_required",
+              "release_required",
+              "best_effort"
+            ],
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "inbound",
+              "outbound",
+              "bidirectional"
+            ],
+            "type": "string"
+          },
+          "environments": {
+            "items": {
+              "enum": [
+                "test",
+                "preview",
+                "production"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          },
+          "plane": {
+            "enum": [
+              "control",
+              "product"
+            ],
+            "type": "string"
+          },
+          "provider": {
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "providerPolicy": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed": {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "forbidden": {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "preferred": {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "providerVersion": {
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "capability",
+          "provider",
+          "providerVersion",
+          "plane",
+          "direction",
+          "environments",
+          "operations",
+          "scopes",
+          "criticality"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "version": {
+      "const": 1,
+      "type": "number"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "version",
+    "integrations"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.integrations.IntegrationsManifestV1"
+}

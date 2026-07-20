@@ -31,7 +31,7 @@ function expectedJson(zod: Parameters<typeof renderContractJsonSchema>[0], schem
 describe("contract JSON Schema drift", () => {
   it("catalogs every contract family the export covers", () => {
     const families = new Set(contractSchemaCatalog.map((d) => d.family));
-    expect([...families].sort()).toEqual(["answerers", "events", "http", "insights", "state"]);
+    expect([...families].sort()).toEqual(["answerers", "events", "http", "insights", "integrations", "state"]);
   });
 
   it("emits files into a stable, sorted tree with unique generated paths", () => {
