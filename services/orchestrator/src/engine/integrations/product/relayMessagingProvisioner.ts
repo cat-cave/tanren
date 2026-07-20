@@ -357,21 +357,30 @@ export class RelayMessagingProvisioner implements ApplicationIntegrationProvisio
 
 /**
  * Assert a relay binding carries every field that CONFIRMS the external effect —
- * a non-empty channel id, channel name, and provider receipt. A relay response
- * missing any of these is incomplete evidence, not a success: the mutation
- * fails-closed rather than returning an artifact with an empty channel_id / receipt.
+ * a NON-BLANK binding id, idempotency key, channel id, channel name, and provider
+ * receipt. `bindingId`/`stableKey` are re-asserted HERE (not only in the fetch
+ * parser) so NO transport — fetch or injected — can produce a confirmed artifact
+ * with an empty external resource id. Whitespace-only is treated as blank: a relay
+ * response with a `"   "` channel is incomplete evidence, not a success.
  */
 function assertConfirmedRelayBinding(binding: RelayBinding, stage: "provision" | "bind" | "rotate"): void {
   const missing: string[] = [];
-  if (binding.channelId === "") missing.push("channelId");
-  if (binding.channelName === "") missing.push("channelName");
-  if (binding.receiptId === "") missing.push("receiptId");
+  if (isBlank(binding.bindingId)) missing.push("bindingId");
+  if (isBlank(binding.stableKey)) missing.push("stableKey");
+  if (isBlank(binding.channelId)) missing.push("channelId");
+  if (isBlank(binding.channelName)) missing.push("channelName");
+  if (isBlank(binding.receiptId)) missing.push("receiptId");
   if (missing.length > 0) {
     throw new ProductProvisionFailedError(
       stage,
-      `incomplete_relay_evidence: relay binding '${binding.bindingId}' is missing confirmation field(s): ${missing.join(", ")}`,
+      `incomplete_relay_evidence: relay binding '${binding.bindingId}' has missing/blank confirmation field(s): ${missing.join(", ")}`,
     );
   }
+}
+
+/** True when a string is empty or whitespace-only (not a confirmed value). */
+function isBlank(value: string): boolean {
+  return value.trim() === "";
 }
 
 /** The relay-side idempotency key: one managed binding per (org, project, capability). */

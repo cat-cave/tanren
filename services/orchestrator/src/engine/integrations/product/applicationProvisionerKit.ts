@@ -190,8 +190,9 @@ export function applicationArtifactToResolvedBinding(
   plan: ProductProvisionPlan,
 ): ResolvedBinding {
   assertProductBindingOutputs(artifact.outputs, "provision");
-  if (artifact.externalResourceId === "" || artifact.externalResourceName === "") {
-    throw new ProductProvisionFailedError("provision", "artifact has no provisioned external resource");
+  if (artifact.externalResourceId.trim() === "" || artifact.externalResourceName.trim() === "") {
+    // Non-blank: a whitespace-only external id/name is not a confirmed resource.
+    throw new ProductProvisionFailedError("provision", "artifact has no provisioned external resource (blank id/name)");
   }
   const outputs: ResolvedBindingOutput[] = artifact.outputs.map((resolved) => {
     const secret = resolved.output.classification === "secret_ref";
@@ -201,13 +202,13 @@ export function applicationArtifactToResolvedBinding(
         `secret output '${resolved.output.logicalKey}' is missing its secret source coordinate`,
       );
     }
-    if (!secret && (resolved.plainValue === undefined || resolved.plainValue === "")) {
-      // An empty plain value (e.g. an unconfirmed, coerced-to-"" channel_id) must
-      // NOT reach project_app_env — the in-14 materializer accepts any defined
-      // plainValue, so this seam is the fail-closed choke point for empty evidence.
+    if (!secret && (resolved.plainValue === undefined || resolved.plainValue.trim() === "")) {
+      // A blank plain value (e.g. an unconfirmed, coerced-to-"" or whitespace-only
+      // channel_id) must NOT reach project_app_env — the in-14 materializer accepts
+      // any defined plainValue, so this seam is the fail-closed choke point.
       throw new ProductProvisionFailedError(
         "provision",
-        `non-secret output '${resolved.output.logicalKey}' has no value (empty is not a confirmed binding)`,
+        `non-secret output '${resolved.output.logicalKey}' has no value (blank is not a confirmed binding)`,
       );
     }
     return {

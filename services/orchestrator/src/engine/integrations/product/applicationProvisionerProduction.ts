@@ -31,16 +31,19 @@ interface RawRelayBinding {
 
 // (no lenient `asString` coercion — confirmation fields are required non-empty.)
 
+/** Sentinel a read returns for a CONFIRMED 404 absence (distinct from 2xx-empty). */
+const RELAY_ABSENT = Symbol("relay_absent");
+
 /**
- * Extract a REQUIRED non-empty confirmation string, fail-closed. A missing/empty
- * field means the relay did not confirm the external effect — the mutation must NOT
- * fabricate a success artifact with a coerced `""`.
+ * Extract a REQUIRED NON-BLANK confirmation string, fail-closed. A missing, empty,
+ * or WHITESPACE-ONLY field means the relay did not confirm the external effect —
+ * the mutation must NOT fabricate a success artifact with a coerced/blank `""`.
  */
 function requiredField(value: unknown, key: string): string {
-  if (typeof value !== "string" || value === "") {
+  if (typeof value !== "string" || value.trim() === "") {
     throw new ProductProvisionFailedError(
       "provision",
-      `incomplete_relay_evidence: relay response is missing required confirmation field '${key}'`,
+      `incomplete_relay_evidence: relay response is missing or blank required confirmation field '${key}'`,
     );
   }
   return value;
@@ -103,10 +106,11 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
   }
 
   /**
-   * Send a relay request. `absentOn404` maps a 404 to `undefined` ONLY for reads
-   * where absence is a legitimate answer (getBinding). Every other non-2xx — and a
-   * 404 on a write/delete — throws, so a mutation can never read an unconfirmed
-   * response as success.
+   * Send a relay request. `absentOn404` returns the {@link RELAY_ABSENT} sentinel
+   * for a CONFIRMED 404 ONLY (never a 2xx-empty body) so a caller can distinguish a
+   * real "gone" from a malformed 2xx. Every other non-2xx — and a 404 on a
+   * write/delete — throws, so a mutation can never read an unconfirmed response as
+   * success.
    */
   private async send(
     token: string,
@@ -124,7 +128,7 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
     if (opts.absentOn404 === true && response.status === 404) {
-      return undefined;
+      return RELAY_ABSENT;
     }
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`relay ${method} ${path} failed: HTTP ${response.status}`);
@@ -140,7 +144,16 @@ export class FetchProductRelayTransport implements ProductRelayTransport {
   async getBinding(token: string, orgId: string, stableKey: string): Promise<RelayBinding | undefined> {
     const query = `?orgId=${encodeURIComponent(orgId)}&stableKey=${encodeURIComponent(stableKey)}`;
     const body = await this.send(token, "GET", `/v1/bindings${query}`, { absentOn404: true });
-    return body === undefined ? undefined : parseRelayBinding(body);
+    // Absence is a CONFIRMED 404 only. A 2xx with an empty/unparseable body is a
+    // malformed response, NOT "gone" — fail-closed so teardown's no-op path (and any
+    // "already exists?" check) never fires on an ambiguous 2xx-empty.
+    if (body === RELAY_ABSENT) {
+      return undefined;
+    }
+    if (body === undefined) {
+      throw new Error(`malformed_relay_binding: relay returned a 2xx empty body for getBinding '${stableKey}'`);
+    }
+    return parseRelayBinding(body);
   }
 
   async listBindings(token: string, orgId: string): Promise<readonly RelayBinding[]> {
