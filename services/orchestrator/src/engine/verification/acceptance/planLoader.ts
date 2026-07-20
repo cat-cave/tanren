@@ -19,7 +19,7 @@
 import { parseDigest } from "../../contracts/cas.js";
 import { parseBehaviorRevisionId, parsePersonaRevisionId } from "../../contracts/behaviorRevision.js";
 import type { AssertionExpression, ExecutableBehaviorPlanV1 } from "../../contracts/runtimeVerificationPlan.js";
-import type { AcceptanceAssertion, AcceptancePlan, HttpProbeSpec } from "./orchestrator.js";
+import type { AcceptanceAssertion, AcceptancePlan, HttpProbeSpec, PlanCapabilityFragment } from "./orchestrator.js";
 import type { CauseSpec, EffectCorrelation } from "./causalCorrelation.js";
 import { parseAcceptanceSpec, type AcceptanceSpecV1 } from "./acceptanceSpec.js";
 import { compileExecutableBehaviorPlan } from "./executablePlanCompiler.js";
@@ -51,8 +51,17 @@ export interface CompileAcceptancePlanRevision {
   readonly acceptance: unknown;
 }
 
+/** Project one bound capability step into the narrow `PlanCapabilityFragment` shape. */
+function projectStep(step: {
+  readonly id: string;
+  readonly capabilityFragmentRef: ExecutableBehaviorPlanV1["fixtures"][number]["capabilityFragmentRef"];
+  readonly params: ExecutableBehaviorPlanV1["fixtures"][number]["params"];
+}): Omit<PlanCapabilityFragment, "stepKind"> {
+  return { stepId: step.id, capabilityFragmentRef: step.capabilityFragmentRef, params: step.params };
+}
+
 /** Project the canonical typed plan + its source spec into the orchestrator's narrow view. */
-function toAcceptancePlan(plan: ExecutableBehaviorPlanV1, spec: AcceptanceSpecV1): AcceptancePlan {
+export function toAcceptancePlan(plan: ExecutableBehaviorPlanV1, spec: AcceptanceSpecV1): AcceptancePlan {
   const correlationById = new Map<string, EffectCorrelation>();
   for (const authored of spec.assertions) {
     if (authored.correlation !== undefined) correlationById.set(authored.assertionId, authored.correlation);
@@ -77,12 +86,21 @@ function toAcceptancePlan(plan: ExecutableBehaviorPlanV1, spec: AcceptanceSpecV1
     ...(probe.body === undefined ? {} : { body: probe.body }),
   }));
 
+  // rv-3: surface the resolved capability fragment refs (fixture/action/cleanup
+  // steps) so a downstream runtime can drive them from their registry version.
+  const capabilityFragments: readonly PlanCapabilityFragment[] = [
+    ...plan.fixtures.map((step) => ({ stepKind: "fixture" as const, ...projectStep(step) })),
+    ...plan.actions.map((step) => ({ stepKind: "action" as const, ...projectStep(step) })),
+    ...plan.cleanup.map((step) => ({ stepKind: "cleanup" as const, ...projectStep(step) })),
+  ];
+
   return {
     planId: plan.planId,
     behaviorRevisionId: plan.behaviorRevisionId,
     requiredSurfaces: plan.requiredSurfaces,
     assertions,
     fixtures: spec.fixtures,
+    ...(capabilityFragments.length === 0 ? {} : { capabilityFragments }),
     examples: plan.examples.map((example) => ({ values: example.values, rowHash: example.rowHash })),
     executionMatrix: plan.executionMatrix,
     causes: spec.causes as readonly CauseSpec[],

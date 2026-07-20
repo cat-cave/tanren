@@ -18,6 +18,7 @@
 import { z } from "zod";
 import type { CanonicalBody } from "../../contracts/cas.js";
 import type { ComparisonOperator, ExecutionMatrix } from "../../contracts/runtimeVerificationPlan.js";
+import { VerificationCapabilityCitationSchema } from "./fragments/verificationFragment.js";
 
 export class MalformedAcceptanceSpecError extends Error {
   public override readonly name = "MalformedAcceptanceSpecError";
@@ -114,6 +115,10 @@ const acceptanceSpecSchema = z.object({
   examples: z.array(exampleSchema).default([]),
   executionMatrix: matrixSchema,
   causes: z.array(causeSchema).default([]),
+  // rv-3: OPTIONAL verification-capability citations. Each names a reusable fragment
+  // `(capabilityKey, fragmentKind)` the plan binds into a fixture/action/cleanup lane;
+  // the rv-3 registry resolves it (or F2-authors it, fail-closed) before the plan runs.
+  capabilities: z.array(VerificationCapabilityCitationSchema).default([]),
   // rv-13 A4: an OPTIONAL rendered-visual requirement — when `required`, the behavior
   // demands a passing ds-4 design-render verdict on top of its functional assertions.
   visualVerification: visualVerificationSchema.optional(),
@@ -176,6 +181,20 @@ export function parseAcceptanceSpec(behaviorRevisionId: string, acceptance: unkn
       throw new MalformedAcceptanceSpecError(behaviorRevisionId, `duplicate assertion id ${assertion.assertionId}`);
     }
     declaredAssertionIds.add(assertion.assertionId);
+  }
+
+  // rv-3: a capability citation's stepId must be unique within its lane — a duplicate
+  // would bind two fragments to one plan step (fail early, before a spend).
+  const declaredStepIds = new Set<string>();
+  for (const citation of spec.capabilities) {
+    const stepKey = `${citation.stepKind}:${citation.stepId}`;
+    if (declaredStepIds.has(stepKey)) {
+      throw new MalformedAcceptanceSpecError(
+        behaviorRevisionId,
+        `duplicate capability step ${citation.stepKind} step id ${citation.stepId}`,
+      );
+    }
+    declaredStepIds.add(stepKey);
   }
 
   for (const assertion of spec.assertions) {

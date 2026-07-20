@@ -17,6 +17,7 @@ import {
   PgDesignRenderVerdictReader,
   PgVerificationCaptureStore,
   type AcceptanceBaseUrlResolver,
+  type PlanCapabilityAuthoring,
 } from "../acceptance/index.js";
 import { PgCasByteStore } from "../../cas/pgCasByteStore.js";
 import {
@@ -41,7 +42,15 @@ class FixedBaseUrlResolver implements AcceptanceBaseUrlResolver {
  * (`RunPlannerLoopInput.preMergeBehaviorProducer`); the merge stage runs it ONLY when the
  * project's `preMergeBehaviorGate` knob is on.
  */
-export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: SecretStore): PreMergeBehaviorGateProducer {
+export function buildPreMergeBehaviorGateProducer(
+  pool: pg.Pool,
+  secrets: SecretStore,
+  // rv-3: the OPTIONAL F2 authoring seam. When supplied (the run worker, which has the
+  // Forge answerer infra), a behavior citing a MISSING verification capability is authored
+  // through the writer→validate convergent loop before the gate runs; when absent, a
+  // missing capability HALTS the plan load loud (fail-closed) — never a silently-empty plan.
+  fragmentAuthoring?: PlanCapabilityAuthoring,
+): PreMergeBehaviorGateProducer {
   // rv-9: content-address every drive's response/render capture into the SP-3 CAS +
   // verification_artifacts on the MERGE-CRITICAL pre-merge gate, so `evidenceLinkRefs` are
   // durably linked onto the persisted verdict (behavior_verdict_evidence) instead of discarded.
@@ -61,7 +70,10 @@ export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: Secret
   return new PreviewBehaviorGateProducer({
     provisioner: new DeployAdapterPreviewSurfaceProvisioner(pool, { transport: fetchDeployTransport(), secrets }),
     behaviorRevisions: new PgBehaviorRevisionResolver(pool),
-    planLoader: new PgAcceptancePlanLoader(pool),
+    planLoader: new PgAcceptancePlanLoader(
+      pool,
+      fragmentAuthoring === undefined ? {} : { authoring: fragmentAuthoring },
+    ),
     buildExecutor,
   });
 }

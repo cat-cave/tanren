@@ -33,7 +33,21 @@ export {
 export { buildRedriveHistoryReader } from "../workflow/plannerRunRedrive.js";
 // rv-premerge: the OPT-IN pre-merge behavior-gate producer (preview deploy → rv-11 → pre_merge
 // verdict). Re-exported here so `runExecutor.ts` takes NO extra module edge for it.
-export { buildPreMergeBehaviorGateProducer } from "../verification/preMerge/buildPreMergeBehaviorGateProducer.js";
+import { buildPreMergeBehaviorGateProducer as buildPreMergeProducer } from "../verification/preMerge/buildPreMergeBehaviorGateProducer.js";
+import type { PreMergeBehaviorGateProducer } from "../verification/preMerge/preMergeBehaviorGateProducer.js";
+import { buildForgeVerificationFragmentAuthoring } from "../forge/verificationFragmentAuthoringFactory.js";
+import type { ForgeAnswererInfra, ForgeAnswererTarget } from "../forge/providerFactory.js";
+// rv-3: assemble the pre-merge behavior-gate producer WITH the F2 verification-fragment
+// authoring seam (the SAME allocating Forge answerer infra the run worker uses) so a
+// behavior citing a MISSING verification capability authors it (writer→validate
+// convergent) before the gate — fail-closed. `infra` is structurally the run worker's
+// deps (pool/secrets/allocator/ssh/identitySecretRef); `target` scopes the answerer.
+export function buildPreMergeProducerWithFragmentF2(
+  infra: ForgeAnswererInfra,
+  target: ForgeAnswererTarget,
+): PreMergeBehaviorGateProducer {
+  return buildPreMergeProducer(infra.pool, infra.secrets, buildForgeVerificationFragmentAuthoring(infra, target));
+}
 // apex v79/v80 loop closure: build the production materializer for triage-emitted
 // `kind: spec` items (routes to `acceptProposals` under the run's org scope, so the
 // "route out" decision actually lands on the DAG instead of vanishing).

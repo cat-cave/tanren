@@ -17,3 +17,9 @@ export * from "./flakeClassification.js";
 export * from "./flakeEpochReevaluation.js";
 export * from "./behaviorQuarantineGovernance.js";
 export * from "./flakeQuarantineActuator.js";
+// rv-3: verification-fragment registry + F2 authoring.
+export * from "./fragments/verificationFragment.js";
+export * from "./fragments/verificationFragmentValidation.js";
+export * from "./fragments/verificationFragmentAuthorer.js";
+export * from "./fragments/verificationFragmentEvents.js";
+export * from "./fragments/verificationFragmentRegistry.js";
