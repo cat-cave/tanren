@@ -78,5 +78,6 @@ export * from "./authoringKernel.js";
 // in-2: typed integration lifecycle documents (requirement / effect / binding).
 export * from "./integrationEffect.js";
 export * from "./integrationBindingOutput.js";
+export * from "./integrationBindingContract.js";
 export * from "./integrationRequirement.js";
 export * from "./symptomContract.js";

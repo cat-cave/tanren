@@ -39,11 +39,21 @@ export class BindingMaterializerMemoryDb implements IntegrationQueryClient {
   async query(sql: string, params: unknown[] = []): Promise<IntegrationQueryResult> {
     if (sql.includes("INSERT INTO integration_bindings")) return this.insertBinding(params);
     if (sql.includes("UPDATE integration_bindings")) return this.advanceBinding(params);
+    // in-15 proof-gate generation read matches `g.desired_state_hash` too, so its
+    // more-specific `g.drift_state` marker must be dispatched FIRST.
+    if (sql.includes("g.drift_state")) return this.proofGeneration(params);
     if (sql.includes("g.desired_state_hash")) return this.loadCurrentGeneration(params);
     if (sql.includes("max(generation)")) return this.maxGeneration(params);
     if (sql.includes("INSERT INTO integration_binding_generations")) return this.insertGeneration(params);
     if (sql.includes("INSERT INTO integration_binding_env")) return this.insertEnv(params);
     if (sql.includes("INSERT INTO project_app_env")) return this.upsertAppEnv(params);
+    // in-15 proof-gate reads (dispatched before the in-14 shapes they'd otherwise
+    // match — `pae.value_ref` / `ready_binding_id` disambiguate; the generation
+    // read's `g.drift_state` marker is handled above, before `g.desired_state_hash`).
+    if (sql.includes("pae.value_ref")) return this.proofMaterializedOutputs(params);
+    if (sql.includes("count(*)::int AS n FROM project_app_env")) return this.proofProvisionedCount(params);
+    if (sql.includes("source = 'provisioned'")) return this.proofProvisionedRows(params);
+    if (sql.includes("ready_binding_id")) return this.proofReadyBindingIds(params);
     if (sql.includes("SELECT b.id AS binding_id")) return this.readyBindings(params);
     if (sql.includes("FROM integration_binding_env e")) return this.resolvedOutputs(params);
     throw new Error(`BindingMaterializerMemoryDb: unhandled query: ${sql.slice(0, 80)}`);
@@ -257,6 +267,135 @@ export class BindingMaterializerMemoryDb implements IntegrationQueryClient {
           },
         ];
       });
+    return this.result(rows);
+  }
+
+  /** in-15: load the ready binding's current generation + lineage for the proof gate. */
+  private proofGeneration(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, bindingId, environment] = p as string[];
+    const binding = this.bindings.find(
+      (b) =>
+        b["org_id"] === orgId &&
+        b["project_id"] === projectId &&
+        b["id"] === bindingId &&
+        b["environment"] === environment &&
+        b["status"] === "ready" &&
+        b["current_generation"] !== null,
+    );
+    if (binding === undefined) return this.result([]);
+    const gen = this.generations.find(
+      (g) =>
+        g["org_id"] === orgId &&
+        g["project_id"] === projectId &&
+        g["binding_id"] === bindingId &&
+        g["generation"] === binding["current_generation"],
+    );
+    if (gen === undefined) return this.result([]);
+    return this.result([
+      {
+        current_generation: binding["current_generation"],
+        requirement_id: gen["requirement_id"],
+        environment: gen["environment"],
+        desired_state_hash: gen["desired_state_hash"],
+        provider_kind: gen["provider_kind"],
+        connection_id: gen["connection_id"],
+        auth_generation: gen["auth_generation"],
+        grant_id: gen["grant_id"],
+        grant_generation: gen["grant_generation"],
+        adapter_version: gen["adapter_version"],
+        external_resource_id: gen["external_resource_id"],
+        external_resource_name: gen["external_resource_name"],
+        ownership: gen["ownership"],
+        teardown_policy: gen["teardown_policy"],
+        status: binding["status"],
+        drift_state: binding["drift_state"],
+      },
+    ]);
+  }
+
+  /** in-15: the exact-generation output shape LEFT JOINed onto the materialized rows. */
+  private proofMaterializedOutputs(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, bindingId, generation, environment] = p;
+    const rows = this.env
+      .filter(
+        (e) =>
+          e["org_id"] === orgId &&
+          e["project_id"] === projectId &&
+          e["binding_id"] === bindingId &&
+          e["binding_generation"] === generation,
+      )
+      .map((e) => {
+        const app = this.appEnv.find(
+          (a) =>
+            a["org_id"] === orgId &&
+            a["project_id"] === projectId &&
+            a["binding_id"] === bindingId &&
+            a["binding_generation"] === generation &&
+            a["environment"] === environment &&
+            a["key"] === e["key"],
+        );
+        return {
+          key: e["key"],
+          classification: e["classification"],
+          required: e["required"],
+          scopes: e["scopes"],
+          value_ref: app?.["value_ref"] ?? null,
+          secret_generation: app?.["secret_generation"] ?? null,
+          plain_value: app?.["plain_value"] ?? null,
+        };
+      })
+      .sort((a, b) => (String(a.key) < String(b.key) ? -1 : 1));
+    return this.result(rows);
+  }
+
+  /** in-15: count the project_app_env rows provisioned under this exact generation. */
+  private proofProvisionedCount(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, environment, bindingId, generation] = p;
+    const n = this.appEnv.filter(
+      (a) =>
+        a["org_id"] === orgId &&
+        a["project_id"] === projectId &&
+        a["environment"] === environment &&
+        a["binding_id"] === bindingId &&
+        a["binding_generation"] === generation,
+    ).length;
+    return this.result([{ n }]);
+  }
+
+  /** in-15: the provisioned project_app_env rows for the coverage assertion. */
+  private proofProvisionedRows(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, environment] = p as string[];
+    const rows = this.appEnv
+      .filter(
+        (a) =>
+          a["org_id"] === orgId &&
+          a["project_id"] === projectId &&
+          a["environment"] === environment &&
+          a["source"] === "provisioned",
+      )
+      .map((a) => ({
+        key: a["key"],
+        binding_id: a["binding_id"] ?? null,
+        binding_generation: a["binding_generation"] ?? null,
+      }))
+      .sort((a, b) => (String(a.key) < String(b.key) ? -1 : 1));
+    return this.result(rows);
+  }
+
+  /** in-15: every ready binding id of the project/environment. */
+  private proofReadyBindingIds(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, environment] = p as string[];
+    const rows = this.bindings
+      .filter(
+        (b) =>
+          b["org_id"] === orgId &&
+          b["project_id"] === projectId &&
+          b["environment"] === environment &&
+          b["status"] === "ready" &&
+          b["current_generation"] !== null,
+      )
+      .map((b) => ({ ready_binding_id: b["id"] }))
+      .sort((a, b) => (String(a.ready_binding_id) < String(b.ready_binding_id) ? -1 : 1));
     return this.result(rows);
   }
 

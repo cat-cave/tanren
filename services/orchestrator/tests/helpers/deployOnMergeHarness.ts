@@ -155,17 +155,22 @@ export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
       return { rows, rowCount: rows.length };
     }
     if (/FROM project_app_env[\s\S]*WHERE org_id/u.test(sql)) {
-      const rows = (state.appEnv ?? []).map((row, index) => ({
-        id: `env_${index}`,
-        org_id: ORG_ID,
-        project_id: PROJECT_ID,
-        environment: "production",
-        binding_id: null,
-        binding_generation: null,
-        secret_generation: row["value_ref"] === null ? null : 1,
-        description: "",
-        ...row,
-      }));
+      const rows = (state.appEnv ?? [])
+        .map((row, index) => ({
+          id: `env_${index}`,
+          org_id: ORG_ID,
+          project_id: PROJECT_ID,
+          environment: "production",
+          binding_id: null,
+          binding_generation: null,
+          secret_generation: row["value_ref"] === null ? null : 1,
+          description: "",
+          ...row,
+        }))
+        // The in-15 proof-gate coverage query filters `source = 'provisioned'`;
+        // honor it so binding-less byo rows (schema-excluded from that query in
+        // production) don't appear as uncovered provisioned rows here.
+        .filter((row) => !sql.includes("source = 'provisioned'") || row.source === "provisioned");
       return { rows, rowCount: rows.length };
     }
     return { rows: [], rowCount: 0 };
