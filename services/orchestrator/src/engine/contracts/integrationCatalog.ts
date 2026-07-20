@@ -47,6 +47,17 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
           { id: "bind", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
         ],
       },
+      {
+        // in-12: the PRODUCT-plane messaging capability the built application uses
+        // (managed relay / in-13 direct mode). Distinct from control `notify` — a
+        // Tanren operator bot token never validates a product messaging grant.
+        id: "messaging.send",
+        operations: [
+          { id: "discover", requiredScopes: ["channels:read"], plane: "product" },
+          { id: "provision", requiredScopes: ["chat:write", "channels:read"], plane: "product" },
+          { id: "bind", requiredScopes: ["chat:write", "channels:read"], plane: "product" },
+        ],
+      },
     ],
   },
   {
