@@ -12,6 +12,7 @@ import {
   decodeBundleId,
   encodeBundleId,
   MalformedBundleIdError,
+  proofUnitContentBytes,
   serializeBundleBytes,
 } from "../src/engine/cas/proofSubstrateCodec.js";
 
@@ -75,28 +76,68 @@ describe("computeProofRoot — deterministic, order-sensitive Merkle root", () =
   });
 });
 
-describe("canonicalSealMessage — byte-stable signed message", () => {
-  it("is identical for identical (proofRoot, bindings) regardless of binding key order", () => {
-    const proofRoot = computeProofRoot([unit("a")]);
-    const reordered: BundleBindings = { ...BINDINGS };
-    const a = canonicalSealMessage({ proofRoot, bindings: BINDINGS });
-    const b = canonicalSealMessage({ proofRoot, bindings: reordered });
+describe("canonicalSealMessage — byte-stable signed message over the FULL identity", () => {
+  const IDENTITY = {
+    orgId: "org_a",
+    projectId: "proj_a",
+    bundleDigest: computeProofRoot([unit("a")]),
+    proofRoot: computeProofRoot([unit("a")]),
+    bindings: BINDINGS,
+  };
+
+  it("is identical for identical identity regardless of binding key order", () => {
+    const a = canonicalSealMessage(IDENTITY);
+    const b = canonicalSealMessage({ ...IDENTITY, bindings: { ...BINDINGS } });
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
 
+  it("CHANGES when orgId changes (tenant is inside the signed envelope)", () => {
+    const base = canonicalSealMessage(IDENTITY);
+    const rebound = canonicalSealMessage({ ...IDENTITY, orgId: "org_b" });
+    expect(Buffer.from(base).equals(Buffer.from(rebound))).toBe(false);
+  });
+
+  it("CHANGES when projectId changes", () => {
+    const base = canonicalSealMessage(IDENTITY);
+    const rebound = canonicalSealMessage({ ...IDENTITY, projectId: "proj_b" });
+    expect(Buffer.from(base).equals(Buffer.from(rebound))).toBe(false);
+  });
+
+  it("CHANGES when bundleDigest changes (bundle identity is signed)", () => {
+    const base = canonicalSealMessage(IDENTITY);
+    const other = canonicalSealMessage({ ...IDENTITY, bundleDigest: computeProofRoot([unit("z")]) });
+    expect(Buffer.from(base).equals(Buffer.from(other))).toBe(false);
+  });
+
   it("changes when the proof root changes", () => {
-    const one = canonicalSealMessage({ proofRoot: computeProofRoot([unit("a")]), bindings: BINDINGS });
-    const two = canonicalSealMessage({ proofRoot: computeProofRoot([unit("b")]), bindings: BINDINGS });
-    expect(Buffer.from(one).equals(Buffer.from(two))).toBe(false);
+    const base = canonicalSealMessage(IDENTITY);
+    const other = canonicalSealMessage({ ...IDENTITY, proofRoot: computeProofRoot([unit("b")]) });
+    expect(Buffer.from(base).equals(Buffer.from(other))).toBe(false);
   });
 
   it("changes when a binding field changes", () => {
-    const base = canonicalSealMessage({ proofRoot: computeProofRoot([unit("a")]), bindings: BINDINGS });
-    const tampered = canonicalSealMessage({
-      proofRoot: computeProofRoot([unit("a")]),
-      bindings: { ...BINDINGS, nonce: "nonce-2" },
-    });
+    const base = canonicalSealMessage(IDENTITY);
+    const tampered = canonicalSealMessage({ ...IDENTITY, bindings: { ...BINDINGS, nonce: "nonce-2" } });
     expect(Buffer.from(base).equals(Buffer.from(tampered))).toBe(false);
+  });
+});
+
+describe("proofUnitContentBytes — binds kind + verdict + body (audit Finding 3)", () => {
+  it("distinct kind OR verdict over the same body yields distinct content digests", () => {
+    const body = { subject: "s1" };
+    const base = contentDigestOf(proofUnitContentBytes({ kind: "test", verdict: "passed", body }));
+    const diffVerdict = contentDigestOf(proofUnitContentBytes({ kind: "test", verdict: "failed", body }));
+    const diffKind = contentDigestOf(proofUnitContentBytes({ kind: "security_finding", verdict: "passed", body }));
+    expect(base).not.toBe(diffVerdict);
+    expect(base).not.toBe(diffKind);
+    expect(diffVerdict).not.toBe(diffKind);
+  });
+
+  it("identical (kind, verdict, body) is stable", () => {
+    const body = { subject: "s1" };
+    expect(contentDigestOf(proofUnitContentBytes({ kind: "test", verdict: "passed", body }))).toBe(
+      contentDigestOf(proofUnitContentBytes({ kind: "test", verdict: "passed", body })),
+    );
   });
 });
 
@@ -125,6 +166,22 @@ describe("bundle id codec — carries tenant scope injection-safely", () => {
     expect(() => decodeBundleId(`pb1_${Buffer.from('{"o":1}', "utf8").toString("base64url")}`)).toThrow(
       MalformedBundleIdError,
     );
+  });
+
+  it("REJECTS a non-canonical encoding of the same (org, project, digest) (audit Finding 4)", () => {
+    const bundleDigest = computeProofRoot([unit("a")]);
+    const canonical = encodeBundleId({ orgId: "o", projectId: "p", bundleDigest });
+    // Same fields, but unsorted keys / extra whitespace / an extra key — all
+    // JSON-parseable to the same context, yet NOT the canonical byte form.
+    const unsortedKeys = `pb1_${Buffer.from(`{"p":"p","o":"o","d":${JSON.stringify(bundleDigest)}}`, "utf8").toString("base64url")}`;
+    const extraKey = `pb1_${Buffer.from(`{"d":${JSON.stringify(bundleDigest)},"o":"o","p":"p","x":1}`, "utf8").toString("base64url")}`;
+    const spaced = `pb1_${Buffer.from(`{ "d": ${JSON.stringify(bundleDigest)}, "o": "o", "p": "p" }`, "utf8").toString("base64url")}`;
+    expect(unsortedKeys).not.toBe(canonical);
+    expect(() => decodeBundleId(unsortedKeys)).toThrow(MalformedBundleIdError);
+    expect(() => decodeBundleId(extraKey)).toThrow(MalformedBundleIdError);
+    expect(() => decodeBundleId(spaced)).toThrow(MalformedBundleIdError);
+    // The canonical form still decodes.
+    expect(decodeBundleId(canonical)).toEqual({ orgId: "o", projectId: "p", bundleDigest });
   });
 });
 

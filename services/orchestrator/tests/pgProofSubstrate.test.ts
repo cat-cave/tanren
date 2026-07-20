@@ -18,7 +18,7 @@ import type {
 import { CasArtifactNotFoundError, contentDigestOf } from "../src/engine/contracts/cas.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgProofSubstrate } from "../src/engine/cas/pgProofSubstrate.js";
-import { serializeBundleBytes } from "../src/engine/cas/proofSubstrateCodec.js";
+import { bundleUnitId, encodeBundleId, serializeBundleBytes } from "../src/engine/cas/proofSubstrateCodec.js";
 
 const TEST_REF = "credential/proof-substrate/platform/test-ed25519";
 const ORG = "org_sp3";
@@ -151,6 +151,21 @@ describe("PgProofSubstrate — construct + seal + verify happy path", () => {
       }),
     ).rejects.toThrow("section body rejected");
   });
+
+  it("ingesting the SAME body with different kind/verdict yields DISTINCT digests (audit Finding 3)", async () => {
+    const { substrate } = build(secretsWithKey(testKeyPem()));
+    const body = { subject: "same-body" };
+    const refs = await substrate.ingestUnits({
+      orgId: ORG,
+      projectId: PROJECT,
+      drafts: [
+        { kind: "test", verdict: "passed", subjectId: "s", body },
+        { kind: "test", verdict: "failed", subjectId: "s", body },
+        { kind: "security_finding", verdict: "passed", subjectId: "s", body },
+      ],
+    });
+    expect(new Set(refs.map((r) => r.digest)).size).toBe(3);
+  });
 });
 
 describe("PgProofSubstrate — FAIL-CLOSED verify arms", () => {
@@ -228,14 +243,46 @@ describe("PgProofSubstrate — FAIL-CLOSED verify arms", () => {
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/signing key unavailable/u);
   });
+
+  it("CRITICAL negative control: CROSS-TENANT REBINDING is REJECTED (no private key)", async () => {
+    // Seal a genuine bundle for org_sp3/project_sp3. The DEMONSTRATED audit attack:
+    // re-encode bundleId to a DIFFERENT org/project (same bundleDigest), re-derive
+    // each bundleUnitId + bytesDigest, keep proofRoot/members/bindings/rootSignature
+    // UNCHANGED — and try to pass verify under the SAME platform key.
+    const secrets = secretsWithKey(testKeyPem());
+    const { substrate, bundle } = await constructSealed(secrets);
+
+    const forgedBundleId = encodeBundleId({
+      orgId: "org_attacker",
+      projectId: "proj_attacker",
+      bundleDigest: bundle.bundleDigest,
+    });
+    const reboundMembers = bundle.members.map((m) => ({ ...m, bundleUnitId: bundleUnitId(forgedBundleId, m.ordinal) }));
+    const rebound0: ProofBundleSealed = { ...bundle, bundleId: forgedBundleId, members: reboundMembers };
+    // Re-derive bytesDigest so the self-consistency bytes check passes — isolating
+    // the signature-over-identity defense as the thing that must reject.
+    const rebound: ProofBundleSealed = { ...rebound0, bytesDigest: contentDigestOf(serializeBundleBytes(rebound0)) };
+
+    const result = await substrate.verify(rebound);
+    expect(result.valid).toBe(false);
+    // The signed message now covers org_attacker/proj_attacker, so the unchanged
+    // signature (sealed over org_sp3/project_sp3) no longer verifies.
+    expect(result.reason).toMatch(/signature verification failed/u);
+  });
 });
 
 describe("PgProofSubstrate — seal/construct guards", () => {
+  const sealInput = () => ({
+    orgId: ORG,
+    projectId: PROJECT,
+    bundleDigest: `sha256:${"d".repeat(64)}` as Digest,
+    proofRoot: `sha256:${"a".repeat(64)}` as Digest,
+    bindings: bindings(),
+  });
+
   it("seal THROWS when the signing key is absent (never signs with nothing)", async () => {
     const { substrate } = build(new InMemorySecretStore());
-    await expect(
-      substrate.seal({ proofRoot: `sha256:${"a".repeat(64)}` as Digest, bindings: bindings() }),
-    ).rejects.toMatchObject({ name: "ProofSigningKeyUnavailableError" });
+    await expect(substrate.seal(sealInput())).rejects.toMatchObject({ name: "ProofSigningKeyUnavailableError" });
   });
 
   it("seal THROWS on non-ed25519 key material", async () => {
@@ -243,9 +290,7 @@ describe("PgProofSubstrate — seal/construct guards", () => {
     const store = new InMemorySecretStore();
     await store.put({ ref: TEST_REF, value: privateKey.export({ type: "pkcs8", format: "pem" }) as string });
     const { substrate } = build(store);
-    await expect(
-      substrate.seal({ proofRoot: `sha256:${"a".repeat(64)}` as Digest, bindings: bindings() }),
-    ).rejects.toMatchObject({ name: "ProofSigningKeyMalformedError" });
+    await expect(substrate.seal(sealInput())).rejects.toMatchObject({ name: "ProofSigningKeyMalformedError" });
   });
 
   it("constructBundle rejects an empty member set", async () => {

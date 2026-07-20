@@ -266,7 +266,17 @@ export interface ProofSubstrate {
     readonly validateSectionBody?: SectionBodyValidator;
   }): Promise<readonly ProofUnitRef[]>;
   computeRoot(members: readonly ProofUnitRef[]): Digest;
+  /**
+   * Sign the canonical message over the FULL bundle identity — tenant
+   * (`orgId`/`projectId`), bundle identity (`bundleDigest`, which binds proofRoot +
+   * members + bindings), plus `proofRoot`/`bindings` explicitly. The tenant + bundle
+   * id MUST be inside the signed envelope so a proof cannot be rebound to another
+   * org/project (or another bundle identity) without the private key.
+   */
   seal(input: {
+    readonly orgId: string;
+    readonly projectId: string;
+    readonly bundleDigest: Digest;
     readonly proofRoot: Digest;
     readonly bindings: BundleBindings;
   }): Promise<{ readonly signingKeyId: string; readonly rootSignature: Uint8Array }>;

@@ -12,7 +12,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import { PgProofSubstrate } from "../src/engine/cas/pgProofSubstrate.js";
+import { bundleUnitId, encodeBundleId, serializeBundleBytes } from "../src/engine/cas/proofSubstrateCodec.js";
 import type { BundleBindings, Digest, ProofBundleSealed } from "../src/engine/contracts/cas.js";
+import { contentDigestOf } from "../src/engine/contracts/cas.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -177,6 +179,24 @@ describeDb("PgProofSubstrate RLS (SP-3 proof bundle round-trip)", () => {
     const result = await substrate.verify(tampered);
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/proof root/u);
+  });
+
+  it("CRITICAL: a cross-tenant-rebound bundle fails verify AND cannot be persisted under the forged org", async () => {
+    // A genuine bundle sealed for org A.
+    const bundle = await constructAndPersist();
+    const forgedBundleId = encodeBundleId({ orgId: ORG_B, projectId: PROJECT_B, bundleDigest: bundle.bundleDigest });
+    const reboundMembers = bundle.members.map((m) => ({ ...m, bundleUnitId: bundleUnitId(forgedBundleId, m.ordinal) }));
+    const rebound0: ProofBundleSealed = { ...bundle, bundleId: forgedBundleId, members: reboundMembers };
+    const rebound: ProofBundleSealed = { ...rebound0, bytesDigest: contentDigestOf(serializeBundleBytes(rebound0)) };
+
+    // Verify rejects (signature was sealed over org A, message now covers org B).
+    expect((await substrate.verify(rebound)).valid).toBe(false);
+    // persistBundle re-verifies and refuses — nothing lands under the forged org B.
+    await expect(substrate.persistBundle(rebound)).rejects.toMatchObject({ name: "ProofBundleNotVerifiedError" });
+    const forgedRow = await runWithOrgScope(runtimePool, ORG_B, (client) =>
+      client.query("SELECT id FROM proof_bundles WHERE bundle_digest = $1", [bundle.bundleDigest]),
+    );
+    expect(forgedRow.rowCount).toBe(0);
   });
 
   it("cross-org isolation: org B and the unscoped runtime role see zero proof rows", async () => {

@@ -103,15 +103,45 @@ export function canonicalBindings(bindings: BundleBindings): CanonicalBody {
 
 /**
  * The exact byte message that `seal` signs and `verify` re-checks: a
- * domain-tagged, canonical serialization of (proofRoot ‖ canonical-bindings).
- * Byte-stable — no map iteration order, no timestamps beyond the durable
- * binding fields the caller already fixed.
+ * domain-tagged, canonical serialization of the FULL bundle identity —
+ * (orgId ‖ projectId ‖ bundleDigest ‖ proofRoot ‖ canonical-bindings). The tenant
+ * (`orgId`/`projectId`) and bundle identity (`bundleDigest`) are INSIDE the signed
+ * envelope, so a proof cannot be rebound to another org/project or another bundle
+ * identity without re-signing (which needs the private key). `bundleDigest` already
+ * binds proofRoot + members + bindings; proofRoot + bindings are also signed
+ * explicitly (defense in depth). Byte-stable — no map iteration order, no
+ * timestamps beyond the durable binding fields the caller already fixed.
  */
 export function canonicalSealMessage(input: {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly bundleDigest: Digest;
   readonly proofRoot: Digest;
   readonly bindings: BundleBindings;
 }): Uint8Array {
-  return canonicalBytes([SEAL_TAG, input.proofRoot, canonicalBindings(input.bindings)]);
+  return canonicalBytes([
+    SEAL_TAG,
+    input.orgId,
+    input.projectId,
+    input.bundleDigest,
+    input.proofRoot,
+    canonicalBindings(input.bindings),
+  ]);
+}
+
+/**
+ * The canonical bytes content-addressed for a proof unit. The content identity
+ * binds `kind` + `verdict` + `body`, so two units with the same body but a
+ * different kind/verdict get DISTINCT `proof_unit_digest`s (no first-writer-wins
+ * `ON CONFLICT` collision in `proof_units`) — matching the sealed member leaf's
+ * kind/verdict binding. Domain-tagged so it can never collide with a bare body hash.
+ */
+export function proofUnitContentBytes(unit: {
+  readonly kind: ProofUnitKind;
+  readonly verdict: ProofUnitVerdict;
+  readonly body: CanonicalBody;
+}): Uint8Array {
+  return canonicalBytes(["tanren.proof-unit.v1", unit.kind, unit.verdict, unit.body]);
 }
 
 /** The ordinal-ordered canonical projection of a member for the whole-bundle digest. */
@@ -234,7 +264,15 @@ export function decodeBundleId(bundleId: string): BundleIdContext {
   if (typeof orgId !== "string" || typeof projectId !== "string" || typeof bundleDigest !== "string") {
     throw new MalformedBundleIdError(bundleId);
   }
-  return { orgId, projectId, bundleDigest: bundleDigest as Digest };
+  const context: BundleIdContext = { orgId, projectId, bundleDigest: bundleDigest as Digest };
+  // Defense in depth (audit Finding 4): reject any NON-CANONICAL encoding — extra
+  // keys, unsorted keys, or non-canonical spacing that JSON.parse would accept for
+  // the same (org, project, digest). Re-encode the decoded context and require it
+  // reproduces the input byte-for-byte, so a bundle id has exactly one valid form.
+  if (encodeBundleId(context) !== bundleId) {
+    throw new MalformedBundleIdError(bundleId);
+  }
+  return context;
 }
 
 /** Deterministic per-row id for a `proof_bundle_units` row (stable ⇒ idempotent). */

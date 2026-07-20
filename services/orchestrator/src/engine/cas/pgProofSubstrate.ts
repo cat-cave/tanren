@@ -37,7 +37,7 @@ import type {
   ProofVerification,
   SectionBodyValidator,
 } from "../contracts/cas.js";
-import { canonicalJson, contentDigestOf } from "../contracts/cas.js";
+import { contentDigestOf } from "../contracts/cas.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { PgCasByteStore } from "./pgCasByteStore.js";
 import { PROOF_SIGNING_KEY_REF, resolveSigningKey } from "./proofSigningKey.js";
@@ -53,10 +53,9 @@ import {
   encodeBundleId,
   PROOF_BUNDLE_MEDIA_TYPE,
   PROOF_UNIT_MEDIA_TYPE,
+  proofUnitContentBytes,
   serializeBundleBytes,
 } from "./proofSubstrateCodec.js";
-
-const encoder = new TextEncoder();
 
 /** A proof bundle must seal over at least one member unit. */
 export class EmptyProofBundleError extends Error {
@@ -113,7 +112,10 @@ export class PgProofSubstrate implements ProofSubstrate {
       // SP-7: validate the gate-section body BEFORE content-addressing. A draft
       // failing validation THROWS here — it is never silently ingested.
       input.validateSectionBody?.(draft.kind, draft.body);
-      const bytes = encoder.encode(canonicalJson(draft.body));
+      // Content identity binds kind + verdict + body (audit Finding 3): a
+      // same-body/different-verdict (or -kind) unit gets a DISTINCT digest, so the
+      // `ON CONFLICT DO NOTHING` below can never first-writer-win a colliding row.
+      const bytes = proofUnitContentBytes(draft);
       const casRef = await this.casByteStore.put({ orgId: input.orgId, bytes, mediaType: PROOF_UNIT_MEDIA_TYPE });
       const digest = casRef.digest;
       const evidenceDigests = draft.evidenceDigests ?? [];
@@ -143,12 +145,23 @@ export class PgProofSubstrate implements ProofSubstrate {
   }
 
   public async seal(input: {
+    readonly orgId: string;
+    readonly projectId: string;
+    readonly bundleDigest: Digest;
     readonly proofRoot: Digest;
     readonly bindings: BundleBindings;
   }): Promise<{ readonly signingKeyId: string; readonly rootSignature: Uint8Array }> {
     // Fail-loud on a missing/malformed key — NEVER sign with an empty/zero key.
     const key = await resolveSigningKey(this.secrets, this.signingKeyRef);
-    const message = canonicalSealMessage({ proofRoot: input.proofRoot, bindings: input.bindings });
+    // Sign over the FULL identity — tenant + bundle id are inside the envelope, so
+    // a proof cannot be rebound to another org/project/bundle without re-signing.
+    const message = canonicalSealMessage({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      bundleDigest: input.bundleDigest,
+      proofRoot: input.proofRoot,
+      bindings: input.bindings,
+    });
     const rootSignature = new Uint8Array(ed25519Sign(null, message, key.privateKey));
     return { signingKeyId: key.signingKeyId, rootSignature };
   }
@@ -182,7 +195,13 @@ export class PgProofSubstrate implements ProofSubstrate {
       ...member,
       bundleUnitId: bundleUnitId(bundleId, member.ordinal),
     }));
-    const { signingKeyId, rootSignature } = await this.seal({ proofRoot, bindings: input.bindings });
+    const { signingKeyId, rootSignature } = await this.seal({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      bundleDigest,
+      proofRoot,
+      bindings: input.bindings,
+    });
     const bytes = serializeBundleBytes({
       bundleId,
       bundleDigest,
@@ -263,7 +282,17 @@ export class PgProofSubstrate implements ProofSubstrate {
     if (key.signingKeyId !== bundle.signingKeyId) {
       return { valid: false, reason: "unknown or mismatched signingKeyId" };
     }
-    const message = canonicalSealMessage({ proofRoot: bundle.proofRoot, bindings: bundle.bindings });
+    // Recompute the signed message from the bundle's OWN tenant + bundle identity
+    // (decoded from bundleId, whose digest was checked == bundleDigest above). A
+    // bundle rewritten to another org/project (audit Finding 1) yields a DIFFERENT
+    // message here, so the unchanged signature no longer verifies → invalid.
+    const message = canonicalSealMessage({
+      orgId: context.orgId,
+      projectId: context.projectId,
+      bundleDigest: bundle.bundleDigest,
+      proofRoot: bundle.proofRoot,
+      bindings: bundle.bindings,
+    });
     let signatureValid = false;
     try {
       signatureValid = ed25519Verify(null, message, key.publicKey, bundle.rootSignature);
