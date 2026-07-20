@@ -442,7 +442,6 @@ export const specBehaviors = pgTable(
     index("spec_behaviors_behavior_id").on(table.behaviorId),
   ],
 );
-
 // Modeled as a join table for additive m:n evolution; the unique index on
 // spec_id enforces the current one-milestone-per-spec rule.
 export const specMilestones = pgTable(
@@ -492,6 +491,7 @@ export { designFragments } from "./schemaDesignFragments.js";
 export { designRenderLandVerdicts } from "./schemaDesignRender.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
 export { governanceFragments, governancePolicyRevisions } from "./schemaGovernance.js";
+export { integrationFragments } from "./schemaIntegrationFragments.js";
 export * from "./schemaEffectivePolicySnapshots.js";
 export * from "./schemaWave6.js";
 export * from "./schemaBhCluster.js";

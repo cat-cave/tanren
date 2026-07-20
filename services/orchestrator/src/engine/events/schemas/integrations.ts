@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AuditEnvelope } from "./audit.js";
 
 export { w0EventRegistry } from "./eventVocabularyW0.js";
+export { w1aEventRegistry } from "./eventVocabularyW1aIntegrationAuthor.js";
 export { wave1EventRegistry } from "./wave1Vocabulary.js";
 export { governanceVocabularyRegistry } from "./governanceVocabulary.js";
 export { designSystemVocabularyRegistry } from "./designSystemVocabulary.js";
