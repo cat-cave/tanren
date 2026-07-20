@@ -130,9 +130,9 @@ function boundKeyFor(
   if (equivalence !== "equivalent" || preMerge === undefined) return null;
   return {
     releaseDigest: preMerge.contractDigest,
-    // The cell keys already fold the sorted fragment digest SET into each `designProofKey`;
-    // the bound components expose the anchor digests the join proved equal across environments.
-    fragmentDigests: [],
+    // The REAL sorted validated fragment-digest set fed into `deriveDesignProofKey` (never
+    // an empty placeholder) — so the proven six-tuple is honest.
+    fragmentDigests: [...preMerge.fragmentDigests],
     adapterTarget: preMerge.adapterTarget,
     environment: "production",
     scenarioKey: [...preMerge.scenarioKeys].sort().join(","),

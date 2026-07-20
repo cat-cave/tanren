@@ -128,6 +128,7 @@ export const DesignDeliveryProofSchema = z.object({
       renderOutcome: z.enum(["passed", "failed_visual", "inconclusive_infrastructure", "not_applicable"]),
       adapterTarget: z.string(),
       artifactDigest: z.string(),
+      fragmentDigests: z.array(z.string()),
       scenarioKeys: z.array(z.string()),
       cells: z.array(
         z.object({
@@ -149,6 +150,7 @@ export const DesignDeliveryProofSchema = z.object({
       environment: z.literal("production"),
       deploymentId: z.string(),
       artifactDigest: z.string(),
+      deployedProductDigest: z.string(),
       sourceRef: z.string(),
       behaviorCount: z.number().int(),
       behaviorsPassed: z.number().int(),

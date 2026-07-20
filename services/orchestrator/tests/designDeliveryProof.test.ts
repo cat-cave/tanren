@@ -36,6 +36,7 @@ function preMerge(overrides: Partial<DesignDeliveryPreMergeV1> = {}): DesignDeli
     renderOutcome: "passed",
     adapterTarget: "web-react",
     artifactDigest: ARTIFACT,
+    fragmentDigests: [SHA("1"), SHA("2")],
     scenarioKeys: ["button/light/desktop", "card/dark/mobile"],
     cells: [
       {
@@ -65,6 +66,7 @@ function production(overrides: Partial<DesignDeliveryProductionV1> = {}): Design
     environment: "production",
     deploymentId: "dep-1",
     artifactDigest: ARTIFACT,
+    deployedProductDigest: SHA("b"),
     sourceRef: "mainsha1",
     behaviorCount: 3,
     behaviorsPassed: 3,
@@ -99,6 +101,8 @@ describe("ds-6 DesignDeliveryProofV1 equivalence (the verified join)", () => {
     expect(proof.equivalence).toBe("equivalent");
     expect(proof.boundKey).not.toBeNull();
     expect(proof.boundKey?.artifactDigest).toBe(ARTIFACT);
+    // Finding 4: the proven six-tuple carries the REAL fragment digests, never [].
+    expect(proof.boundKey?.fragmentDigests).toEqual([SHA("1"), SHA("2")]);
     // No client success boolean exists on the shape.
     expect((proof as unknown as Record<string, unknown>)["success"]).toBeUndefined();
   });

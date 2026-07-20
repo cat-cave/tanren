@@ -82,7 +82,13 @@ export const DesignDeliveryPreMergeV1 = z
     designContractVersion: Label,
     renderOutcome: z.enum(["passed", "failed_visual", "inconclusive_infrastructure", "not_applicable"]),
     adapterTarget: Label,
+    /** The design-system artifact digest the eager matrix bound (the snapshot the cells were
+     * keyed against) — the SAME-domain equality anchor compared against the deployed design
+     * artifact digest (NOT the product deploy artifact). */
     artifactDigest: Sha256Digest,
+    /** The sorted validated fragment-digest SET fed into `deriveDesignProofKey` — the real
+     * sixth key input, carried so the proven `boundKey` is honest (never `[]`). */
+    fragmentDigests: z.array(Sha256Digest).max(4096),
     /** The eager scenario set (sorted) the pre-merge matrix bound — the equality anchor. */
     scenarioKeys: z.array(Label).max(4096),
     cells: z.array(DesignDeliveryCellV1).max(4096),
@@ -98,15 +104,22 @@ export const DesignDeliveryProductionV1 = z
     provider: Label,
     environment: z.literal("production"),
     deploymentId: Id,
-    /** The LIVE deployed product artifact digest — the equality anchor against pre-merge. */
+    /** The DEPLOYED design-system artifact digest — INDEPENDENTLY resolved from the live
+     * design render state (same content domain as the pre-merge binding's `artifactDigest`),
+     * NOT the product deploy blob. The equality anchor against the pre-merge snapshot. */
     artifactDigest: Sha256Digest,
+    /** The live product-deploy artifact digest (`release_instances.artifact_digest`) — carried
+     * for the trace only; a DIFFERENT content domain, so it is NEVER compared to the design
+     * artifact digest above. */
+    deployedProductDigest: Sha256Digest,
     /** The landed source ref the live release serves (the merged tip). */
     sourceRef: Label,
     /** The proof-backed demo's behavior tally (from `demo.completed`); no success boolean. */
     behaviorCount: Count,
     behaviorsPassed: Count,
     behaviorsFailed: Count,
-    /** The deployed scenario set (sorted) — the equality anchor against pre-merge. */
+    /** The deployed scenario set (sorted), INDEPENDENTLY resolved from the live design render
+     * state — NOT copied from pre-merge. The real equality check against the pre-merge set. */
     scenarioKeys: z.array(Label).max(4096),
   })
   .strict();

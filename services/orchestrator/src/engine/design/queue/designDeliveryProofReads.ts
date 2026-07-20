@@ -16,8 +16,22 @@ import type {
 } from "./designDeliveryProof.js";
 import type { DesignDeliveryEvidence } from "./designDeliveryProofGates.js";
 
-/** The proof-unit kind the pre-merge design binding records each eager matrix cell under. */
-export const DESIGN_DELIVERY_PROOF_UNIT_KIND = "design_delivery_scenario";
+// The proof-unit `kind`s the design binding records cells under — DISTINCT per phase so the
+// pre-merge load (below) reads ONLY pre-merge cells in SQL and the production-phase re-insert
+// can never contaminate the pre-merge matrix (Finding 5). The phase is separated at the
+// column level, not merely inside the derived `subject_id`.
+export const DESIGN_DELIVERY_PRE_MERGE_KIND = "design_delivery_scenario";
+export const DESIGN_DELIVERY_PRODUCTION_KIND = "design_delivery_production";
+
+/** The proof-unit verdict → cell render-verdict mapping. The `integration_proof_units.verdict`
+ * column vocabulary is `pass|fail|skipped`; the cell render vocabulary is `passed|failed|unknown`.
+ * Recorder and loader MUST agree — this is the single translation point (Finding 1). */
+function cellVerdictFromProofUnit(verdict: string): "passed" | "failed" | "unknown" | undefined {
+  if (verdict === "pass") return "passed";
+  if (verdict === "fail") return "failed";
+  if (verdict === "skipped") return "unknown";
+  return undefined;
+}
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 
@@ -62,15 +76,6 @@ function mergeShaOf(payload: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-interface RenderVerdictRow {
-  readonly design_system_id: string;
-  readonly release_id: string;
-  readonly design_contract_version: string;
-  readonly contract_digest: string | null;
-  readonly outcome: string;
-  readonly checkpoints: unknown;
-}
-
 interface ProofUnitCellRow {
   readonly proof_unit_id: string;
   readonly subject_id: string;
@@ -83,15 +88,23 @@ interface ArtifactDigestRow {
   readonly digest: string;
 }
 
-const RENDER_OUTCOMES = new Set(["passed", "failed_visual", "inconclusive_infrastructure", "not_applicable"]);
-const CELL_VERDICTS = new Set(["passed", "failed", "unknown"]);
+/** The snapshot design-release metadata matched to the pre-merge cells by artifact digest. */
+interface SnapshotVerdictRow {
+  readonly design_system_id: string;
+  readonly release_id: string;
+  readonly design_contract_version: string;
+  readonly contract_digest: string | null;
+  readonly checkpoints: unknown;
+}
 
 /**
- * Gather the pre-merge design binding for an integration node: the design proof-unit cells
- * recorded against it (kind = `design_delivery_scenario`, `source_node_id = node`), joined
- * to the latest run-level render verdict for the project's design system + its canonical
- * artifact digest. `undefined` when no cells or no render verdict exist (→ blocked). Caller
- * owns the org-scoped client.
+ * Gather the pre-merge design binding for an integration node — the immutable SNAPSHOT the
+ * eager matrix recorded: the design proof-unit cells (kind = pre-merge, `source_node_id =
+ * node`) whose per-cell verdict is the SNAPSHOT render result, the design artifact digest they
+ * were keyed against (`artifact_hash`), and the metadata of the render verdict matched to THAT
+ * exact artifact (so the binding reflects the design release the cells were bound to, not
+ * whatever is latest). `undefined` when no cells, a divergent/absent cell artifact, an
+ * unmatched verdict, or a malformed cell exists (→ blocked). Caller owns the org-scoped client.
  */
 export async function loadPreMergeBinding(
   client: QueryClient,
@@ -103,61 +116,59 @@ export async function loadPreMergeBinding(
          FROM integration_proof_units
         WHERE project_id = $1 AND kind = $2 AND source_node_id = $3
         ORDER BY created_at ASC, proof_unit_id ASC`,
-      [input.projectId, DESIGN_DELIVERY_PROOF_UNIT_KIND, input.integrationNodeId],
+      [input.projectId, DESIGN_DELIVERY_PRE_MERGE_KIND, input.integrationNodeId],
     )
   ).rows;
   if (cellRows.length === 0) return undefined;
 
-  const verdict = (
-    await client.query<RenderVerdictRow>(
-      `SELECT design_system_id, release_id, design_contract_version, contract_digest, outcome, checkpoints
-         FROM design_render_land_verdicts
-        WHERE org_id = $1 AND project_id = $2
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [input.orgId, input.projectId],
-    )
-  ).rows[0];
-  if (verdict === undefined || !RENDER_OUTCOMES.has(verdict.outcome) || verdict.contract_digest === null) {
-    return undefined;
-  }
-
-  const artifactDigest = await resolveReleaseArtifactDigest(client, input.orgId, verdict.release_id);
+  // The SNAPSHOT design artifact digest = the common `artifact_hash` of the recorded cells.
+  // A null or divergent artifact across cells is a corrupt binding → fail-closed.
+  const artifactDigest = cellRows[0]?.artifact_hash ?? undefined;
   if (artifactDigest === undefined) return undefined;
 
-  // Each cell's `artifact_hash` is the design artifact digest it was keyed against; a cell
-  // that does not agree with the resolved release artifact is a corrupt binding → fail-closed.
   const cells: DesignDeliveryCellV1[] = [];
   for (const row of cellRows) {
-    if (row.input_hash === null || !CELL_VERDICTS.has(row.verdict)) return undefined;
-    if (row.artifact_hash !== null && row.artifact_hash !== artifactDigest) return undefined;
+    if (row.input_hash === null || row.artifact_hash !== artifactDigest) return undefined;
+    const renderVerdict = cellVerdictFromProofUnit(row.verdict);
+    if (renderVerdict === undefined) return undefined;
     const scenarioKey = scenarioKeyOfSubject(row.subject_id);
     if (scenarioKey === undefined) return undefined;
     cells.push({
       scenarioKey,
-      renderVerdict: row.verdict as "passed" | "failed" | "unknown",
+      renderVerdict,
       designProofKey: proofKeyOfSubject(row.subject_id),
       proofUnitId: row.proof_unit_id,
       reused: false,
     });
   }
 
+  // Match the render verdict to the SNAPSHOT artifact (the design release whose canonical
+  // artifact digest the cells recorded) — the honest metadata source, not "latest".
+  const snapshot = await resolveVerdictByArtifactDigest(client, input.orgId, input.projectId, artifactDigest);
+  if (snapshot === undefined || snapshot.contract_digest === null) return undefined;
+
+  const fragmentDigests = await resolveFragmentDigests(client, input.orgId, snapshot.design_system_id);
   const scenarioKeys = [...new Set(cells.map((cell) => cell.scenarioKey))].sort();
-  const checkpointDigests = screenshotDigestsByScenario(verdict.checkpoints);
+  const checkpointDigests = screenshotDigestsByScenario(snapshot.checkpoints);
   const cellsWithShots = cells.map((cell) => {
     const shot = checkpointDigests.get(cell.scenarioKey);
     return shot === undefined ? cell : { ...cell, screenshotDigest: shot };
   });
+  // The render outcome is DERIVED from the recorded cells (the authoritative snapshot), not a
+  // possibly-newer verdict row: every cell passed ⇒ the matrix passed.
+  const renderOutcome = cellsWithShots.every((cell) => cell.renderVerdict === "passed") ? "passed" : "failed_visual";
 
   return {
     integrationNodeId: input.integrationNodeId,
     proofRoot: composeCellsRoot(cellsWithShots),
-    releaseId: verdict.release_id,
-    designSystemId: verdict.design_system_id,
-    contractDigest: verdict.contract_digest,
-    designContractVersion: verdict.design_contract_version,
-    renderOutcome: verdict.outcome as DesignDeliveryPreMergeV1["renderOutcome"],
+    releaseId: snapshot.release_id,
+    designSystemId: snapshot.design_system_id,
+    contractDigest: snapshot.contract_digest,
+    designContractVersion: snapshot.design_contract_version,
+    renderOutcome,
     adapterTarget: "web-react",
     artifactDigest,
+    fragmentDigests,
     scenarioKeys,
     cells: cellsWithShots,
   };
@@ -179,14 +190,15 @@ interface DemoRow {
 
 /**
  * Gather the production activation for the merged run: the LIVE production release bound to
- * the integration node, the newest terminal deploy/demo events, and the deployed design
- * scenario set (independently resolved from the render verdict of the LIVE release's design
- * system). Returns the production sub-object + whether the deploy verified. `undefined`
- * production ⇒ no live release (→ blocked). Caller owns the org-scoped client.
+ * the integration node, the newest terminal deploy/demo events, and — INDEPENDENTLY resolved
+ * (never copied from pre-merge) — the DEPLOYED design state: the current design render
+ * verdict's design-artifact digest + scenario set (the live design the deployed release
+ * serves). The scenario/artifact are therefore real equality inputs the gate can catch a
+ * divergence on. `undefined` production ⇒ no live release (→ blocked). Caller owns the client.
  */
 export async function loadProductionActivation(
   client: QueryClient,
-  input: { orgId: string; projectId: string; runId: string; preMergeScenarioKeys: readonly string[] },
+  input: { orgId: string; projectId: string; runId: string },
 ): Promise<{ production: DesignDeliveryProductionV1 | undefined; deployVerified: boolean }> {
   const release = (
     await client.query<LiveReleaseRow>(
@@ -206,23 +218,28 @@ export async function loadProductionActivation(
   const demoEvent = await newestTerminal(client, input.orgId, input.runId, ["demo.completed", "demo.failed"]);
   const demo = demoTallyOf(demoEvent);
 
-  // The deployed scenario set is the render-verdict scenario set of the LIVE release's design
-  // artifact (independently resolved). When the design artifact digest of the live release's
-  // binding equals the pre-merge binding, its scenario set equals too; a drift surfaces as a
-  // mismatch in the gate. Absent a live-release-scoped verdict, fall back to the pre-merge set
-  // ONLY when the artifacts agree (below), else leave it empty (→ scenario mismatch).
+  // INDEPENDENTLY resolve the deployed design state — the current design render verdict's
+  // design-artifact digest + scenario set (same content domain as the pre-merge binding). A
+  // recompose that changed the design artifact or the scenario matrix after the pre-merge
+  // snapshot surfaces as a real artifact/scenario mismatch in the gate (never tautological).
+  const design = await resolveCurrentDesignState(client, input.orgId, input.projectId);
+  if (design === undefined) return { production: undefined, deployVerified };
+
   const production: DesignDeliveryProductionV1 = {
     releaseInstanceId: release.id,
     integrationNodeId: release.integration_node_id,
     provider: release.provider,
     environment: "production",
     deploymentId: release.deployment_id,
-    artifactDigest: release.artifact_digest,
+    // The deployed DESIGN artifact digest (equality anchor) — NOT the product deploy blob.
+    artifactDigest: design.artifactDigest,
+    // The product deploy blob digest (trace only; different domain, never compared).
+    deployedProductDigest: release.artifact_digest,
     sourceRef: release.source_ref,
     behaviorCount: demo?.behaviorCount ?? 0,
     behaviorsPassed: demo?.passed ?? 0,
     behaviorsFailed: demo?.failed ?? 0,
-    scenarioKeys: [...input.preMergeScenarioKeys].sort(),
+    scenarioKeys: design.scenarioKeys,
   };
   return { production, deployVerified };
 }
@@ -243,7 +260,6 @@ export async function gatherDesignDeliveryEvidence(
       orgId: coords.orgId,
       projectId: coords.projectId,
       runId: coords.runId,
-      preMergeScenarioKeys: preMerge?.scenarioKeys ?? [],
     });
     return {
       orgId: coords.orgId,
@@ -320,21 +336,72 @@ export async function resolveIntegrationNodeForRun(
 
 // ---- helpers ---------------------------------------------------------------------------
 
-async function resolveReleaseArtifactDigest(
+/** Match the render verdict whose design release's CANONICAL artifact digest equals the given
+ * (snapshot) digest — the honest metadata source for the pre-merge binding (not "latest"). */
+async function resolveVerdictByArtifactDigest(
   client: QueryClient,
   orgId: string,
-  releaseId: string,
-): Promise<string | undefined> {
-  const row = (
-    await client.query<ArtifactDigestRow>(
-      `SELECT a.digest
-         FROM design_system_releases r
+  projectId: string,
+  artifactDigest: string,
+): Promise<SnapshotVerdictRow | undefined> {
+  return (
+    await client.query<SnapshotVerdictRow>(
+      `SELECT v.design_system_id, v.release_id, v.design_contract_version, v.contract_digest, v.checkpoints
+         FROM design_render_land_verdicts v
+         JOIN design_system_releases r ON r.org_id = v.org_id AND r.id = v.release_id
          JOIN design_artifacts a ON a.org_id = r.org_id AND a.id = r.canonical_artifact_id
-        WHERE r.org_id = $1 AND r.id = $2`,
-      [orgId, releaseId],
+        WHERE v.org_id = $1 AND v.project_id = $2 AND a.digest = $3
+        ORDER BY v.created_at DESC, v.id DESC LIMIT 1`,
+      [orgId, projectId, artifactDigest],
     )
   ).rows[0];
-  return row?.digest;
+}
+
+/** The current (deployed) design state: the LATEST render verdict's design-artifact digest +
+ * scenario set — the production-side design evidence, resolved INDEPENDENTLY of pre-merge. */
+async function resolveCurrentDesignState(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<{ artifactDigest: string; scenarioKeys: string[] } | undefined> {
+  const row = (
+    await client.query<{ digest: string; checkpoints: unknown }>(
+      `SELECT a.digest, v.checkpoints
+         FROM design_render_land_verdicts v
+         JOIN design_system_releases r ON r.org_id = v.org_id AND r.id = v.release_id
+         JOIN design_artifacts a ON a.org_id = r.org_id AND a.id = r.canonical_artifact_id
+        WHERE v.org_id = $1 AND v.project_id = $2
+        ORDER BY v.created_at DESC, v.id DESC LIMIT 1`,
+      [orgId, projectId],
+    )
+  ).rows[0];
+  if (row === undefined) return undefined;
+  return { artifactDigest: row.digest, scenarioKeys: scenarioKeysOfCheckpoints(row.checkpoints) };
+}
+
+/** The sorted validated fragment-digest SET for a design system — the real sixth key input. */
+async function resolveFragmentDigests(client: QueryClient, orgId: string, designSystemId: string): Promise<string[]> {
+  const rows = (
+    await client.query<ArtifactDigestRow>(
+      `SELECT digest FROM design_fragments
+        WHERE org_id = $1 AND design_system_id = $2 AND status = 'validated'
+        ORDER BY digest ASC`,
+      [orgId, designSystemId],
+    )
+  ).rows;
+  return rows.map((row) => row.digest).filter((digest) => /^sha256:[0-9a-f]{64}$/u.test(digest));
+}
+
+/** Extract the sorted, de-duplicated scenario keys from a render verdict's checkpoints. */
+function scenarioKeysOfCheckpoints(checkpoints: unknown): string[] {
+  if (!Array.isArray(checkpoints)) return [];
+  const keys = new Set<string>();
+  for (const item of checkpoints) {
+    if (typeof item !== "object" || item === null) continue;
+    const id = (item as Record<string, unknown>)["checkpointId"];
+    if (typeof id === "string" && id.length > 0) keys.add(id);
+  }
+  return [...keys].sort();
 }
 
 async function newestTerminal(

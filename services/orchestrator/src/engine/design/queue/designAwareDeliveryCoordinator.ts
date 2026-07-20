@@ -36,7 +36,7 @@ import {
   type ProofUnitVerdict,
 } from "../../repositories/integrationProofUnits.js";
 import { readLatestDesignRenderVerdict } from "../render/designRenderVerdictStore.js";
-import { DESIGN_DELIVERY_PROOF_UNIT_KIND } from "./designDeliveryProofReads.js";
+import { DESIGN_DELIVERY_PRE_MERGE_KIND, DESIGN_DELIVERY_PRODUCTION_KIND } from "./designDeliveryProofReads.js";
 import {
   gatherDesignDeliveryEvidence,
   resolveIntegrationNodeForRun,
@@ -191,6 +191,9 @@ export class DesignAwareDeliveryCoordinator implements RunMergeWatcher {
     releaseIdForReuseEvent: string;
   }): Promise<void> {
     const quarantineEpoch = 0;
+    // Phase-distinct kind so the pre-merge load reads ONLY pre-merge cells in SQL and the
+    // production re-insert can never contaminate the pre-merge matrix (Finding 5).
+    const kind = input.environment === "pre_merge" ? DESIGN_DELIVERY_PRE_MERGE_KIND : DESIGN_DELIVERY_PRODUCTION_KIND;
     for (const cell of input.binding.cells) {
       let designProofKey: string;
       try {
@@ -220,7 +223,7 @@ export class DesignAwareDeliveryCoordinator implements RunMergeWatcher {
       const reusable = await this.deps.proofUnits.findReusable({
         orgId: input.orgId,
         projectId: input.projectId,
-        kind: DESIGN_DELIVERY_PROOF_UNIT_KIND,
+        kind,
         subjectId,
         ...reuseIdentity,
       });
@@ -238,7 +241,7 @@ export class DesignAwareDeliveryCoordinator implements RunMergeWatcher {
       await this.deps.proofUnits.record({
         orgId: input.orgId,
         projectId: input.projectId,
-        kind: DESIGN_DELIVERY_PROOF_UNIT_KIND,
+        kind,
         subjectId,
         inputHash: proofUnitReuseInputHash(reuseIdentity),
         verdict,
