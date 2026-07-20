@@ -14,7 +14,7 @@
 
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
-import { BatchMergeCoordinator } from "./batchCoordinator.js";
+import { BatchMergeCoordinator, buildEagerIntegrationBeamPlanner } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
 import { resolveMaxBatchSize } from "./batchMaxSize.js";
@@ -86,5 +86,17 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.
     holdCeilingStore: new PgHoldCeilingStore(deps.pool),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
+    // mq-8's only production binding: subscriber → coordinate → recover stale
+    // claims → EAGER plan/build → fresh queue snapshot. The planner is preparation
+    // only; it receives no queue runner or authority evaluator.
+    eagerBeamPlanner: buildEagerIntegrationBeamPlanner({
+      pool: deps.pool,
+      secrets: deps.secrets,
+      githubHttp: deps.githubHttp,
+      allocator: deps.allocator,
+      ssh: deps.ssh,
+      identitySecretRef: deps.identitySecretRef,
+      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+    }),
   });
 }

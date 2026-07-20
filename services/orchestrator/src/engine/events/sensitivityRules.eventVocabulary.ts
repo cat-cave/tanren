@@ -1,5 +1,6 @@
 import type { SensitivityRule } from "./sensitivity.js";
 import { benchmarkSensitivityRules } from "./sensitivityRules.benchmark.js";
+import { eagerBeamSensitivityRules } from "./sensitivityRules.eagerBeam.js";
 import {
   designSystemSensitivityRules,
   eventVocabularyW0SensitivityRules,
@@ -29,4 +30,5 @@ export {
 export const eventVocabularySensitivityRules: SensitivityRule[] = [
   ...eventVocabularyW0SensitivityRules,
   ...eventVocabularyW1aIntegrationAuthorSensitivityRules,
+  ...eagerBeamSensitivityRules,
 ];

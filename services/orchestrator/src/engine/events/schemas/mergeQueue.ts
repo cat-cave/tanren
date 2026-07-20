@@ -249,6 +249,36 @@ export const MergeBatchGateReworkRoutedPayload = z
   })
   .strict();
 
+// mq-8 EAGER beam lifecycle. These events narrate build preparation only; neither
+// payload is an authority decision and neither can advance a queue entry.
+export const MergeBeamPlannedPayload = z
+  .object({
+    projectId: z.string(),
+    beamId: z.string(),
+    frontierRunId: z.string(),
+    frontierSpecId: z.string(),
+    planDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    integrationNodeId: z.string(),
+    rank: z.number().int().positive(),
+    generation: z.number().int().positive(),
+    baseSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    memberShas: z.array(z.string().regex(/^[0-9a-f]{40}$/u)).min(1),
+  })
+  .strict();
+
+export const MergeBeamStalePayload = z
+  .object({
+    projectId: z.string(),
+    beamId: z.string(),
+    frontierRunId: z.string(),
+    reason: z.string().min(1),
+    planDigest: z
+      .string()
+      .regex(/^sha256:[0-9a-f]{64}$/u)
+      .optional(),
+  })
+  .strict();
+
 // merge.regate.gate_rework_routed → a PRE-MERGE re-gate (a base-shift / queued-merge
 // re-gate of a cleanly-rebased-or-resolved tree) FAILED a deterministic GATE TIER
 // (lint/test/build) — the rebase itself was CLEAN (no merge conflict), the code just

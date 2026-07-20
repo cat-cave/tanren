@@ -36,7 +36,9 @@ import type { BatchAuthorityEvaluator } from "./multiMemberAuthorityTypes.js";
 import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
 import { createLogger } from "../observability/logger.js";
 import { BatchBisector } from "./batchBisector.js";
+import { buildEagerIntegrationBeamPlanner, type EagerIntegrationBeamPlanner } from "./eagerIntegrationBeamPlanner.js";
 export { DEFAULT_MAX_BATCH_SIZE };
+export { buildEagerIntegrationBeamPlanner };
 const log = createLogger("batch-coordinator");
 const INFRA_RETRY_BACKOFF_MS = 500;
 const PENDING_RECHECK_MS = 15_000;
@@ -94,6 +96,8 @@ export interface BatchMergeCoordinatorDeps {
   resolveMaxBatchSize?: (projectId: string) => Promise<number>;
   /** Test seam: the sleep between infra-error re-polls. Defaults to a real timer; a test injects a no-op/recording sleep so re-polls run instantly. */
   sleep?: (ms: number) => Promise<void>;
+  /** mq-8 advisory build-only planner. Production always supplies the real PG/jj implementation. */
+  eagerBeamPlanner?: Pick<EagerIntegrationBeamPlanner, "planAndBuild">;
 }
 
 /** Production BatchMergeCoordinator: speculative batch-check + bisect over the native queue. */
@@ -115,6 +119,10 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
     await this.deps.queue.recoverStaleClaims(projectId);
+    // EAGER planning is bound to the real subscriber → coordinator wake path. It
+    // intentionally runs before the fresh snapshot and cannot mutate queue state or
+    // reach MergeAuthority; an old/fake test seam simply omits this advisory work.
+    await this.deps.eagerBeamPlanner?.planAndBuild(projectId);
 
     // in-18 integration-grant park/re-admit reconciliation (the always-on backstop,
     // mirroring in-9's prepare pass). RE-ADMIT first so a unit whose grant genuinely

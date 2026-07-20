@@ -23,6 +23,8 @@ import { MergeTrainPanel } from "./MergeTrainPanel.js";
 import type { MergeQueueRepairRoutesListResponse } from "../../api/mergeQueueRepairRoutes.js";
 import type { MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
 import type { MergeQueueEvidenceContractResponse } from "../../api/mergeQueueEvidenceContracts.js";
+import type { MergeQueueEagerBeamsResponse } from "../../api/mergeQueueEagerBeams.js";
+import { EagerBeamPanel } from "./EagerBeamPanel.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 import { EvidenceContractPanel } from "./EvidenceContractPanel.js";
 
@@ -41,6 +43,8 @@ export interface MergeQueueBodyProps {
   mergeTrain: MergeTrainListResponse | undefined;
   /** mq-12 frozen F2 evidence for the latest visible merge-train node. */
   evidenceContract: MergeQueueEvidenceContractResponse | undefined;
+  /** mq-8 advisory eager integration builds (undefined on a failed read). */
+  eagerBeams: MergeQueueEagerBeamsResponse | undefined;
   /** Org id for the mq-15 artifact links. */
   orgId: string;
   /** Project id for the mq-15 artifact links. */
@@ -175,6 +179,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
     repairRoutes,
     mergeTrain,
     evidenceContract,
+    eagerBeams,
     orgId,
     projectId,
     windowDays,
@@ -212,6 +217,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
             <>
               <MergeTrainPanel projection={mergeTrain} orgId={orgId} projectId={projectId} />
               <EvidenceContractPanel projection={evidenceContract} />
+              <EagerBeamPanel projection={eagerBeams} />
               <MultiMemberAuthorityPanel projection={authorityEvaluations} />
               <RepairRouteLineagePanel projection={repairRoutes} />
               <AuthoritySignalPanel projection={authoritySignals} />

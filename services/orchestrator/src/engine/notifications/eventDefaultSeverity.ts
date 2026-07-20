@@ -1,5 +1,6 @@
 import { listEventNames, type EventName } from "../events/index.js";
 import type { Severity } from "./schemas.js";
+import { missionCompleteSeverityOverrides } from "./eventDefaultSeverity.missionComplete.js";
 
 // Map every event name in the registry to a default severity. The matrix UI
 // consumes this map to render the event row's default level; the dispatcher
@@ -23,6 +24,7 @@ import type { Severity } from "./schemas.js";
 // the rows off without forcing the operator to discover them.
 
 const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
+  ...missionCompleteSeverityOverrides,
   "delivery.degraded": "warn",
   "delivery.completed": "info",
   "delivery.demo_stimulus_started": "info",
@@ -447,20 +449,6 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "source_issue.sync.drifted": "warn",
   "resolution.proof.sealed": "info",
 
-  // Mission-complete WAVE-2 governance policy-revision vocabulary (gv-7). The
-  // immutable revision lifecycle (draft persisted, deterministically compiled,
-  // activated) is routine durable governance fact → `info`. A proof invalidation
-  // (a live gate/review proof dropped because policy changed under it or the
-  // stacked base shifted) is operator-actionable — a regate/re-review follows —
-  // so it is `warn` and clears the matrix floor to reach the operator.
-  "governance.policy.created": "info",
-  "governance.policy.compiled": "info",
-  "governance.policy.activated": "info",
-  "governanceFragment.authoring.started": "info",
-  "governanceFragment.authoring.attempt": "info",
-  "governanceFragment.authoring.succeeded": "info",
-  "governanceFragment.authoring.failed": "fail",
-  "integration.proof.invalidated": "warn",
   // ds-0 design-system vocabulary (§7). Trajectory/progress + digests are `info`;
   // the loud operator-actionable failures are `warn` (F2D authoring failure and a
   // queue regression bisected to a culprit release).

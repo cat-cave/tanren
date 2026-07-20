@@ -39,11 +39,12 @@ export const integrationNodes = pgTable(
   (table) => [
     check(
       "integration_nodes_purpose_check",
-      sql`${table.purpose} IN ('eager_base','merge_batch','stack_head','bisect_prefix','pre_merge_preview')`,
+      sql`${table.purpose} IN ('eager_base','eager_beam','merge_batch','stack_head','bisect_prefix','pre_merge_preview')`,
     ),
     check("integration_nodes_status_check", sql`${table.status} IN ('building','ready','landed','stale')`),
     index("integration_nodes_org_id").on(table.orgId),
     index("integration_nodes_org_project").on(table.orgId, table.projectId),
+    uniqueIndex("integration_nodes_org_node_unique").on(table.orgId, table.nodeId),
     uniqueIndex("integration_nodes_org_member_key_unique").on(table.orgId, table.memberKey),
   ],
 );

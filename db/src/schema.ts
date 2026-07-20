@@ -32,9 +32,7 @@ import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js
 import { events } from "./schemaEvents.js";
 import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
 
-// Core identity + project/spec/run tables live in schemaCore.ts (cycle-avoidance
-// — sub-schemas can reference them without importing schema.ts); re-exported so
-// consumers + the migration generator still see one `schema.*` namespace.
+// Core identity + project/spec/run tables live in schemaCore.ts (cycle-avoidance — sub-schemas can reference it without importing schema.ts); re-exported so consumers + the migration generator see one `schema.*` namespace.
 export {
   enumCheck,
   integrationNodes,
@@ -50,6 +48,8 @@ export {
   users,
   events,
 };
+
+export { mergeEagerBeams } from "./schemaEagerBeams.js";
 
 export const tasks = pgTable(
   "tasks",
