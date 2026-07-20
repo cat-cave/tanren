@@ -303,4 +303,27 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     expect(store.nodes.size).toBe(0);
     expect(gate).not.toHaveBeenCalled();
   });
+
+  it("negative control: an excluded changed test records only a fallback observation, runs the full gate, and cannot return a mergeable pass", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "fail" as const, message: "unselected changed test failed" },
+      passed: false,
+    }));
+    const driven = deps(store, new RecordingEventStore(), gate);
+    driven.resolveFragmentEvidence = async () => ({ kind: "fallback", reason: "selector_set_mismatch" });
+
+    const verdict = await driveBatchThroughNode(FACTS, driven);
+
+    expect(verdict).toEqual({ result: "fail", message: "unselected changed test failed" });
+    expect(gate).toHaveBeenCalledTimes(1);
+    const evidenceUnits = store.proofUnits.db.integrationProofUnits.filter(
+      (unit) => unit.subject_id === "fragment_evidence:fallback:selector_set_mismatch",
+    );
+    expect(evidenceUnits).toHaveLength(1);
+    expect(evidenceUnits[0]?.verdict).toBe("fail");
+    expect(
+      evidenceUnits.some((unit) => unit.subject_id === "fragment_evidence:selected" && unit.verdict === "pass"),
+    ).toBe(false);
+  });
 });

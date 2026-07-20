@@ -101,6 +101,7 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "  - Runtime-lang dev-dependency declarations (typescript, vitest, rspec, …).",
     "MUST DECLARE: `contract.testRunner` + `contract.reportPath` (checked by",
     "processCiYml; a runtime fragment missing these is rejected at compose time).",
+    "WHEN `contract.evidence` is present, write its exact JSON selector + behavior manifests; they are data only, never commands.",
     "MUST NOT: declare product env vars owned by db/deploy/notify slots (see the",
     "OWNED ENV VARS section below), or ship an example table/model (that's the",
     "example fragment's job).",

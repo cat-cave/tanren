@@ -27,6 +27,19 @@ export {
   VirtualFileSystem,
 } from "./types.js";
 export {
+  FragmentContractSchema,
+  FragmentEvidenceContractV1Schema,
+  FragmentEvidenceManifestV1Schema,
+  fragmentEvidenceContentBytes,
+  fragmentEvidenceContentDigest,
+  FRAGMENT_EVIDENCE_MANIFEST_PATH,
+  SafeRepositoryRelativePathSchema,
+  serializeFragmentEvidenceManifest,
+  type FragmentContractShape,
+  type FragmentEvidenceContractV1,
+  type FragmentEvidenceManifestV1,
+} from "./fragmentEvidenceContract.js";
+export {
   ADDON_BIOME_ID,
   ADDON_DOCKER_ID,
   BASE_FRAGMENT_ID,

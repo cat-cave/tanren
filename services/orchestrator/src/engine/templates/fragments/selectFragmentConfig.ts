@@ -38,6 +38,7 @@
 import { lookupCurated } from "./registry/index.js";
 import { compose as composeFragmentIds } from "./compose.js";
 import type { CaptureLifecycle } from "../../forge/interview/types.js";
+import { fragmentEvidenceContentDigest, type FragmentEvidenceContractV1 } from "./fragmentEvidenceContract.js";
 import { type FragmentContract, type FragmentKind, type FragmentLibrary, type TemplateConfig } from "./types.js";
 
 // Re-export so `derive.ts` can declare the seam without reaching into the inner module.
@@ -361,7 +362,24 @@ function runtimeRequiredContract(runtimeLabel: string): Partial<FragmentContract
   return {
     ...(testRunner === undefined ? {} : { testRunner }),
     reportPath: "reports/junit.xml",
+    evidence: runtimeEvidenceContract(),
   };
+}
+
+/**
+ * F2 runtime authoring receives a complete declarative evidence shape. The digest
+ * addresses this frozen declaration, not a command or a mutable CI label; the batch
+ * resolver still requires a matching captured artifact before it can select it.
+ */
+function runtimeEvidenceContract(): FragmentEvidenceContractV1 {
+  const contract: FragmentEvidenceContractV1 = {
+    schemaVersion: "fragment_evidence.v1",
+    junitReportPath: "reports/junit.xml",
+    testSelector: { path: ".tanren/test-selector.json", format: "json" },
+    behaviorManifest: { path: ".tanren/behavior-manifest.json", format: "json" },
+    contentDigest: "sha256:" + "0".repeat(64),
+  };
+  return { ...contract, contentDigest: fragmentEvidenceContentDigest(contract) };
 }
 
 function requiredContractFor(kind: FragmentKind, label: string): Partial<FragmentContract> {

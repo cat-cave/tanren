@@ -28,6 +28,10 @@ import {
   type MergeQueueRepairRoutesListResponse,
 } from "../../api/mergeQueueRepairRoutes.js";
 import { MergeQueueTrainClient, type MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
+import {
+  MergeQueueEvidenceContractsClient,
+  type MergeQueueEvidenceContractResponse,
+} from "../../api/mergeQueueEvidenceContracts.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
 
@@ -52,6 +56,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
     let repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
     let mergeTrain: MergeTrainListResponse | undefined;
+    let evidenceContract: MergeQueueEvidenceContractResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -81,6 +86,14 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         repairClient.listRepairRoutes(ctx.org.id, project.projectId),
         trainClient.listTrain(ctx.org.id, project.projectId),
       ]);
+      const nodeId = mergeTrain?.artifacts?.[0]?.integrationNodeId;
+      if (nodeId !== undefined) {
+        const evidenceClient = new MergeQueueEvidenceContractsClient({
+          orchestratorUrl: deps.orchestratorUrl,
+          cookieHeader: c.req.header("cookie"),
+        });
+        evidenceContract = await evidenceClient.getEvidenceContract(ctx.org.id, project.projectId, nodeId);
+      }
     }
 
     return renderShell(
@@ -94,6 +107,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         authorityEvaluations={authorityEvaluations}
         repairRoutes={repairRoutes}
         mergeTrain={mergeTrain}
+        evidenceContract={evidenceContract}
         orgId={ctx.org?.id ?? ""}
         projectId={project?.projectId ?? ""}
         windowDays={windowDays}

@@ -218,6 +218,13 @@ describe("selectFragmentConfig — per-runtime testRunner required contract (Cod
     expect(runtimeSpec).toBeDefined();
     expect(runtimeSpec?.requiredContract.testRunner).toBe("cargo-test");
     expect(runtimeSpec?.requiredContract.reportPath).toBe("reports/junit.xml");
+    expect(runtimeSpec?.requiredContract.evidence).toMatchObject({
+      schemaVersion: "fragment_evidence.v1",
+      junitReportPath: "reports/junit.xml",
+      testSelector: { path: ".tanren/test-selector.json", format: "json" },
+      behaviorManifest: { path: ".tanren/behavior-manifest.json", format: "json" },
+    });
+    expect(runtimeSpec?.requiredContract.evidence?.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   });
 
   it("stamps testRunner: go-test on the missing-runtime FragmentSpec for a Go stack", () => {

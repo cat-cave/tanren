@@ -20,6 +20,7 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { FragmentEvidenceContractV1 } from "./fragmentEvidenceContract.js";
 
 // ---- Matrix point labels ---------------------------------------------------
 //
@@ -378,6 +379,9 @@ export interface FragmentContract {
    * tier-2 target by `appendToJustfileTarget`; declared HERE so the post-processor
    * can sanity-check the runtime's declaration vs the justfile fill. */
   ciTier2?: string;
+  /** Frozen declarative proof metadata. It contains paths and identities only;
+   * neither composition nor batch evaluation can execute anything from it. */
+  evidence?: FragmentEvidenceContractV1;
 }
 
 /**
