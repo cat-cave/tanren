@@ -11,7 +11,6 @@
 // a URL smoke check (NO markLive), preserving the invariant that NOTHING promotes until the
 // preview's proof-backed demo passes. Only the promote step verifies through the live path.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import {
   buildDeployAdapter,
@@ -20,7 +19,6 @@ import {
 } from "../../deploy/buildDeployAdapter.js";
 import { EventReapFailureReporter } from "../../deploy/reapFailureReporter.js";
 import { parseDigest } from "../../contracts/cas.js";
-import type { BehaviorRevisionId } from "../../contracts/behaviorRevision.js";
 import type {
   DeployAdapter,
   DeployRef,
@@ -32,7 +30,6 @@ import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { DeploySource } from "../../provisioners/deployProvisioner.js";
 import type { EventStore } from "../../eventStore.js";
 import type { ReleaseInstancesRepository } from "../../repositories/releaseInstances.js";
-import { ReleaseInstancesStore } from "../../repositories/releaseInstances.js";
 import { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
 import { PgReleaseInstancesRepository } from "../../repositories/index.js";
 import {
@@ -42,49 +39,41 @@ import {
 } from "../../demo/proofBackedWebDemo.js";
 import { createLogger } from "../../observability/logger.js";
 import { pollUntilTerminal } from "../../deploy/pollUntilTerminal.js";
-import { loadSpecBehaviors } from "../demoOnDeployReads.js";
-import { deployAuditEnvelope, loadDeployOperationGrant, missingDeployGrantError } from "../deployOnMergeAuthority.js";
+import { loadDeployOperationGrant, missingDeployGrantError } from "../deployOnMergeAuthority.js";
 import type { SecretStore, DeployHttpTransport } from "../deployOnMergeDeployDeps.js";
-import type {
-  GroupArtifact,
-  GroupDeliveryDeployer,
-  GroupDeliveryPlan,
-  GroupDemoOutcome,
-  GroupPreview,
-  GroupProduction,
-  GroupReleaseHandle,
-  PriorGoodRelease,
-  ResolvedGroupDeployTarget,
+import {
+  currentLiveGroupRelease,
+  currentPriorGoodRelease,
+  emitGroupDeployVerified,
+  ensureGroupDeployVerified,
+  findGroupRelease,
+  resolveGroupBehaviorRevisionIds,
+} from "./groupDeliveryDeployerHelpers.js";
+import {
+  LandGroupDeliveryClaimLostError,
+  type GroupArtifact,
+  type GroupDeliveryDeployer,
+  type GroupDeliveryPlan,
+  type GroupDemoOutcome,
+  type GroupPreview,
+  type GroupPreviewOutcome,
+  type GroupProduction,
+  type GroupPromoteOutcome,
+  type GroupReleaseHandle,
+  type PriorGoodRelease,
+  type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
 
 const log = createLogger("land-group-delivery-deployer");
 
 /**
- * Build the GROUP's `deploy.verified` payload — the shape mq-15's `gatherEvidenceFromClient`
- * and ds-6's `designDeliveryProofReads` read (provider / appId / deploymentId / url / state +
- * smokeStatus + the audit envelope, bound to the LIVE production deployment). Pure so the shape
- * is unit-testable against BOTH the strict registered `DeployVerifiedPayload` and the consumers'
- * projections (Finding 2). NON-SECRET — refs + a URL + a state + a status code.
+ * The INTENT-MARKER seam (Finding A): a fenced, durable "about to fire the external effect" marker
+ * committed BEFORE the irreversible external call, read on takeover to detect a maybe-fired effect.
+ * A subset of `PgLandGroupDeliveryStore` (structurally satisfied); the factory wires the store.
  */
-export function groupDeployVerifiedPayload(
-  plan: GroupDeliveryPlan,
-  target: ResolvedGroupDeployTarget,
-  verified: { deploymentId: string; url: string; state: string; smokeStatus: number },
-) {
-  return {
-    provider: target.provider,
-    appId: target.appId,
-    deploymentId: verified.deploymentId,
-    url: verified.url,
-    state: verified.state,
-    smokeStatus: verified.smokeStatus,
-    ...deployAuditEnvelope({
-      provider: target.provider,
-      appId: target.appId,
-      orgId: plan.orgId,
-      policyVersion: target.policyVersion,
-    }),
-  };
+export interface GroupIntentStore {
+  writeIntent(orgId: string, landGroupId: string, token: string, step: "preview" | "promote"): Promise<boolean>;
+  readIntent(orgId: string, landGroupId: string, step: "preview" | "promote"): Promise<boolean>;
 }
 
 export interface ProductionGroupDeliveryDeployerDeps {
@@ -99,6 +88,8 @@ export interface ProductionGroupDeliveryDeployerDeps {
   readonly verifyPoll?: VerifyPollPolicy;
   /** Injectable DeployAdapter (tests); defaults to the production `direct_api` adapter per drive. */
   readonly deployAdapter?: DeployAdapter;
+  /** The intent-marker store (Finding A) — wired by the factory; absent ⇒ no intent gating (tests). */
+  readonly intentStore?: GroupIntentStore;
 }
 
 /** The `deploy.<provider>` provider kind maps onto the `deployRef.provider`. */
@@ -140,10 +131,43 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
-  }): Promise<GroupPreview> {
+    token?: string;
+    heartbeat?: () => Promise<void>;
+  }): Promise<GroupPreviewOutcome> {
     const { plan, target, artifact } = input;
     const ref = this.ref(target);
-    const behaviorRevisionIds = await this.resolveBehaviorRevisionIds(plan);
+    // COMPLETION CHECK: a persisted release for THIS group's artifact already exists ⇒ REUSE it
+    // (idempotent — a takeover after the prior owner persisted the preview).
+    const existing = await findGroupRelease(this.deps.pool, plan, target, artifact.artifactDigest);
+    if (existing !== undefined) {
+      return {
+        kind: "applied",
+        preview: {
+          release: {
+            releaseInstanceId: existing.releaseInstanceId,
+            deploymentId: existing.deploymentId,
+            artifactDigest: artifact.artifactDigest,
+          },
+          previewDeploymentId: existing.deploymentId,
+        },
+      };
+    }
+    // INTENT CHECK (Finding A/D): a preview intent WITHOUT a persisted preview ⇒ the external
+    // deploy MAY have fired + orphaned for a dead owner ⇒ AMBIGUOUS. Degrade (never apply a SECOND
+    // preview); the orphan is reconciled out-of-band (preview TTL) + surfaced via needs_attention.
+    if (
+      this.deps.intentStore !== undefined &&
+      (await this.deps.intentStore.readIntent(plan.orgId, plan.landGroupId, "preview"))
+    ) {
+      log.warn("preview intent present without a persisted preview — ambiguous, degrading (orphaned preview)", {
+        landGroupId: plan.landGroupId,
+      });
+      return { kind: "ambiguous" };
+    }
+    // FIRE: write the preview intent FENCED (also the immediate fence-recheck, Finding C) COMMITTED
+    // BEFORE the external deploy. A lost fence ⇒ abort before firing.
+    await this.markIntentOrAbort(plan, input.token, input.heartbeat, "preview");
+    const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
     const grant = await this.grant(plan, target, "deploy", {
       resourceId: target.appId,
       sourceRepo: target.repoSlug,
@@ -159,13 +183,36 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
     const release = await this.readBackRelease(plan, target, preview.deploymentId);
     return {
-      release: {
-        releaseInstanceId: release.releaseInstanceId,
-        deploymentId: preview.deploymentId,
-        artifactDigest: artifact.artifactDigest,
+      kind: "applied",
+      preview: {
+        release: {
+          releaseInstanceId: release.releaseInstanceId,
+          deploymentId: preview.deploymentId,
+          artifactDigest: artifact.artifactDigest,
+        },
+        previewDeploymentId: preview.deploymentId,
       },
-      previewDeploymentId: preview.deploymentId,
     };
+  }
+
+  /**
+   * Write the step's intent marker FENCED (Finding A) BEFORE the external effect — which is ALSO
+   * the atomic immediate fence-recheck (Finding C). A lost fence ⇒ throw claim-lost (abort before
+   * firing). With no intent store (tests), fall back to the heartbeat fence-recheck.
+   */
+  private async markIntentOrAbort(
+    plan: GroupDeliveryPlan,
+    token: string | undefined,
+    heartbeat: (() => Promise<void>) | undefined,
+    step: "preview" | "promote",
+  ): Promise<void> {
+    if (this.deps.intentStore !== undefined && token !== undefined) {
+      if (!(await this.deps.intentStore.writeIntent(plan.orgId, plan.landGroupId, token, step))) {
+        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+      }
+      return;
+    }
+    if (heartbeat !== undefined) await heartbeat();
   }
 
   async verifyPreview(input: {
@@ -224,16 +271,16 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
     preview: GroupPreview;
+    token?: string;
     heartbeat?: () => Promise<void>;
-  }): Promise<GroupProduction> {
+  }): Promise<GroupPromoteOutcome> {
     const { plan, target, artifact, preview } = input;
     const ref = this.ref(target);
-    const current = await this.currentLiveRecord(plan, target);
-    // IDEMPOTENT PROMOTE (Finding A.2): if THIS group's artifact is ALREADY the live production
-    // release (bound to this landed commit), the promote has already COMMITTED — a takeover race
-    // detected the prior owner's effect. NO-OP (never a double external promote/deploy, never a
-    // second `deploy.verified`); return the committed release. The current live release is for
-    // THIS group only when its artifact digest AND source ref match the landed group.
+    const current = await currentLiveGroupRelease(this.deps.pool, plan, target);
+    // COMPLETION CHECK: THIS group's artifact is ALREADY the live production release ⇒ the promote
+    // has COMMITTED. NO-OP — but ENSURE `deploy.verified` is emitted (Finding B: a prior owner may
+    // have committed the live release then DIED before appending it; without this the group would
+    // have a live deploy but no deploy.verified → mq-15/ds-6 starve). Idempotent (no double-emit).
     if (
       current !== undefined &&
       current.artifactDigest === artifact.artifactDigest &&
@@ -243,17 +290,41 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
         landGroupId: plan.landGroupId,
         releaseInstanceId: current.releaseInstanceId,
       });
+      await ensureGroupDeployVerified(
+        { pool: this.deps.pool, eventStore: this.deps.eventStore, urlProbe: this.urlProbe },
+        plan,
+        target,
+        current,
+      );
       return {
-        release: {
-          releaseInstanceId: current.releaseInstanceId,
-          deploymentId: current.deploymentId,
-          artifactDigest: artifact.artifactDigest,
+        kind: "promoted",
+        production: {
+          release: {
+            releaseInstanceId: current.releaseInstanceId,
+            deploymentId: current.deploymentId,
+            artifactDigest: artifact.artifactDigest,
+          },
         },
       };
     }
-    // FENCE-RECHECK before the IRREVERSIBLE promote: re-assert the claim is still owned (a lost
-    // claim throws LandGroupDeliveryClaimLostError and aborts BEFORE the external effect fires).
-    if (input.heartbeat !== undefined) await input.heartbeat();
+    // INTENT CHECK (Finding A): a promote intent present WITHOUT a committed live release ⇒ the
+    // EXTERNAL promote MAY have fired for an owner that DIED before the DB commit ⇒ AMBIGUOUS.
+    // DEGRADE — NEVER re-fire (a double production deploy is unacceptable; a conservative degrade
+    // requiring an operator/re-drive is acceptable). This closes the external-before-DB gap that
+    // check-then-act cannot.
+    if (
+      this.deps.intentStore !== undefined &&
+      (await this.deps.intentStore.readIntent(plan.orgId, plan.landGroupId, "promote"))
+    ) {
+      log.warn("promote intent present without a committed live release — ambiguous, degrading (never re-fire)", {
+        landGroupId: plan.landGroupId,
+      });
+      return { kind: "ambiguous" };
+    }
+    // FIRE: write the promote intent FENCED (the atomic immediate fence-recheck, Finding C)
+    // COMMITTED IMMEDIATELY BEFORE the external promote. A lost fence ⇒ abort before firing. This
+    // is the tightest boundary — write intent, then the external call, then the durable completion.
+    await this.markIntentOrAbort(plan, input.token, input.heartbeat, "promote");
     const prior = current;
     const grant = await this.grant(plan, target, "promote", {
       resourceId: target.appId,
@@ -266,12 +337,9 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     });
     // Production verify (the markLive path is correct here — the release IS production now).
     const verified = await this.verifyReadiness(plan, target, transition.deploymentId, input.heartbeat);
-    // Finding 2: durably emit the GROUP's `deploy.verified` on the tail run so mq-15 seals +
-    // ds-6 joins from the group's evidence (in-17's per-run delivery — the sole other emitter —
-    // is membership-guarded off for group members, so this is the ONLY deploy.verified a land
-    // group gets). The shape is exactly what mq-15/ds-6 read (provider/appId/deploymentId/url/
-    // state + smoke + audit envelope), bound to the LIVE production deployment.
-    await this.emitGroupDeployVerified(plan, target, {
+    // Finding 2: durably emit the GROUP's `deploy.verified` on the tail run (idempotently) so mq-15
+    // seals + ds-6 joins from the group's evidence. Bound to the LIVE production deployment.
+    await emitGroupDeployVerified({ pool: this.deps.pool, eventStore: this.deps.eventStore }, plan, target, {
       deploymentId: transition.deploymentId,
       url: verified.url,
       state: verified.state,
@@ -279,30 +347,15 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     });
     const release = await this.readBackRelease(plan, target, transition.deploymentId);
     return {
-      release: {
-        releaseInstanceId: release.releaseInstanceId,
-        deploymentId: transition.deploymentId,
-        artifactDigest: artifact.artifactDigest,
+      kind: "promoted",
+      production: {
+        release: {
+          releaseInstanceId: release.releaseInstanceId,
+          deploymentId: transition.deploymentId,
+          artifactDigest: artifact.artifactDigest,
+        },
       },
     };
-  }
-
-  /** Append the group's `deploy.verified` on the tail run (the shape mq-15 / ds-6 read). */
-  private async emitGroupDeployVerified(
-    plan: GroupDeliveryPlan,
-    target: ResolvedGroupDeployTarget,
-    verified: { deploymentId: string; url: string; state: string; smokeStatus: number },
-  ): Promise<void> {
-    await runWithJobOrgId(plan.orgId, async () => {
-      await this.deps.eventStore.append({
-        runId: plan.tailRunId,
-        specId: plan.tailSpecId,
-        projectId: plan.projectId,
-        orgId: plan.orgId,
-        eventType: "deploy.verified",
-        payload: groupDeployVerifiedPayload(plan, target, verified),
-      });
-    });
   }
 
   async currentPriorGood(input: {
@@ -310,21 +363,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     exceptReleaseInstanceId: string;
   }): Promise<PriorGoodRelease | undefined> {
-    const { plan } = input;
-    // Finding 1: the prior-good is the release the just-promoted production release SUPERSEDED
-    // — it is now state `superseded` (promote demoted it), so a `latestLive` (state='live')
-    // lookup would ALWAYS miss it and the loop would never roll back. Read the DURABLE promote
-    // lineage instead: the production release records the release it superseded as its
-    // `previousReleaseInstanceId`. A null predecessor is a genuine no-prior-good (first-ever
-    // release, nothing to roll back to) ⇒ undefined ⇒ the core ends needs_attention.
-    return runWithOrgScope(this.deps.pool, plan.orgId, async (client): Promise<PriorGoodRelease | undefined> => {
-      const production = await ReleaseInstancesStore.getById(client, plan.orgId, input.exceptReleaseInstanceId);
-      const priorId = production?.previousReleaseInstanceId ?? null;
-      if (priorId === null) return undefined;
-      const prior = await ReleaseInstancesStore.getById(client, plan.orgId, priorId);
-      if (prior === undefined) return undefined;
-      return { releaseInstanceId: prior.releaseInstanceId, artifactDigest: prior.artifactDigest };
-    });
+    return currentPriorGoodRelease(this.deps.pool, input.plan, input.exceptReleaseInstanceId);
   }
 
   async rollback(input: {
@@ -451,40 +490,5 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       );
     }
     return record;
-  }
-
-  private async currentLiveRecord(
-    plan: GroupDeliveryPlan,
-    target: ResolvedGroupDeployTarget,
-    exceptReleaseInstanceId?: string,
-  ): Promise<ReleaseInstanceRecord | undefined> {
-    return runWithOrgScope(this.deps.pool, plan.orgId, (client) =>
-      ReleaseInstancesStore.latestLive(
-        client,
-        plan.orgId,
-        plan.projectId,
-        target.provider,
-        target.appId,
-        exceptReleaseInstanceId,
-      ),
-    );
-  }
-
-  /** Resolve the group's active behavior REVISION ids — the union of the member specs' behaviors. */
-  private async resolveBehaviorRevisionIds(plan: GroupDeliveryPlan): Promise<BehaviorRevisionId[]> {
-    const behaviorIds = new Set<string>();
-    await runWithSystemScope(this.deps.pool, async (client) => {
-      for (const specId of plan.memberSpecIds) {
-        const behaviors = await loadSpecBehaviors(client, specId, plan.orgId, plan.projectId);
-        for (const behavior of behaviors) behaviorIds.add(behavior.behaviorId);
-      }
-    });
-    if (behaviorIds.size === 0) return [];
-    const resolved = await this.behaviorRevisions.resolveActive({
-      orgId: plan.orgId,
-      projectId: plan.projectId,
-      behaviorIds: [...behaviorIds],
-    });
-    return resolved.map((entry) => entry.revisionId);
   }
 }

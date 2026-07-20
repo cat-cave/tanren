@@ -1,5 +1,5 @@
 {
-  "id": "94d4d044-8212-4685-b55b-857030ef0e95",
+  "id": "abe8466d-f034-427b-95b8-f017ed50379b",
   "prevId": "f6365a46-e06f-4c34-a651-09d891a8f055",
   "version": "7",
   "dialect": "postgresql",
@@ -5809,6 +5809,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "preview_intent_at": {
+          "name": "preview_intent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promote_intent_at": {
+          "name": "promote_intent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "receipt": {
           "name": "receipt",

@@ -119,6 +119,7 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
         attribution: this.deps.attribution,
         plan,
         target,
+        token,
         heartbeat: () => beat.assertOwned(),
       });
       await this.store.finalize({ plan, token, outcome, reason: OUTCOME_REASON[outcome.state] });

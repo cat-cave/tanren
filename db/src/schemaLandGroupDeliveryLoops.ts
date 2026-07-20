@@ -45,6 +45,12 @@ export const landGroupDeliveryLoops = pgTable(
     attributedRunId: text("attributed_run_id"),
     idempotencyKey: text("idempotency_key").notNull(),
     fencingToken: text("fencing_token").notNull(),
+    // INTENT-MARKER-BEFORE-EFFECT (Finding A / in-17): committed under the claim fence IMMEDIATELY
+    // BEFORE the irreversible external effect (preview deploy / production promote). On a takeover,
+    // an intent present WITHOUT the durable completion means the external effect MAY have fired ⇒
+    // DEGRADE (never re-fire). Null until the owner is about to fire that step.
+    previewIntentAt: timestamp("preview_intent_at", { withTimezone: true }),
+    promoteIntentAt: timestamp("promote_intent_at", { withTimezone: true }),
     receipt: jsonb("receipt"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

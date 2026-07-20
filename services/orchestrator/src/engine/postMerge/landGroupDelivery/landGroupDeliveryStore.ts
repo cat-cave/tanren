@@ -184,6 +184,40 @@ export class PgLandGroupDeliveryStore {
   }
 
   /**
+   * INTENT-MARKER-BEFORE-EFFECT (Finding A): FENCED-commit the "about to fire the external effect"
+   * marker for a step BEFORE the irreversible external call. The fenced UPDATE is ALSO the atomic
+   * fence-recheck (Finding C) — it returns false when the claim was taken over, so the caller
+   * aborts BEFORE firing. `step` selects the column. Committed the instant it returns.
+   */
+  async writeIntent(orgId: string, landGroupId: string, token: string, step: "preview" | "promote"): Promise<boolean> {
+    const column = step === "preview" ? "preview_intent_at" : "promote_intent_at";
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const wrote = await client.query<{ id: string }>(
+        `UPDATE land_group_delivery_loops SET ${column} = now(), updated_at = now()
+          WHERE org_id = $1 AND land_group_id = $2 AND fencing_token = $3 AND state = 'in_progress'
+          RETURNING id`,
+        [orgId, landGroupId, token],
+      );
+      return wrote.rows[0] !== undefined;
+    });
+  }
+
+  /** Whether the step's intent marker is present (a prior owner was ABOUT TO fire that effect). */
+  async readIntent(orgId: string, landGroupId: string, step: "preview" | "promote"): Promise<boolean> {
+    const column = step === "preview" ? "preview_intent_at" : "promote_intent_at";
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const row = (
+        await client.query<{ present: boolean }>(
+          `SELECT ${column} IS NOT NULL AS present FROM land_group_delivery_loops
+            WHERE org_id = $1 AND land_group_id = $2`,
+          [orgId, landGroupId],
+        )
+      ).rows[0];
+      return row?.present ?? false;
+    });
+  }
+
+  /**
    * Finalize an owned delivery: UPDATE the row (FENCED on the token, so a superseded owner cannot
    * clobber a terminal row) to its terminal state + the strict receipt JSON, then append the
    * frozen delivery event on the SAME client. Returns the persisted receipt.

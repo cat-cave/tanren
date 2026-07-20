@@ -14,7 +14,9 @@ import {
   type GroupDeliveryPlan,
   type GroupDemoOutcome,
   type GroupPreview,
+  type GroupPreviewOutcome,
   type GroupProduction,
+  type GroupPromoteOutcome,
   type GroupRegressionAttribution,
   type PriorGoodRelease,
   type ResolvedGroupDeployTarget,
@@ -72,9 +74,9 @@ class FakeDeployer implements GroupDeliveryDeployer {
     return ARTIFACT;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async applyPreview(): Promise<GroupPreview> {
+  async applyPreview(): Promise<GroupPreviewOutcome> {
     this.calls.push("applyPreview");
-    return PREVIEW;
+    return { kind: "applied", preview: PREVIEW };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async verifyPreview(): Promise<void> {
@@ -94,9 +96,9 @@ class FakeDeployer implements GroupDeliveryDeployer {
     this.teardownCount += 1;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async promote(): Promise<GroupProduction> {
+  async promote(): Promise<GroupPromoteOutcome> {
     this.calls.push("promote");
-    return PRODUCTION;
+    return { kind: "promoted", production: PRODUCTION };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async currentPriorGood(): Promise<PriorGoodRelease | undefined> {

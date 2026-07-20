@@ -5,36 +5,29 @@
 // the frozen delivery event, a cross-org read sees ZERO rows (FORCE RLS) and the route 404s, and
 // the membership guard sees a group member (so the per-run delivery no-ops).
 
-import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
-import { Pool } from "pg";
+import { runWithOrgScope } from "@tanren/db";
+import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgLandGroupDeliveryStore } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryStore.js";
 import { isLandGroupMember } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryReads.js";
 import { LandGroupDeliveryLoop } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryLoop.js";
-import {
-  groupDeployVerifiedPayload,
-  ProductionGroupDeliveryDeployer,
-} from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { ProductionGroupDeliveryDeployer } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
 import { startClaimHeartbeat } from "../src/engine/postMerge/landGroupDelivery/claimHeartbeat.js";
-import { MergeTrainArtifactWatcher } from "../src/engine/postMerge/mergeTrainArtifactWatcher.js";
-import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 import type { DeployAdapter } from "../src/engine/contracts/deployAdapter.js";
-import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
 import {
   ADMIN,
-  ADMIN_URL,
-  APP_PASSWORD,
-  APP_ROLE,
+  ARTIFACT_INTENT,
   basePlan,
-  connectionUrl,
-  databaseName,
+  createRlsDatabase,
   delay,
   HappyFakeDeployer,
-  insertEvents,
   LG,
   LG_HB,
+  LG_INTENT,
   LG_STALE,
   MAIN,
+  MAIN_INTENT,
   NoopAttribution,
   ORG,
   OTHER_ORG,
@@ -43,7 +36,7 @@ import {
   RUN,
   RUN_A,
   RUN_FORMING,
-  seedTenant,
+  type RlsDatabase,
   TARGET,
 } from "./helpers/landGroupDeliveryFixture.js";
 
@@ -51,33 +44,15 @@ const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
 
 describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () => {
-  const database = databaseName();
-  let owner: Pool;
+  let db: RlsDatabase;
   let app: Pool;
 
   beforeAll(async () => {
-    const admin = new Pool({ connectionString: ADMIN_URL });
-    await admin.query(`CREATE DATABASE ${database}`);
-    await admin.end();
-    owner = new Pool({ connectionString: connectionUrl(database) });
-    await migrate(owner);
-    app = new Pool({ connectionString: connectionUrl(database, { user: APP_ROLE, password: APP_PASSWORD }) });
-    setSystemPool(owner);
-    await seedTenant(owner);
+    db = await createRlsDatabase();
+    app = db.app;
   }, 60_000);
 
-  afterAll(async () => {
-    resetSystemPool();
-    await app?.end();
-    await owner?.end();
-    const admin = new Pool({ connectionString: ADMIN_URL });
-    await admin.query(
-      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
-      [database],
-    );
-    await admin.query(`DROP DATABASE IF EXISTS ${database}`);
-    await admin.end();
-  });
+  afterAll(() => db.drop());
 
   async function rowCount(landGroupId: string): Promise<number> {
     return runWithOrgScope(app, ORG, async (client) => {
@@ -160,9 +135,10 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     expect(row?.state).toBe("needs_attention");
   });
 
-  it("idempotent promote: an already-committed group promote is a NO-OP — no double external deploy (Finding A)", async () => {
+  it("idempotent promote NO-OP: no re-deploy AND deploy.verified emitted for the already-live group (Findings A + B)", async () => {
     // rel-prod is already the live production release for THIS group (artifact + main SHA). A
-    // takeover's re-promote must detect the committed release and NEVER call adapter.promote again.
+    // takeover's re-promote must detect the committed release, NEVER call adapter.promote again,
+    // AND ensure deploy.verified is emitted (Finding B — the prior owner may have died before it).
     let promoteCalls = 0;
     const guardAdapter = {
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -175,10 +151,12 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
       pool: app,
       secrets: {} as never,
       transport: {} as never,
-      eventStore: {} as never,
+      eventStore: new PgEventStore(app),
       deployAdapter: guardAdapter,
+      // eslint-disable-next-line @typescript-eslint/require-await
+      urlProbe: { probe: async () => 200 },
     });
-    const production = await deployer.promote({
+    const outcome = await deployer.promote({
       plan: { ...basePlan(), landGroupId: LG },
       target: TARGET,
       artifact: { artifactDigest: `sha256:${"c".repeat(64)}`, deploymentId: "dep-build" },
@@ -196,7 +174,109 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     });
     // NO re-promote — the committed live release was detected
     expect(promoteCalls).toBe(0);
-    expect(production.release.releaseInstanceId).toBe("rel-prod");
+    expect(outcome.kind).toBe("promoted");
+    if (outcome.kind !== "promoted") throw new Error("expected promoted");
+    expect(outcome.production.release.releaseInstanceId).toBe("rel-prod");
+    // Finding B: the no-op path emitted deploy.verified for the tail run (mq-15 can now seal).
+    const dv = await runWithOrgScope(app, ORG, (client) =>
+      client.query("SELECT 1 FROM events WHERE org_id = $1 AND run_id = $2 AND event_type = 'deploy.verified'", [
+        ORG,
+        RUN,
+      ]),
+    );
+    expect(dv.rows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("DEFINITIVE no-double-deploy: promote intent present without completion → DEGRADE, adapter.promote NOT called (Finding A)", async () => {
+    // Owner A wrote the promote INTENT then fired the external promote (promoteCalls would be 1
+    // out-of-band) and DIED before the DB live-release committed. Simulate: an in_progress claim
+    // for LG_INTENT with promote_intent_at SET, and NO committed live release for its artifact.
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query(
+        `INSERT INTO land_group_delivery_loops
+           (org_id, id, project_id, land_group_id, main_sha, state, disposition, idempotency_key,
+            fencing_token, promote_intent_at)
+         VALUES ($1,$2,$3,$4,$5,'in_progress','none',$6,'tokA', now())`,
+        [ORG, `ldl-${LG_INTENT}`, PROJECT, LG_INTENT, MAIN_INTENT, `key-${LG_INTENT}`],
+      ),
+    );
+    let promoteCalls = 0;
+    const guardAdapter = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async promote() {
+        promoteCalls += 1;
+        throw new Error("adapter.promote MUST NOT be called after an ambiguous intent");
+      },
+    } as unknown as DeployAdapter;
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: new PgEventStore(app),
+      deployAdapter: guardAdapter,
+      intentStore: new PgLandGroupDeliveryStore(app),
+    });
+    // B takes over and re-drives promote. The intent marker (no committed live release for THIS
+    // artifact/main SHA) ⇒ AMBIGUOUS ⇒ B does NOT re-fire the external promote.
+    const outcome = await deployer.promote({
+      plan: { ...basePlan(), landGroupId: LG_INTENT, mainSha: MAIN_INTENT },
+      target: TARGET,
+      artifact: { artifactDigest: ARTIFACT_INTENT, deploymentId: "dep-build-intent" },
+      preview: {
+        release: {
+          releaseInstanceId: "rel-prev-intent",
+          deploymentId: "dep-prev-intent",
+          artifactDigest: ARTIFACT_INTENT,
+        },
+        previewDeploymentId: "dep-prev-intent",
+      },
+      token: "tokB",
+      heartbeat: async () => {
+        /* still owned */
+      },
+    });
+    // degrade — never re-fire; B did NOT call adapter.promote (no double external deploy)
+    expect(outcome.kind).toBe("ambiguous");
+    expect(promoteCalls).toBe(0);
+  });
+
+  it("orphaned preview reconcile: preview intent present without a persisted preview → DEGRADE (Finding D)", async () => {
+    // Mark a preview intent on LG_INTENT's row (created by the promote-intent test) with NO persisted
+    // preview release for its artifact — an orphaned external deploy from a dead owner.
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query(
+        "UPDATE land_group_delivery_loops SET preview_intent_at = now() WHERE org_id = $1 AND land_group_id = $2",
+        [ORG, LG_INTENT],
+      ),
+    );
+    let previewFired = false;
+    const guardAdapter = {
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async applyPreview() {
+        previewFired = true;
+        throw new Error("adapter.applyPreview MUST NOT re-fire after an orphaned preview intent");
+      },
+    } as unknown as DeployAdapter;
+    const deployer = new ProductionGroupDeliveryDeployer({
+      pool: app,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: new PgEventStore(app),
+      deployAdapter: guardAdapter,
+      intentStore: new PgLandGroupDeliveryStore(app),
+    });
+    const outcome = await deployer.applyPreview({
+      plan: { ...basePlan(), landGroupId: LG_INTENT, mainSha: MAIN_INTENT },
+      target: TARGET,
+      artifact: { artifactDigest: ARTIFACT_INTENT, deploymentId: "dep-build-intent" },
+      token: "tokB",
+      heartbeat: async () => {
+        /* still owned */
+      },
+    });
+    // orphan reconcile — never apply a SECOND preview
+    expect(outcome.kind).toBe("ambiguous");
+    expect(previewFired).toBe(false);
   });
 
   it("continuous heartbeat keeps a LIVE owner fresh (not taken over); a DEAD owner is reclaimed (Finding A)", async () => {
@@ -233,35 +313,6 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
       leaseInterval: "100 milliseconds",
     });
     expect(reclaimed.kind).toBe("owned");
-  });
-
-  it("mq-15 SEALS a merge-train artifact from the GROUP's deploy.verified + demo.completed (Finding 2)", async () => {
-    // The group loop emits the group's deploy.verified (via groupDeployVerifiedPayload) +
-    // demo.completed on the tail run. With in-17 muted for group members, this is the ONLY
-    // evidence a land group gets — mq-15 must be able to seal from it (else land groups starve).
-    const plan = { ...basePlan(), landGroupId: LG };
-    const deployVerified = groupDeployVerifiedPayload(plan, TARGET, {
-      deploymentId: "dep-prod",
-      url: "https://app1.example.com",
-      state: "live",
-      smokeStatus: 200,
-    });
-    await insertEvents(owner, RUN, [
-      ["deploy.verified", deployVerified],
-      ["demo.completed", { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 }],
-    ]);
-    const cas = new PgCasByteStore(app);
-    const substrate = new TestProofSubstrate(app, cas);
-    const watcher = new MergeTrainArtifactWatcher({ pool: app, proofSubstrate: substrate, casByteStore: cas });
-    await watcher.check(RUN);
-    const sealed = await runWithOrgScope(app, ORG, (client) =>
-      client.query<{ land_group_id: string }>(
-        "SELECT land_group_id FROM merge_train_artifacts WHERE org_id = $1 AND land_group_id = $2",
-        [ORG, LG],
-      ),
-    );
-    expect(sealed.rows).toHaveLength(1);
-    expect(sealed.rows[0]?.land_group_id).toBe(LG);
   });
 
   it("drives the FULL loop for a completed group → completed receipt + frozen event; a re-check is idempotent", async () => {

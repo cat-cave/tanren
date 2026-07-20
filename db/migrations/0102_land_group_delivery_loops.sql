@@ -13,6 +13,8 @@ CREATE TABLE "land_group_delivery_loops" (
 	"attributed_run_id" text,
 	"idempotency_key" text NOT NULL,
 	"fencing_token" text NOT NULL,
+	"preview_intent_at" timestamp with time zone,
+	"promote_intent_at" timestamp with time zone,
 	"receipt" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,

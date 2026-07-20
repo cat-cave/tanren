@@ -2,8 +2,9 @@
 // land-group delivery integration test drives (kept out of the test file for the line cap).
 // cspell:ignore mqdlv headsha mainsha expmain
 
+import { migrate, resetSystemPool, setSystemPool } from "@tanren/db";
 import { Hono } from "hono";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import type { ActorContext } from "../../src/auth/schemas.js";
 import type { ActorContextEnv } from "../../src/middleware/auth.js";
 import { createLandGroupDeliveryRoutes } from "../../src/routes/mergeQueue/landGroupDelivery.js";
@@ -14,7 +15,9 @@ import type {
   GroupDeliveryPlan,
   GroupDemoOutcome,
   GroupPreview,
+  GroupPreviewOutcome,
   GroupProduction,
+  GroupPromoteOutcome,
   GroupRegressionAttribution,
   ResolvedGroupDeployTarget,
 } from "../../src/engine/postMerge/landGroupDelivery/groupDeliveryCore.js";
@@ -49,6 +52,11 @@ export const DEC_STALE = "decision_mqdlv_stale";
 // Finding A: a completed group used to prove the continuous heartbeat keeps a live owner's claim fresh.
 export const LG_HB = "lg_mqdlv_hb";
 export const DEC_HB = "decision_mqdlv_hb";
+// Finding A: a completed group used to prove the promote/preview intent-marker DEGRADE (no re-fire).
+export const LG_INTENT = "lg_mqdlv_intent";
+export const DEC_INTENT = "decision_mqdlv_intent";
+export const MAIN_INTENT = "mainsha_mqdlv_intent";
+export const ARTIFACT_INTENT = `sha256:${"d".repeat(64)}`;
 
 /** A test delay (no kill verb — a plain wakeup, not a work deadline). */
 export function delay(ms: number): Promise<void> {
@@ -68,10 +76,10 @@ export const TARGET: ResolvedGroupDeployTarget = {
 // (the single-event-writer rule governs engine src, not RLS-fixture seeding).
 const EVENTS_TABLE = "events";
 
-export function databaseName(): string {
+function databaseName(): string {
   return `tanren_mqdlv_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 }
-export function connectionUrl(database: string, role?: { user: string; password: string }): string {
+function connectionUrl(database: string, role?: { user: string; password: string }): string {
   const parsed = new URL(ADMIN_URL);
   parsed.pathname = `/${database}`;
   if (role !== undefined) {
@@ -79,6 +87,42 @@ export function connectionUrl(database: string, role?: { user: string; password:
     parsed.password = role.password;
   }
   return parsed.toString();
+}
+
+/** A live RLS harness: a fresh migrated DB, seeded tenant, owner (BYPASSRLS) + app (tanren_app) pools. */
+export interface RlsDatabase {
+  readonly owner: Pool;
+  readonly app: Pool;
+  drop(): Promise<void>;
+}
+
+/** Create + seed a per-file RLS test database. Call in `beforeAll`; `drop()` in `afterAll`. */
+export async function createRlsDatabase(): Promise<RlsDatabase> {
+  const database = databaseName();
+  const admin = new Pool({ connectionString: ADMIN_URL });
+  await admin.query(`CREATE DATABASE ${database}`);
+  await admin.end();
+  const owner = new Pool({ connectionString: connectionUrl(database) });
+  await migrate(owner);
+  const app = new Pool({ connectionString: connectionUrl(database, { user: APP_ROLE, password: APP_PASSWORD }) });
+  setSystemPool(owner);
+  await seedTenant(owner);
+  return {
+    owner,
+    app,
+    async drop(): Promise<void> {
+      resetSystemPool();
+      await app.end();
+      await owner.end();
+      const admin2 = new Pool({ connectionString: ADMIN_URL });
+      await admin2.query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        [database],
+      );
+      await admin2.query(`DROP DATABASE IF EXISTS ${database}`);
+      await admin2.end();
+    },
+  };
 }
 
 export async function seedTenant(owner: Pool): Promise<void> {
@@ -221,6 +265,7 @@ export async function seedTenant(owner: Pool): Promise<void> {
   // Finding 5: a COMPLETED group used for the stale-claim takeover test (no members needed).
   await seedGroup(owner, { lg: LG_STALE, decision: DEC_STALE, state: "completed" });
   await seedGroup(owner, { lg: LG_HB, decision: DEC_HB, state: "completed" });
+  await seedGroup(owner, { lg: LG_INTENT, decision: DEC_INTENT, state: "completed" });
 }
 
 /** Seed a decision + a land group (+ an optional member run) for the non-primary-group tests. */
@@ -299,8 +344,8 @@ export class HappyFakeDeployer implements GroupDeliveryDeployer {
     return ARTIFACT;
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async applyPreview(): Promise<GroupPreview> {
-    return PREVIEW;
+  async applyPreview(): Promise<GroupPreviewOutcome> {
+    return { kind: "applied", preview: PREVIEW };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async verifyPreview(): Promise<void> {}
@@ -311,8 +356,8 @@ export class HappyFakeDeployer implements GroupDeliveryDeployer {
   // eslint-disable-next-line @typescript-eslint/require-await
   async teardownPreview(): Promise<void> {}
   // eslint-disable-next-line @typescript-eslint/require-await
-  async promote(): Promise<GroupProduction> {
-    return PRODUCTION;
+  async promote(): Promise<GroupPromoteOutcome> {
+    return { kind: "promoted", production: PRODUCTION };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async currentPriorGood(): Promise<undefined> {

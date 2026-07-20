@@ -5,7 +5,7 @@
 // merge-train seal + design-delivery join bind (provider / appId / deploymentId / url / state).
 
 import { describe, expect, it } from "vitest";
-import { groupDeployVerifiedPayload } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { groupDeployVerifiedPayload } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployerHelpers.js";
 import { DeployVerifiedPayload } from "../src/engine/events/schemas/deploy.js";
 import type {
   GroupDeliveryPlan,

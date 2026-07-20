@@ -99,6 +99,35 @@ export interface PriorGoodRelease {
 }
 
 /**
+ * The outcome of an intent-marked external step (Finding A). `applied`/`promoted` carry the
+ * durable result; `ambiguous` means the step's intent marker was present WITHOUT a durable
+ * completion — the external effect MAY have fired, so the loop DEGRADES to `needs_attention` and
+ * NEVER re-fires (in-17's hard invariant: never re-run a maybe-committed external effect).
+ */
+export type GroupPreviewOutcome =
+  | { readonly kind: "applied"; readonly preview: GroupPreview }
+  | { readonly kind: "ambiguous" };
+export type GroupPromoteOutcome =
+  | { readonly kind: "promoted"; readonly production: GroupProduction }
+  | { readonly kind: "ambiguous" };
+
+/**
+ * The DEGRADE outcome for an ambiguous external step (intent present, completion absent — the
+ * effect MAY have fired). needs_attention, NEVER a re-fire (Finding A).
+ */
+function ambiguousDegrade(artifactDigest: string, previewReleaseInstanceId: string | null): GroupDeliveryOutcome {
+  return {
+    state: "needs_attention",
+    disposition: "needs_attention",
+    artifactDigest,
+    previewReleaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  };
+}
+
+/**
  * The injected deployer port — the REAL DeployAdapter SP-6 lifecycle + ProofBackedWebDemo +
  * release-instance persistence behind a testable seam. The production impl (see
  * `groupDeliveryDeployer.ts`) wires the real adapter/grant/demo; a fake drives every branch.
@@ -118,7 +147,11 @@ export interface GroupDeliveryDeployer {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
-  }): Promise<GroupPreview>;
+    /** The claim fence token — the intent marker + fenced write are keyed on it (Finding A). */
+    token?: string;
+    /** Immediate fence-recheck before the external deploy (Finding C). */
+    heartbeat?: () => Promise<void>;
+  }): Promise<GroupPreviewOutcome>;
   /**
    * VERIFY the applied preview is live (poll-to-ready + URL smoke). Throws LOUD when the
    * preview never becomes reachable — the caller tears the preview down and records
@@ -144,15 +177,24 @@ export interface GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     previewDeploymentId: string;
   }): Promise<void>;
-  /** PROMOTE the verified preview artifact to production, verify it live, persist the live release. */
+  /**
+   * PROMOTE the verified preview artifact to production, verify it live, persist the live release.
+   * Applies the INTENT-MARKER-BEFORE-EFFECT protocol (Finding A): a committed live release ⇒
+   * `promoted` (no-op, `deploy.verified` ensured); an intent marker present WITHOUT a committed
+   * live release ⇒ `ambiguous` (the external promote MAY have fired — the loop degrades, never
+   * re-fires); otherwise it fenced-writes the intent, fires the external promote, and returns
+   * `promoted`.
+   */
   promote(input: {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
     preview: GroupPreview;
+    /** The claim fence token — the intent marker + fenced write are keyed on it (Finding A). */
+    token?: string;
     /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
     heartbeat?: () => Promise<void>;
-  }): Promise<GroupProduction>;
+  }): Promise<GroupPromoteOutcome>;
   /** The current LIVE production release (prior-good) EXCLUDING the just-promoted one, or undefined. */
   currentPriorGood(input: {
     plan: GroupDeliveryPlan;
@@ -217,6 +259,8 @@ export async function runGroupDelivery(deps: {
   readonly attribution: GroupRegressionAttribution;
   readonly plan: GroupDeliveryPlan;
   readonly target: ResolvedGroupDeployTarget;
+  /** The claim fence token — threaded to the intent-marked external steps (Finding A). */
+  readonly token?: string;
   /**
    * A progress sign-of-life the loop calls between phases to RENEW its liveness lease (Finding
    * 5); it THROWS if the claim was taken over (a stale owner) so this drive aborts before
@@ -224,16 +268,26 @@ export async function runGroupDelivery(deps: {
    */
   readonly heartbeat?: () => Promise<void>;
 }): Promise<GroupDeliveryOutcome> {
-  const { deployer, attribution, plan, target } = deps;
+  const { deployer, attribution, plan, target, token } = deps;
   const beat = deps.heartbeat ?? (async (): Promise<void> => undefined);
 
   // 1. Build ONE artifact for the whole completed group (single call ⇒ exactly one artifact).
   await beat();
   const artifact = await deployer.buildArtifact({ plan, target });
 
-  // 2. Apply a preview of the built artifact (persists the preview release; does NOT verify).
+  // 2. Apply a preview of the built artifact (intent-marked; persists the preview release). An
+  //    AMBIGUOUS outcome (preview intent present without a persisted preview — the external deploy
+  //    MAY have fired for a dead owner) ⇒ DEGRADE (never re-apply a second preview).
   await beat();
-  const preview = await deployer.applyPreview({ plan, target, artifact });
+  const previewOutcome = await deployer.applyPreview({
+    plan,
+    target,
+    artifact,
+    ...(token !== undefined && { token }),
+    heartbeat: beat,
+  });
+  if (previewOutcome.kind === "ambiguous") return ambiguousDegrade(artifact.artifactDigest, null);
+  const preview = previewOutcome.preview;
   const previewFailed = (): GroupDeliveryOutcome => ({
     state: "preview_failed",
     disposition: "none",
@@ -267,7 +321,16 @@ export async function runGroupDelivery(deps: {
       return previewFailed();
     }
 
-    return await driveFromVerifiedPreview({ deployer, attribution, plan, target, artifact, preview, beat });
+    return await driveFromVerifiedPreview({
+      deployer,
+      attribution,
+      plan,
+      target,
+      artifact,
+      preview,
+      beat,
+      ...(token !== undefined && { token }),
+    });
   } catch (error) {
     if (error instanceof LandGroupDeliveryClaimLostError) {
       await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
@@ -289,8 +352,9 @@ async function driveFromVerifiedPreview(deps: {
   readonly artifact: GroupArtifact;
   readonly preview: GroupPreview;
   readonly beat: () => Promise<void>;
+  readonly token?: string;
 }): Promise<GroupDeliveryOutcome> {
-  const { deployer, attribution, plan, target, artifact, preview, beat } = deps;
+  const { deployer, attribution, plan, target, artifact, preview, beat, token } = deps;
   const previewFailed = (): GroupDeliveryOutcome => ({
     state: "preview_failed",
     disposition: "none",
@@ -311,11 +375,25 @@ async function driveFromVerifiedPreview(deps: {
     return previewFailed();
   }
 
-  // 5. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production + verify live
-  //    (the promote step durably emits the GROUP's `deploy.verified` on the tail run so mq-15
-  //    seals + ds-6 joins from the group's evidence).
+  // 5. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production (INTENT-MARKED,
+  //    Finding A). An AMBIGUOUS promote (intent present without a committed live release — the
+  //    external promote MAY have fired for a dead owner) ⇒ DEGRADE to needs_attention, NEVER
+  //    re-fire (a double production deploy is unacceptable; a conservative degrade is not). The
+  //    promote step durably emits the GROUP's `deploy.verified` on the tail run (idempotently) so
+  //    mq-15 seals + ds-6 joins from the group's evidence.
   await beat();
-  const production = await deployer.promote({ plan, target, artifact, preview, heartbeat: beat });
+  const promoteOutcome = await deployer.promote({
+    plan,
+    target,
+    artifact,
+    preview,
+    ...(token !== undefined && { token }),
+    heartbeat: beat,
+  });
+  if (promoteOutcome.kind === "ambiguous") {
+    return ambiguousDegrade(artifact.artifactDigest, preview.release.releaseInstanceId);
+  }
+  const production = promoteOutcome.production;
 
   // 6. PROOF-BACKED production demo (the group's `demo.completed` on the tail run).
   await beat();
