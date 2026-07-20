@@ -8,6 +8,8 @@
 import type { Hono } from "hono";
 import type pg from "pg";
 import { buildLiveBenchmarkScheduler, type LiveBenchmarkInfra } from "../../engine/benchmark/liveScheduler.js";
+import type { SecretStore } from "../../engine/contracts/index.js";
+import { PgProofSubstrate } from "../../engine/cas/pgProofSubstrate.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createDoraRoutes } from "../dora/index.js";
 import { createCiInsightRoutes } from "../ciInsights/index.js";
@@ -20,6 +22,12 @@ import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
   pool: pg.Pool;
+  // The platform secret store. Used to construct the sole production `PgProofSubstrate`
+  // so the mq-15 merge-train export route RE-VERIFIES a served artifact's persisted
+  // bundle cryptographically (SP-3 × mq-15 connect-up). Absent the platform signing key,
+  // verify fails closed (a row never re-verifies ⇒ the route serves nothing), never a
+  // silent green — the same fail-closed posture as the sealing worker.
+  secrets: SecretStore;
   // The live benchmark infra (allocator + ssh + identity ref + the shared LISTEN
   // connection). Supplied by the API boot so the benchmark scheduler runs a real
   // trial: the post-merge accept tier (allocate→clone@mergedSHA→bootstrap→accept)
@@ -46,7 +54,17 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   // mq-10 autonomous-repair + respec lineage projection over `merge_repair_routes`.
   app.route("/orgs", createMergeQueueRepairRouteRoutes({ pool: deps.pool }));
   // mq-15 sealed merge-train delivery projection (train list + one land-group artifact).
-  app.route("/orgs", createMergeTrainArtifactRoutes({ pool: deps.pool }));
+  // SP-3 × mq-15 connect-up: inject the sole production `PgProofSubstrate` so the export
+  // route re-verifies each served bundle's ed25519 signature (no longer permanently 404
+  // for want of a substrate). verify() is pure crypto over the persisted bundle + the
+  // platform key; the substrate's own pool/CAS are unused on this read path.
+  app.route(
+    "/orgs",
+    createMergeTrainArtifactRoutes({
+      pool: deps.pool,
+      proofSubstrate: new PgProofSubstrate(deps.pool, deps.secrets),
+    }),
+  );
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);
