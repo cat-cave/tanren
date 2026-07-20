@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { composeProofRoot, IntegrationProofUnitGraph } from "../src/engine/dag/integrationProofUnits.js";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
+import type { IntegrationProofUnit } from "../src/engine/repositories/integrationProofUnits.js";
 import { createInMemoryIntegrationProofUnitStore } from "./conformance/fakes/inMemoryMergeQueue.js";
 
 const hash = (letter: string): string => `sha256:${letter.repeat(64)}`;
@@ -33,7 +34,83 @@ function seedNode(store: ReturnType<typeof createInMemoryIntegrationProofUnitSto
   });
 }
 
+function proofUnit(proofUnitId: string): IntegrationProofUnit {
+  return {
+    orgId: "org_a",
+    projectId: "project_a",
+    proofUnitId,
+    kind: "eager_materialization",
+    subjectId: proofUnitId,
+    inputHash: hash("a"),
+    verdict: "pass",
+    quarantineEpoch: 0,
+  };
+}
+
 describe("MQ-6 integration proof units", () => {
+  it("fails closed for malformed EAGER proof work and proof graphs", async () => {
+    const store = createInMemoryIntegrationProofUnitStore();
+    seedNode(store, "inode_fail_closed");
+    const graph = new IntegrationProofUnitGraph(store, new RecordingEvents());
+    const input = {
+      orgId: "org_a",
+      projectId: "project_a",
+      nodeId: "inode_fail_closed",
+      evaluationId: "eval_fail_closed",
+      quarantineEpoch: 0,
+      toolchainHash: hash("b"),
+      designContractVersion: "design-v1",
+      behaviorManifestHash: hash("c"),
+    };
+    const work = {
+      key: "exact",
+      kind: "eager_materialization",
+      subjectId: "frontier",
+      inputHash: hash("d"),
+      run: async () => ({ verdict: "pass" as const }),
+    };
+
+    await expect(graph.evaluate({ ...input, units: [work, work] })).rejects.toThrow("duplicate proof-unit work key");
+    await expect(
+      graph.evaluate({ ...input, units: [{ ...work, dependsOn: ["missing_exact_member"] }] }),
+    ).rejects.toThrow("depends on unknown missing_exact_member");
+    expect(composeProofRoot([], [])).toMatch(/^sha256:/u);
+    expect(() => composeProofRoot([proofUnit("one")], [{ parentUnitId: "one", childUnitId: "absent" }])).toThrow(
+      "outside the evaluation",
+    );
+    expect(() => composeProofRoot([proofUnit("one")], [{ parentUnitId: "one", childUnitId: "one" }])).toThrow(
+      "no root",
+    );
+    expect(() =>
+      composeProofRoot(
+        [proofUnit("root"), proofUnit("left"), proofUnit("right")],
+        [
+          { parentUnitId: "left", childUnitId: "right" },
+          { parentUnitId: "right", childUnitId: "left" },
+        ],
+      ),
+    ).toThrow("disconnected cycle");
+    expect(() =>
+      composeProofRoot(
+        [proofUnit("root"), proofUnit("left"), proofUnit("right")],
+        [
+          { parentUnitId: "root", childUnitId: "left" },
+          { parentUnitId: "left", childUnitId: "right" },
+          { parentUnitId: "right", childUnitId: "left" },
+        ],
+      ),
+    ).toThrow("contains a cycle");
+    expect(
+      composeProofRoot(
+        [proofUnit("root_a"), proofUnit("root_b"), proofUnit("shared")],
+        [
+          { parentUnitId: "root_a", childUnitId: "shared" },
+          { parentUnitId: "root_b", childUnitId: "shared" },
+        ],
+      ),
+    ).toMatch(/^sha256:/u);
+  });
+
   it("records a unit DAG, composes its root, and reuses each identical unit without recomputing", async () => {
     const store = createInMemoryIntegrationProofUnitStore();
     const events = new RecordingEvents();
