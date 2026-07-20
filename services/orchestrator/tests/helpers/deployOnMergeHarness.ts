@@ -120,7 +120,7 @@ export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
           operations: ["attach_runtime_env", "deploy", "resolve_artifact_identity", "verify"],
           provider_scopes: [],
           resource_constraints: defaultIntegrationResourceConstraints(),
-          policy_revision: "integration-catalog.v2",
+          policy_revision: "integration-catalog.v3",
           consent_revision: "consent.test",
           grant_expires_at: null,
           grant_generation_status: "active",

@@ -40,6 +40,10 @@ export interface ApplicationProvisionerHarness {
   projectCtx(projectId: string): ProjectContext;
   /** The id of a resource the made provisioner already has (for the bind spec). */
   seededResourceId: string;
+  /** Direct credentials rotate at IntegrationAuthority, never inside the provider. */
+  supportsProviderCredentialRotation?: boolean;
+  /** Direct channels have no durable ownership marker and must not be deleted. */
+  supportsProviderTeardown?: boolean;
 }
 
 const provisionTarget = (ctx: ProjectContext): IntegrationOperationTarget => projectIntegrationOperationTarget(ctx);
@@ -183,7 +187,7 @@ export function describeApplicationIntegrationProvisionerConformance(
       expect(reconciled.externalResourceId).toBe(first.externalResourceId);
     });
 
-    it("rotate() bumps the workload generation and preserves the resource", async () => {
+    it("rotate() either confirms a new provider credential generation or fails closed when authority-owned", async () => {
       const provisioner = harness.make();
       const ctx = harness.projectCtx("proj_rotate");
       const plan = provisioner.plan(harness.requirement(), ctx);
@@ -192,19 +196,44 @@ export function describeApplicationIntegrationProvisionerConformance(
         plan,
         ctx,
       );
-      const rotated = await provisioner.rotate(await harness.grant("provision", ctx, provisionTarget(ctx)), plan, ctx);
-      expect(rotated.externalResourceId).toBe(before.externalResourceId);
-      expect(rotated.receipt?.["workloadGeneration"]).not.toBe(before.receipt?.["workloadGeneration"]);
+      const outcome = await provisioner
+        .rotate(await harness.grant("provision", ctx, provisionTarget(ctx)), plan, ctx)
+        .then((rotated) => ({
+          kind: "returned" as const,
+          typedError: false,
+          resourcePreserved: rotated.externalResourceId === before.externalResourceId,
+          workloadChanged: rotated.receipt?.["workloadGeneration"] !== before.receipt?.["workloadGeneration"],
+        }))
+        .catch((error: unknown) => ({
+          kind: "failed" as const,
+          typedError: error instanceof ProductProvisionFailedError,
+          resourcePreserved: false,
+          workloadChanged: false,
+        }));
+      const ownsRotation = harness.supportsProviderCredentialRotation !== false;
+      expect(outcome.kind).toBe(ownsRotation ? "returned" : "failed");
+      expect(outcome.typedError).toBe(!ownsRotation);
+      expect(outcome.resourcePreserved).toBe(ownsRotation);
+      expect(outcome.workloadChanged).toBe(ownsRotation);
     });
 
-    it("teardown() removes a created resource (observe then reports absent)", async () => {
+    it("teardown() removes a created resource, or rejects where durable ownership is unavailable", async () => {
       const provisioner = harness.make();
       const ctx = harness.projectCtx("proj_teardown");
       const plan = provisioner.plan(harness.requirement(), ctx);
       await provisioner.provision(await harness.grant("provision", ctx, provisionTarget(ctx)), plan, ctx);
-      await provisioner.teardown(await harness.grant("provision", ctx, provisionTarget(ctx)), ctx);
+      const outcome = await provisioner
+        .teardown(await harness.grant("provision", ctx, provisionTarget(ctx)), ctx)
+        .then(() => ({ kind: "returned" as const, typedError: false }))
+        .catch((error: unknown) => ({
+          kind: "failed" as const,
+          typedError: error instanceof ProductProvisionFailedError,
+        }));
       const observation = await provisioner.observe(await harness.grant("discover", ctx, {}), ctx);
-      expect(observation.present).toBe(false);
+      const ownsTeardown = harness.supportsProviderTeardown !== false;
+      expect(outcome.kind).toBe(ownsTeardown ? "returned" : "failed");
+      expect(outcome.typedError).toBe(!ownsTeardown);
+      expect(observation.present).toBe(!ownsTeardown);
     });
 
     it("VERTICAL: the artifact converts to a materializer-valid ResolvedBinding", async () => {

@@ -1,11 +1,10 @@
 // in-12: PRODUCTION wiring for the product-plane ApplicationIntegrationProvisioner.
 // This is the single prod seam the capability/delivery path selects a REAL product
 // provisioner from — mirroring `productionProvisionerDeps` for the control plane.
-// It resolves the concrete `RelayMessagingProvisioner` (over a fetch-backed relay
-// transport) from the registry; the in-memory fake lives ONLY under tests/ and is
-// never reachable here. FAIL-CLOSED: a missing relay endpoint throws at
-// construction, and an unregistered kind resolves to the hard-throw
-// `UnconfiguredApplicationIntegrationProvisioner`.
+// It resolves the concrete relay or direct Slack provider from the registry. The
+// in-memory fakes live ONLY under tests/ and are never reachable here. Each mode
+// constructs only its own deps: direct Slack does not require (or silently fall
+// back through) the relay URL, and relay does not receive the direct bot transport.
 
 import type { SecretStore } from "../../contracts/secretStore.js";
 import {
@@ -15,6 +14,9 @@ import {
   type ApplicationIntegrationProvisionerDeps,
 } from "../../contracts/applicationIntegrationProvisioner.js";
 import type { ProductRelayTransport, RegisterRelayBindingRequest, RelayBinding } from "./relayMessagingProvisioner.js";
+import { RELAY_MESSAGING_PROVIDER_KIND } from "./relayMessagingProvisioner.js";
+import { FetchSlackProductTransport } from "./fetchSlackProductTransport.js";
+import { SLACK_PRODUCT_MESSAGE_PROVIDER_KIND } from "./slackProductProvisioner.js";
 
 /** The env var naming Tanren's managed product-relay base URL. */
 export const PRODUCT_RELAY_URL_ENV = "TANREN_PRODUCT_RELAY_URL";
@@ -193,13 +195,27 @@ function resolveRelayBaseUrl(): string {
 }
 
 /**
- * Build the PRODUCTION `ApplicationIntegrationProvisionerDeps`: the fetch-backed
- * relay transport + the configured SecretStore (the SAME store the rest of the app
- * uses, so refs the provisioner resolves are visible to the runtime). The single
- * prod wiring point — a new product provider extends the deps here.
+ * Build the PRODUCTION deps slice for one product provider kind. The relay's URL
+ * is required only for the managed-relay kind; the direct Slack kind gets a real
+ * fetch-backed Slack transport that is constructed with the lease-resolved product
+ * token for each call. Both use the same configured SecretStore so the exact source
+ * coordinate materialized by in-14 is the one the API call validated.
  */
-export function productionApplicationProvisionerDeps(secrets: SecretStore): ApplicationIntegrationProvisionerDeps {
-  return { relay: new FetchProductRelayTransport(resolveRelayBaseUrl()), secrets };
+export function productionApplicationProvisionerDeps(
+  kind: string,
+  secrets: SecretStore,
+): ApplicationIntegrationProvisionerDeps {
+  switch (kind) {
+    case RELAY_MESSAGING_PROVIDER_KIND:
+      return { relay: new FetchProductRelayTransport(resolveRelayBaseUrl()), secrets };
+    case SLACK_PRODUCT_MESSAGE_PROVIDER_KIND:
+      return {
+        secrets,
+        slackProductTransportFactory: (token) => new FetchSlackProductTransport(async () => token),
+      };
+    default:
+      return { secrets };
+  }
 }
 
 /**
@@ -212,5 +228,5 @@ export function resolveProductionApplicationProvisioner(
   kind: string,
   secrets: SecretStore,
 ): ApplicationIntegrationProvisioner {
-  return buildApplicationIntegrationProvisioner(kind, productionApplicationProvisionerDeps(secrets));
+  return buildApplicationIntegrationProvisioner(kind, productionApplicationProvisionerDeps(kind, secrets));
 }

@@ -3,7 +3,9 @@
  * Consent revision is issued by authenticated administrative action, not callers.
  */
 
-export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v2" as const;
+// v3 adds the direct product Slack channel-create/join scopes. Existing grants
+// remain ineligible until authority reissues consent against this exact policy.
+export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v3" as const;
 
 export type IntegrationProviderKind =
   | "slack"
@@ -54,8 +56,19 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
         id: "messaging.send",
         operations: [
           { id: "discover", requiredScopes: ["channels:read"], plane: "product" },
-          { id: "provision", requiredScopes: ["chat:write", "channels:read"], plane: "product" },
-          { id: "bind", requiredScopes: ["chat:write", "channels:read"], plane: "product" },
+          // Direct mode creates a product-owned channel and joins its separately
+          // authorized bot before it confirms chat.postMessage. Relay mode uses
+          // the same product grant through its managed channel lifecycle.
+          {
+            id: "provision",
+            requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+            plane: "product",
+          },
+          {
+            id: "bind",
+            requiredScopes: ["chat:write", "channels:read", "channels:join"],
+            plane: "product",
+          },
         ],
       },
     ],

@@ -109,7 +109,7 @@ async function seedLinkedConnection(
         provider_scopes, resource_constraints, policy_revision, consent_revision,
         consent_actor_id, consented_at, status)
      VALUES ($1, $2, $3, $4, 1, $5::text[], $6::text[], $7::text[], '{}'::jsonb,
-             'integration-catalog.v2', 'consent.test', $8, now(), 'active')`,
+             'integration-catalog.v3', 'consent.test', $8, now(), 'active')`,
     [
       input.orgId,
       input.providerKind,

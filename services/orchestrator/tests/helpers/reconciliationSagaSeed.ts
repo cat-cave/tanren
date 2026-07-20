@@ -160,7 +160,7 @@ export async function seedBindingLineage(
         provider_scopes, resource_constraints, policy_revision, consent_revision,
         consent_actor_id, consented_at, status)
      VALUES ($1, 'slack', $2, $3, 1, ARRAY['messaging']::text[], ARRAY['bind']::text[],
-             ARRAY['chat:write']::text[], '{}'::jsonb, 'integration-catalog.v2', 'consent.test',
+             ARRAY['chat:write']::text[], '{}'::jsonb, 'integration-catalog.v3', 'consent.test',
              'admin-a', now(), 'active')`,
     [orgId, conn, grant],
   );
