@@ -114,6 +114,26 @@ describe("selectFragmentConfig — fail-loud unresolvable lifecycle", () => {
   it("throws on an empty stack (never silently defaults)", () => {
     expect(() => deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "" }))).toThrow(UnresolvableLifecycleError);
   });
+
+  it("derives uncommon runtime, frontend, database, and deploy aliases without silently changing the selected slots", () => {
+    expect(
+      deriveTemplateConfigFromLifecycle(
+        tsLifecycle({ stack: "ruby bundler + react router + postgres-prisma", deploy: "vercel deploy" }),
+      ).config,
+    ).toMatchObject({ runtime: "ruby-bundler", frontend: "react-router", db: "postgres-prisma", deploy: "vercel" });
+    expect(
+      deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "rails + sqlite", deploy: "none" })).config,
+    ).toMatchObject({ runtime: "ruby-bundler", frontend: "rails", db: "sqlite", deploy: "none" });
+    expect(
+      deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "custom + remix + prisma", deploy: "none" })).config,
+    ).toMatchObject({ runtime: "custom", frontend: "remix", db: "postgres-prisma" });
+  });
+
+  it("rejects punctuation-only stacks instead of deriving an empty runtime label", () => {
+    expect(() => deriveTemplateConfigFromLifecycle(tsLifecycle({ stack: "/-+", deploy: "none" }))).toThrow(
+      UnresolvableLifecycleError,
+    );
+  });
 });
 
 describe("selectFragmentConfig — unknown deploy halts loud (Codex H3 #1)", () => {

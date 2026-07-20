@@ -47,6 +47,7 @@ class EvidenceProjectionPool {
     private readonly unit: ProofUnitRow | undefined,
     private readonly contracts: readonly Record<string, unknown>[],
     private readonly projectOrg: string | null = ORG,
+    private readonly failProjectRead = false,
   ) {}
 
   async connect() {
@@ -60,6 +61,7 @@ class EvidenceProjectionPool {
           return rows([]);
         }
         if (text === "SELECT org_id FROM projects WHERE project_id = $1") {
+          if (this.failProjectRead) throw new Error("project lookup unavailable");
           return this.projectOrg === null ? rows([]) : rows([{ org_id: this.projectOrg }]);
         }
         if (text.startsWith("SELECT role FROM project_members")) return rows([]);
@@ -103,6 +105,7 @@ function appFor(pool: EvidenceProjectionPool, actor: ActorContext = ACTOR): Hono
     await next();
   });
   app.route("/orgs", createMergeQueueEvidenceContractRoutes({ pool: pool.asPgPool() }));
+  app.onError(() => new Response(null, { status: 500 }));
   return app;
 }
 
@@ -163,6 +166,41 @@ describe("mq-12 evidence contract route", () => {
       contract: null,
       fallback: null,
     });
+
+    const staleContract = {
+      ...CONTRACT,
+      evidence: { ...CONTRACT.evidence, contentDigest: `sha256:${"f".repeat(64)}` },
+    };
+    const stale = await appFor(new EvidenceProjectionPool(selectedUnit(), [staleContract])).request(endpoint());
+    expect(await stale.json()).toMatchObject({
+      resolutionStatus: "selected_contract_unavailable",
+      contract: null,
+      fallback: null,
+    });
+  });
+
+  it("redacts missing artifact and unrecognized proof observations to an unavailable contract", async () => {
+    const withoutArtifact = await appFor(
+      new EvidenceProjectionPool({ ...selectedUnit(), artifact_hash: null }, [CONTRACT]),
+    ).request(endpoint());
+    expect(await withoutArtifact.json()).toMatchObject({
+      resolutionStatus: "selected_contract_unavailable",
+      contract: null,
+      proofUnit: { artifactDigest: null },
+      fallback: null,
+    });
+
+    const unrecognized = await appFor(
+      new EvidenceProjectionPool(
+        { ...selectedUnit(), subject_id: "fragment_evidence:unexpected", verdict: "fail" },
+        [],
+      ),
+    ).request(endpoint());
+    expect(await unrecognized.json()).toMatchObject({
+      resolutionStatus: "full_gate_fallback",
+      contract: null,
+      fallback: "unobserved",
+    });
   });
 
   it("never exposes another org or a project outside the addressed org", async () => {
@@ -172,5 +210,30 @@ describe("mq-12 evidence contract route", () => {
 
     expect(crossOrg.status).toBe(404);
     expect(mismatchedProject.status).toBe(404);
+  });
+
+  it("fails closed before querying evidence when an actor or addressed project is invalid", async () => {
+    const missingActor = new Hono<ActorContextEnv>();
+    missingActor.route(
+      "/orgs",
+      createMergeQueueEvidenceContractRoutes({ pool: new EvidenceProjectionPool(undefined, []).asPgPool() }),
+    );
+    missingActor.onError(() => new Response(null, { status: 500 }));
+    expect((await missingActor.request(endpoint())).status).toBe(500);
+
+    const platformActor = { ...ACTOR, scopes: ["platform:admin"] };
+    const projectOutsideAddressedOrg = await appFor(
+      new EvidenceProjectionPool(selectedUnit(), [CONTRACT], "org_different"),
+      platformActor,
+    ).request(endpoint());
+    expect(projectOutsideAddressedOrg.status).toBe(404);
+  });
+
+  it("does not redaction-mask an unexpected storage failure as an authorization result", async () => {
+    const response = await appFor(new EvidenceProjectionPool(selectedUnit(), [CONTRACT], ORG, true)).request(
+      endpoint(),
+    );
+
+    expect(response.status).toBe(500);
   });
 });
