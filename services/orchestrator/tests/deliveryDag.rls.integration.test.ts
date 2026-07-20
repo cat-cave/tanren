@@ -257,7 +257,8 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       sha: "f".repeat(40),
       deliveryId: "delivery-dec_gate",
     });
-    // (5) demo no-double-fire: a prior `stimulate` attempt with NO terminal demo event.
+    // (5a) demo RESUME (deadlock fix): a prior `stimulate` attempt but NO fire-intent marker
+    // ⇒ the demo never fired ⇒ re-entry must FIRE and COMPLETE (not stick degraded).
     await seedMergedRun(ownerPool, {
       org: ORG_A,
       project: "proj_demo",
@@ -272,6 +273,28 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       `INSERT INTO delivery_stage_attempts (org_id, id, delivery_run_id, stage, ordinal, attempt, status, started_at)
        VALUES ($1, $2, $3, 'stimulate', 6, 1, 'running', now())`,
       [ORG_A, "delivery-dec_demo:stimulate:1", "delivery-dec_demo"],
+    );
+    // (5b) demo NO-DOUBLE-FIRE: the durable fire-INTENT marker is present with NO terminal
+    // demo event ⇒ a possible mid-crash fire ⇒ re-entry must DEGRADE (never re-fire).
+    await seedMergedRun(ownerPool, {
+      org: ORG_A,
+      project: "proj_demo2",
+      run: "run_demo2",
+      spec: "spec_demo2",
+      decision: "dec_demo2",
+      node: "node_demo2",
+      sha: "2".repeat(40),
+      deliveryId: "delivery-dec_demo2",
+    });
+    await runWithJobOrgId(ORG_A, () =>
+      new PgEventStore(orgScopingPool(ownerPool)).append({
+        runId: "run_demo2",
+        specId: "spec_demo2",
+        projectId: "proj_demo2",
+        orgId: ORG_A,
+        eventType: "delivery.demo_stimulus_started",
+        payload: { deliveryRunId: "delivery-dec_demo2", mergeSha: "2".repeat(40) },
+      }),
     );
   }, 60_000);
 
@@ -420,16 +443,32 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     expect((await deliveryRow(appPool, ORG_A, id))?.status).toBe("completed");
   });
 
-  // Finding 2: a demo stage re-entered after a prior stimulus (no terminal demo event) does
-  // NOT re-fire the live effect — it degrades fail-closed.
-  it("demo idempotency: a re-entered demo with a prior stimulus + no terminal does NOT re-fire", async () => {
+  // Finding 1 (deadlock fix): a re-entered demo with a prior ATTEMPT but NO fire-intent marker
+  // never fired — it must FIRE and the delivery must COMPLETE (not stick degraded forever).
+  it("demo resume: a prior stimulate attempt with NO intent marker FIRES and completes", async () => {
     const { driver, demo } = makeDriver();
     await driver.check("run_demo");
 
     const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo");
+    expect(row?.status).toBe("completed");
+    expect(row?.completed_at).not.toBeNull();
+    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo");
+    expect(evTypes).toContain("delivery.completed");
+    expect(evTypes).not.toContain("delivery.degraded");
+    // The demo runner WAS invoked (the never-fired demo resumed and ran) — no permanent degrade.
+    expect(demo.calls).toEqual(["run_demo"]);
+  });
+
+  // Finding 1: a demo re-entered with the durable fire-INTENT marker present but NO terminal
+  // demo event does NOT re-fire the possibly-committed effect — it degrades fail-closed.
+  it("demo no-double-fire: an intent marker without a terminal degrades and does NOT re-fire", async () => {
+    const { driver, demo } = makeDriver();
+    await driver.check("run_demo2");
+
+    const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo2");
     expect(row?.status).toBe("degraded");
     expect(row?.completed_at).toBeNull();
-    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo");
+    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo2");
     expect(evTypes).toContain("delivery.degraded");
     expect(evTypes).not.toContain("delivery.completed");
     // The demo runner was NEVER invoked — the committed-maybe prior effect is not re-fired.

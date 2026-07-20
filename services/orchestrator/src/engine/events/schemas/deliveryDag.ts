@@ -14,6 +14,12 @@ import { z } from "zod";
 //   - delivery.degraded  → a stage could not confirm its external effect; the delivery is
 //                          in an explicit durable DEGRADED state (resumable next wake), NOT
 //                          silently reported complete.
+//   - delivery.demo_stimulus_started → the durable INTENT MARKER recorded (under the
+//                          cross-process advisory lock) IMMEDIATELY BEFORE the demo behavior
+//                          effect fires. On a resume: absent ⇒ the effect never fired ⇒ FIRE;
+//                          present without a terminal demo event ⇒ the effect MAY have fired
+//                          mid-crash ⇒ degrade (never re-fire). This is the effect-boundary
+//                          idempotency marker (never the attempt boundary).
 
 const Sha256Digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 
@@ -56,5 +62,14 @@ export const DeliveryDegradedPayload = z
     classification: z.string(),
     /** A fixed, non-secret operator-facing detail. */
     detail: z.string(),
+  })
+  .strict();
+
+export const DeliveryDemoStimulusStartedPayload = z
+  .object({
+    /** The durable `delivery_runs` row whose demo effect is about to fire. */
+    deliveryRunId: z.string(),
+    /** The merged commit SHA the delivery activates. */
+    mergeSha: z.string(),
   })
   .strict();
