@@ -1,7 +1,6 @@
 import {
   DeliveryCompletedPayload,
   DeliveryDegradedPayload,
-  DeliveryDemoStimulusAbortedPayload,
   DeliveryDemoStimulusStartedPayload,
 } from "./deliveryDag.js";
 import { deploymentEventRegistry } from "./deploymentVocabulary.js";
@@ -24,5 +23,4 @@ export const deliveryEventRegistry = {
   "delivery.completed": DeliveryCompletedPayload,
   "delivery.degraded": DeliveryDegradedPayload,
   "delivery.demo_stimulus_started": DeliveryDemoStimulusStartedPayload,
-  "delivery.demo_stimulus_aborted": DeliveryDemoStimulusAbortedPayload,
 } as const;
