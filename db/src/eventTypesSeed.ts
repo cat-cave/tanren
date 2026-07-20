@@ -83,6 +83,7 @@ export const eventTypesSeed = [
   { name: "dag.spec.speculative", defaultSeverity: "info" },
   { name: "delivery.completed", defaultSeverity: "info" },
   { name: "delivery.degraded", defaultSeverity: "warn" },
+  { name: "delivery.demo_stimulus_aborted", defaultSeverity: "info" },
   { name: "delivery.demo_stimulus_started", defaultSeverity: "info" },
   { name: "demo.completed", defaultSeverity: "info" },
   { name: "demo.evidence.recorded", defaultSeverity: "info" },

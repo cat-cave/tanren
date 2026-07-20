@@ -97,13 +97,13 @@ describe("driveDeliveryStagePlan", () => {
   });
 });
 
-describe("demo stage idempotency (Finding 1 — effect-boundary intent marker, no false-degrade)", () => {
-  // (b) possibly-fired: intent marker PRESENT + no terminal → degrade, never re-fire.
-  it("REFUSES to re-fire and degrades when the fire-intent marker is present without a terminal", async () => {
+describe("demo stage idempotency (Finding HIGH — tight intent boundary, pre-dispatch re-fires)", () => {
+  // (b) crash mid-dispatch: a LIVE fire-intent (started>aborted) + no terminal → degrade, never re-fire.
+  it("REFUSES to re-fire and degrades when a LIVE fire-intent is present without a terminal", async () => {
     const demoRunner = fakeRunner();
     const { deps } = stagesDeps({
       demoRunner,
-      signals: fakeSignals({ demoTerminalExists: async () => false, demoStimulusIntentExists: async () => true }),
+      signals: fakeSignals({ demoTerminalExists: async () => false, demoStimulusIntentLive: async () => true }),
     });
     const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
     expect(out).toMatchObject({ kind: "degraded", classification: "demo_effect_in_flight_unknown" });
@@ -111,23 +111,52 @@ describe("demo stage idempotency (Finding 1 — effect-boundary intent marker, n
     expect(demoRunner.calls).toHaveLength(0);
   });
 
-  // (a) never-fired: NO intent marker + deploy verified → FIRES + records the intent + confirms.
-  it("FIRES the demo (and records the fire-intent) when no intent marker exists — never sticks degraded", async () => {
-    const demoRunner = fakeRunner();
+  // (a) never-fired: NO live intent + deploy verified → FIRES, records the intent, terminal appears → confirms.
+  it("FIRES the demo (recording the fire-intent) when no live intent exists — never sticks degraded", async () => {
+    let fired = false;
+    const demoRunner = fakeRunner(async () => {
+      fired = true;
+    });
     const { deps, events } = stagesDeps({
       demoRunner,
       signals: fakeSignals({
-        demoStimulusIntentExists: async () => false,
+        demoStimulusIntentLive: async () => false,
         deployReach: async () => "verified",
-        demoReach: async () => "observed",
+        // the terminal appears once the runner has fired (a real runner appends demo.completed)
+        demoTerminalExists: async () => fired,
+        demoReach: async () => (fired ? "observed" : "none"),
       }),
     });
     const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
     expect(out.kind).toBe("confirmed");
     // the effect ran
     expect(demoRunner.calls).toEqual(["run-1"]);
-    // the durable fire-intent marker was recorded at the effect boundary
-    expect(events.appended.map((e) => e.eventType)).toContain("delivery.demo_stimulus_started");
+    const types = events.appended.map((e) => e.eventType);
+    // the fire-intent was recorded at the effect boundary and NOT aborted (a terminal followed)
+    expect(types).toContain("delivery.demo_stimulus_started");
+    expect(types).not.toContain("delivery.demo_stimulus_aborted");
+  });
+
+  // (a') pre-dispatch failure: the runner throws leaving NO terminal → the intent is ABORTED so a
+  // resume RE-FIRES (never a permanent degrade for a never-fired demo).
+  it("ABORTS the fire-intent (able to re-fire) when the runner fails before dispatch (no terminal)", async () => {
+    const demoRunner = fakeRunner(async () => {
+      // a pre-dispatch failure (e.g. loadVerifiedDeploy throwing) — NO terminal demo event
+      throw new Error("loadVerifiedDeploy transient failure");
+    });
+    const { deps, events } = stagesDeps({
+      demoRunner,
+      signals: fakeSignals({
+        demoStimulusIntentLive: async () => false,
+        deployReach: async () => "verified",
+        demoTerminalExists: async () => false,
+      }),
+    });
+    await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    const types = events.appended.map((e) => e.eventType);
+    // intent recorded AND then aborted ⇒ NOT live ⇒ a resume re-fires (no permanent degrade)
+    expect(types).toContain("delivery.demo_stimulus_started");
+    expect(types).toContain("delivery.demo_stimulus_aborted");
   });
 
   // (c) no-op demo (deploy NOT verified): runner no-ops, NO intent recorded, confirm — never false-degrades.

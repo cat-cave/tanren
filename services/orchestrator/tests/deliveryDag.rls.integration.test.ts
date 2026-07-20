@@ -11,7 +11,7 @@
 //   (3) an org-A drive never touches an org-B delivery (cross-org RLS isolation).
 // Gated on TANREN_RLS_DB_TEST; runs in the RLS phase, not the DB-less unit phase.
 
-import { migrate, resetSystemPool, runWithJobOrgId, runWithOrgScope, setSystemPool } from "@tanren/db";
+import { migrate, resetSystemPool, runWithJobOrgId, setSystemPool } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
@@ -21,7 +21,15 @@ import { DeliveryDagDriver } from "../src/engine/postMerge/delivery/deliveryDagD
 import { contentAddressedEvidenceSigner } from "../src/engine/postMerge/delivery/deliveryEvidence.js";
 import { DeliveryRunStore } from "../src/engine/postMerge/delivery/deliveryRunStore.js";
 import { PgDeliverySignals } from "../src/engine/postMerge/delivery/deliverySignals.js";
-import type { RunMergeWatcher } from "../src/engine/postMerge/subscriber.js";
+import {
+  deliveryEventTypesFor,
+  deliveryRow,
+  recordingRunner,
+  seedDeliveryEvent,
+  seedMergedRun,
+  seedOrg,
+  stageStatuses,
+} from "./helpers/deliveryDagRlsSeed.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -46,121 +54,6 @@ function appUrl(url: string, database: string): string {
   p.password = APP_PASSWORD;
   p.pathname = `/${database}`;
   return p.toString();
-}
-
-/** A no-op idempotent cluster runner that records the runIds it was driven for. */
-function recordingRunner(): RunMergeWatcher & { calls: string[] } {
-  const calls: string[] = [];
-  return {
-    calls,
-    // eslint-disable-next-line @typescript-eslint/require-await
-    check: async (runId: string) => {
-      calls.push(runId);
-    },
-  };
-}
-
-async function seedOrg(owner: Pool, org: string): Promise<void> {
-  await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
-    [org],
-  );
-}
-
-/** Seed the full lineage + in-16 outbox row for one merged run (as the DB owner). */
-async function seedMergedRun(
-  owner: Pool,
-  args: {
-    org: string;
-    project: string;
-    run: string;
-    spec: string;
-    decision: string;
-    node: string;
-    sha: string;
-    deliveryId: string;
-  },
-): Promise<void> {
-  const { org, project, run, spec, decision, node, sha, deliveryId } = args;
-  await owner.query(
-    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
-     VALUES ($1, $1, 'https://example.com/repo.git', 'main', 'runner:v0', $2, '{}'::jsonb)`,
-    [project, org],
-  );
-  await owner.query(
-    `INSERT INTO integration_nodes (node_id, project_id, org_id, base_branch, base_sha, ref, purpose, member_key, head_sha, tree_hash, status)
-     VALUES ($1, $2, $3, 'main', $4, 'refs/heads/main', 'merge_batch', $1, $4, 'tree-x', 'ready')`,
-    [node, project, org, D],
-  );
-  await owner.query(
-    `INSERT INTO authority_decisions
-       (org_id, project_id, id, integration_node_id, subject_kind, head_sha, expected_main_sha,
-        artifact_digest, proof_root, member_set_hash, policy_version, decision)
-     VALUES ($1, $2, $3, $4, 'integration_node', $5, $5, $5, $5, $5, 'v1', 'authorized')`,
-    [org, project, decision, node, D],
-  );
-  await owner.query(
-    `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-     VALUES ($1, $2, $3, 't', 'd', 'in_flight')`,
-    [spec, project, org],
-  );
-  await owner.query(
-    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch)
-     VALUES ($1, $2, $3, $4, 'test', 'main')`,
-    [run, spec, project, org],
-  );
-  // Seed the merged-run signal through the single event-writer seam (not a raw INSERT).
-  await runWithJobOrgId(org, () =>
-    new PgEventStore(orgScopingPool(owner)).append({
-      runId: run,
-      specId: spec,
-      projectId: project,
-      orgId: org,
-      eventType: "merge.completed",
-      payload: { prUrl: "https://example.com/pr/1", prNumber: 1, integration: "native_queue", mergeSha: sha },
-    }),
-  );
-  await owner.query(
-    `INSERT INTO delivery_runs (org_id, id, project_id, authority_decision_id, merge_sha, status)
-     VALUES ($1, $2, $3, $4, $5, 'pending')`,
-    [org, deliveryId, project, decision, sha],
-  );
-}
-
-interface DeliveryRow {
-  status: string;
-  completed_at: string | null;
-}
-async function deliveryRow(pool: Pool, org: string, id: string): Promise<DeliveryRow | undefined> {
-  return runWithOrgScope(pool, org, async (client) => {
-    const r = await client.query<DeliveryRow>(
-      "SELECT status, completed_at FROM delivery_runs WHERE org_id = $1 AND id = $2",
-      [org, id],
-    );
-    return r.rows[0];
-  });
-}
-async function stageStatuses(pool: Pool, org: string, deliveryId: string): Promise<Map<string, string>> {
-  return runWithOrgScope(pool, org, async (client) => {
-    const r = await client.query<{ stage: string; status: string }>(
-      "SELECT stage, status FROM delivery_stage_attempts WHERE org_id = $1 AND delivery_run_id = $2 ORDER BY ordinal, attempt",
-      [org, deliveryId],
-    );
-    const m = new Map<string, string>();
-    // last attempt wins
-    for (const row of r.rows) m.set(row.stage, row.status);
-    return m;
-  });
-}
-async function eventTypesFor(pool: Pool, org: string, run: string): Promise<string[]> {
-  return runWithOrgScope(pool, org, async (client) => {
-    const r = await client.query<{ event_type: string }>(
-      "SELECT event_type FROM events WHERE org_id = $1 AND run_id = $2 AND event_type LIKE 'delivery.%'",
-      [org, run],
-    );
-    return r.rows.map((x) => x.event_type);
-  });
 }
 
 describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG", () => {
@@ -286,16 +179,32 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       sha: "2".repeat(40),
       deliveryId: "delivery-dec_demo2",
     });
-    await runWithJobOrgId(ORG_A, () =>
-      new PgEventStore(orgScopingPool(ownerPool)).append({
-        runId: "run_demo2",
-        specId: "spec_demo2",
-        projectId: "proj_demo2",
-        orgId: ORG_A,
-        eventType: "delivery.demo_stimulus_started",
-        payload: { deliveryRunId: "delivery-dec_demo2", mergeSha: "2".repeat(40) },
-      }),
-    );
+    const demo2 = { org: ORG_A, run: "run_demo2", spec: "spec_demo2", project: "proj_demo2" };
+    await seedDeliveryEvent(ownerPool, demo2, "delivery.demo_stimulus_started", {
+      deliveryRunId: "delivery-dec_demo2",
+      mergeSha: "2".repeat(40),
+    });
+    // (5c) demo PRE-DISPATCH FAILURE re-fire: a prior drive recorded a fire-intent then ABORTED
+    // the intent (the effect proved not-dispatched) ⇒ NOT live ⇒ re-entry must FIRE and COMPLETE.
+    await seedMergedRun(ownerPool, {
+      org: ORG_A,
+      project: "proj_demo3",
+      run: "run_demo3",
+      spec: "spec_demo3",
+      decision: "dec_demo3",
+      node: "node_demo3",
+      sha: "3".repeat(40),
+      deliveryId: "delivery-dec_demo3",
+    });
+    const demo3 = { org: ORG_A, run: "run_demo3", spec: "spec_demo3", project: "proj_demo3" };
+    await seedDeliveryEvent(ownerPool, demo3, "delivery.demo_stimulus_started", {
+      deliveryRunId: "delivery-dec_demo3",
+      mergeSha: "3".repeat(40),
+    });
+    await seedDeliveryEvent(ownerPool, demo3, "delivery.demo_stimulus_aborted", {
+      deliveryRunId: "delivery-dec_demo3",
+      reason: "no_terminal_after_run",
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -323,7 +232,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     expect(stages.size).toBe(9);
     for (const status of stages.values()) expect(status).toBe("succeeded");
 
-    expect(await eventTypesFor(appPool, ORG_A, "run_ok")).toContain("delivery.completed");
+    expect(await deliveryEventTypesFor(appPool, ORG_A, "run_ok")).toContain("delivery.completed");
     // The idempotent cluster runners were driven exactly once each.
     expect(deploy.calls).toEqual(["run_ok"]);
     expect(demo.calls).toEqual(["run_ok"]);
@@ -341,7 +250,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     expect(stages.get("observe")).toBe("succeeded");
     // the fail-closed gate
     expect(stages.get("record_evidence")).toBe("retry_scheduled");
-    const evTypes1 = await eventTypesFor(appPool, ORG_A, "run_deg");
+    const evTypes1 = await deliveryEventTypesFor(appPool, ORG_A, "run_deg");
     expect(evTypes1).toContain("delivery.degraded");
     // NEVER complete without the effect
     expect(evTypes1).not.toContain("delivery.completed");
@@ -361,7 +270,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     expect(row?.completed_at).not.toBeNull();
     stages = await stageStatuses(appPool, ORG_A, "delivery-dec_deg");
     expect(stages.get("record_evidence")).toBe("succeeded");
-    expect(await eventTypesFor(appPool, ORG_A, "run_deg")).toContain("delivery.completed");
+    expect(await deliveryEventTypesFor(appPool, ORG_A, "run_deg")).toContain("delivery.completed");
     // PROOF of no-re-run: the resume drive never re-invoked the already-succeeded deploy/demo
     // cluster runners (they belong to durably-succeeded stages).
     expect(second.deploy.calls).toEqual([]);
@@ -452,7 +361,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo");
     expect(row?.status).toBe("completed");
     expect(row?.completed_at).not.toBeNull();
-    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo");
+    const evTypes = await deliveryEventTypesFor(appPool, ORG_A, "run_demo");
     expect(evTypes).toContain("delivery.completed");
     expect(evTypes).not.toContain("delivery.degraded");
     // The demo runner WAS invoked (the never-fired demo resumed and ran) — no permanent degrade.
@@ -468,10 +377,26 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo2");
     expect(row?.status).toBe("degraded");
     expect(row?.completed_at).toBeNull();
-    const evTypes = await eventTypesFor(appPool, ORG_A, "run_demo2");
+    const evTypes = await deliveryEventTypesFor(appPool, ORG_A, "run_demo2");
     expect(evTypes).toContain("delivery.degraded");
     expect(evTypes).not.toContain("delivery.completed");
     // The demo runner was NEVER invoked — the committed-maybe prior effect is not re-fired.
     expect(demo.calls).toEqual([]);
+  });
+
+  // Finding HIGH: a prior fire-intent that was ABORTED (pre-dispatch failure proved not-dispatched)
+  // is NOT live ⇒ the demo RE-FIRES and the delivery COMPLETES (no permanent degrade).
+  it("demo pre-dispatch failure: a started+aborted intent RE-FIRES and completes", async () => {
+    const { driver, demo } = makeDriver();
+    await driver.check("run_demo3");
+
+    const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo3");
+    expect(row?.status).toBe("completed");
+    expect(row?.completed_at).not.toBeNull();
+    const evTypes = await deliveryEventTypesFor(appPool, ORG_A, "run_demo3");
+    expect(evTypes).toContain("delivery.completed");
+    expect(evTypes).not.toContain("delivery.degraded");
+    // The demo runner WAS re-invoked (the aborted intent did not strand it).
+    expect(demo.calls).toEqual(["run_demo3"]);
   });
 });

@@ -141,6 +141,32 @@ export async function appendDemoStimulusStarted(
   );
 }
 
+/**
+ * Append the durable demo ABORT MARKER (`delivery.demo_stimulus_aborted`) — clears a
+ * `started` fire-intent once the drive PROVED the external effect never dispatched (the
+ * runner returned/threw leaving NO terminal demo event). This makes a never-fired demo
+ * (a pre-dispatch failure: deploy-load throw, notify-after-commit, no-op) ABLE TO RE-FIRE on
+ * resume instead of stranding it degraded. Only a genuine crash mid-dispatch leaves the
+ * `started` un-cleared ⇒ degrade.
+ */
+export async function appendDemoStimulusAborted(
+  deps: Pick<RecordEvidenceDeps, "eventStore">,
+  lineage: DeliveryLineage,
+  deliveryRunId: string,
+  reason: string,
+): Promise<void> {
+  await runWithJobOrgId(lineage.orgId, () =>
+    deps.eventStore.append({
+      runId: lineage.runId,
+      specId: lineage.specId,
+      projectId: lineage.projectId,
+      orgId: lineage.orgId,
+      eventType: "delivery.demo_stimulus_aborted",
+      payload: { deliveryRunId, reason },
+    }),
+  );
+}
+
 /** Append the durable `delivery.degraded` narration (one per degraded settle; not deduped). */
 export async function recordDeliveryDegraded(
   deps: Pick<RecordEvidenceDeps, "eventStore">,
