@@ -41,6 +41,7 @@ import {
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
   PgReleaseInstanceBaseUrlResolver,
+  PgVerificationCaptureStore,
   type AcceptanceBehaviorResult,
   type AcceptanceEventSink,
   type AcceptancePlan,
@@ -53,6 +54,7 @@ import {
   type RecordAcceptanceVerdictInput,
   type StoredAcceptanceVerdict,
 } from "../verification/acceptance/index.js";
+import { PgCasByteStore } from "../cas/pgCasByteStore.js";
 import {
   PgVerificationEnvironmentResolver,
   type VerificationEnvironmentResolver,
@@ -309,6 +311,10 @@ export function buildProofBackedWebDemo(pool: pg.Pool, events: EventStore): Proo
     // surfaces its own `demo.*` events via `events` below.
     events: new EphemeralAcceptanceEventSink(),
     drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(pool) })],
+    // rv-9: content-address the demo drive's response/render captures into the SP-3 CAS +
+    // verification_artifacts; the persisted verdict carries the durable evidence link so the
+    // demo's proof-backed evidence resolves from the ledger, not just the ephemeral result.
+    renderCapture: new PgVerificationCaptureStore(pool, new PgCasByteStore(pool)),
   });
   return new ProofBackedWebDemo({
     events,

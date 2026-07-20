@@ -7,14 +7,17 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Digest } from "../../contracts/cas.js";
+import type { CanonicalBody, Digest } from "../../contracts/cas.js";
 import type {
   AdapterUnavailableResult,
   BehaviorVerdictOutcome,
   DriverExecutionResult,
   DriverObservation,
+  EvidenceBytePayload,
 } from "../../contracts/runtimeVerificationAdapters.js";
 import type { ExecutionMatrix } from "../../contracts/runtimeVerificationPlan.js";
+import { evaluateAssertion } from "./assertionEvaluator.js";
+import type { AcceptanceAssertion } from "./acceptancePlan.js";
 import type { CausalStageResult } from "./causalStage.js";
 
 export function sha256(value: string): Digest {
@@ -39,6 +42,31 @@ export interface AssertionEvaluation {
   readonly observed: readonly { readonly assertionId: string; readonly satisfied: boolean }[];
 }
 
+/**
+ * Evaluate a plan's assertions against the drive's observations. An assertion
+ * with no observation for its subject did NOT execute (fail-closed: it can never
+ * be laundered into a pass).
+ */
+export function evaluatePlan(
+  plan: { readonly assertions: readonly AcceptanceAssertion[] },
+  observations: readonly DriverObservation[],
+): AssertionEvaluation {
+  const bySubject = new Map<string, CanonicalBody>();
+  for (const observation of observations) bySubject.set(observation.subject, observation.value);
+  const observed: { assertionId: string; satisfied: boolean }[] = [];
+  let executedCount = 0;
+  let passedCount = 0;
+  for (const assertion of plan.assertions) {
+    if (!bySubject.has(assertion.subject)) continue;
+    executedCount += 1;
+    const actual = bySubject.get(assertion.subject) ?? null;
+    const satisfied = evaluateAssertion(assertion.comparisonOperator, actual, assertion.expected);
+    if (satisfied) passedCount += 1;
+    observed.push({ assertionId: assertion.assertionId, satisfied });
+  }
+  return { executedCount, passedCount, observed };
+}
+
 /** The aggregate of driving EVERY required surface for one behavior. */
 export interface DriveAggregate {
   readonly observations: readonly DriverObservation[];
@@ -48,6 +76,8 @@ export interface DriveAggregate {
   readonly missingDriver: boolean;
   /** A required surface's driver reported its environment unavailable. */
   readonly unavailable?: AdapterUnavailableResult;
+  /** rv-9: raw run-artifact captures emitted by the driven surfaces, for content-addressing. */
+  readonly captures: readonly EvidenceBytePayload[];
 }
 
 /**
@@ -63,6 +93,7 @@ export function mergeCausalIntoAggregate(surface: DriveAggregate, causal: Causal
     observations: [...surface.observations, ...causal.observations],
     drove: surface.drove || causal.attempted,
     missingDriver: surface.missingDriver || causal.missingCauseDriver || causal.missingObserver,
+    captures: surface.captures,
     ...(unavailable === undefined ? {} : { unavailable }),
   };
 }

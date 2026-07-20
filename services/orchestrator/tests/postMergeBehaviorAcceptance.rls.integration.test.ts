@@ -345,6 +345,30 @@ describeDb("rv-16a persisted post-merge production behavior verdict — real Pos
     // 200-but-broken persists failed_product, NOT passed.
     expect(failed!.outcome).toBe("failed_product");
 
+    // rv-9 FINDING 1: this REAL production factory now content-addresses the reproof's response
+    // capture and DURABLY links it onto the persisted verdict (behavior_verdict_evidence) — the
+    // post-merge reproof path is no longer a dead capture path; resolve it from the ledger alone.
+    const evidence = await runWithOrgScope(app, ORG, async (client) => {
+      const rows = await client.query<{ verification_artifact_id: string; cas_digest: string }>(
+        `SELECT e.verification_artifact_id, e.cas_digest
+           FROM behavior_verdict_evidence e
+           JOIN behavior_verdicts v ON v.org_id = e.org_id AND v.id = e.verdict_id
+           JOIN behavior_verification_runs r ON r.org_id = v.org_id AND r.id = v.run_id
+          WHERE v.org_id = $1 AND v.behavior_revision_id = $2 AND r.purpose = 'post_merge_production'`,
+        [ORG, PASS_BR],
+      );
+      return rows.rows;
+    });
+    expect(evidence.length).toBeGreaterThanOrEqual(1);
+    expect(evidence[0]!.cas_digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    const artifact = await runWithOrgScope(app, ORG, (client) =>
+      client.query(`SELECT 1 FROM verification_artifacts WHERE org_id = $1 AND id = $2`, [
+        ORG,
+        evidence[0]!.verification_artifact_id,
+      ]),
+    );
+    expect(artifact.rowCount).toBe(1);
+
     // The frozen post_merge.behavior.* events were emitted for each persisted verdict.
     const events = await runWithOrgScope(app, ORG, async (client) => {
       const rows = await client.query<{ event_type: string; payload: Record<string, unknown> }>(

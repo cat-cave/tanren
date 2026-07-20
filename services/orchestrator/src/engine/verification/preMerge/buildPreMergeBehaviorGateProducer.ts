@@ -15,8 +15,10 @@ import {
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
   PgDesignRenderVerdictReader,
+  PgVerificationCaptureStore,
   type AcceptanceBaseUrlResolver,
 } from "../acceptance/index.js";
+import { PgCasByteStore } from "../../cas/pgCasByteStore.js";
 import {
   PreviewBehaviorGateProducer,
   type AcceptanceExecutorFactory,
@@ -40,6 +42,10 @@ class FixedBaseUrlResolver implements AcceptanceBaseUrlResolver {
  * project's `preMergeBehaviorGate` knob is on.
  */
 export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: SecretStore): PreMergeBehaviorGateProducer {
+  // rv-9: content-address every drive's response/render capture into the SP-3 CAS +
+  // verification_artifacts on the MERGE-CRITICAL pre-merge gate, so `evidenceLinkRefs` are
+  // durably linked onto the persisted verdict (behavior_verdict_evidence) instead of discarded.
+  const renderCapture = new PgVerificationCaptureStore(pool, new PgCasByteStore(pool));
   const buildExecutor: AcceptanceExecutorFactory = (baseUrl) =>
     new AcceptanceOrchestrator({
       // PERSIST: the `pre_merge` run + blocking verdicts land in the 0079-hardened ledger so
@@ -47,6 +53,7 @@ export function buildPreMergeBehaviorGateProducer(pool: pg.Pool, secrets: Secret
       store: new PgAcceptanceRunStore(pool),
       events: new PgAcceptanceEventSink(pool),
       drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new FixedBaseUrlResolver(baseUrl) })],
+      renderCapture,
       // rv-13: a behavior that declares a required rendered-visual requirement is gated on the
       // ds-4 design-render verdict for the project (fail-closed) alongside its HTTP assertions.
       designRenderReader: new PgDesignRenderVerdictReader(pool),

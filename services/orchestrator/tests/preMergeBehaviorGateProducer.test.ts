@@ -109,6 +109,7 @@ function executorWithOutcome(outcome: BehaviorVerdictOutcome): AcceptanceExecuto
             requiredAssertionCount: 1,
             executedAssertionCount: 1,
             passedAssertionCount: outcome === "passed" ? 1 : 0,
+            evidenceLinkRefs: [],
           },
         ],
       };
@@ -222,6 +223,7 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
               requiredAssertionCount: 1,
               executedAssertionCount: 1,
               passedAssertionCount: 1,
+              evidenceLinkRefs: [],
             },
           ],
         };
