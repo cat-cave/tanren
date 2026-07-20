@@ -911,6 +911,16 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
 smoke-rls-integration-lifecycle:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts services/orchestrator/tests/integrationStateWriter.rls.integration.test.ts
 
+# IN-14: BindingMaterializer live proofs — a resolved binding materializes an
+# immutable generation + integration_binding_env shape + provisioned
+# project_app_env with a project-scoped, least-privilege Vault ref per secret;
+# identical content is idempotent (same generation), changed content mints the
+# next; a missing secret fails closed with no partial write; rows are org-scoped
+# (cross-org zero); and the live deploy-path reconcile re-materializes ready
+# bindings idempotently and fails closed on a revoked secret.
+smoke-rls-binding-materializer:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/bindingMaterializer.rls.integration.test.ts
+
 # RV-4: behavior-coverage affected-selection live proofs — the 0044 composite
 # (org_id, project_id) project-lineage FK rejection + the production
 # HTTP -> PgCasByteStore -> PgEventStore -> replay path against real Postgres.
@@ -938,6 +948,12 @@ smoke-rls-governance-policy:
 # route returns only the caller org/project's events; a foreign org sees zero rows.
 smoke-rls-integration-events:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/integrationEventsRead.rls.integration.test.ts
+
+# IN-7: integration fragment F2 authoring live RLS proof — the POST …/integrations/derive
+# seam authors a MISSING provider integration definition via the shared kernel, then a
+# foreign org + unscoped read see zero rows and the durable integration.author.* events land.
+smoke-rls-integration-fragments:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/integrationFragmentsRls.integration.test.ts
 
 
 
@@ -1048,6 +1064,13 @@ smoke-rls-post-merge-behavior-verdict:
 smoke-rls-acceptance-plan-loader:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/acceptancePlanLoader.rls.integration.test.ts
 
+# rv-3: verification-fragment registry + F2 authoring — the plan loader F2-authors a
+# cited-but-missing capability, atomically registers + versions it, binds it into the
+# plan (behavior_verification_plans + verification_plan_fragments), all as tanren_app;
+# a resolve/load under another org sees zero rows.
+smoke-rls-verification-fragment-registry:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/verificationFragmentRegistry.rls.integration.test.ts
+
 # rv-6 A2 end-to-end: the prod execute-behaviors route drives the DEFAULT real HTTP
 # driver + real Pg release resolver + real loader against a live server as tanren_app,
 # proving a correct product passes and a broken expectation fails_product (no fabrication).
@@ -1107,7 +1130,7 @@ smoke-rls-deploy-verification-environment:
 smoke-rls-proof-bundle:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/proofBundleExport.rls.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-issue-loop smoke-rls-spec-origins smoke-rls-integration-lifecycle smoke-rls-behavior-coverage smoke-rls-merge-queue-authority smoke-integration-vault-cas smoke-rls-allocator smoke-rls-event-integrity smoke-rls-environments smoke-rls-design-contracts smoke-rls-governance-policy smoke-rls-design-foundation smoke-rls-integration-events smoke-rls-webhook-intake smoke-rls-merge-partitions smoke-rls-governance-bindings smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority smoke-rls-merge-bundle-scope smoke-rls-symptom-contracts smoke-rls-production-verification smoke-rls-symptom-evidence smoke-rls-baseline-reproduction smoke-rls-issue-source smoke-rls-source-sync-worker smoke-rls-land-groups smoke-rls-governance-tiers smoke-rls-fixture-leases smoke-rls-effect-observations smoke-rls-integration-proof-units smoke-rls-repo-visibility smoke-rls-resolution-jobs smoke-rls-resolution-decisions smoke-rls-resolution-authority smoke-rls-remediation-attempts smoke-rls-release-instances smoke-rls-resolution-walker smoke-rls-resolution-proof smoke-rls-self-healing-funnel smoke-rls-verdict-substrate smoke-rls-behavior-revision-mint smoke-rls-acceptance-orchestrator smoke-rls-causal-correlation smoke-rls-post-merge-reproof smoke-rls-acceptance-plan-loader smoke-rls-acceptance-execute-behaviors smoke-rls-proof-backed-demo smoke-rls-deploy-verification-environment smoke-rls-proof-bundle # rv-24: exportable proof bundle — org-scoped export assembles a tamper-evident bundle # from the real persisted acceptance rows; a failed verdict stays failed; cross-org sees zero. smoke-rls-proof-bundle: DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/proofBundleExport.rls.integration.test.ts smoke-rls-post-merge-behavior-verdict smoke-rls-verification-reads smoke-rls-proof-dashboard
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-issue-loop smoke-rls-spec-origins smoke-rls-integration-lifecycle smoke-rls-binding-materializer smoke-rls-integration-fragments smoke-rls-behavior-coverage smoke-rls-merge-queue-authority smoke-integration-vault-cas smoke-rls-allocator smoke-rls-event-integrity smoke-rls-environments smoke-rls-design-contracts smoke-rls-governance-policy smoke-rls-design-foundation smoke-rls-integration-events smoke-rls-webhook-intake smoke-rls-merge-partitions smoke-rls-governance-bindings smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority smoke-rls-merge-bundle-scope smoke-rls-symptom-contracts smoke-rls-production-verification smoke-rls-symptom-evidence smoke-rls-baseline-reproduction smoke-rls-issue-source smoke-rls-source-sync-worker smoke-rls-land-groups smoke-rls-governance-tiers smoke-rls-fixture-leases smoke-rls-effect-observations smoke-rls-integration-proof-units smoke-rls-repo-visibility smoke-rls-resolution-jobs smoke-rls-resolution-decisions smoke-rls-resolution-authority smoke-rls-remediation-attempts smoke-rls-release-instances smoke-rls-resolution-walker smoke-rls-resolution-proof smoke-rls-self-healing-funnel smoke-rls-verdict-substrate smoke-rls-behavior-revision-mint smoke-rls-acceptance-orchestrator smoke-rls-causal-correlation smoke-rls-post-merge-reproof smoke-rls-acceptance-plan-loader smoke-rls-verification-fragment-registry smoke-rls-acceptance-execute-behaviors smoke-rls-proof-backed-demo smoke-rls-deploy-verification-environment smoke-rls-proof-bundle # rv-24: exportable proof bundle — org-scoped export assembles a tamper-evident bundle # from the real persisted acceptance rows; a failed verdict stays failed; cross-org sees zero. smoke-rls-proof-bundle: DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/proofBundleExport.rls.integration.test.ts smoke-rls-post-merge-behavior-verdict smoke-rls-verification-reads smoke-rls-proof-dashboard
 # rv-24: exportable proof bundle — org-scoped export assembles a tamper-evident bundle
 # from the real persisted acceptance rows; a failed verdict stays failed; cross-org sees zero.
 # rv-22: runtime-verification HTTP read surface — real Hono route → real DB → real

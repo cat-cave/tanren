@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "missionNodeId": {
+      "const": "in-7",
+      "type": "string"
+    },
+    "unitId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "missionNodeId",
+    "unitId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.author.started"
+}

@@ -4,13 +4,22 @@ import type pg from "pg";
 import { z } from "zod";
 import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { AuthoringAuthorer } from "../../engine/contracts/authoringKernel.js";
 import {
   buildIntegrationProvisioner,
   type IntegrationProvisioner,
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { IntegrationSecretStore } from "../../engine/contracts/integrationSecretStore.js";
-import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
+import { PgEventStore, type AppendEventInput, type EventStore } from "../../engine/eventStore.js";
+import type { EventName } from "../../engine/events/index.js";
+import {
+  IntegrationFragmentAuthoringFailedError,
+  IntegrationFragmentStore,
+  resolveIntegrationFragments,
+  type IntegrationFragmentDraft,
+  type IntegrationFragmentSpec,
+} from "../../engine/integrations/fragments/index.js";
 import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../engine/integrations/integrationSecretStoreImpl.js";
 import {
@@ -39,6 +48,16 @@ interface SharedRouteOptions {
   /** Test seam; production omits this and uses the real registry. */
   buildProvisioner?: (kind: string) => IntegrationProvisioner;
   fetchImpl?: typeof fetch;
+  /**
+   * in-7 — the real F2 writer factory for provider integration definitions. When
+   * present, the derive seam authors any MISSING definition fragment (writer→validate,
+   * convergent); when absent, a missing fragment halts loud. Production wires the
+   * allocating Forge answerer path; only the pool variant supports the derive seam.
+   */
+  integrationFragmentAuthorer?: (target: {
+    orgId: string;
+    projectId: string;
+  }) => AuthoringAuthorer<IntegrationFragmentSpec, IntegrationFragmentDraft>;
 }
 
 export type IntegrationRoutesOptions = SharedRouteOptions &
@@ -55,6 +74,22 @@ const ProvisionBody = z
     name: z.string().min(1).max(200).optional(),
   })
   .strict();
+
+const DeriveBody = z.object({ config: z.unknown() }).strict();
+
+/** EventStore has no ambient scope during an F2 provider (LLM) call; scope each
+ * append independently so a long writer call never holds a database transaction
+ * open. Mirrors the gv-10 governance route's per-append scoping. */
+class OrgScopedEventStore implements Pick<EventStore, "append"> {
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly orgId: string,
+  ) {}
+
+  append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    return runWithOrgScope(this.pool, this.orgId, (client) => new PgEventStore(client).append(input));
+  }
+}
 
 function databaseFor(options: IntegrationRoutesOptions): IntegrationRouteDatabase {
   if (options.database !== undefined) return options.database;
@@ -181,6 +216,12 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
     }
   });
 
+  // in-7 — the integration DERIVATION seam (only on the pool variant: the
+  // org-scoped store + per-append event store need a pool).
+  if (options.pool !== undefined) {
+    mountIntegrationDeriveRoute(app, database, options.pool, options.integrationFragmentAuthorer);
+  }
+
   mountIntegrationAuthorityWrites(app, database, options, authority, integrationSecrets, fetchImpl);
 
   app.get("/:orgId/projects/:projectId/integrations/discover", async (c) => {
@@ -272,6 +313,59 @@ async function projectAccess(
   actor: ActorContext,
 ) {
   return database.withOrgScope(orgId, (client) => integrationProjectAccess(client, orgId, projectId, actor));
+}
+
+/**
+ * in-7 derive seam: resolve the provider-specific integration DEFINITION fragments
+ * a project's requirement config needs. A missing definition spawns the F2 authoring
+ * DAG (writer→validate, convergent, the shared SP-2 kernel) — emitting
+ * `integration.author.*` per attempt — or halts loud
+ * (`IntegrationFragmentAuthoringFailedError` → 409). The authorer is the real
+ * allocating Forge writer; absent it, a missing definition halts loud.
+ */
+function mountIntegrationDeriveRoute(
+  app: Hono<ActorContextEnv>,
+  database: IntegrationRouteDatabase,
+  pool: pg.Pool,
+  authorerFactory?: (target: {
+    orgId: string;
+    projectId: string;
+  }) => AuthoringAuthorer<IntegrationFragmentSpec, IntegrationFragmentDraft>,
+): void {
+  app.post("/:orgId/projects/:projectId/integrations/derive", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const projectId = c.req.param("projectId");
+    if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "org_access_denied" }, 403);
+    const access = await projectAccess(database, orgId, projectId, actor);
+    if (access === "not_found") return c.json({ error: "project_not_found" }, 404);
+    if (access === "denied") return c.json({ error: "project_access_denied" }, 403);
+
+    const parsed = DeriveBody.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_derive", issues: parsed.error.issues }, 400);
+
+    try {
+      const composed = await resolveIntegrationFragments({
+        config: parsed.data.config,
+        context: { orgId, projectId, createdBy: actor.userId },
+        ...(authorerFactory === undefined ? {} : { authorer: authorerFactory({ orgId, projectId }) }),
+        store: new IntegrationFragmentStore(pool),
+        eventStore: new OrgScopedEventStore(pool, orgId),
+      });
+      return c.json({ ok: true as const, missionNodeId: "in-7" as const, snapshot: composed.snapshot }, 200);
+    } catch (error) {
+      if (error instanceof IntegrationFragmentAuthoringFailedError) {
+        return c.json(
+          { error: "integration_fragment_authoring_failed", failedIds: error.failedIds, reasons: error.failureReasons },
+          409,
+        );
+      }
+      if (error instanceof z.ZodError) {
+        return c.json({ error: "invalid_integration_fragment_config", issues: error.issues }, 400);
+      }
+      return c.json({ error: "integration_derive_failed", message: messageOf(error) }, 500);
+    }
+  });
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {

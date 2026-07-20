@@ -14,12 +14,25 @@ import type pg from "pg";
 import type { Digest } from "../../contracts/cas.js";
 import { parseDigest } from "../../contracts/cas.js";
 import type { VerificationArtifactId } from "../../contracts/runtimeVerificationPlan.js";
-import { assertVerdictAssertionCoverage } from "../../contracts/runtimeVerificationInvariants.js";
 import type {
   BehaviorVerdictOutcome,
   FlakeState,
   VerificationRunPurpose,
 } from "../../contracts/runtimeVerificationAdapters.js";
+import {
+  backfillProducingAttempt,
+  ensureVerificationPlanRow,
+  recordAttemptRow,
+  type EnsureVerificationPlanInput,
+  type RecordAttemptInput,
+  type VerdictAttemptTrace,
+} from "./attemptLifecycle.js";
+import {
+  assertAndInsertVerdict,
+  validateVerdictInput,
+  VERDICT_FLAKE_STATES,
+  VERDICT_OUTCOMES,
+} from "./verdictWrite.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
@@ -105,6 +118,28 @@ export interface RecordAcceptanceVerdictInput {
    * from the ledger — not just the ephemeral run result. Absent/empty ⇒ no links written.
    */
   readonly evidenceLinks?: readonly VerdictEvidenceLink[];
+  /**
+   * rv-10: MANDATORY traceability trace — no silent skip path. {@link assertVerdictTraceable} runs
+   * on EVERY verdict, BEFORE any row is written: `attempted` fails closed on an orphan / borrowed /
+   * count-mismatch attempt; `attemptless` fails closed if the run DID attempt the behavior. The
+   * live orchestrator always uses `attempted` via {@link AcceptanceRunStore.recordAttemptedVerdict}.
+   */
+  readonly attemptTrace: VerdictAttemptTrace;
+}
+
+/** The atomic {plan + attempt + verdict} recording unit (records all three in ONE transaction). */
+export interface RecordAttemptedVerdictInput {
+  /** The attempt's plan referent (idempotently materialized in the same transaction). */
+  readonly plan: EnsureVerificationPlanInput;
+  /** The real attempt to record (its id is generated and bound to the verdict's trace). */
+  readonly attempt: RecordAttemptInput;
+  /** The verdict fields; the `attempted` trace is bound internally to the recorded attempt id. */
+  readonly verdict: Omit<RecordAcceptanceVerdictInput, "attemptTrace">;
+}
+
+export interface RecordAttemptedVerdictResult {
+  readonly attemptId: string;
+  readonly verdictId: string;
 }
 
 export interface StoredAcceptanceVerdict {
@@ -120,63 +155,41 @@ export interface StoredAcceptanceVerdict {
 export interface AcceptanceRunStore {
   recordRun(input: RecordAcceptanceRunInput): Promise<string>;
   completeRun(input: CompleteAcceptanceRunInput): Promise<void>;
+  /**
+   * rv-10: materialize the attempt's plan referent (behavior_verification_plans),
+   * the attempt.plan_id FK target the acceptance path never persisted. Idempotent.
+   */
+  ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string>;
+  /** rv-10: record a real attempt row a verdict + captured artifacts can trace to. */
+  recordAttempt(input: RecordAttemptInput): Promise<string>;
   recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string>;
+  /**
+   * rv-10 FINDING 2: record the real attempt AND the verdict it produced in ONE transaction. A
+   * failed traceability assertion rolls the attempt back with the verdict, so no orphan attempt
+   * survives. Also backfills each linked capture's `producing_attempt_id` to the recorded attempt
+   * (guaranteeing a production capture ends non-NULL), atomically.
+   */
+  recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult>;
   listVerdicts(input: { readonly orgId: string; readonly runId: string }): Promise<readonly StoredAcceptanceVerdict[]>;
 }
 
-const OUTCOMES = new Set<BehaviorVerdictOutcome>([
-  "passed",
-  "failed_product",
-  "failed_verification_contract",
-  "failed_visual",
-  "inconclusive_infrastructure",
-  "inconclusive_external",
-  "cancelled_superseded",
-]);
-const FLAKE_STATES = new Set<FlakeState>(["stable", "suspected", "confirmed", "quarantined_fragment"]);
-
-function assertVerdictCountEvidence(input: RecordAcceptanceVerdictInput): void {
-  const assertionIds = new Set<string>();
-  let executed = 0;
-  for (const assertion of input.assertionEvidence) {
-    if (assertion.assertionId.length === 0 || assertionIds.has(assertion.assertionId)) {
-      throw new TypeError(
-        `verdict assertion evidence has a missing or duplicate assertion id: ${assertion.assertionId}`,
-      );
-    }
-    assertionIds.add(assertion.assertionId);
-    if (assertion.executed) {
-      if (typeof assertion.passed !== "boolean") {
-        throw new TypeError(`executed assertion ${assertion.assertionId} has no pass/fail observation`);
-      }
-      executed += 1;
-    } else if (assertion.passed !== undefined) {
-      throw new TypeError(`unexecuted assertion ${assertion.assertionId} cannot have a pass/fail observation`);
-    }
-  }
-  const ordinals = new Set<number>();
-  for (const attempt of input.attemptEvidence) {
-    if (
-      !Number.isInteger(attempt.attemptOrdinal) ||
-      attempt.attemptOrdinal < 1 ||
-      ordinals.has(attempt.attemptOrdinal)
-    ) {
-      throw new TypeError(`verdict attempt evidence has an invalid or duplicate ordinal: ${attempt.attemptOrdinal}`);
-    }
-    if (!OUTCOMES.has(attempt.outcome)) throw new TypeError(`unknown attempt outcome: ${attempt.outcome}`);
-    ordinals.add(attempt.attemptOrdinal);
-  }
-  if (
-    input.requiredAssertionCount !== input.assertionEvidence.length ||
-    input.executedAssertionCount !== executed ||
-    input.attemptCount !== input.attemptEvidence.length
-  ) {
-    throw new TypeError(
-      `verdict count evidence mismatch: stored required/executed/attempt=${input.requiredAssertionCount}/` +
-        `${input.executedAssertionCount}/${input.attemptCount}, evidence=${input.assertionEvidence.length}/` +
-        `${executed}/${input.attemptEvidence.length}`,
-    );
-  }
+/**
+ * Sequential {plan → attempt → verdict} composition for NON-transactional (in-memory / fake)
+ * stores: it reuses the store's own `ensureVerificationPlan` / `recordAttempt` / `recordVerdict`
+ * so their fail-closed mirrors still run. The Postgres store overrides this with a truly ATOMIC
+ * single-transaction implementation (see {@link PgAcceptanceRunStore.recordAttemptedVerdict}).
+ */
+export async function recordAttemptedVerdictSequential(
+  store: Pick<AcceptanceRunStore, "ensureVerificationPlan" | "recordAttempt" | "recordVerdict">,
+  input: RecordAttemptedVerdictInput,
+): Promise<RecordAttemptedVerdictResult> {
+  await store.ensureVerificationPlan(input.plan);
+  const attemptId = await store.recordAttempt(input.attempt);
+  const verdictId = await store.recordVerdict({
+    ...input.verdict,
+    attemptTrace: { kind: "attempted", producingAttemptId: attemptId },
+  });
+  return { attemptId, verdictId };
 }
 
 export interface PgAcceptanceRunStoreDependencies {
@@ -184,6 +197,7 @@ export interface PgAcceptanceRunStoreDependencies {
   readonly withOrgScope?: OrgScope;
   readonly runId?: () => string;
   readonly verdictId?: () => string;
+  readonly attemptId?: () => string;
 }
 
 /** Postgres AcceptanceRunStore over the org-scoped, RLS-forced verdict substrate. */
@@ -191,11 +205,22 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
   private readonly withOrgScope: OrgScope;
   private readonly newRunId: () => string;
   private readonly newVerdictId: () => string;
+  private readonly newAttemptId: () => string;
 
   public constructor(pool: pg.Pool, dependencies: PgAcceptanceRunStoreDependencies = {}) {
     this.withOrgScope = dependencies.withOrgScope ?? ((orgId, operation) => runWithOrgScope(pool, orgId, operation));
     this.newRunId = dependencies.runId ?? (() => `verification_run_${randomUUID()}`);
     this.newVerdictId = dependencies.verdictId ?? (() => `verdict_${randomUUID()}`);
+    this.newAttemptId = dependencies.attemptId ?? (() => `verification_attempt_${randomUUID()}`);
+  }
+
+  public async ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return this.withOrgScope(input.orgId, (client) => ensureVerificationPlanRow(client, input));
+  }
+
+  public async recordAttempt(input: RecordAttemptInput): Promise<string> {
+    const id = this.newAttemptId();
+    return this.withOrgScope(input.orgId, (client) => recordAttemptRow(client, id, input));
   }
 
   public async recordRun(input: RecordAcceptanceRunInput): Promise<string> {
@@ -239,69 +264,40 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
   }
 
   public async recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
-    // The app-layer twin of the 0079 DB CHECKs — a passed verdict without full,
-    // non-zero coverage fails loud here, before it can reach the ledger.
-    assertVerdictAssertionCoverage(input);
-    if (!OUTCOMES.has(input.outcome)) throw new TypeError(`unknown behavior verdict outcome: ${input.outcome}`);
-    if (!FLAKE_STATES.has(input.flakeState)) throw new TypeError(`unknown flake state: ${input.flakeState}`);
-    assertVerdictCountEvidence(input);
+    validateVerdictInput(input);
     const id = this.newVerdictId();
-    return this.withOrgScope(input.orgId, async (client) => {
-      await client.query(
-        `INSERT INTO behavior_verdicts
-           (org_id, id, project_id, run_id, behavior_revision_id, example_hash, matrix_hash,
-            required_assertion_count, executed_assertion_count, outcome, attempt_count,
-            flake_state, gate_effect, artifact_digest, proof_unit_digest, runtime_behavior_context_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-        [
-          input.orgId,
-          id,
-          input.projectId,
-          input.runId,
-          input.behaviorRevisionId,
-          input.exampleHash,
-          input.matrixHash,
-          input.requiredAssertionCount,
-          input.executedAssertionCount,
-          input.outcome,
-          input.attemptCount,
-          input.flakeState,
-          input.gateEffect,
-          input.artifactDigest,
-          input.proofUnitDigest ?? null,
-          input.runtimeBehaviorContextHash,
-        ],
+    await this.withOrgScope(input.orgId, (client) => assertAndInsertVerdict(client, input, id));
+    return id;
+  }
+
+  /**
+   * rv-10 FINDING 2: record the real attempt AND the verdict it produced in ONE org-scoped
+   * transaction. If {@link assertVerdictTraceable} throws (borrowed / count-mismatch / orphan), the
+   * whole transaction rolls back — the attempt row never survives as an orphan. Any linked capture's
+   * `producing_attempt_id` is backfilled to the recorded attempt in the SAME transaction, so a
+   * production capture ends non-NULL atomically with the verdict.
+   */
+  public async recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    const attemptId = this.newAttemptId();
+    const verdict: RecordAcceptanceVerdictInput = {
+      ...input.verdict,
+      attemptTrace: { kind: "attempted", producingAttemptId: attemptId },
+    };
+    // Pre-transaction validation fails loud before we open a transaction / write a row.
+    validateVerdictInput(verdict);
+    const verdictId = this.newVerdictId();
+    await this.withOrgScope(verdict.orgId, async (client) => {
+      await ensureVerificationPlanRow(client, input.plan);
+      await recordAttemptRow(client, attemptId, input.attempt);
+      await assertAndInsertVerdict(client, verdict, verdictId);
+      await backfillProducingAttempt(
+        client,
+        verdict.orgId,
+        attemptId,
+        (verdict.evidenceLinks ?? []).map((link) => link.verificationArtifactId),
       );
-      for (const attempt of input.attemptEvidence) {
-        await client.query(
-          `INSERT INTO behavior_verdict_attempts (org_id, verdict_id, attempt_ordinal, outcome)
-           VALUES ($1, $2, $3, $4)`,
-          [input.orgId, id, attempt.attemptOrdinal, attempt.outcome],
-        );
-      }
-      for (const assertion of input.assertionEvidence) {
-        await client.query(
-          `INSERT INTO behavior_verdict_assertions (org_id, verdict_id, assertion_id, executed, passed)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [input.orgId, id, assertion.assertionId, assertion.executed, assertion.passed ?? null],
-        );
-      }
-      // rv-9: durably link each content-addressed capture to this verdict. The FK to
-      // verification_artifacts rejects any link whose artifact row is absent (no orphan
-      // linkage); identical captures within a verdict collapse via the PK (idempotent).
-      let evidenceOrdinal = 0;
-      for (const link of input.evidenceLinks ?? []) {
-        await client.query(
-          `INSERT INTO behavior_verdict_evidence
-             (org_id, verdict_id, ordinal, verification_artifact_id, cas_digest, media_type)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (org_id, verdict_id, verification_artifact_id) DO NOTHING`,
-          [input.orgId, id, evidenceOrdinal, link.verificationArtifactId, link.casDigest, link.mediaType],
-        );
-        evidenceOrdinal += 1;
-      }
-      return id;
     });
+    return { attemptId, verdictId };
   }
 
   /**
@@ -366,10 +362,10 @@ export class PgAcceptanceRunStore implements AcceptanceRunStore {
         [input.orgId, input.runId],
       );
       return result.rows.map((row) => {
-        if (!OUTCOMES.has(row.outcome as BehaviorVerdictOutcome)) {
+        if (!VERDICT_OUTCOMES.has(row.outcome as BehaviorVerdictOutcome)) {
           throw new TypeError(`stored verdict has an unknown outcome: ${row.outcome}`);
         }
-        if (!FLAKE_STATES.has(row.flake_state as FlakeState)) {
+        if (!VERDICT_FLAKE_STATES.has(row.flake_state as FlakeState)) {
           throw new TypeError(`stored verdict has an unknown flake state: ${row.flake_state}`);
         }
         if (

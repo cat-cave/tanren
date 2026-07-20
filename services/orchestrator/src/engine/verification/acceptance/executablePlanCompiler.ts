@@ -22,20 +22,27 @@
 import type { CanonicalBody, Digest } from "../../contracts/cas.js";
 import type { BehaviorRevisionId, PersonaRevisionId, RevisionDigest } from "../../contracts/behaviorRevision.js";
 import type {
+  ActionStep,
   ArtifactPolicy,
   AssertionExpression,
   BehaviorVerificationPlanId,
+  CapabilityFragmentRef,
+  CleanupStep,
   ExecutableBehaviorPlanCanonical,
   ExecutableBehaviorPlanV1,
+  FixtureStep,
   FlakePolicy,
+  MissingCapabilityObligation,
   PlanCompileResult,
   PlanProvenance,
   RedactionClass,
   RequiredSurface,
+  SourceSpan,
 } from "../../contracts/runtimeVerificationPlan.js";
 import { planHash } from "../../contracts/runtimeVerificationPlan.js";
 import type { AcceptanceSpecAssertion, AcceptanceSpecV1 } from "./acceptanceSpec.js";
 import { toExecutionMatrix } from "./acceptanceSpec.js";
+import { capabilityMapKey } from "./fragments/verificationFragment.js";
 
 /** Bumped whenever the compilation is not bit-compatible; part of the plan hash. */
 export const EXECUTABLE_PLAN_COMPILER_VERSION = "rv2-executable-plan.v1";
@@ -83,6 +90,62 @@ export interface CompileExecutablePlanInput {
   readonly behaviorRevisionHash: RevisionDigest;
   readonly spec: AcceptanceSpecV1;
   readonly forgeProvenanceIds?: readonly string[];
+  /** rv-3: resolved capability fragment refs, keyed by `capabilityMapKey`. A cited
+   * capability absent from this map is an unresolved obligation ⇒ `missing_fragments`
+   * (never a silently-dropped step). Empty/omitted when the spec cites no capability. */
+  readonly resolvedFragments?: ReadonlyMap<string, CapabilityFragmentRef>;
+}
+
+/** A cited capability compiled into one plan step, or an unresolved obligation. */
+interface CompiledSteps {
+  readonly fixtures: FixtureStep[];
+  readonly actions: ActionStep[];
+  readonly cleanup: CleanupStep[];
+  readonly obligations: MissingCapabilityObligation[];
+}
+
+/** A synthetic, deterministic source span pointing at the stored acceptance spec. */
+function citationSpan(index: number): SourceSpan {
+  return {
+    sourcePath: "behavior_revisions.acceptance",
+    startLine: index + 1,
+    startColumn: 1,
+    endLine: index + 1,
+    endColumn: 1,
+  };
+}
+
+/** Resolve every cited capability against the resolution map, binding each into its
+ * plan lane or recording a `missing_fragments` obligation (rv-3). */
+function compileCitedCapabilities(
+  spec: AcceptanceSpecV1,
+  resolved: ReadonlyMap<string, CapabilityFragmentRef>,
+): CompiledSteps {
+  const fixtures: FixtureStep[] = [];
+  const actions: ActionStep[] = [];
+  const cleanup: CleanupStep[] = [];
+  const obligations: MissingCapabilityObligation[] = [];
+  spec.capabilities.forEach((citation, index) => {
+    const ref = resolved.get(capabilityMapKey(citation.fragmentKind, citation.capabilityKey));
+    if (ref === undefined) {
+      obligations.push({
+        capability: citation.capabilityKey,
+        fragmentKind: citation.fragmentKind,
+        reason: `no registered verification fragment for ${citation.fragmentKind}:${citation.capabilityKey}`,
+      });
+      return;
+    }
+    const step = {
+      id: citation.stepId,
+      capabilityFragmentRef: ref,
+      params: citation.params,
+      sourceSpan: citationSpan(index),
+    };
+    if (citation.stepKind === "fixture") fixtures.push(step);
+    else if (citation.stepKind === "action") actions.push(step);
+    else cleanup.push(step);
+  });
+  return { fixtures, actions, cleanup, obligations };
 }
 
 function asFiniteNumber(value: CanonicalBody): number | undefined {
@@ -193,6 +256,12 @@ export function compileExecutableBehaviorPlan(input: CompileExecutablePlanInput)
   }
   if (respecReasons.length > 0) return { kind: "needs_respec", reasons: respecReasons };
 
+  // rv-3: bind cited verification-capability fragments into the plan lanes. An
+  // unresolved citation is a `missing_fragments` obligation the caller resolves via
+  // the registry / F2 authoring — never a silently-dropped step.
+  const steps = compileCitedCapabilities(spec, input.resolvedFragments ?? new Map());
+  if (steps.obligations.length > 0) return { kind: "missing_fragments", obligations: steps.obligations };
+
   const requiredSurfaces: readonly RequiredSurface[] =
     spec.requiredSurfaces.length > 0 ? spec.requiredSurfaces : spec.httpProbes.length > 0 ? ["api"] : [];
 
@@ -209,10 +278,10 @@ export function compileExecutableBehaviorPlan(input: CompileExecutablePlanInput)
     behaviorRevisionId: input.behaviorRevisionId,
     personaRevisionId: input.personaRevisionId,
     requiredSurfaces,
-    fixtures: [] as const,
-    actions: [] as const,
+    fixtures: steps.fixtures,
+    actions: steps.actions,
     assertions,
-    cleanup: [] as const,
+    cleanup: steps.cleanup,
     examples: spec.examples.map((example) => ({ values: example.values, rowHash: example.rowHash as Digest })),
     executionMatrix: toExecutionMatrix(spec.executionMatrix),
     designCheckpoints: [] as const,

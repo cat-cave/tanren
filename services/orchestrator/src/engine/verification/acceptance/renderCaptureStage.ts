@@ -18,6 +18,8 @@ export interface RenderCaptureStageInput {
   readonly orgId: string;
   readonly projectId: string;
   readonly payloads: readonly EvidenceBytePayload[];
+  /** rv-10: the real attempt these captures were produced by; persisted as producing_attempt_id. */
+  readonly producingAttemptId?: string;
 }
 
 export class RenderCaptureStage {
@@ -38,6 +40,7 @@ export class RenderCaptureStage {
         mediaType: payload.mediaType,
         bytes: payload.bytes,
         redactionClass: payload.redactionClass,
+        ...(input.producingAttemptId === undefined ? {} : { producingAttemptId: input.producingAttemptId }),
       });
       refs.push({
         verificationArtifactId: stored.verificationArtifactId,

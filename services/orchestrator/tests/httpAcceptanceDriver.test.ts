@@ -16,14 +16,19 @@ import type { EventName } from "../src/engine/events/index.js";
 import {
   AcceptanceOrchestrator,
   HttpAcceptanceSurfaceDriver,
+  recordAttemptedVerdictSequential,
   type AcceptanceBaseUrlResolver,
   type AcceptanceDriveInput,
   type AcceptanceEventSink,
   type AcceptancePlan,
   type AcceptanceRunStore,
   type CompleteAcceptanceRunInput,
+  type EnsureVerificationPlanInput,
   type RecordAcceptanceRunInput,
+  type RecordAttemptInput,
   type RecordAcceptanceVerdictInput,
+  type RecordAttemptedVerdictInput,
+  type RecordAttemptedVerdictResult,
   type StoredAcceptanceVerdict,
 } from "../src/engine/verification/acceptance/index.js";
 
@@ -38,12 +43,21 @@ class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
   public completeRun(_input: CompleteAcceptanceRunInput): Promise<void> {
     return Promise.resolve();
   }
+  public ensureVerificationPlan(input: EnsureVerificationPlanInput): Promise<string> {
+    return Promise.resolve(input.planId);
+  }
+  public recordAttempt(_input: RecordAttemptInput): Promise<string> {
+    return Promise.resolve("attempt_mem_1");
+  }
   public recordVerdict(input: RecordAcceptanceVerdictInput): Promise<string> {
     // The SAME coverage guard the Pg store enforces: a fake pass cannot be stored.
     assertVerdictAssertionCoverage(input);
     const verdictId = `verdict_mem_${(this.seq += 1)}`;
     this.verdicts.push({ ...input, verdictId });
     return Promise.resolve(verdictId);
+  }
+  public recordAttemptedVerdict(input: RecordAttemptedVerdictInput): Promise<RecordAttemptedVerdictResult> {
+    return recordAttemptedVerdictSequential(this, input);
   }
   public listVerdicts(): Promise<readonly StoredAcceptanceVerdict[]> {
     return Promise.resolve([]);
