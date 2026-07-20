@@ -39,13 +39,12 @@ export interface DeliverySignals {
   /** Whether a TERMINAL demo event (`demo.completed` OR `demo.failed`) exists — the demo effect committed. */
   demoTerminalExists(lineage: DeliveryLineage): Promise<boolean>;
   /**
-   * Whether a LIVE demo fire-intent exists — more `delivery.demo_stimulus_started` than
-   * `delivery.demo_stimulus_aborted`. A live intent WITHOUT a terminal demo event means the
-   * external effect MAY have dispatched (a genuine crash mid-dispatch) ⇒ never re-fire. When
-   * a `started` was cleared by an `aborted` (a proven pre-dispatch failure), the intent is NOT
-   * live ⇒ the demo is able to re-fire.
+   * Whether a demo fire-intent (`delivery.demo_stimulus_started`) exists — recorded as the
+   * LAST step before the (non-idempotent) demo effect is dispatched. Present WITHOUT a
+   * terminal demo event ⇒ the effect MAY have dispatched ⇒ never re-fire (degrade). Absent ⇒
+   * the effect never fired ⇒ safe to fire.
    */
-  demoStimulusIntentLive(lineage: DeliveryLineage): Promise<boolean>;
+  demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean>;
 }
 
 const DEPLOY_TRAIL_EVENTS = [
@@ -172,19 +171,14 @@ export class PgDeliverySignals implements DeliverySignals {
     return present.has("demo.completed") || present.has("demo.failed");
   }
 
-  async demoStimulusIntentLive(lineage: DeliveryLineage): Promise<boolean> {
+  async demoStimulusIntentExists(lineage: DeliveryLineage): Promise<boolean> {
     const result = await runWithSystemScope(this.pool, (client) =>
-      client.query<{ started: string; aborted: string }>(
-        `SELECT
-           count(*) FILTER (WHERE event_type = 'delivery.demo_stimulus_started')::text AS started,
-           count(*) FILTER (WHERE event_type = 'delivery.demo_stimulus_aborted')::text AS aborted
-         FROM events
-         WHERE run_id = $1 AND org_id = $2 AND project_id = $3
-           AND event_type IN ('delivery.demo_stimulus_started', 'delivery.demo_stimulus_aborted')`,
+      client.query<{ id: string }>(
+        `SELECT id FROM events WHERE run_id = $1 AND org_id = $2 AND project_id = $3
+           AND event_type = 'delivery.demo_stimulus_started' LIMIT 1`,
         [lineage.runId, lineage.orgId, lineage.projectId],
       ),
     );
-    const row = result.rows[0];
-    return row !== undefined && Number(row.started) > Number(row.aborted);
+    return result.rows[0] !== undefined;
   }
 }

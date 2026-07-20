@@ -45,7 +45,7 @@ export function fakeSignals(overrides: Partial<DeliverySignals> = {}): DeliveryS
     verifiedDeploymentId: async () => {},
     deliveryCompletedExists: async () => false,
     demoTerminalExists: async () => false,
-    demoStimulusIntentLive: async () => false,
+    demoStimulusIntentExists: async () => false,
     ...overrides,
   };
 }

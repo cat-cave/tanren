@@ -94,7 +94,7 @@ export async function seedMergedRun(
 export async function seedDeliveryEvent(
   owner: Pool,
   lineage: { org: string; run: string; spec: string; project: string },
-  eventType: "delivery.demo_stimulus_started" | "delivery.demo_stimulus_aborted",
+  eventType: "delivery.demo_stimulus_started",
   payload: Record<string, unknown>,
 ): Promise<void> {
   await runWithJobOrgId(lineage.org, () =>

@@ -5,14 +5,11 @@
 --                        the signed evidence of the independently-observed effect (info).
 --   delivery.degraded  → a stage could not confirm its external effect; the delivery is
 --                        in an explicit durable degraded state, not silently complete (warn).
---   delivery.demo_stimulus_started → the fire-intent marker recorded before the demo
---                        behavior effect is dispatched (demo idempotency; info).
---   delivery.demo_stimulus_aborted → clears a fire-intent when the effect proved not
---                        dispatched (a pre-dispatch failure), making it re-fireable (info).
+--   delivery.demo_stimulus_started → the fire-intent marker recorded as the last step before
+--                        the demo behavior effect is dispatched (demo exactly-once; info).
 -- NOTE: claims migration slot 0098 (0097 is reserved by a concurrent node).
 INSERT INTO "event_types" ("name", "default_severity") VALUES
   ('delivery.completed', 'info'),
   ('delivery.degraded', 'warn'),
-  ('delivery.demo_stimulus_started', 'info'),
-  ('delivery.demo_stimulus_aborted', 'info')
+  ('delivery.demo_stimulus_started', 'info')
 ON CONFLICT ("name") DO NOTHING;

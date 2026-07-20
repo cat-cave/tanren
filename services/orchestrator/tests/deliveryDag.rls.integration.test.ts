@@ -184,27 +184,6 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       deliveryRunId: "delivery-dec_demo2",
       mergeSha: "2".repeat(40),
     });
-    // (5c) demo PRE-DISPATCH FAILURE re-fire: a prior drive recorded a fire-intent then ABORTED
-    // the intent (the effect proved not-dispatched) ⇒ NOT live ⇒ re-entry must FIRE and COMPLETE.
-    await seedMergedRun(ownerPool, {
-      org: ORG_A,
-      project: "proj_demo3",
-      run: "run_demo3",
-      spec: "spec_demo3",
-      decision: "dec_demo3",
-      node: "node_demo3",
-      sha: "3".repeat(40),
-      deliveryId: "delivery-dec_demo3",
-    });
-    const demo3 = { org: ORG_A, run: "run_demo3", spec: "spec_demo3", project: "proj_demo3" };
-    await seedDeliveryEvent(ownerPool, demo3, "delivery.demo_stimulus_started", {
-      deliveryRunId: "delivery-dec_demo3",
-      mergeSha: "3".repeat(40),
-    });
-    await seedDeliveryEvent(ownerPool, demo3, "delivery.demo_stimulus_aborted", {
-      deliveryRunId: "delivery-dec_demo3",
-      reason: "no_terminal_after_run",
-    });
   }, 60_000);
 
   afterAll(async () => {
@@ -370,6 +349,8 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
 
   // Finding 1: a demo re-entered with the durable fire-INTENT marker present but NO terminal
   // demo event does NOT re-fire the possibly-committed effect — it degrades fail-closed.
+  // NO-DOUBLE-FIRE regression: a fire-intent present without a terminal ⇒ the non-idempotent
+  // effect MAY have dispatched ⇒ DEGRADE and NEVER re-fire the runner.
   it("demo no-double-fire: an intent marker without a terminal degrades and does NOT re-fire", async () => {
     const { driver, demo } = makeDriver();
     await driver.check("run_demo2");
@@ -380,23 +361,7 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
     const evTypes = await deliveryEventTypesFor(appPool, ORG_A, "run_demo2");
     expect(evTypes).toContain("delivery.degraded");
     expect(evTypes).not.toContain("delivery.completed");
-    // The demo runner was NEVER invoked — the committed-maybe prior effect is not re-fired.
+    // The demo runner was NEVER invoked — the maybe-dispatched effect is not re-fired.
     expect(demo.calls).toEqual([]);
-  });
-
-  // Finding HIGH: a prior fire-intent that was ABORTED (pre-dispatch failure proved not-dispatched)
-  // is NOT live ⇒ the demo RE-FIRES and the delivery COMPLETES (no permanent degrade).
-  it("demo pre-dispatch failure: a started+aborted intent RE-FIRES and completes", async () => {
-    const { driver, demo } = makeDriver();
-    await driver.check("run_demo3");
-
-    const row = await deliveryRow(appPool, ORG_A, "delivery-dec_demo3");
-    expect(row?.status).toBe("completed");
-    expect(row?.completed_at).not.toBeNull();
-    const evTypes = await deliveryEventTypesFor(appPool, ORG_A, "run_demo3");
-    expect(evTypes).toContain("delivery.completed");
-    expect(evTypes).not.toContain("delivery.degraded");
-    // The demo runner WAS re-invoked (the aborted intent did not strand it).
-    expect(demo.calls).toEqual(["run_demo3"]);
   });
 });

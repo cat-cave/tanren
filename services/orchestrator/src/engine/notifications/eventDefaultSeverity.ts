@@ -28,7 +28,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "delivery.degraded": "warn",
   "delivery.completed": "info",
   "delivery.demo_stimulus_started": "info",
-  "delivery.demo_stimulus_aborted": "info",
+  // Run lifecycle
   "run.queued": "info",
   "run.started": "info",
   "run.completed": "ok",

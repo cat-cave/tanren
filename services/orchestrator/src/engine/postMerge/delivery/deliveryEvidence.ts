@@ -120,9 +120,11 @@ export async function appendDeliveryCompleted(
 }
 
 /**
- * Append the durable demo INTENT MARKER (`delivery.demo_stimulus_started`) — recorded
- * under the advisory lock IMMEDIATELY BEFORE the demo effect fires, so a crash mid-fire
- * leaves a durable trace that blocks a re-fire (Finding-1 effect-boundary idempotency).
+ * Append the durable demo INTENT MARKER (`delivery.demo_stimulus_started`) — recorded under
+ * the advisory lock as the LAST step before the demo effect is dispatched (no awaitable
+ * between this and the runner invocation). The demo exercise is NOT idempotent (it drives
+ * arbitrary HTTP methods — a declared behavior may POST/mutate), so a resume that finds this
+ * marker without a terminal demo event must DEGRADE, never re-fire.
  */
 export async function appendDemoStimulusStarted(
   deps: Pick<RecordEvidenceDeps, "eventStore">,
@@ -137,32 +139,6 @@ export async function appendDemoStimulusStarted(
       orgId: lineage.orgId,
       eventType: "delivery.demo_stimulus_started",
       payload: { deliveryRunId, mergeSha: lineage.mergeSha },
-    }),
-  );
-}
-
-/**
- * Append the durable demo ABORT MARKER (`delivery.demo_stimulus_aborted`) — clears a
- * `started` fire-intent once the drive PROVED the external effect never dispatched (the
- * runner returned/threw leaving NO terminal demo event). This makes a never-fired demo
- * (a pre-dispatch failure: deploy-load throw, notify-after-commit, no-op) ABLE TO RE-FIRE on
- * resume instead of stranding it degraded. Only a genuine crash mid-dispatch leaves the
- * `started` un-cleared ⇒ degrade.
- */
-export async function appendDemoStimulusAborted(
-  deps: Pick<RecordEvidenceDeps, "eventStore">,
-  lineage: DeliveryLineage,
-  deliveryRunId: string,
-  reason: string,
-): Promise<void> {
-  await runWithJobOrgId(lineage.orgId, () =>
-    deps.eventStore.append({
-      runId: lineage.runId,
-      specId: lineage.specId,
-      projectId: lineage.projectId,
-      orgId: lineage.orgId,
-      eventType: "delivery.demo_stimulus_aborted",
-      payload: { deliveryRunId, reason },
     }),
   );
 }
