@@ -47,7 +47,9 @@ function defaultTarget(operation: IntegrationPrivilegedOperation): IntegrationOp
 }
 
 function scopesFor(providerKind: string): string[] {
-  if (providerKind === "slack") return ["channels:read", "channels:manage"];
+  // `chat:write` covers the in-12 product `messaging.send` operations; the notify
+  // control scopes stay for the existing control-plane grants.
+  if (providerKind === "slack") return ["channels:read", "channels:manage", "chat:write"];
   if (providerKind === "sentry") return ["event:read", "project:read", "project:write"];
   return [];
 }
