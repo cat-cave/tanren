@@ -659,6 +659,13 @@
       "when": 1784503925452,
       "tag": "0095_behavior_verdict_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1784515431131,
+      "tag": "0096_chief_doomsday",
+      "breakpoints": true
     }
   ]
 }

@@ -387,7 +387,7 @@ describe("IN-7 event observability cannot become product authority", () => {
     ).resolves.toEqual({ kind: "observability_gap", errorMessage: "append failed", warningDelivered: false });
   });
 
-  it("has no production registration or authority imports", () => {
+  it("production registers the four names while prep keeps no authority imports", () => {
     const payloadSource = readFileSync(
       new URL("../../src/engine/contracts/prep/integrationAuthorEventPayloads.ts", import.meta.url),
       "utf8",
@@ -396,13 +396,39 @@ describe("IN-7 event observability cannot become product authority", () => {
       new URL("../../src/engine/contracts/prep/integrationAuthorEventFactory.ts", import.meta.url),
       "utf8",
     );
+    const registrySource = readFileSync(new URL("../../src/engine/events/registry.ts", import.meta.url), "utf8");
+    const sensitivitySource = readFileSync(
+      new URL("../../src/engine/events/sensitivityRules.ts", import.meta.url),
+      "utf8",
+    );
+    const severitySource = readFileSync(
+      new URL("../../src/engine/notifications/eventDefaultSeverity.ts", import.meta.url),
+      "utf8",
+    );
+    const seedSource = readFileSync(new URL("../../../../db/src/eventTypesSeed.ts", import.meta.url), "utf8");
+    const schemaSource = readFileSync(
+      new URL("../../src/engine/events/schemas/eventVocabularyW1aIntegrationAuthor.ts", import.meta.url),
+      "utf8",
+    );
+    const w1aSensitivitySource = readFileSync(
+      new URL("../../src/engine/events/sensitivityRules.eventVocabularyW1aIntegrationAuthor.ts", import.meta.url),
+      "utf8",
+    );
+    const eventVocabularyAggregatorSource = readFileSync(
+      new URL("../../src/engine/events/sensitivityRules.eventVocabulary.ts", import.meta.url),
+      "utf8",
+    );
     const productionSources = [
-      readFileSync(new URL("../../src/engine/events/registry.ts", import.meta.url), "utf8"),
-      readFileSync(new URL("../../src/engine/events/sensitivityRules.ts", import.meta.url), "utf8"),
-      readFileSync(new URL("../../src/engine/notifications/eventDefaultSeverity.ts", import.meta.url), "utf8"),
-      readFileSync(new URL("../../../../db/src/eventTypesSeed.ts", import.meta.url), "utf8"),
+      registrySource,
+      sensitivitySource,
+      severitySource,
+      seedSource,
+      schemaSource,
+      eventVocabularyAggregatorSource,
     ];
 
+    // PREP remains non-authority: only kernel + sibling draft + zod (and type-only
+    // sensitivity/severity imports for draft metadata). Never EventRegistry/EventStore.
     expect(importPaths(payloadSource).sort()).toEqual([
       "../../events/sensitivity.js",
       "../../notifications/schemas.js",
@@ -414,9 +440,39 @@ describe("IN-7 event observability cannot become product authority", () => {
       "./integrationAuthorEventPayloads.js",
       "zod",
     ]);
+    // No authority module imports (comments may mention EventRegistry as a ban).
+    expect(importPaths(payloadSource).some((p) => /eventStore|EventRegistry|registry\.js/u.test(p))).toBe(false);
+    expect(importPaths(factorySource).some((p) => /eventStore|EventRegistry|registry\.js/u.test(p))).toBe(false);
+    expect(factorySource).not.toMatch(/from\s+"[^"]*eventStore/u);
+    expect(factorySource).not.toMatch(/from\s+"[^"]*PgEventStore/u);
+
+    // EV-SUB-W1-A Phase A installs the four names on the sole production path.
+    // PREP drafts must not be imported into that path (dual-schema ban).
     for (const source of productionSources) {
-      expect(source).not.toContain("integration.author.");
-      expect(source).not.toContain("integrationAuthorEvent");
+      expect(source).not.toContain("integrationAuthorEventPayloadDrafts");
+      expect(source).not.toContain("contracts/prep/");
+    }
+    expect(registrySource).toContain("w1aEventRegistry");
+    // Vocabulary waves fan in through the wave-neutral aggregator (import-slot
+    // ceiling repair): the root spreads the combined vocabulary and never imports
+    // the W1-A leaf directly; the aggregator owns the W0 + W1-A import-slot.
+    expect(sensitivitySource).toContain("./sensitivityRules.eventVocabulary.js");
+    expect(sensitivitySource).toContain("...eventVocabularySensitivityRules");
+    expect(sensitivitySource).not.toContain("./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js");
+    expect(eventVocabularyAggregatorSource).toContain("eventVocabularyW1aIntegrationAuthorSensitivityRules");
+    expect(importPaths(eventVocabularyAggregatorSource).sort()).toEqual([
+      "./sensitivity.js",
+      "./sensitivityRules.benchmark.js",
+      "./sensitivityRules.eventVocabularyW0.js",
+      "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js",
+    ]);
+    expect(eventVocabularyAggregatorSource).toContain("...eventVocabularyW0SensitivityRules");
+    expect(eventVocabularyAggregatorSource).toContain("...eventVocabularyW1aIntegrationAuthorSensitivityRules");
+    for (const name of PROSPECTIVE_INTEGRATION_AUTHOR_EVENT_NAMES) {
+      expect(schemaSource).toContain(`"${name}"`);
+      expect(w1aSensitivitySource).toContain(`"${name}"`);
+      expect(severitySource).toContain(`"${name}"`);
+      expect(seedSource).toContain(`name: "${name}"`);
     }
   });
 });

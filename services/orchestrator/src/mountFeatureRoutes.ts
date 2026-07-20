@@ -321,7 +321,16 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // notification target / projects.config / secret refs), and emits
   // `integration.provisioned` (refs only). Org-scoped on the scoped pool; the
   // configured SecretStore backs the provisioner's transports.
-  app.route("/orgs", createIntegrationRoutes({ pool: scopedPool, secrets }));
+  // in-7: the derive seam authors any MISSING provider integration definition
+  // fragment via the real allocating Forge writer (F2, convergent) — never a stub.
+  app.route(
+    "/orgs",
+    createIntegrationRoutes({
+      pool: scopedPool,
+      secrets,
+      integrationFragmentAuthorer: forgeAnswerers.integrationFragmentAuthorer,
+    }),
+  );
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   // Codex H3 Surface 7 finding #21: the operator-facing manual_external DEPLOY
   // CONFIRMATION route. `POST /orgs/:orgId/projects/:projectId/deploys/:deploymentId/confirm`

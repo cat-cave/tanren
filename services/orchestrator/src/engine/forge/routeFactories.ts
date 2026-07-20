@@ -20,6 +20,7 @@ import type { Hono } from "hono";
 import { buildForgeDesignAgentFactory } from "./designAgentFactory.js";
 import { buildForgeDesignSystemComposerFactory } from "./designSystemComposerFactory.js";
 import { buildForgeFragmentAuthorerFactory } from "./fragmentAuthorerFactory.js";
+import { buildForgeIntegrationFragmentAuthorerFactory } from "./integrationFragmentAuthorerFactory.js";
 import type { ComposeDesignSystemCallback } from "./interview/index.js";
 import type { DesignAgent } from "../design/designAgent.js";
 import type { InterviewAnswerer } from "./interview/index.js";
@@ -47,6 +48,9 @@ export interface ForgeRouteAnswererFactories {
   /** F2 — per-fragment authoring (docs/roadmap/templating-system.md): a real
    * LLM-backed authorer that produces a Fragment body for a missing slot. */
   fragmentAuthorer: (target: ForgeAnswererTarget) => FragmentAuthorer;
+  /** in-7 — the F2 authorer for MISSING provider integration definition fragments
+   * (the integration derivation seam authors them writer→validate, convergent). */
+  integrationFragmentAuthorer: ReturnType<typeof buildForgeIntegrationFragmentAuthorerFactory>;
   /** ds-composer — the DESIGN-SYSTEM COMPOSITION seam: compose+publish the project's
    * web design system during derive (authoring the missing ds-3 fragments via F2D). */
   designSystemComposer: () => ComposeDesignSystemCallback;
@@ -75,6 +79,7 @@ export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): For
     audit,
     conversation: buildForgeConversationAnswererFactory(infra),
     fragmentAuthorer: buildForgeFragmentAuthorerFactory(infra),
+    integrationFragmentAuthorer: buildForgeIntegrationFragmentAuthorerFactory(infra),
     designSystemComposer: buildForgeDesignSystemComposerFactory(infra),
     mountGovernanceRoutes: (app) => mountGovernanceRoutes(app, infra),
     auditPassRunnerFor: (github) =>

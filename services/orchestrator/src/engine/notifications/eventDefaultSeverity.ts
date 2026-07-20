@@ -256,6 +256,14 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "merge.signal.classified": "info",
   "merge.member.policy_blocked": "warn",
 
+  // Mission-complete W1-A integration.author.* (IN-7 lifecycle facts). Same
+  // ok/info/ok/fail pattern as fragment.authoring.* but a different namespace
+  // and payload — never an alias. Explicit overrides: default fallback is info.
+  "integration.author.started": "ok",
+  "integration.author.attempt": "info",
+  "integration.author.succeeded": "ok",
+  "integration.author.failed": "fail",
+
   // Wave-3 barrier vocabulary. `fail` is Tanren's terminal error severity.
   "symptom.contract.authored": "info",
   "symptom.contract.validated": "info",

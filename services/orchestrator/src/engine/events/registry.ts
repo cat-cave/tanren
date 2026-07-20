@@ -7,6 +7,7 @@ import {
   designSystemVocabularyRegistry,
   governanceVocabularyRegistry,
   w0EventRegistry,
+  w1aEventRegistry,
   wave1EventRegistry,
   wave4EventRegistry,
   wave5And6AndResolutionClusterEventRegistry,
@@ -17,6 +18,7 @@ import { workflowAndInfrastructureEventRegistry } from "./schemas/workflowAndInf
 // Single source of truth mapping event names to typed Zod payload schemas.
 export const EventRegistry = {
   ...w0EventRegistry,
+  ...w1aEventRegistry,
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
   ...designSystemVocabularyRegistry,

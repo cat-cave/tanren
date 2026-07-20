@@ -12,16 +12,18 @@ import {
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
+// W0 + W1-A (integration.author.*) + future Wn frozen-payload sensitivity fan-in
+// (single source; also re-exports the sibling wave rules to stay under the cap).
 import {
   benchmarkSensitivityRules,
   designSystemSensitivityRules,
-  eventVocabularyW0SensitivityRules,
+  eventVocabularySensitivityRules,
   governanceVocabularySensitivityRules,
   wave1SensitivityRules,
   wave3VocabularySensitivityRules,
   wave4VocabularySensitivityRules,
   wave5And6AndResolutionClusterVocabularySensitivityRules,
-} from "./sensitivityRules.eventVocabularyW0.js";
+} from "./sensitivityRules.eventVocabulary.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
@@ -462,8 +464,8 @@ export const sensitivityRules: SensitivityRule[] = [
   // task #82 window-pause auto-resume (run.paused/resumed/window.refreshed) + Codex critic #18 (usage.accounting_failed).
   ...windowPauseSensitivityRules,
   ...usageAccountingFailedSensitivityRules,
-  // Mission-complete W0 event vocabulary; every frozen payload path is public.
-  ...eventVocabularyW0SensitivityRules,
+  // Mission-complete event vocabulary (W0 + W1-A integration.author.* + future Wn); every frozen payload path is public.
+  ...eventVocabularySensitivityRules,
   // Mission-complete WAVE-1 vocab freeze (in-3 integration + rv-25 runtime); every
   // frozen payload path is public.
   ...wave1SensitivityRules,
