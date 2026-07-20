@@ -14,6 +14,7 @@ import type {
   VerificationRunPurpose,
 } from "../../contracts/runtimeVerificationAdapters.js";
 import type {
+  CapabilityFragmentRef,
   ComparisonOperator,
   ExampleRow,
   ExecutionMatrix,
@@ -50,6 +51,14 @@ export interface HttpProbeSpec {
   readonly body?: CanonicalBody;
 }
 
+/** rv-3: one verification-capability fragment resolved + bound into a plan step. */
+export interface PlanCapabilityFragment {
+  readonly stepKind: "fixture" | "action" | "cleanup";
+  readonly stepId: string;
+  readonly capabilityFragmentRef: CapabilityFragmentRef;
+  readonly params: CanonicalBody;
+}
+
 /** The narrow view of a compiled ExecutableBehaviorPlanV1 the orchestrator reads. */
 export interface AcceptancePlan {
   readonly planId: string;
@@ -57,6 +66,9 @@ export interface AcceptancePlan {
   readonly requiredSurfaces: readonly RequiredSurface[];
   readonly assertions: readonly AcceptanceAssertion[];
   readonly fixtures: readonly unknown[];
+  /** rv-3: the verification-capability fragments resolved + bound into this plan's
+   *  fixture/action/cleanup lanes, each carrying its concrete registry version ref. */
+  readonly capabilityFragments?: readonly PlanCapabilityFragment[];
   readonly examples: readonly ExampleRow[];
   readonly executionMatrix: ExecutionMatrix;
   /** rv-12: the causes a plan's causal assertions drive + correlate effects to. */
