@@ -26,6 +26,7 @@ import {
   type DagEnqueuer,
   type DagReadModel,
   type DagWalker,
+  type IntegrationPhase,
   planSpeculativeDagTick,
   type PlannedEnqueue,
   type ProjectBudgetState,
@@ -88,6 +89,8 @@ export interface DagWalkerDeps {
   ancestorStackResolver: DagAncestorStackResolver;
   /** resolves the project's speculation threshold + depth cap from config. */
   speculationConfig: SpeculationConfigResolver;
+  /** in-9/in-10 capability_prepare phase, run once per active-project walk before spec planning (optional). */
+  integrationPhase?: IntegrationPhase;
   /**
    * The governed concurrency ceiling (autonomy-engine.md §1.4): defaults to the
    * config surface's `AllocatorConfig.concurrency` (the SAME ceiling the worker
@@ -138,6 +141,13 @@ export class EventEmittingDagWalker implements DagWalker {
       const status = snapshot.projectLifecycle === "missing" ? "inactive" : snapshot.projectLifecycle;
       return { projectId, status, enqueuedSpecIds: [], enqueuedRunIds: [] };
     }
+
+    // INTEGRATION PHASE (in-9/in-10): materialize + prepare the capability graph before
+    // spec planning. Fail-safe (isolated .catch) so a prepare error never starves
+    // scheduling — its tx rolled back, node state unchanged, next walk retries.
+    await this.deps.integrationPhase
+      ?.prepare(projectId)
+      .catch((error) => log.error("capability_prepare phase failed; next walk retries", { projectId }, error));
 
     // Plan the tick BEFORE the budget short-circuit. The plan is the sole
     // readiness computation, and a truthful budget-pause observation needs to
@@ -440,6 +450,8 @@ export interface BuildDagWalkerDeps {
    * byte-identical to today.
    */
   runStateWriter?: RunStateWriter;
+  /** in-9/in-10 capability_prepare driver, wired by the subscriber; forwarded to the walker. */
+  integrationPhase?: IntegrationPhase;
 }
 
 /**
@@ -463,6 +475,9 @@ export function buildDagWalker(pool: pg.Pool, deps: BuildDagWalkerDeps): DagWalk
     ancestorStackResolver: new PgDagAncestorStackResolver(pool),
     speculationConfig: buildSpeculationConfigResolver(pool, events),
     budgetGate: new PgBudgetGate(pool),
+    // in-9/in-10: the capability_prepare integration phase (constructed by the
+    // subscriber so this module never imports the concrete integrations driver).
+    ...(deps.integrationPhase !== undefined && { integrationPhase: deps.integrationPhase }),
   });
 }
 
