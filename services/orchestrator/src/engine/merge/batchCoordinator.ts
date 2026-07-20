@@ -112,6 +112,16 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   async coordinate(projectId: string): Promise<CoordinateResult> {
     await this.deps.queue.recoverStaleClaims(projectId);
 
+    // in-18 integration-grant park/re-admit reconciliation (the always-on backstop,
+    // mirroring in-9's prepare pass). RE-ADMIT first so a unit whose grant genuinely
+    // arrived (its capability node advanced past awaiting_grant) re-enters the
+    // candidate set THIS pass; then PARK any unit newly blocked on an awaiting_grant
+    // node so it stops clogging. Both are fail-closed no-ops when unimplemented (a
+    // test fake) or when no capability nodes exist. A grant-arrival event separately
+    // wakes this pass via the subscriber, so re-admission is genuinely event-driven.
+    await this.deps.queue.reAdmitGrantCovered?.(projectId);
+    await this.deps.queue.parkGrantBlocked?.(projectId);
+
     const maxBatchSize = await this.resolveMaxBatchSize(projectId);
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
     const queueDepth = snapshot.entries.length;

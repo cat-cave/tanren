@@ -333,6 +333,12 @@ export const mergeQueue = pgTable(
     status: text("status").notNull().default("queued"),
     /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed | superseded | needs_attention). */
     dequeueReason: text("dequeue_reason"),
+    /**
+     * in-18: the integration-grant-blocked park reason (status = 'parked_grant';
+     * mirrors `capability_nodes.wait_reason`). NON-terminal — the parked entry is
+     * neither merged nor dropped; re-admitted only when its grant covers. NULL otherwise.
+     */
+    parkReason: text("park_reason"),
     /** The PR url + number captured at enqueue (the coordinator drives by run id). */
     prUrl: text("pr_url").notNull(),
     prNumber: text("pr_number").notNull(),
@@ -372,11 +378,13 @@ export const mergeQueue = pgTable(
       foreignColumns: [mergeQueuePartitions.orgId, mergeQueuePartitions.id],
       name: "merge_queue_partition_fk",
     }),
-    enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued"]),
+    enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued", "parked_grant"]),
     check(
       "merge_queue_dequeue_reason_check",
       sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed','superseded','needs_attention')`,
     ),
+    // in-18: a park reason is only ever carried by an integration-grant-blocked park.
+    check("merge_queue_park_reason_check", sql`${table.parkReason} IS NULL OR ${table.status} = 'parked_grant'`),
     check(
       "merge_queue_lease_check",
       sql`(${table.leaseOwner} IS NULL AND ${table.leaseExpiresAt} IS NULL) OR (${table.leaseOwner} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
@@ -384,11 +392,12 @@ export const mergeQueue = pgTable(
     index("merge_queue_org_id").on(table.orgId),
     index("merge_queue_org_project").on(table.orgId, table.projectId),
     index("merge_queue_org_project_status").on(table.orgId, table.projectId, table.status),
-    // The idempotency boundary: a run may have at most ONE active (queued/merging)
-    // entry. A partial unique index keyed on run_id where status is non-terminal.
+    // The idempotency boundary: a run may have at most ONE active (queued/merging/
+    // parked_grant) entry. in-18: `parked_grant` is a non-terminal park still in the
+    // queue, so it joins this set — a re-publish of a parked run must not duplicate.
     uniqueIndex("merge_queue_active_run_unique")
       .on(table.runId)
-      .where(sql`status IN ('queued', 'merging')`),
+      .where(sql`status IN ('queued', 'merging', 'parked_grant')`),
   ],
 );
 
