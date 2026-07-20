@@ -12,6 +12,7 @@ import type pg from "pg";
 import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js";
 import { handleConfigCasSql } from "../../helpers/routesPoolConfigCas.js";
 import { RoutesPoolDerivationEvidence } from "../../helpers/routesPoolDerivationEvidence.js";
+import { createRevisionSpineStub } from "../../helpers/revisionSpineMemory.js";
 
 // The `composeDesignSystem` seam is production-required (deriveProductGraph fails
 // loud on an absent wire — a dropped seam is a bug, never a silent design-less skip),
@@ -122,6 +123,7 @@ export function stubPool(): {
   >();
   const derivations = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
+  const revisionSpine = createRevisionSpineStub();
   let graphSnapshot:
     | {
         specs: typeof state.specs;
@@ -480,7 +482,8 @@ export function stubPool(): {
       state.specBehaviors += 1;
       return { rows: [], rowCount: 1 };
     }
-    return { rows: [], rowCount: 0 };
+    // rv-1 — immutable persona/behavior revision spine mint (deriveBehaviorSpec).
+    return revisionSpine(sql, params) ?? { rows: [], rowCount: 0 };
   };
   const pool = {
     query,
