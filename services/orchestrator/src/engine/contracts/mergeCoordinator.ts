@@ -310,10 +310,19 @@ export interface MergeQueueModel {
    * (active + unexpired + capability-covering + requiredOperations⊆granted +
    * requiredScopes⊆granted), so re-admission inherits the genuine coverage check — a
    * partial/expired/wrong-scope grant leaves the node `awaiting_grant` (or
-   * `needs_attention`) and the entry STAYS parked. Returns the number re-admitted.
-   * Idempotent + org-scoped.
+   * `needs_attention`) and the entry STAYS parked. Re-admission requires POSITIVE
+   * coverage evidence (≥1 covering node), so a parked row with zero surviving
+   * capability rows does NOT re-admit. Returns the number re-admitted. Idempotent +
+   * org-scoped.
    */
   reAdmitGrantCovered?(projectId: string): Promise<number>;
+
+  /**
+   * in-18 — how many entries are grant-parked for a project. The coordinator arms a
+   * sign-of-life recheck when the only remaining work is parked, so re-admission
+   * self-heals even if the event-driven grant wake is missed. Org-scoped.
+   */
+  parkedGrantDepth?(projectId: string): Promise<number>;
 }
 
 /**

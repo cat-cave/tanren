@@ -70,6 +70,9 @@ function node(overrides: Partial<CapabilityNodeForEval> = {}): CapabilityNodeFor
 
 function coveringGrantRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    provider_kind: "slack",
+    connection_id: "conn_1",
+    grant_id: "grant_1",
     capabilities: ["messaging.send"],
     operations: ["chat.postMessage"],
     provider_scopes: ["chat:write"],
@@ -112,9 +115,14 @@ describe("evaluateGrant (genuine coverage)", () => {
     const c = new FakeClient([{ match: "project_integration_grant_selections", rows: [] }]);
     expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: false, reason: "grant_absent" });
   });
-  it("is ok when the grant genuinely covers the node", async () => {
+  it("is ok (with the covering grant identity) when the grant genuinely covers the node", async () => {
     const c = new FakeClient([{ match: "project_integration_grant_selections", rows: [coveringGrantRow()] }]);
-    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({ ok: true });
+    expect(await evaluateGrant(c.as(), "o", node(), ["slack"])).toEqual({
+      ok: true,
+      providerKind: "slack",
+      connectionId: "conn_1",
+      grantId: "grant_1",
+    });
   });
   it("fails closed on a missing required scope", async () => {
     const c = new FakeClient([

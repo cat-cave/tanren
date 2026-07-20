@@ -24,6 +24,7 @@ import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { selectNextMerge } from "../src/engine/contracts/mergeCoordinator.js";
 import { formBatch } from "../src/engine/contracts/batchMergeCoordinator.js";
 import { CapabilityPrepareDriver } from "../src/engine/integrations/capabilityPrepare.js";
+import { resolveCredentialRepairProjects } from "../src/engine/merge/subscriber.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -93,6 +94,21 @@ describeDb("in-18 merge-queue integration-grant park/dequeue (real PG, RLS)", ()
     // A present-but-INSUFFICIENT grant (missing the required chat:write scope).
     await seedGrantLineage(ownerPool, ORG_A, "proj_readmit", "slack", "product", "test", ["channels:read"]);
     await seedSpecRunQueued(model, ownerPool, ORG_A, "proj_readmit", "spec_re", "run_re", 3010, []);
+
+    // ORG_A / PROJECT_E2E — end-to-end re-admission through the REAL production trigger
+    // (driver.prepare → grantCovers → node advance → integration.grant.linked emit).
+    await seedOrgProject(ownerPool, ORG_A, "proj_e2e");
+    await seedRequirement(ownerPool, ORG_A, "proj_e2e", "req_e2e", "messaging.send", "product");
+    await seedGrantLineage(ownerPool, ORG_A, "proj_e2e", "slack", "product", "test", ["channels:read"]);
+    await seedSpecRunQueued(model, ownerPool, ORG_A, "proj_e2e", "spec_e2e", "run_e2e", 3030, []);
+
+    // ORG_A / PROJECT_ORPHAN — a parked row whose capability rows are later deleted
+    // (finding-3 empty-set false-positive control).
+    await seedOrgProject(ownerPool, ORG_A, "proj_orphan");
+    await seedRequirement(ownerPool, ORG_A, "proj_orphan", "req_orphan", "messaging.send", "product");
+    await seedCapabilityNode(ownerPool, ORG_A, "proj_orphan", "req_orphan", "awaiting_grant", "grant_absent:slack");
+    await seedSpecRunQueued(model, ownerPool, ORG_A, "proj_orphan", "spec_orphan", "run_orphan", 3040, []);
+    await seedSpecCapabilityDep(ownerPool, ORG_A, "proj_orphan", "spec_orphan", "capnode_req_orphan_test");
 
     // ORG_B — cross-org control. Its own parked unit must survive an ORG_A park pass.
     await seedOrgProject(ownerPool, ORG_B, "proj_b");
@@ -200,6 +216,56 @@ describeDb("in-18 merge-queue integration-grant park/dequeue (real PG, RLS)", ()
     expect((await queueRow(ownerPool, ORG_B, "run_b")).status).toBe("parked_grant");
     // ORG_A's readmitted unit is unaffected.
     expect((await queueRow(ownerPool, ORG_A, "run_re")).status).toBe("queued");
+  });
+
+  it("(f) END-TO-END: a covering grant arriving drives node advance → grant.linked emit → wake → re-admit", async () => {
+    // Park spec_e2e on the insufficient grant (real prepare → awaiting_grant node).
+    await driver.prepare("proj_e2e");
+    await seedSpecCapabilityDep(ownerPool, ORG_A, "proj_e2e", "spec_e2e", "capnode_req_e2e_test");
+    expect(await model.parkGrantBlocked("proj_e2e")).toBe(1);
+    expect((await queueRow(ownerPool, ORG_A, "run_e2e")).status).toBe("parked_grant");
+
+    // The covering grant ARRIVES. The REAL production integration phase (driver.prepare)
+    // re-runs grantCovers → advances the node awaiting_grant→enqueued AND emits the
+    // durable integration.grant.linked wake (NOT a hand-fired phantom event).
+    await ownerPool.query(
+      "UPDATE org_integration_grant_generations SET provider_scopes = ARRAY['chat:write'] WHERE org_id = $1 AND grant_id = 'grant_proj_e2e'",
+      [ORG_A],
+    );
+    await driver.prepare("proj_e2e");
+    const node = await ownerPool.query<{ status: string }>(
+      "SELECT status FROM capability_nodes WHERE org_id = $1 AND id = 'capnode_req_e2e_test'",
+      [ORG_A],
+    );
+    expect(node.rows[0]?.status).toBe("enqueued");
+
+    // The emit is a REAL row; the merge coordinator's wake recognizer maps it to the
+    // project (the exact path the subscriber runs on the events NOTIFY).
+    const evt = await ownerPool.query<{ id: string; payload: Record<string, unknown> }>(
+      "SELECT id, payload FROM events WHERE org_id = $1 AND project_id = 'proj_e2e' AND event_type = 'integration.grant.linked' ORDER BY id DESC LIMIT 1",
+      [ORG_A],
+    );
+    const eventId = evt.rows[0]?.id;
+    expect(eventId).toBeDefined();
+    expect(evt.rows[0]?.payload["providerKind"]).toBe("slack");
+    expect(await resolveCredentialRepairProjects(ownerPool, eventId!)).toEqual(["proj_e2e"]);
+
+    // The woken coordinate pass re-admits the parked unit (node now covered).
+    expect(await model.reAdmitGrantCovered("proj_e2e")).toBe(1);
+    expect((await queueRow(ownerPool, ORG_A, "run_e2e")).status).toBe("queued");
+  });
+
+  it("(g) a parked row whose capability rows were DELETED does NOT re-admit (no empty-set false positive)", async () => {
+    expect(await model.parkGrantBlocked("proj_orphan")).toBe(1);
+    expect((await queueRow(ownerPool, ORG_A, "run_orphan")).status).toBe("parked_grant");
+    // Delete the spec→node link + the node — zero surviving capability rows.
+    await ownerPool.query("DELETE FROM spec_capability_dependencies WHERE org_id = $1 AND project_id = 'proj_orphan'", [
+      ORG_A,
+    ]);
+    await ownerPool.query("DELETE FROM capability_nodes WHERE org_id = $1 AND project_id = 'proj_orphan'", [ORG_A]);
+    // No POSITIVE coverage evidence → the vacuous NOT-EXISTS is not enough → stays parked.
+    expect(await model.reAdmitGrantCovered("proj_orphan")).toBe(0);
+    expect((await queueRow(ownerPool, ORG_A, "run_orphan")).status).toBe("parked_grant");
   });
 });
 

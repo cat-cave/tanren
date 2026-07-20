@@ -82,7 +82,7 @@ async function resolveRunProject(pool: pg.Pool, runId: string): Promise<string |
   });
 }
 
-async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): Promise<string[]> {
+export async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
     const result = await client.query<{
       project_id: string | null;
@@ -99,12 +99,13 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
         row.event_type === "org.github.connected" ||
         (row.event_type === "integration.provisioned" && row.payload?.["providerKind"] === "github") ||
         row.payload?.["provider"] === "github" ||
-        // in-18 GRANT-WAKE: an integration grant genuinely arriving (linked/validated)
-        // must wake the merge coordinator so any unit PARKED on that grant re-admits
-        // once its capability node advances. The coordinate pass re-checks coverage
-        // (reAdmitGrantCovered) — this only decides WHICH projects to re-drive.
-        row.event_type === "integration.grant.linked" ||
-        row.event_type === "integration.grant.validated"
+        // in-18 GRANT-WAKE: `integration.grant.linked` is emitted (capabilityNodeCore) at
+        // the exact grantCovers moment a previously-parked capability node becomes covered.
+        // It wakes the merge coordinator so any unit PARKED on that grant re-admits; the
+        // coordinate pass re-checks coverage (reAdmitGrantCovered) — this only decides
+        // WHICH projects to re-drive. (Only `linked` is listened for: it is the one grant
+        // event with a real production emitter — no phantom listener.)
+        row.event_type === "integration.grant.linked"
       )
     ) {
       return [];

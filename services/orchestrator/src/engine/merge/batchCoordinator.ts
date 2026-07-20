@@ -40,6 +40,10 @@ export { DEFAULT_MAX_BATCH_SIZE };
 const log = createLogger("batch-coordinator");
 const INFRA_RETRY_BACKOFF_MS = 500;
 const PENDING_RECHECK_MS = 15_000;
+// in-18: the sign-of-life recheck cadence for a project whose only remaining work is
+// grant-parked. NOT a give-up cap — it re-drives (idempotently, one timer/project via
+// the subscriber) until the grant covers and the unit re-admits, or the row leaves.
+const PARKED_GRANT_RECHECK_MS = 30_000;
 
 export interface BatchMergeEventEmitter {
   emitChecking(input: {
@@ -134,7 +138,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           ? "empty"
           : "all_blocked";
       await this.infraHolds.reset(projectId);
-      const retryAfterMs = holdReason === "serialized" ? serializedRetryAfterMs(snapshot) : undefined;
+      let retryAfterMs = holdReason === "serialized" ? serializedRetryAfterMs(snapshot) : undefined;
+      // in-18 SELF-HEAL BACKSTOP (finding-2): a project whose only remaining work is
+      // grant-parked has no `tanren_run` NOTIFY guaranteed to re-drive it, so arm a
+      // sign-of-life recheck (NOT a give-up cap — it re-drives until the grant covers
+      // or the row leaves). The event-driven grant wake is the fast path; this is the
+      // safety net so a covered unit is never starved after independent work drains.
+      if (retryAfterMs === undefined && ((await this.deps.queue.parkedGrantDepth?.(projectId)) ?? 0) > 0) {
+        retryAfterMs = PARKED_GRANT_RECHECK_MS;
+      }
       return { projectId, holdReason, queueDepth, ...(retryAfterMs !== undefined && { retryAfterMs }) };
     }
 

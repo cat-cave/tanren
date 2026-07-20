@@ -359,11 +359,14 @@ export class PgMergeQueueModel implements MergeQueueModel {
 
   /**
    * in-18 FAIL-CLOSED RE-ADMISSION: return a `parked_grant` entry to `queued` (and
-   * clear `park_reason`) ONLY when every linked capability node has advanced OUT of
-   * the blocked set — i.e. all are `enqueued`/`ready`. That advancement is set solely
-   * by in-9's `grantCovers`-gated `evaluateAndApply`, so a partial/expired/wrong-scope
-   * grant (node still `awaiting_grant`) or a genuinely-failed grant (node
-   * `needs_attention`) keeps the entry parked — never a fail-open re-admit. Org-scoped.
+   * clear `park_reason`) ONLY on POSITIVE coverage evidence — the spec has at least
+   * ONE covering capability node (`enqueued`/`ready`, a state set solely by in-9's
+   * `grantCovers`-gated `evaluateAndApply`) AND no uncovered one remains. The
+   * EXISTS-covering guard closes the empty-set false-positive (a parked row whose
+   * capability rows were deleted has NO covering node → it stays parked, never
+   * silently re-queued). A partial/expired/wrong-scope grant (node still
+   * `awaiting_grant`) or a genuinely-failed grant (node `needs_attention`) leaves an
+   * uncovered node → the entry stays parked. Never a fail-open re-admit. Org-scoped.
    */
   async reAdmitGrantCovered(projectId: string): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, projectId);
@@ -373,6 +376,16 @@ export class PgMergeQueueModel implements MergeQueueModel {
         `UPDATE merge_queue mq
             SET status = 'queued', park_reason = NULL
           WHERE mq.org_id = $1 AND mq.project_id = $2 AND mq.status = 'parked_grant'
+            AND EXISTS (
+              SELECT 1
+                FROM spec_capability_dependencies scd
+                JOIN capability_nodes cn
+                  ON cn.org_id = scd.org_id AND cn.project_id = scd.project_id
+                 AND cn.id = scd.capability_node_id
+               WHERE scd.org_id = mq.org_id AND scd.project_id = mq.project_id
+                 AND scd.spec_id = mq.spec_id
+                 AND cn.status IN ('enqueued', 'ready')
+            )
             AND NOT EXISTS (
               SELECT 1
                 FROM spec_capability_dependencies scd
@@ -386,6 +399,25 @@ export class PgMergeQueueModel implements MergeQueueModel {
         [orgId, projectId],
       );
       return result.rowCount ?? 0;
+    });
+  }
+
+  /**
+   * in-18 BACKSTOP SUPPORT: how many entries are currently grant-parked for a
+   * project. The coordinator uses it to arm a sign-of-life recheck when the only
+   * remaining work is parked (no `tanren_run` NOTIFY is guaranteed to re-drive it),
+   * so re-admission self-heals even if the event-driven grant wake is missed.
+   * Org-scoped under RLS.
+   */
+  async parkedGrantDepth(projectId: string): Promise<number> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) return 0;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM merge_queue WHERE org_id = $1 AND project_id = $2 AND status = 'parked_grant'",
+        [orgId, projectId],
+      );
+      return Number(result.rows[0]?.n ?? "0");
     });
   }
 
