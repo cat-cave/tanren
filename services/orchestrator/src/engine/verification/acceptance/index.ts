@@ -9,6 +9,7 @@ export * from "./renderCaptureStore.js";
 export * from "./renderCaptureStage.js";
 export * from "./orchestrator.js";
 export * from "./httpDriver.js";
+export * from "./executablePlanCompiler.js";
 export * from "./planLoader.js";
 export * from "./pgAcceptancePlanLoader.js";
 export * from "./pgReleaseInstanceBaseUrlResolver.js";
