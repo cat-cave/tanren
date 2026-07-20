@@ -159,6 +159,9 @@ function assertResolved(resolved: ResolvedBinding): void {
   }
 }
 
+const scopesOf = (output: ResolvedBindingOutput): AppEnvScope[] =>
+  output.scopes.length === 0 ? ["runtime"] : [...output.scopes];
+
 /**
  * The content hash addressing the generation — the canonical `appEnvHash` (in-15).
  * Includes a digest of every resolved value (secret material or plain text) so a
@@ -166,13 +169,19 @@ function assertResolved(resolved: ResolvedBinding): void {
  * content is idempotent. Never embeds plaintext — only per-value digests. The
  * in-15 proof gate recomputes this EXACT hash from durable state to verify a
  * materialized app-env still matches its immutable recorded generation.
+ *
+ * Scopes are hashed via {@link scopesOf} — the SAME normalized/defaulted form that
+ * is actually WRITTEN to `integration_binding_env` + `project_app_env`. Record ==
+ * stored == verify: hashing raw scopes here would diverge from the gate's recompute
+ * (which reads the stored form) and false-fail a valid binding with empty/defaulted
+ * scopes.
  */
 function computeDesiredStateHash(resolved: ResolvedBinding, materials: ReadonlyMap<string, string>): string {
   const outputs: CanonicalAppEnvOutput[] = resolved.outputs.map((output) => ({
     key: output.logicalKey,
     secret: output.secret,
     required: output.required,
-    scopes: output.scopes,
+    scopes: scopesOf(output),
     valueDigest: sha256Hex(
       output.secret ? (materials.get(output.logicalKey) as string) : (output.plainValue as string),
     ),
@@ -199,9 +208,6 @@ async function resolveSecretMaterials(
   }
   return materials;
 }
-
-const scopesOf = (output: ResolvedBindingOutput): AppEnvScope[] =>
-  output.scopes.length === 0 ? ["runtime"] : [...output.scopes];
 
 /**
  * Materialize a resolved binding into `project_app_env` + a scoped Vault ref per

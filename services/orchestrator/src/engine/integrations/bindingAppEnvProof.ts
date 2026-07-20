@@ -71,7 +71,24 @@ export type BindingAppEnvProofVerdict =
       readonly bindingId: string;
       readonly generation: number;
       readonly detail: string;
+    }
+  | {
+      /**
+       * Project-level: `project_app_env` provisioned rows the deploy's env attach
+       * would ship that are NOT covered by any proof-verified ready binding (a
+       * non-ready binding's env, a superseded generation's leftover, or an injected
+       * orphan row) — everything attach reads must be proof-covered.
+       */
+      readonly status: "unverified_app_env_rows";
+      readonly uncovered: readonly UncoveredAppEnvRow[];
     };
+
+/** A provisioned `project_app_env` row not covered by a verified ready binding. */
+export interface UncoveredAppEnvRow {
+  readonly key: string;
+  readonly bindingId: string | null;
+  readonly bindingGeneration: number | null;
+}
 
 export function isProofVerified(
   verdict: BindingAppEnvProofVerdict,
@@ -87,7 +104,13 @@ export class BindingAppEnvProofFailedError extends Error {
   public constructor(scope: ProjectBindingProofScope, failures: readonly BindingAppEnvProofVerdict[]) {
     super(
       `appEnvHash proof gate BLOCKED delivery for project '${scope.projectId}' (org '${scope.orgId}', ` +
-        `env '${scope.environment}'): ${failures.map((f) => `${f.bindingId}=${f.status}`).join(", ")}`,
+        `env '${scope.environment}'): ${failures
+          .map((f) =>
+            f.status === "unverified_app_env_rows"
+              ? `unverified_app_env_rows(${f.uncovered.length})`
+              : `${f.bindingId}=${f.status}`,
+          )
+          .join(", ")}`,
     );
     this.failures = failures;
   }
@@ -345,10 +368,56 @@ export async function verifyReadyProjectBindingProofs(
   return verdicts;
 }
 
+const coverageKey = (bindingId: string, generation: number, key: string): string => `${bindingId} ${generation} ${key}`;
+
+const ProvisionedRow = z.object({
+  key: z.string(),
+  binding_id: z.string().nullable(),
+  binding_generation: z.coerce.number().int().positive().nullable(),
+});
+
 /**
- * Assert every ready binding of the project/environment proves its appEnvHash.
- * Returns the frozen verified contracts; throws {@link BindingAppEnvProofFailedError}
- * (BLOCK) if any binding does not verify. A project with no ready bindings is a
+ * The provisioned `project_app_env` rows the deploy's env attach reads for this
+ * project/environment that are NOT covered by the given verified-binding coverage
+ * set — a superseded generation's leftover, a non-ready binding's row, or an
+ * injected orphan. (BYO rows are user-owned, out of the binding-proof scope.)
+ */
+async function findUncoveredProvisionedRows(
+  client: IntegrationQueryClient,
+  scope: ProjectBindingProofScope,
+  coverage: ReadonlySet<string>,
+): Promise<UncoveredAppEnvRow[]> {
+  const result = await client.query(
+    `SELECT key, binding_id, binding_generation
+       FROM project_app_env
+      WHERE org_id = $1 AND project_id = $2 AND environment = $3 AND source = 'provisioned'
+      ORDER BY key`,
+    [scope.orgId, scope.projectId, scope.environment],
+  );
+  const uncovered: UncoveredAppEnvRow[] = [];
+  for (const raw of result.rows) {
+    const row = ProvisionedRow.parse(raw);
+    // A provisioned row always carries binding_id + binding_generation (schema
+    // check); a null here is itself corruption → uncovered, fail closed.
+    const covered =
+      row.binding_id !== null &&
+      row.binding_generation !== null &&
+      coverage.has(coverageKey(row.binding_id, row.binding_generation, row.key));
+    if (!covered) {
+      uncovered.push({ key: row.key, bindingId: row.binding_id, bindingGeneration: row.binding_generation });
+    }
+  }
+  return uncovered;
+}
+
+/**
+ * Assert the WHOLE app-env the deploy will consume is proof-covered: every ready
+ * binding of the project/environment proves its appEnvHash, AND every provisioned
+ * `project_app_env` row the env attach reads belongs to a proof-verified ready
+ * binding's current generation (no non-ready / superseded / orphan row ships
+ * unverified). Returns the frozen verified contracts; throws
+ * {@link BindingAppEnvProofFailedError} (BLOCK) on any per-binding failure OR any
+ * uncovered row. A project with no ready bindings and no provisioned rows is a
  * clean no-op (empty array).
  */
 export async function assertReadyProjectBindingProofs(
@@ -363,6 +432,17 @@ export async function assertReadyProjectBindingProofs(
     if (isProofVerified(verdict)) verified.push(verdict.contract);
     else failures.push(verdict);
   }
+
+  // Exhaustive coverage: everything env-attach reads must be proof-covered.
+  const coverage = new Set<string>();
+  for (const contract of verified) {
+    for (const output of contract.outputs) {
+      coverage.add(coverageKey(contract.bindingId, contract.generation, output.logicalKey));
+    }
+  }
+  const uncovered = await findUncoveredProvisionedRows(client, scope, coverage);
+  if (uncovered.length > 0) failures.push({ status: "unverified_app_env_rows", uncovered });
+
   if (failures.length > 0) throw new BindingAppEnvProofFailedError(scope, failures);
   return verified;
 }

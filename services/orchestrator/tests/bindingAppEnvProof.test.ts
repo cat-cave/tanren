@@ -163,6 +163,23 @@ describe("in-15 appEnvHash proof gate — verdicts", () => {
     const verdict = await verifyBindingAppEnvProof(db, secrets, SCOPE, BIND);
     expect(verdict.status).toBe("output_shape_mismatch");
   });
+
+  it("verifies a binding whose output scopes DEFAULT via scopesOf (record == stored == verify)", async () => {
+    // Empty scopes are normalized by scopesOf to ["runtime"] at WRITE time; the
+    // recorded desired_state_hash must use the SAME defaulted form or the gate would
+    // false-fail this valid binding. (Regression pin for the record/verify scope
+    // representation alignment.)
+    const db = new BindingMaterializerMemoryDb();
+    const backing = new InMemorySecretStore();
+    void backing.put({ ref: generationSecretRef(CRED, 1), value: MATERIAL });
+    const secrets = new GenerationAddressedIntegrationSecretStore(backing);
+    const base = resolved(PLAIN_CHANNEL);
+    const emptyScopes: ResolvedBinding = { ...base, outputs: base.outputs.map((o) => ({ ...o, scopes: [] })) };
+    await materializeBinding(db, secrets, emptyScopes, systemActor);
+
+    const verdict = await verifyBindingAppEnvProof(db, secrets, SCOPE, BIND);
+    expect(verdict.status).toBe("verified");
+  });
 });
 
 describe("in-15 appEnvHash proof gate — project-wide assertion", () => {
@@ -186,5 +203,36 @@ describe("in-15 appEnvHash proof gate — project-wide assertion", () => {
     await expect(assertReadyProjectBindingProofs(db, secrets, SCOPE)).rejects.toBeInstanceOf(
       BindingAppEnvProofFailedError,
     );
+  });
+
+  it("BLOCKS an orphan provisioned project_app_env row not covered by any verified binding", async () => {
+    const { db, secrets } = await materialized();
+    // A provisioned env row belonging to a binding NOT in the verified ready set —
+    // env-attach reads the whole project_app_env, so this would ship unproven.
+    db.appEnv.push({
+      org_id: ORG,
+      id: "orphan",
+      project_id: PROJECT,
+      environment: "production",
+      key: "ORPHAN_KEY",
+      value_ref: null,
+      plain_value: "orphan",
+      scopes: ["runtime"],
+      source: "provisioned",
+      binding_id: "other_binding",
+      binding_generation: 1,
+      secret_generation: null,
+      description: "",
+    });
+
+    // BIND itself still verifies per-binding (the orphan isn't its row) — the BLOCK is
+    // the project-wide coverage assertion.
+    const perBinding = await verifyBindingAppEnvProof(db, secrets, SCOPE, BIND);
+    expect(perBinding.status).toBe("verified");
+
+    const err = await assertReadyProjectBindingProofs(db, secrets, SCOPE).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BindingAppEnvProofFailedError);
+    const failures = (err as BindingAppEnvProofFailedError).failures;
+    expect(failures.some((f) => f.status === "unverified_app_env_rows")).toBe(true);
   });
 });

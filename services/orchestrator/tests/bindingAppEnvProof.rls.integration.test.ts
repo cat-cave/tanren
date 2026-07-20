@@ -137,15 +137,18 @@ function buildResolved(): ResolvedBinding {
     externalResourceName: "general",
     ownership: "created",
     teardownPolicy: "delete",
+    // Empty scopes on purpose: scopesOf defaults them to ["runtime"] at WRITE time,
+    // so the WHOLE suite exercises the record==stored==verify scope alignment — the
+    // "verifies" test below would false-fail if record hashed raw scopes.
     outputs: [
       {
         logicalKey: "SLACK_BOT_TOKEN",
         secret: true,
         required: true,
-        scopes: ["runtime"],
+        scopes: [],
         secretSource: { ref: CRED_A, generation: 1 },
       },
-      { logicalKey: "SLACK_CHANNEL_ID", secret: false, required: true, scopes: ["runtime"], plainValue: PLAIN_CHANNEL },
+      { logicalKey: "SLACK_CHANNEL_ID", secret: false, required: true, scopes: [], plainValue: PLAIN_CHANNEL },
     ],
   };
 }
@@ -198,7 +201,7 @@ describeDb("in-15 appEnvHash proof gate — real Postgres", () => {
     await adminPool.end();
   }, 30_000);
 
-  it("verifies a correctly-materialized production binding", async () => {
+  it("verifies a correctly-materialized production binding (scopesOf-defaulted scopes round-trip)", async () => {
     const { verdict, contracts } = await runWithOrgScope(runtimePool, ORG_A, async (client) => ({
       verdict: await verifyBindingAppEnvProof(client, secrets, SCOPE_A, BIND_A),
       contracts: await assertReadyProjectBindingProofs(client, secrets, SCOPE_A),
@@ -266,5 +269,38 @@ describeDb("in-15 appEnvHash proof gate — real Postgres", () => {
     expect(crossOrg.ready).toEqual([]);
     expect(crossOrg.contracts).toEqual([]);
     expect(crossOrg.binding.status).toBe("missing_generation");
+  });
+
+  it("BLOCKS a superseded-generation leftover row not covered by the verified binding (coverage gap)", async () => {
+    // Shrink BIND_A's output set (drop SLACK_CHANNEL_ID) → mints gen 2 with TOKEN only.
+    // The dropped key's project_app_env row stays at gen 1 (an FK-valid orphan that
+    // env-attach would still ship).
+    const tokenOnly = { ...buildResolved(), outputs: [buildResolved().outputs[0]!] };
+    await runWithOrgScope(runtimePool, ORG_A, (client) => materializeBinding(client, secrets, tokenOnly, systemActor));
+
+    // Per-binding STILL verifies (gen 2 = TOKEN only) — the gap is project-wide.
+    const perBinding = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      verifyReadyProjectBindingProofs(client, secrets, SCOPE_A),
+    );
+    expect(perBinding.map((v) => v.status)).toEqual(["verified"]);
+
+    // The whole-project coverage assertion BLOCKS on the orphan gen-1 CHANNEL row.
+    const err = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      assertReadyProjectBindingProofs(client, secrets, SCOPE_A),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BindingAppEnvProofFailedError);
+    expect((err as BindingAppEnvProofFailedError).failures.some((f) => f.status === "unverified_app_env_rows")).toBe(
+      true,
+    );
+
+    // Restore: re-materialize both keys → CHANNEL upserts forward to the current gen,
+    // no orphan remains, coverage passes again.
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      materializeBinding(client, secrets, buildResolved(), systemActor),
+    );
+    const restored = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      assertReadyProjectBindingProofs(client, secrets, SCOPE_A),
+    );
+    expect(restored).toHaveLength(1);
   });
 });

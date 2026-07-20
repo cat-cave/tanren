@@ -52,6 +52,7 @@ export class BindingMaterializerMemoryDb implements IntegrationQueryClient {
     // read's `g.drift_state` marker is handled above, before `g.desired_state_hash`).
     if (sql.includes("pae.value_ref")) return this.proofMaterializedOutputs(params);
     if (sql.includes("count(*)::int AS n FROM project_app_env")) return this.proofProvisionedCount(params);
+    if (sql.includes("source = 'provisioned'")) return this.proofProvisionedRows(params);
     if (sql.includes("ready_binding_id")) return this.proofReadyBindingIds(params);
     if (sql.includes("SELECT b.id AS binding_id")) return this.readyBindings(params);
     if (sql.includes("FROM integration_binding_env e")) return this.resolvedOutputs(params);
@@ -359,6 +360,26 @@ export class BindingMaterializerMemoryDb implements IntegrationQueryClient {
         a["binding_generation"] === generation,
     ).length;
     return this.result([{ n }]);
+  }
+
+  /** in-15: the provisioned project_app_env rows for the coverage assertion. */
+  private proofProvisionedRows(p: unknown[]): IntegrationQueryResult {
+    const [orgId, projectId, environment] = p as string[];
+    const rows = this.appEnv
+      .filter(
+        (a) =>
+          a["org_id"] === orgId &&
+          a["project_id"] === projectId &&
+          a["environment"] === environment &&
+          a["source"] === "provisioned",
+      )
+      .map((a) => ({
+        key: a["key"],
+        binding_id: a["binding_id"] ?? null,
+        binding_generation: a["binding_generation"] ?? null,
+      }))
+      .sort((a, b) => (String(a.key) < String(b.key) ? -1 : 1));
+    return this.result(rows);
   }
 
   /** in-15: every ready binding id of the project/environment. */
