@@ -263,9 +263,54 @@ describe("PreviewBehaviorGateProducer — fail-closed decision table", () => {
     expect(provision).not.toHaveBeenCalled();
   });
 
-  it("no preview surface (non-web product) → not_applicable (merge on CI alone)", async () => {
+  it("WEB behavior (api surface) + no preview surface → BLOCKED (fail-closed, not not_applicable-as-pass)", async () => {
+    // The run's declared behavior REQUIRES a web preview (api → rv-6 drives it against a deployed
+    // HTTP URL). No preview could be provisioned ⇒ the behavior is unverifiable ⇒ fail-closed BLOCK.
+    // This is the exact not_applicable-as-pass gap rv-5 closes: absence of a required preview is
+    // NEVER a silent pass-through. No run row is recorded (nothing was deployed/verified).
+    const { provisioner } = provisionerReturning({ kind: "no_surface", reason: "project configures no deploy target" });
+    const outcome = await buildProducer({ provisioner }).produce(INPUT);
+    expect(outcome.kind).toBe("blocked");
+    expect("recordedRunId" in outcome && outcome.recordedRunId).toBeFalsy();
+  });
+
+  it("browser behavior + no preview surface → BLOCKED (browser is a web preview surface)", async () => {
+    const { provisioner } = provisionerReturning({ kind: "no_surface", reason: "no deploy target" });
+    const producer = buildProducer({
+      provisioner,
+      planLoader: planLoaderReturning([{ ...fakePlan(), requiredSurfaces: ["browser"] }]),
+    });
+    expect((await producer.produce(INPUT)).kind).toBe("blocked");
+  });
+
+  it("NON-WEB behavior only (cli/package) + no preview surface → not_applicable (merge on CI alone)", async () => {
+    // A genuinely non-web product: its declared behaviors drive only cli/package surfaces, which
+    // need NO deployed web preview. `no_surface` is a real `not_applicable` here — merge on CI.
     const { provisioner } = provisionerReturning({ kind: "no_surface", reason: "no web surface" });
-    expect((await buildProducer({ provisioner }).produce(INPUT)).kind).toBe("not_applicable");
+    const producer = buildProducer({
+      provisioner,
+      planLoader: planLoaderReturning([{ ...fakePlan(), requiredSurfaces: ["cli", "package"] }]),
+    });
+    expect((await producer.produce(INPUT)).kind).toBe("not_applicable");
+  });
+
+  it("MIXED surfaces (one web, one non-web behavior) + no preview surface → BLOCKED (a web behavior is unverifiable)", async () => {
+    // Two declared behaviors: one needs a cli surface, the other an api (web) surface. Missing a
+    // preview leaves the web behavior unverifiable ⇒ BLOCK, never partial-pass on the non-web subset.
+    const { provisioner } = provisionerReturning({ kind: "no_surface", reason: "no deploy target" });
+    const producer = buildProducer({
+      provisioner,
+      behaviorRevisions: resolverFor([
+        ["beh1", "br1"],
+        ["beh2", "br2"],
+      ]),
+      planLoader: planLoaderReturning([
+        { ...fakePlan(), behaviorRevisionId: "br1", requiredSurfaces: ["cli"] },
+        { ...fakePlan(), planId: "plan2", behaviorRevisionId: "br2", requiredSurfaces: ["api"] },
+      ]),
+    });
+    const outcome = await producer.produce({ ...INPUT, behaviorIds: ["beh1", "beh2"] });
+    expect(outcome.kind).toBe("blocked");
   });
 
   it("preview deploy FAILED → blocked (fail-closed, no run row)", async () => {

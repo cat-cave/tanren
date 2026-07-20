@@ -110,7 +110,7 @@ function sequence(lines: Line[], start: number, indent: number): { value: YamlVa
       const result = block(lines, i + 1, indent + 2);
       items.push(result.value);
       i = result.next;
-    } else if (rest.includes(":") && !isFlowQuotedColon(rest)) {
+    } else if (hasMappingKeyColon(rest)) {
       // Inline first key of a mapping item: re-tokenize the item body so the
       // mapping parser sees the first pair at the item's content indent.
       const result = inlineMappingItem(lines, i, indent, rest);
@@ -148,8 +148,28 @@ function inlineMappingItem(
   return { value: result.value, next: i };
 }
 
-function isFlowQuotedColon(rest: string): boolean {
-  return (rest.startsWith('"') && rest.endsWith('"')) || (rest.startsWith("'") && rest.endsWith("'"));
+// A sequence item is an INLINE MAPPING only when it carries a real mapping-key
+// colon — a `:` at the end of the token or FOLLOWED BY A SPACE, outside quotes
+// (`- name: value`). A colon that is part of a scalar (`- chat:write`, an OAuth
+// scope; `- a:b:c`) is NOT a key indicator, so the item stays a scalar. A fully
+// flow-quoted scalar (`- "x: y"`) is likewise never a mapping. This mirrors
+// findKeyColon's rule without throwing.
+function hasMappingKeyColon(rest: string): boolean {
+  if ((rest.startsWith('"') && rest.endsWith('"')) || (rest.startsWith("'") && rest.endsWith("'"))) {
+    return false;
+  }
+  let quote: string | null = null;
+  for (let i = 0; i < rest.length; i += 1) {
+    const ch = rest[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === ":" && (i + 1 === rest.length || rest[i + 1] === " ")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function mapping(lines: Line[], start: number, indent: number): { value: YamlValue; next: number } {

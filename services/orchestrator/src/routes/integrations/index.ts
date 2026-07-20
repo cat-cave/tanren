@@ -20,6 +20,11 @@ import {
   type IntegrationFragmentDraft,
   type IntegrationFragmentSpec,
 } from "../../engine/integrations/fragments/index.js";
+import {
+  integrationFragmentConfigFromManifest,
+  IntegrationsManifestInvalidError,
+  resolveIntegrationsManifest,
+} from "../../engine/integrations/manifest/index.js";
 import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../engine/integrations/integrationSecretStoreImpl.js";
 import {
@@ -75,7 +80,14 @@ const ProvisionBody = z
   })
   .strict();
 
-const DeriveBody = z.object({ config: z.unknown() }).strict();
+// The derive seam accepts EITHER an already-shaped in-7 fragment `config` (the raw
+// IntegrationFragmentConfig) OR the repo-sourced `.tanren/integrations.yml` manifest
+// text (`manifestYaml`, in-8). Exactly one — the union of two strict objects rejects
+// a body carrying both or neither, and each arm rejects unknown keys.
+const DeriveBody = z.union([
+  z.object({ config: z.unknown() }).strict(),
+  z.object({ manifestYaml: z.string().min(1) }).strict(),
+]);
 
 /** EventStore has no ambient scope during an F2 provider (LLM) call; scope each
  * append independently so a long writer call never holds a database transaction
@@ -344,9 +356,31 @@ function mountIntegrationDeriveRoute(
     const parsed = DeriveBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_derive", issues: parsed.error.issues }, 400);
 
+    // in-8: a `manifestYaml` body is the repo-sourced `.tanren/integrations.yml`.
+    // Parse + validate it fail-closed, then project onto the in-7 fragment config the
+    // derive seam already consumes. A malformed manifest is a LOUD 400 — never a
+    // silently-ignored / partially-applied / defaulted derive.
+    let fragmentConfig: unknown;
+    if ("manifestYaml" in parsed.data) {
+      try {
+        const manifest = resolveIntegrationsManifest(parsed.data.manifestYaml);
+        if (manifest === undefined) {
+          return c.json({ error: "empty_integrations_manifest" }, 400);
+        }
+        fragmentConfig = integrationFragmentConfigFromManifest(manifest);
+      } catch (error) {
+        if (error instanceof IntegrationsManifestInvalidError) {
+          return c.json({ error: "invalid_integrations_manifest", issues: error.issues }, 400);
+        }
+        throw error;
+      }
+    } else {
+      fragmentConfig = parsed.data.config;
+    }
+
     try {
       const composed = await resolveIntegrationFragments({
-        config: parsed.data.config,
+        config: fragmentConfig,
         context: { orgId, projectId, createdBy: actor.userId },
         ...(authorerFactory === undefined ? {} : { authorer: authorerFactory({ orgId, projectId }) }),
         store: new IntegrationFragmentStore(pool),

@@ -129,7 +129,14 @@ function scanSecrets(value: unknown, path: string, issues: IntegrationRequiremen
   }
 }
 
-function capabilityPlaneAffinity(capability: string): IntegrationPlane | "either" {
+/**
+ * The plane a capability is bound to by its name, or "either" when the capability
+ * carries no plane affinity. Catalogued control/product capabilities pin a plane;
+ * a `control.` / `product.` prefix pins by convention; anything else is `either`.
+ * Exported so the repo-sourced `.tanren/integrations.yml` manifest (in-8) enforces
+ * the SAME plane-affinity rule as the Forge-derived requirement — one vocabulary.
+ */
+export function capabilityPlaneAffinity(capability: string): IntegrationPlane | "either" {
   if ((CONTROL_CAPABILITIES as readonly string[]).includes(capability)) return "control";
   if ((PRODUCT_CAPABILITIES as readonly string[]).includes(capability)) return "product";
   if (capability.startsWith("control.")) return "control";
