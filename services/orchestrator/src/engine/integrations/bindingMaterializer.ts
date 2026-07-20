@@ -26,9 +26,8 @@
  * idempotent (identical bytes at an occupied coordinate is success).
  */
 
-import { createHash } from "node:crypto";
 import type { ActorRef } from "../state/actor.js";
-import { canonicalJson, type CanonicalBody } from "../contracts/cas.js";
+import { computeBindingAppEnvHash, sha256Hex, type CanonicalAppEnvOutput } from "./bindingAppEnvHash.js";
 import type {
   ExactSecretCoordinate,
   IntegrationSecretStore,
@@ -160,43 +159,25 @@ function assertResolved(resolved: ResolvedBinding): void {
   }
 }
 
-function digestOf(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 /**
- * The content hash addressing the generation. Includes a digest of every resolved
- * value (secret material or plain text) so a rotated secret or changed config
- * mints the NEXT generation, while identical content is idempotent. Never embeds
- * plaintext — only per-value digests.
+ * The content hash addressing the generation — the canonical `appEnvHash` (in-15).
+ * Includes a digest of every resolved value (secret material or plain text) so a
+ * rotated secret or changed config mints the NEXT generation, while identical
+ * content is idempotent. Never embeds plaintext — only per-value digests. The
+ * in-15 proof gate recomputes this EXACT hash from durable state to verify a
+ * materialized app-env still matches its immutable recorded generation.
  */
 function computeDesiredStateHash(resolved: ResolvedBinding, materials: ReadonlyMap<string, string>): string {
-  const outputs = [...resolved.outputs]
-    .map((output) => ({
-      key: output.logicalKey,
-      secret: output.secret,
-      required: output.required,
-      scopes: [...output.scopes].sort(),
-      valueDigest: digestOf(
-        output.secret ? (materials.get(output.logicalKey) as string) : (output.plainValue as string),
-      ),
-    }))
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const body: CanonicalBody = {
-    providerKind: resolved.providerKind,
-    connectionId: resolved.connectionId,
-    authGeneration: resolved.authGeneration,
-    grantId: resolved.grantId,
-    grantGeneration: resolved.grantGeneration,
-    adapterVersion: resolved.adapterVersion,
-    externalResourceId: resolved.externalResourceId,
-    externalResourceName: resolved.externalResourceName,
-    ownership: resolved.ownership,
-    teardownPolicy: resolved.teardownPolicy,
-    environment: resolved.environment,
-    outputs,
-  } as unknown as CanonicalBody;
-  return `sha256:${digestOf(canonicalJson(body))}`;
+  const outputs: CanonicalAppEnvOutput[] = resolved.outputs.map((output) => ({
+    key: output.logicalKey,
+    secret: output.secret,
+    required: output.required,
+    scopes: output.scopes,
+    valueDigest: sha256Hex(
+      output.secret ? (materials.get(output.logicalKey) as string) : (output.plainValue as string),
+    ),
+  }));
+  return computeBindingAppEnvHash(resolved, outputs);
 }
 
 /** Resolve every secret output's source material, fail-closed on any miss. */
