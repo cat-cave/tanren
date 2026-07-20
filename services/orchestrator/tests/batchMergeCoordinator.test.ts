@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
+import type { MergeQueueModel } from "../src/engine/contracts/mergeCoordinator.js";
 import {
   InMemoryBatchChecker,
   RecordingBatchGateReworkRouter,
@@ -266,5 +267,18 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     const result = await h.coordinator.coordinate(PROJECT);
     expect(result.holdReason).toBe("empty");
     expect(h.checker.checked).toEqual([]);
+    // in-18 backstop: no parked units → no recheck armed (a plain idle hold).
+    expect(result.retryAfterMs).toBeUndefined();
+  });
+
+  it("in-18 backstop: arms a sign-of-life recheck when the only remaining work is grant-parked", async () => {
+    const h = makeHarness();
+    // Empty candidate set (every unit parked) BUT a positive parked depth → the
+    // coordinator arms a recheck so re-admission self-heals after independent work drains
+    // (the event-driven grant wake is the fast path; this is the safety net).
+    (h.queue as MergeQueueModel).parkedGrantDepth = () => Promise.resolve(2);
+    const result = await h.coordinator.coordinate(PROJECT);
+    expect(result.holdReason).toBe("empty");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
   });
 });

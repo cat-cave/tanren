@@ -82,7 +82,7 @@ async function resolveRunProject(pool: pg.Pool, runId: string): Promise<string |
   });
 }
 
-async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): Promise<string[]> {
+export async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
     const result = await client.query<{
       project_id: string | null;
@@ -98,7 +98,14 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
         row.event_type === "credential.github.configured" ||
         row.event_type === "org.github.connected" ||
         (row.event_type === "integration.provisioned" && row.payload?.["providerKind"] === "github") ||
-        row.payload?.["provider"] === "github"
+        row.payload?.["provider"] === "github" ||
+        // in-18 GRANT-WAKE: `integration.grant.linked` is emitted (capabilityNodeCore) at
+        // the exact grantCovers moment a previously-parked capability node becomes covered.
+        // It wakes the merge coordinator so any unit PARKED on that grant re-admits; the
+        // coordinate pass re-checks coverage (reAdmitGrantCovered) — this only decides
+        // WHICH projects to re-drive. (Only `linked` is listened for: it is the one grant
+        // event with a real production emitter — no phantom listener.)
+        row.event_type === "integration.grant.linked"
       )
     ) {
       return [];
@@ -106,11 +113,14 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
     if (row.project_id !== null) return [row.project_id];
     if (row.org_id === null) return [];
 
+    // Include `parked_grant` so a project whose ONLY active work is grant-parked is
+    // still woken by a credential/grant arrival — otherwise its parked unit could
+    // starve (never re-admitted). Statuses are the merge_queue active set.
     const projects = await client.query<{ project_id: string }>(
       `SELECT DISTINCT project_id
          FROM merge_queue
         WHERE org_id = $1
-          AND status IN ('queued', 'merging')
+          AND status IN ('queued', 'merging', 'parked_grant')
         ORDER BY project_id`,
       [row.org_id],
     );
@@ -121,10 +131,13 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
 /** Discover every project that has a native merge queue to coordinate (system-scoped). */
 async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
+    // in-18: `parked_grant` is an active (non-terminal) status, so a project whose
+    // only work is grant-parked is coordinated on startup too — its re-admit pass
+    // runs and the parked unit advances once its grant covers.
     const result = await client.query<{ project_id: string }>(
       `SELECT DISTINCT project_id
          FROM merge_queue
-        WHERE status IN ('queued', 'merging')
+        WHERE status IN ('queued', 'merging', 'parked_grant')
         ORDER BY project_id`,
     );
     return result.rows.map((row) => row.project_id);

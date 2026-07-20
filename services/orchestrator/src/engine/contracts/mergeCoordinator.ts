@@ -288,6 +288,41 @@ export interface MergeQueueModel {
     reason: "audit_policy" | "member_gate" | "behavior_proof" | "design_proof";
     findingIds: string[];
   }): Promise<boolean>;
+
+  /**
+   * in-18 — NON-CLOGGING GRANT PARK. Move every `queued` entry whose spec is BLOCKED
+   * on an integration grant (a linked `capability_nodes` row is `awaiting_grant`) to
+   * the NON-terminal `parked_grant` disposition, recording the node's precise
+   * `wait_reason` as the entry's `park_reason`. A parked entry leaves the active
+   * candidate set (`loadSnapshot` reads only `queued`), so INDEPENDENT ready units
+   * dequeue past it — but it is NEVER dropped and NEVER merged while blocked. Its
+   * DEPENDENTS stay behind it automatically: a parked spec never enters
+   * `mergedSpecIds`, so the DAG-eligibility rule holds every dependent back. Returns
+   * the number parked. Idempotent (an already-parked entry is untouched). Org-scoped.
+   */
+  parkGrantBlocked?(projectId: string): Promise<number>;
+
+  /**
+   * in-18 — FAIL-CLOSED RE-ADMISSION. Return a `parked_grant` entry to `queued` (and
+   * clear `park_reason`) ONLY when its integration grant GENUINELY arrived: every
+   * linked capability node has advanced OUT of the blocked set to `enqueued`/`ready`.
+   * That advancement is set solely by in-9's `grantCovers`-gated `evaluateAndApply`
+   * (active + unexpired + capability-covering + requiredOperations⊆granted +
+   * requiredScopes⊆granted), so re-admission inherits the genuine coverage check — a
+   * partial/expired/wrong-scope grant leaves the node `awaiting_grant` (or
+   * `needs_attention`) and the entry STAYS parked. Re-admission requires POSITIVE
+   * coverage evidence (≥1 covering node), so a parked row with zero surviving
+   * capability rows does NOT re-admit. Returns the number re-admitted. Idempotent +
+   * org-scoped.
+   */
+  reAdmitGrantCovered?(projectId: string): Promise<number>;
+
+  /**
+   * in-18 — how many entries are grant-parked for a project. The coordinator arms a
+   * sign-of-life recheck when the only remaining work is parked, so re-admission
+   * self-heals even if the event-driven grant wake is missed. Org-scoped.
+   */
+  parkedGrantDepth?(projectId: string): Promise<number>;
 }
 
 /**

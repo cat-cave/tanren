@@ -117,10 +117,30 @@ export async function resolveDependencies(
   return { resolution: "satisfied", edgeCount };
 }
 
-/** A grant-coverage verdict: satisfied, or a precise fail-closed reason. */
-export type GrantEvaluation = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+/** The identity of the covering grant (in-18: carried into the grant-linked wake event). */
+export interface GrantCoverageIdentity {
+  readonly providerKind: string;
+  readonly connectionId: string;
+  readonly grantId: string;
+}
+
+/**
+ * A grant-coverage verdict: satisfied (with the covering grant's identity), or a
+ * precise fail-closed reason. The identity lets `evaluateAndApply` emit the durable
+ * `integration.grant.linked` wake when a previously-parked node becomes covered
+ * (in-18 re-admission trigger) — it never carries a token or secret value.
+ */
+export type GrantEvaluation =
+  | ({ readonly ok: true } & GrantCoverageIdentity)
+  | { readonly ok: false; readonly reason: string };
+
+/** grantCovers' internal pass/fail (no identity — evaluateGrant attaches it). */
+type CoverageVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 interface GrantCandidateRow {
+  provider_kind: string;
+  connection_id: string;
+  grant_id: string;
   capabilities: string[];
   operations: string[];
   provider_scopes: string[];
@@ -151,7 +171,8 @@ export async function evaluateGrant(
   const requiredOperations = readStringArray(ds["requiredOperations"]);
   const requiredScopes = readStringArray(ds["requiredScopes"]);
   const result = await client.query<GrantCandidateRow>(
-    `SELECT gg.capabilities, gg.operations, gg.provider_scopes,
+    `SELECT s.provider_kind, s.connection_id, s.grant_id,
+            gg.capabilities, gg.operations, gg.provider_scopes,
             gg.status AS grant_gen_status, ag.status AS auth_gen_status,
             (gg.expires_at IS NOT NULL AND gg.expires_at <= now()) AS grant_expired,
             (ag.expires_at IS NOT NULL AND ag.expires_at <= now()) AS auth_expired
@@ -176,7 +197,9 @@ export async function evaluateGrant(
   let firstReason: string | undefined;
   for (const row of result.rows) {
     const verdict = grantCovers(row, node.capability, requiredOperations, requiredScopes);
-    if (verdict.ok) return { ok: true };
+    if (verdict.ok) {
+      return { ok: true, providerKind: row.provider_kind, connectionId: row.connection_id, grantId: row.grant_id };
+    }
     firstReason ??= verdict.reason;
   }
   return { ok: false, reason: firstReason ?? "grant_absent" };
@@ -188,7 +211,7 @@ function grantCovers(
   capability: string,
   requiredOperations: readonly string[],
   requiredScopes: readonly string[],
-): GrantEvaluation {
+): CoverageVerdict {
   if (row.grant_gen_status !== "active" || row.auth_gen_status !== "active") {
     return { ok: false, reason: "grant_inactive" };
   }
@@ -271,6 +294,15 @@ export async function evaluateAndApply(
   // the node is enqueued keeps a node that reached `enqueued` in a prior crashed
   // pass from being left without its work row.
   await enqueuePrepareWork(client, orgId, node);
+  // in-18 RE-ADMISSION TRIGGER: when a PREVIOUSLY-PARKED node (awaiting_grant) becomes
+  // covered here — the exact grantCovers moment a grant genuinely arrives — emit the
+  // durable `integration.grant.linked` wake. The merge coordinator subscribes to it and
+  // re-admits any merge-queue unit parked on this grant. Fires ONLY on the real
+  // awaiting_grant→enqueued transition (not on a first-pass pending→enqueued and not on
+  // a re-run no-op), so the wake is genuine and single-shot per arrival.
+  if (outcome === "enqueued" && node.status === "awaiting_grant") {
+    await emitGrantLinked(client, orgId, node, grant);
+  }
   return outcome;
 }
 
@@ -354,6 +386,34 @@ async function emitGrantRequested(
       capabilities: [node.capability],
       operations: readStringArray(ds["requiredOperations"]).slice(0, 256),
       scopes: readStringArray(ds["requiredScopes"]).slice(0, 256),
+    },
+  });
+}
+
+/**
+ * in-18: the durable `integration.grant.linked` wake — emitted when a previously
+ * parked (awaiting_grant) capability node becomes covered (grantCovers passed). Carries
+ * ONLY the covering grant's identity + plane/environment (never a token). Its append
+ * fires the events NOTIFY, which the merge coordinator subscriber consumes to re-admit
+ * any merge-queue unit parked on this grant.
+ */
+async function emitGrantLinked(
+  client: QueryRunner,
+  orgId: string,
+  node: CapabilityNodeForEval,
+  grant: GrantCoverageIdentity,
+): Promise<void> {
+  await new PgEventStore(client).append({
+    orgId,
+    projectId: node.projectId,
+    eventType: "integration.grant.linked",
+    payload: {
+      grantId: grant.grantId,
+      connectionId: grant.connectionId,
+      providerKind: grant.providerKind,
+      plane: node.plane === "control" ? "control" : "product",
+      environment:
+        node.environment === "preview" ? "preview" : node.environment === "production" ? "production" : "test",
     },
   });
 }

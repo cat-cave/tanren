@@ -107,7 +107,10 @@ export class PgMergeQueueModel implements MergeQueueModel {
     },
   ): Promise<{ queueId: string; created: boolean }> {
     const existing = await client.query<{ queue_id: string }>(
-      "SELECT queue_id FROM merge_queue WHERE run_id = $1 AND status IN ('queued','merging') LIMIT 1",
+      // in-18: `parked_grant` is a non-terminal active status (it shares the
+      // `merge_queue_active_run_unique` partial index), so a re-published PR for a
+      // parked run resolves to the existing parked entry — never a duplicate INSERT.
+      "SELECT queue_id FROM merge_queue WHERE run_id = $1 AND status IN ('queued','merging','parked_grant') LIMIT 1",
       [input.runId],
     );
     const found = existing.rows[0];
@@ -163,6 +166,20 @@ export class PgMergeQueueModel implements MergeQueueModel {
                  AND held.partition_id IS NOT DISTINCT FROM mq.partition_id
                  AND held.status = 'merging'
                  AND held.lease_owner IS NOT NULL
+            )
+            -- in-18 fail-closed defense: a spec BLOCKED on an integration grant (a
+            -- linked capability node is awaiting_grant) is NEVER a merge candidate,
+            -- even if its parked_grant transition has not been persisted yet. This
+            -- does not clog: independent ready specs still return here and proceed.
+            AND NOT EXISTS (
+              SELECT 1
+                FROM spec_capability_dependencies scd
+                JOIN capability_nodes cn
+                  ON cn.org_id = scd.org_id AND cn.project_id = scd.project_id
+                 AND cn.id = scd.capability_node_id
+               WHERE scd.org_id = mq.org_id AND scd.project_id = mq.project_id
+                 AND scd.spec_id = mq.spec_id
+                 AND cn.status = 'awaiting_grant'
             )`,
         [projectId],
       );
@@ -304,6 +321,104 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
     if (isolated) this.releaseLocalClaim(input.queueId);
     return isolated;
+  }
+
+  /**
+   * in-18 NON-CLOGGING PARK: move every `queued` entry whose spec is grant-blocked
+   * (a linked capability node is `awaiting_grant`) to the non-terminal `parked_grant`
+   * disposition, recording the blocking node id(s) + wait_reason(s) as `park_reason`.
+   * A single UPDATE joining the derived set of grant-blocked specs — idempotent (only
+   * `queued` rows move; an already-parked entry is untouched). Org-scoped under RLS.
+   */
+  async parkGrantBlocked(projectId: string): Promise<number> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) return 0;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query(
+        `UPDATE merge_queue mq
+            SET status = 'parked_grant', park_reason = blocked.reason
+           FROM (
+             SELECT scd.spec_id,
+                    'integration_grant_blocked:' ||
+                      string_agg(cn.id || '=' || COALESCE(cn.wait_reason, 'awaiting_grant'), ';'
+                                 ORDER BY cn.id) AS reason
+               FROM spec_capability_dependencies scd
+               JOIN capability_nodes cn
+                 ON cn.org_id = scd.org_id AND cn.project_id = scd.project_id
+                AND cn.id = scd.capability_node_id
+              WHERE scd.org_id = $1 AND scd.project_id = $2 AND cn.status = 'awaiting_grant'
+              GROUP BY scd.spec_id
+           ) blocked
+          WHERE mq.org_id = $1 AND mq.project_id = $2 AND mq.status = 'queued'
+            AND mq.spec_id = blocked.spec_id`,
+        [orgId, projectId],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /**
+   * in-18 FAIL-CLOSED RE-ADMISSION: return a `parked_grant` entry to `queued` (and
+   * clear `park_reason`) ONLY on POSITIVE coverage evidence — the spec has at least
+   * ONE covering capability node (`enqueued`/`ready`, a state set solely by in-9's
+   * `grantCovers`-gated `evaluateAndApply`) AND no uncovered one remains. The
+   * EXISTS-covering guard closes the empty-set false-positive (a parked row whose
+   * capability rows were deleted has NO covering node → it stays parked, never
+   * silently re-queued). A partial/expired/wrong-scope grant (node still
+   * `awaiting_grant`) or a genuinely-failed grant (node `needs_attention`) leaves an
+   * uncovered node → the entry stays parked. Never a fail-open re-admit. Org-scoped.
+   */
+  async reAdmitGrantCovered(projectId: string): Promise<number> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) return 0;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query(
+        `UPDATE merge_queue mq
+            SET status = 'queued', park_reason = NULL
+          WHERE mq.org_id = $1 AND mq.project_id = $2 AND mq.status = 'parked_grant'
+            AND EXISTS (
+              SELECT 1
+                FROM spec_capability_dependencies scd
+                JOIN capability_nodes cn
+                  ON cn.org_id = scd.org_id AND cn.project_id = scd.project_id
+                 AND cn.id = scd.capability_node_id
+               WHERE scd.org_id = mq.org_id AND scd.project_id = mq.project_id
+                 AND scd.spec_id = mq.spec_id
+                 AND cn.status IN ('enqueued', 'ready')
+            )
+            AND NOT EXISTS (
+              SELECT 1
+                FROM spec_capability_dependencies scd
+                JOIN capability_nodes cn
+                  ON cn.org_id = scd.org_id AND cn.project_id = scd.project_id
+                 AND cn.id = scd.capability_node_id
+               WHERE scd.org_id = mq.org_id AND scd.project_id = mq.project_id
+                 AND scd.spec_id = mq.spec_id
+                 AND cn.status NOT IN ('enqueued', 'ready')
+            )`,
+        [orgId, projectId],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /**
+   * in-18 BACKSTOP SUPPORT: how many entries are currently grant-parked for a
+   * project. The coordinator uses it to arm a sign-of-life recheck when the only
+   * remaining work is parked (no `tanren_run` NOTIFY is guaranteed to re-drive it),
+   * so re-admission self-heals even if the event-driven grant wake is missed.
+   * Org-scoped under RLS.
+   */
+  async parkedGrantDepth(projectId: string): Promise<number> {
+    const orgId = await resolveProjectOrg(this.pool, projectId);
+    if (orgId === null) return 0;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM merge_queue WHERE org_id = $1 AND project_id = $2 AND status = 'parked_grant'",
+        [orgId, projectId],
+      );
+      return Number(result.rows[0]?.n ?? "0");
+    });
   }
 
   private async release(

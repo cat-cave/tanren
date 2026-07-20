@@ -68,7 +68,10 @@ SELECT DISTINCT ON (e.run_id)
    AND NOT EXISTS (
      SELECT 1 FROM merge_queue mq
       WHERE mq.run_id = e.run_id
-        AND mq.status IN ('queued', 'merging', 'merged')
+        -- in-18: parked_grant is a tracked active entry (grant-blocked, non-terminal)
+        -- so a parked PR is NOT an orphan; re-enqueuing it would collide on the
+        -- merge_queue_active_run_unique index.
+        AND mq.status IN ('queued', 'merging', 'merged', 'parked_grant')
    )
  ORDER BY e.run_id, e.ts DESC, e.id DESC`;
 
