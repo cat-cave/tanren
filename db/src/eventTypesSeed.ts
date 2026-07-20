@@ -235,6 +235,8 @@ export const eventTypesSeed = [
   { name: "merge.failed", defaultSeverity: "info" },
   { name: "merge.group.formed", defaultSeverity: "info" },
   { name: "merge.land_group.completed", defaultSeverity: "info" },
+  { name: "merge.land_group.delivery.completed", defaultSeverity: "ok" },
+  { name: "merge.land_group.delivery.failed", defaultSeverity: "warn" },
   { name: "merge.member.isolated", defaultSeverity: "warn" },
   { name: "merge.member.policy_blocked", defaultSeverity: "warn" },
   { name: "merge.member.respec_routed", defaultSeverity: "warn" },

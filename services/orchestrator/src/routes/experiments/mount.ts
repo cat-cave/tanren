@@ -17,7 +17,7 @@ import { createIntegrationMetricsRoutes } from "../integrationMetrics/index.js";
 import { createMergeQueueAuthorityEvaluationRoutes } from "../mergeQueue/authorityEvaluations.js";
 import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySignals.js";
 import { createMergeQueueRepairRouteRoutes } from "../mergeQueue/repairRoutes.js";
-import { createMergeTrainArtifactRoutes } from "../mergeQueue/trainArtifact.js";
+import { createLandGroupDeliveryRoutes, createMergeTrainArtifactRoutes } from "../mergeQueue/trainArtifact.js";
 import { createMergeQueueEvidenceContractRoutes } from "../mergeQueue/evidenceContracts.js";
 import { mountMergeQueueReadRoutes } from "../mergeQueue/scheduleMount.js";
 import { createExperimentRoutes } from "./index.js";
@@ -70,11 +70,14 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   // mq-12 read-only selected-F2 evidence projection. It exposes immutable
   // metadata and the proof-unit observation only; there is no run/control route.
   app.route("/orgs", createMergeQueueEvidenceContractRoutes({ pool: deps.pool }));
-  // mq-8 advisory speculative-build evidence. Read-only and org-scoped; it has no
-  // authority endpoint and cannot advance a queue member.
-  // mq-9's scoped semantic partition/lease explanation follows the mq-8 advisory
-  // beam read model. The production coordinator always revalidates CodeHost facts.
+  // mq-8 advisory speculative-build evidence + mq-9's scoped semantic partition/lease
+  // explanation, mounted together via the read-routes helper (the eager-beam route now
+  // lives inside `mountMergeQueueReadRoutes`, so it is NOT mounted separately). Read-only
+  // and org-scoped; the production coordinator always revalidates CodeHost facts.
   mountMergeQueueReadRoutes(app, deps.pool);
+  // mq-13 read-only land-group DELIVERY timeline projection over `land_group_delivery_loops`
+  // (artifact, preview/production/rollback release lineage, terminal disposition, receipt id).
+  app.route("/orgs", createLandGroupDeliveryRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

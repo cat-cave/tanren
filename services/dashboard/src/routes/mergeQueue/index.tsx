@@ -29,6 +29,10 @@ import {
 } from "../../api/mergeQueueRepairRoutes.js";
 import { MergeQueueTrainClient, type MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
 import {
+  MergeQueueGroupDeliveryClient,
+  type LandGroupDeliveryListResponse,
+} from "../../api/mergeQueueGroupDelivery.js";
+import {
   MergeQueueEvidenceContractsClient,
   type MergeQueueEvidenceContractResponse,
 } from "../../api/mergeQueueEvidenceContracts.js";
@@ -58,6 +62,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
     let repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
     let mergeTrain: MergeTrainListResponse | undefined;
+    let groupDelivery: LandGroupDeliveryListResponse | undefined;
     let evidenceContract: MergeQueueEvidenceContractResponse | undefined;
     let eagerBeams: MergeQueueEagerBeamsResponse | undefined;
     let semanticSchedule: MergeQueueScheduleResponse | undefined;
@@ -86,14 +91,28 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      // mq-8 beams + mq-9 semantic schedule join the parallel read fan-out. mq-12's evidence
-      // contract is a DEPENDENT read (it needs the merge-train's node id), so it stays a
-      // follow-up await after the fan-out resolves.
+      // mq-8 eager beams + mq-9 semantic schedule + mq-13 group deliveries all join the single
+      // parallel read fan-out. mq-12's evidence contract is a DEPENDENT read (it needs the
+      // merge-train's node id), so it stays a follow-up await after the fan-out resolves.
       const scheduleClient = new MergeQueueScheduleClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes, mergeTrain, eagerBeams, semanticSchedule] =
+      const groupDeliveryClient = new MergeQueueGroupDeliveryClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [
+        metrics,
+        stats,
+        authoritySignals,
+        authorityEvaluations,
+        repairRoutes,
+        mergeTrain,
+        eagerBeams,
+        semanticSchedule,
+        groupDelivery,
+      ] =
         await Promise.all([
           client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
           client.getQueueStats(ctx.org.id, project.projectId, windowDays),
@@ -103,6 +122,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
           trainClient.listTrain(ctx.org.id, project.projectId),
           eagerBeamClient.listEagerBeams(ctx.org.id, project.projectId),
           scheduleClient.getSchedule(ctx.org.id, project.projectId),
+          groupDeliveryClient.listDeliveries(ctx.org.id, project.projectId),
         ]);
       const nodeId = mergeTrain?.artifacts?.[0]?.integrationNodeId;
       if (nodeId !== undefined) {
@@ -125,6 +145,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         authorityEvaluations={authorityEvaluations}
         repairRoutes={repairRoutes}
         mergeTrain={mergeTrain}
+        groupDelivery={groupDelivery}
         evidenceContract={evidenceContract}
         eagerBeams={eagerBeams}
         semanticSchedule={semanticSchedule}

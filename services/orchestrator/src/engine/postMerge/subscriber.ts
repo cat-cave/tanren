@@ -36,6 +36,9 @@ export {
 // ds-6: re-exported here so the autonomy-loop composition root wires the design-delivery
 // coordinator through the SAME post-merge builder import (the runtime-import cap).
 export { buildDesignAwareDeliveryCoordinator } from "../design/queue/designAwareDeliveryCoordinator.js";
+// mq-13: the group-level LandGroupDeliveryLoop factory rides the SAME barrel so the
+// autonomy-loops boot imports every post-merge builder from ONE module (the runtime-import cap).
+export { buildLandGroupDeliveryLoop } from "./landGroupDelivery/buildLandGroupDeliveryLoop.js";
 
 const log = createLogger("post-merge");
 
@@ -47,6 +50,16 @@ export interface RunMergeWatcher {
 export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
   /** The shared LISTEN connection (its own, so it never contends with the walker's pump). */
   notifyListener: PgNotifyListener;
+  /**
+   * The mq-13 GROUP-level LandGroupDeliveryLoop, driven FIRST in `runChain`. For a completed
+   * land group's tail run it deploys/previews/verifies/demos/promotes the group ONCE (emitting
+   * the group's `deploy.verified` / `demo.completed` on the tail run, so mq-15 seals + ds-6
+   * joins from the group's evidence), then rolls back / routes repair on a production regression.
+   * Group members' per-run in-17 delivery is membership-guarded off, so a group deploys ONCE, not
+   * once per member. ISOLATED — a failure is logged and never suppresses the other watchers.
+   * Optional — wired when a deploy transport is available.
+   */
+  landGroupDeliveryLoop?: RunMergeWatcher;
   /**
    * The watcher to drive. Defaults to the production `PostMergeWatcher`. A test
    * injects a recording watcher to assert the event-driven trigger fires it.
@@ -97,6 +110,7 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
  */
 export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
+  private readonly landGroupDeliveryLoop: RunMergeWatcher | undefined;
   private readonly deliveryDriver: RunMergeWatcher | undefined;
   private readonly mergeTrainArtifactWatcher: RunMergeWatcher | undefined;
   private readonly designDeliveryCoordinator: RunMergeWatcher | undefined;
@@ -107,6 +121,7 @@ export class PostMergeSubscriber {
 
   constructor(private readonly deps: PostMergeSubscriberDeps) {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
+    this.landGroupDeliveryLoop = deps.landGroupDeliveryLoop;
     this.deliveryDriver = deps.deliveryDriver;
     this.mergeTrainArtifactWatcher = deps.mergeTrainArtifactWatcher;
     this.designDeliveryCoordinator = deps.designDeliveryCoordinator;
@@ -183,6 +198,17 @@ export class PostMergeSubscriber {
   private async runChain(runId: string): Promise<void> {
     do {
       this.rePending.delete(runId);
+      // mq-13 runs FIRST: the GROUP-level delivery loop. For a completed land group's tail run it
+      // deploys/promotes/demos/rolls-back the group ONCE and emits the group's `deploy.verified` /
+      // `demo.completed` on the tail run, so the ISOLATED delivery/seal/join watchers below observe
+      // the GROUP's evidence (not per-member). A run that is not a completed-group tail — or a group
+      // already claimed/terminal — is a clean no-op. ISOLATED: a throw is logged, never suppressing
+      // the issue/delivery/seal watchers.
+      if (this.landGroupDeliveryLoop !== undefined) {
+        await this.landGroupDeliveryLoop.check(runId).catch((error: unknown) => {
+          log.error("land-group-delivery failed", { runId }, error);
+        });
+      }
       await this.watcher.check(runId).catch((error: unknown) => {
         log.error("check failed", { runId }, error);
       });

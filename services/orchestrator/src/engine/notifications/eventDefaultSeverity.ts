@@ -393,6 +393,8 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "source.sync.externally_closed_unverified": "warn",
   "merge.group.formed": "info",
   "merge.land_group.completed": "info",
+  "merge.land_group.delivery.completed": "ok",
+  "merge.land_group.delivery.failed": "warn",
   "merge.train.artifact.sealed": "ok",
   "governance.tier.created": "info",
   "governance.tier.activated": "info",

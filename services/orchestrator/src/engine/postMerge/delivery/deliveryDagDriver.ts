@@ -16,6 +16,7 @@
 import { createLogger } from "../../observability/logger.js";
 import { mergeShaFromPayload } from "../deployOnMergeReads.js";
 import { loadValidatedRunEvent } from "../runLineage.js";
+import { isLandGroupMember } from "../landGroupDelivery/landGroupDeliveryReads.js";
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunMergeWatcher } from "../subscriber.js";
@@ -154,6 +155,16 @@ export class DeliveryDagDriver implements RunMergeWatcher {
     const lineage = await this.resolveLineage(runId);
     // Not a merged run (nothing to deliver).
     if (lineage === undefined) return;
+
+    // mq-13 MEMBERSHIP GUARD: a land-group MEMBER's per-run delivery is owned by the GROUP-level
+    // LandGroupDeliveryLoop (which deploys/previews/promotes the WHOLE group ONCE and emits the
+    // group's `deploy.verified` / `demo.completed` on the tail run). Skip the per-run delivery for
+    // a group member so a group does not deploy once per member; a solo (non-group) run is
+    // unaffected and keeps its full per-run delivery DAG.
+    const isMember = await runWithSystemScope(this.deps.pool, (client) =>
+      isLandGroupMember(client, lineage.orgId, runId),
+    );
+    if (isMember) return;
 
     const claimed = await this.store.claim(lineage.orgId, lineage.projectId, lineage.mergeSha);
     if (claimed === undefined) {

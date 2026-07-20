@@ -48,7 +48,6 @@ export {
   users,
   events,
 };
-
 export { mergeEagerBeams } from "./schemaEagerBeams.js";
 
 export const tasks = pgTable(
@@ -497,3 +496,4 @@ export * from "./schemaBhCluster.js";
 export { regressionBisections } from "./schemaRegressionBisections.js";
 export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";
 export { mergeTrainArtifacts } from "./schemaMergeTrainArtifacts.js";
+export { landGroupDeliveryLoops } from "./schemaLandGroupDeliveryLoops.js";
