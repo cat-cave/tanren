@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "evaluationId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "generation": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+    },
+    "groupId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "nextAgentRoute": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "packetHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "priorAgentRoute": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "replacementSpecIds": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "sourceSpecId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "sourceSpecId",
+    "groupId",
+    "evaluationId",
+    "packetHash",
+    "priorAgentRoute",
+    "nextAgentRoute",
+    "generation",
+    "replacementSpecIds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.member.respec_routed"
+}

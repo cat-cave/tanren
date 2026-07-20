@@ -8,7 +8,7 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MAX_BATCH_SIZE } from "../src/engine/config/shared.js";
-import { resolveMaxBatchSize } from "../src/engine/merge/batchCoordinatorBuild.js";
+import { resolveMaxBatchSize } from "../src/engine/merge/batchMaxSize.js";
 
 function fakePoolReturningConfig(config: unknown): pg.Pool {
   const query = async (sql: string) => {
