@@ -96,7 +96,14 @@ async function seedTenant(owner: Pool): Promise<void> {
       [ORG, LG, key, pr, run, spec],
     );
   }
+  // The release's artifact_digest FKs cas_artifacts — seed the referenced blob once.
+  await owner.query(
+    `INSERT INTO cas_artifacts (org_id, digest, byte_size, media_type, storage_backend, inline_bytes)
+     VALUES ($1,$2,0,'application/octet-stream','inline_pg',$3) ON CONFLICT (org_id, digest) DO NOTHING`,
+    [ORG, ARTIFACT_DIGEST, Buffer.from([0])],
+  );
   await seedReceipt(owner, LG, "audit_mqtrain");
+  await seedRelease(owner, "dep1", MAIN, "live");
   await insertEvents(
     owner,
     RUN,
@@ -107,6 +114,17 @@ async function seedTenant(owner: Pool): Promise<void> {
       deploymentId: "dep1",
       demo: { passed: 3, failed: 0 },
     }),
+  );
+}
+
+/** The durable deploy target that binds a `deploy.verified` deploymentId to a landed SHA. */
+async function seedRelease(owner: Pool, deploymentId: string, sourceRef: string, state: string): Promise<void> {
+  await owner.query(
+    `INSERT INTO release_instances
+       (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref, artifact_digest,
+        integration_node_id, state)
+     VALUES ($1,$2,$3,'deploy.flyio','app1','production',$4,$5,$6,$7,$8)`,
+    [ORG, `rel-${deploymentId}`, PROJECT, deploymentId, sourceRef, ARTIFACT_DIGEST, NODE, state],
   );
 }
 
@@ -197,13 +215,16 @@ const ADMIN: ActorContext = {
   source: "session",
 };
 
-function routeApp(pool: Pool, actor: ActorContext): Hono<ActorContextEnv> {
+function routeApp(pool: Pool, actor: ActorContext, proofSubstrate?: TestProofSubstrate): Hono<ActorContextEnv> {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
     c.set("actor", actor);
     await next();
   });
-  app.route("/orgs", createMergeTrainArtifactRoutes({ pool }));
+  app.route(
+    "/orgs",
+    createMergeTrainArtifactRoutes(proofSubstrate === undefined ? { pool } : { pool, proofSubstrate }),
+  );
   return app;
 }
 
@@ -212,6 +233,7 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
   let owner: Pool;
   let app: Pool;
   let watcher: MergeTrainArtifactWatcher;
+  let substrate: TestProofSubstrate;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -224,11 +246,8 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
     setSystemPool(owner);
     await seedTenant(owner);
     const cas = new PgCasByteStore(app);
-    watcher = new MergeTrainArtifactWatcher({
-      pool: app,
-      proofSubstrate: new TestProofSubstrate(app, cas),
-      casByteStore: cas,
-    });
+    substrate = new TestProofSubstrate(app, cas);
+    watcher = new MergeTrainArtifactWatcher({ pool: app, proofSubstrate: substrate, casByteStore: cas });
   }, 60_000);
 
   afterAll(async () => {
@@ -288,19 +307,36 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
     expect(await rowCount()).toBe(1);
   });
 
-  it("route serves the train + artifact for the owner, and 404s cross-org", async () => {
-    const owned = routeApp(app, ADMIN);
+  it("route (with substrate) re-verifies + serves the train, and 404s cross-org", async () => {
+    const owned = routeApp(app, ADMIN, substrate);
     const list = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/train`);
     expect(list.status).toBe(200);
     expect(((await list.json()) as { artifacts: unknown[] }).artifacts).toHaveLength(1);
     const artifact = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`);
     expect(artifact.status).toBe(200);
 
-    const crossOrg = routeApp(app, { ...ADMIN, orgId: OTHER_ORG });
+    const crossOrg = routeApp(app, { ...ADMIN, orgId: OTHER_ORG }, substrate);
     const denied = await crossOrg.request(
       `/orgs/${OTHER_ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`,
     );
     expect(denied.status).toBe(404);
+  });
+
+  it("NEGATIVE CONTROL (Finding 4): a tampered bundle signature makes the export re-verify FAIL", async () => {
+    // Without a substrate the route serves the strict-revalidated manifest.
+    const dormant = routeApp(app, ADMIN);
+    expect(
+      (await dormant.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`)).status,
+    ).toBe(200);
+    // Tamper the persisted bundle's root signature (proof_bundles is not immutable-locked).
+    await owner.query("UPDATE proof_bundles SET root_signature = $1 WHERE org_id = $2", [
+      Buffer.from([0, 0, 0, 0]),
+      ORG,
+    ]);
+    // The strict manifest is still valid, but the substrate re-verify now fails → fail-closed.
+    const owned = routeApp(app, ADMIN, substrate);
+    const artifact = await owned.request(`/orgs/${ORG}/projects/${PROJECT}/merge-queue/land-groups/${LG}/artifact`);
+    expect(artifact.status).toBe(404);
   });
 
   it("NEGATIVE CONTROL: a failed demo seals NOTHING (the read/UI stay unknown)", async () => {
@@ -328,6 +364,8 @@ describeDb("mq-15 merge_train_artifacts — sealed delivery projection (RLS)", (
       );
     }
     await seedReceipt(owner, LG2, "audit_mqtrain2");
+    // The deploy binds cleanly (release FOR the landed tip) so the ONLY failing gate is the demo.
+    await seedRelease(owner, "dep2", MAIN, "live");
     // Identical to the happy path EXCEPT a FAILED demo (1 of 3 behaviors failed).
     await insertEvents(
       owner,

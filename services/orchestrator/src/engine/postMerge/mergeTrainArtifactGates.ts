@@ -1,29 +1,15 @@
-// mq-15 pure, DB-free gates + seal orchestration. The watcher is a thin DB shell over
-// these functions: every fail-closed DECISION (a mismatched land group, cross-project
-// decision, stale receipt, wrong group-formed, unsuccessful demo, unresolved member) is
-// made here over already-fetched rows, and the seal delegates entirely to the injected
-// `ProofSubstrate` + `CasByteStore`. Splitting them out keeps the SQL glue small and
-// lets every negative control be asserted without a database.
+// cspell:ignore multiset
+// mq-15 pure, DB-free fail-closed gates. The watcher is a thin DB shell over these
+// functions: every fail-closed DECISION (a mismatched land group, cross-project decision,
+// stale receipt, wrong group-formed, partial/reordered/non-landed member set, SHA-unbound
+// or failed terminal deploy/demo) is made here over already-fetched rows, so every
+// negative control is asserted without a database. The seal itself lives in the sibling
+// `mergeTrainArtifactSeal.ts`.
 
 import type pg from "pg";
 import { z } from "zod";
-import {
-  type BundleBindings,
-  type CanonicalBody,
-  type CasByteStore,
-  canonicalJson,
-  type Digest,
-  type ProofSubstrate,
-  type ProofUnitDraft,
-} from "../contracts/cas.js";
-import {
-  encodeMergeTrainArtifactBytes,
-  finalizeMergeTrainArtifact,
-  MERGE_TRAIN_ARTIFACT_MEDIA_TYPE,
-  type MergeTrainArtifactDraft,
-  type MergeTrainArtifactV1,
-  type MergeTrainMember,
-} from "../contracts/mergeTrainArtifact.js";
+import { canonicalJson, contentDigestOf, type Digest } from "../contracts/cas.js";
+import type { MergeTrainMember } from "../contracts/mergeTrainArtifact.js";
 import type { ValidatedRunLineage } from "./runLineage.js";
 
 export type QueryClient = Pick<pg.PoolClient, "query">;
@@ -41,7 +27,9 @@ export const CompletedPayload = z
   .strip();
 export type CompletedData = z.infer<typeof CompletedPayload>;
 
-const GroupFormedPayload = z.object({ groupId: z.string().min(1) }).strip();
+const GroupFormedPayload = z
+  .object({ groupId: z.string().min(1), memberKeys: z.array(z.string().min(1)).min(1) })
+  .strip();
 const ProofRootComposedPayload = z
   .object({ integrationNodeId: z.string().min(1), proofRoot: z.string().min(1) })
   .strip();
@@ -84,7 +72,16 @@ interface MemberRow {
   readonly run_id: string | null;
   readonly spec_id: string | null;
   readonly pr_number: string | null;
+  readonly outcome: string | null;
 }
+
+interface ReleaseRow {
+  readonly source_ref: string;
+  readonly state: string;
+}
+
+/** Release states that are NOT a live delivery of the sealed tip (fail-closed). */
+const DEAD_RELEASE_STATES = new Set(["failed", "rolled_back", "torn_down", "superseded"]);
 
 /** Everything the seal needs, gathered under one org-scoped read. Absent ⇒ no-op. */
 export interface Evidence {
@@ -115,11 +112,14 @@ export function decisionSatisfies(
   completed: CompletedData,
   projectId: string,
 ): decision is DecisionRow {
-  // Cross-project fail-closed: the decision must belong to THIS project.
+  // Cross-project fail-closed: the decision must belong to THIS project, AND its
+  // authorized head + expected-main base must EXACTLY match the completed land — a
+  // decision authorizing a DIFFERENT head SHA than the one that landed is rejected.
   return (
     decision !== undefined &&
     decision.project_id === projectId &&
-    decision.expected_main_sha === completed.expectedMainSha
+    decision.expected_main_sha === completed.expectedMainSha &&
+    decision.head_sha === completed.authorizedSha
   );
 }
 
@@ -127,42 +127,103 @@ export function demoIsSuccessful(demo: DemoData): boolean {
   return demo.behaviorCount > 0 && demo.failed === 0 && demo.passed === demo.behaviorCount;
 }
 
-/** Map the ORDERED memberKeys to durable run identity; any gap fails closed. */
-export function resolveMembers(
-  rows: readonly MemberRow[],
-  memberKeys: readonly string[],
-): MergeTrainMember[] | undefined {
-  const byKey = new Map(rows.map((row) => [row.member_key, row]));
-  const members: MergeTrainMember[] = [];
-  for (const [ordinal, memberKey] of memberKeys.entries()) {
-    const row = byKey.get(memberKey);
-    if (row === undefined || row.run_id === null || row.spec_id === null) return undefined;
-    const prNumber = row.pr_number === null ? null : Number.parseInt(row.pr_number, 10);
-    members.push({
-      ordinal,
-      memberKey,
-      runId: row.run_id,
-      specId: row.spec_id,
-      prNumber: prNumber === null || Number.isNaN(prNumber) ? null : prNumber,
-    });
+/** A deterministic content digest over the CANONICAL (sorted) member-key set. */
+export function memberSetDigest(memberKeys: readonly string[]): Digest {
+  return contentDigestOf(new TextEncoder().encode(canonicalJson([...memberKeys].sort())));
+}
+
+/** EXACT multiset equality (order-insensitive, duplicate-sensitive). */
+function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((value, index) => value === sortedB[index]);
+}
+
+/**
+ * Resolve the land group's members with EXACT-SET enforcement — the gravest fail-open
+ * here is sealing a partial/reordered/foreign-member train as a full delivery. It fails
+ * closed unless the durable `land_group_members` set is EXACTLY the completed +
+ * group.formed member sets (same count, no missing, no extra), EVERY member is
+ * `outcome='landed'`, and every member has durable run identity. Order is CANONICALIZED
+ * (sorted by member key), so a reordered payload yields the identical artifact rather
+ * than a divergent one.
+ */
+export function resolveExactMembers(input: {
+  rows: readonly MemberRow[];
+  completedKeys: readonly string[];
+  formedKeys: readonly string[];
+}): MergeTrainMember[] | undefined {
+  const tableKeys = input.rows.map((row) => row.member_key);
+  // Exact set equality across all three durable sources (table / completed / formed).
+  if (!sameMultiset(tableKeys, input.completedKeys)) return undefined;
+  if (!sameMultiset(input.formedKeys, input.completedKeys)) return undefined;
+  // The recomputed member-set digest must agree across every source.
+  const digest = memberSetDigest(tableKeys);
+  if (memberSetDigest(input.completedKeys) !== digest || memberSetDigest(input.formedKeys) !== digest) return undefined;
+  // Every member must have LANDED and carry durable run identity.
+  if (input.rows.some((row) => row.outcome !== "landed" || row.run_id === null || row.spec_id === null)) {
+    return undefined;
   }
-  return members;
+  return [...input.rows]
+    .sort((left, right) => left.member_key.localeCompare(right.member_key))
+    .map((row, ordinal) => {
+      const prNumber = row.pr_number === null ? null : Number.parseInt(row.pr_number, 10);
+      return {
+        ordinal,
+        memberKey: row.member_key,
+        runId: row.run_id!,
+        specId: row.spec_id!,
+        prNumber: prNumber === null || Number.isNaN(prNumber) ? null : prNumber,
+      };
+    });
+}
+
+/** The release for this deployment must exist, be alive, and be FOR the sealed tip. */
+export function releaseBindsToLand(release: ReleaseRow | undefined, completed: CompletedData): release is ReleaseRow {
+  return (
+    release !== undefined &&
+    !DEAD_RELEASE_STATES.has(release.state) &&
+    (release.source_ref === completed.mainSha || release.source_ref === completed.authorizedSha)
+  );
 }
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+/** The single newest TERMINAL event of a family for the run (verified vs failed). */
+async function newestTerminalEvent(
+  client: QueryClient,
+  orgId: string,
+  runId: string,
+  eventTypes: readonly string[],
+): Promise<{ event_type: string; payload: unknown } | undefined> {
+  const result = await client.query<{ event_type: string; payload: unknown }>(
+    `SELECT event_type, payload FROM events
+       WHERE org_id = $1 AND run_id = $2 AND event_type = ANY($3::text[])
+       ORDER BY ts DESC, id DESC LIMIT 1`,
+    [orgId, runId, [...eventTypes]],
+  );
+  return result.rows[0];
+}
+
 /**
  * Read + gate every bound input on an already-org-scoped client. Exercised in a unit
  * test with a stub `{ query }`; the negative controls all resolve to `undefined` here.
+ *
+ * The terminal deploy/demo evidence is resolved as the NEWEST TERMINAL event of its
+ * family (`deploy.verified` vs `deploy.failed`; `demo.completed` vs `demo.failed`), so a
+ * prior success followed by a later failure of the tip fails closed. The deploy is bound
+ * to the sealed tip through `release_instances` (its `source_ref` must be the land's main
+ * or authorized SHA and the release must not be dead) — a stale success for a prior SHA
+ * on the same run does NOT satisfy the gate.
  */
 export async function gatherEvidenceFromClient(
   client: QueryClient,
   lineage: ValidatedRunLineage,
   completed: CompletedData,
   runId: string,
-  loadRunEvent: (eventType: string) => Promise<{ payload: unknown } | undefined>,
 ): Promise<Evidence | undefined> {
   const group = (
     await client.query<GroupRow>(
@@ -189,7 +250,7 @@ export async function gatherEvidenceFromClient(
   ).rows[0];
   if (receipt === undefined || receipt.main_sha !== group.main_sha) return undefined;
 
-  const formedEvent = await loadRunEvent("merge.group.formed");
+  const formedEvent = await newestTerminalEvent(client, lineage.orgId, runId, ["merge.group.formed"]);
   const formed = formedEvent === undefined ? undefined : GroupFormedPayload.safeParse(formedEvent.payload);
   if (formed === undefined || !formed.success || formed.data.groupId !== completed.landGroupId) return undefined;
 
@@ -207,20 +268,38 @@ export async function gatherEvidenceFromClient(
 
   const memberRows = (
     await client.query<MemberRow>(
-      "SELECT member_key, run_id, spec_id, pr_number FROM land_group_members WHERE org_id = $1 AND land_group_id = $2",
+      "SELECT member_key, run_id, spec_id, pr_number, outcome FROM land_group_members WHERE org_id = $1 AND land_group_id = $2",
       [lineage.orgId, completed.landGroupId],
     )
   ).rows;
-  const members = resolveMembers(memberRows, completed.memberKeys);
+  const members = resolveExactMembers({
+    rows: memberRows,
+    completedKeys: completed.memberKeys,
+    formedKeys: formed.data.memberKeys,
+  });
   if (members === undefined) return undefined;
 
-  const deployEvent = await loadRunEvent("deploy.verified");
-  const deploy = deployEvent === undefined ? undefined : DeployVerifiedPayload.safeParse(deployEvent.payload);
-  if (deploy === undefined || !deploy.success) return undefined;
+  // Deploy: the NEWEST terminal deploy event must be a verification (not a later failure).
+  const deployEvent = await newestTerminalEvent(client, lineage.orgId, runId, ["deploy.verified", "deploy.failed"]);
+  if (deployEvent === undefined || deployEvent.event_type !== "deploy.verified") return undefined;
+  const deploy = DeployVerifiedPayload.safeParse(deployEvent.payload);
+  if (!deploy.success) return undefined;
+  // Bind the deploy to the sealed tip via its release_instances row.
+  const release = (
+    await client.query<ReleaseRow>(
+      `SELECT source_ref, state FROM release_instances
+         WHERE org_id = $1 AND deployment_id = $2
+         ORDER BY created_at DESC LIMIT 1`,
+      [lineage.orgId, deploy.data.deploymentId],
+    )
+  ).rows[0];
+  if (!releaseBindsToLand(release, completed)) return undefined;
 
-  const demoEvent = await loadRunEvent("demo.completed");
-  const demo = demoEvent === undefined ? undefined : DemoCompletedPayload.safeParse(demoEvent.payload);
-  if (demo === undefined || !demo.success || !demoIsSuccessful(demo.data)) return undefined;
+  // Demo: the NEWEST terminal demo event must be a completion (not a later failure) and full pass.
+  const demoEvent = await newestTerminalEvent(client, lineage.orgId, runId, ["demo.completed", "demo.failed"]);
+  if (demoEvent === undefined || demoEvent.event_type !== "demo.completed") return undefined;
+  const demo = DemoCompletedPayload.safeParse(demoEvent.payload);
+  if (!demo.success || !demoIsSuccessful(demo.data)) return undefined;
 
   return {
     lineage,
@@ -233,216 +312,4 @@ export async function gatherEvidenceFromClient(
     deploy: deploy.data,
     demo: demo.data,
   };
-}
-
-// ---- Seal assembly (pure) ----------------------------------------------------------
-
-export function assembleDraftBody(evidence: Evidence): MergeTrainArtifactDraft {
-  const { lineage, decision } = evidence;
-  return {
-    version: 1,
-    schemaVersion: "merge_train_artifact.v1",
-    orgId: lineage.orgId,
-    projectId: lineage.projectId,
-    landGroupId: evidence.completed.landGroupId,
-    authorityDecisionId: evidence.completed.decisionId,
-    integrationNodeId: decision.integration_node_id,
-    proofRoot: decision.proof_root,
-    receipt: { mainSha: evidence.receiptMainSha, auditId: evidence.receiptAuditId },
-    members: evidence.members,
-    deploy: {
-      provider: evidence.deploy.provider,
-      appId: evidence.deploy.appId,
-      deploymentId: evidence.deploy.deploymentId,
-      url: evidence.deploy.url,
-      state: evidence.deploy.state,
-    },
-    demo: {
-      surfaceKind: evidence.demo.surfaceKind,
-      behaviorCount: evidence.demo.behaviorCount,
-      passed: evidence.demo.passed,
-      failed: evidence.demo.failed,
-    },
-  };
-}
-
-/** The pre-seal canonical body (no sealedBundle) the bundle's artifactDigest binds. */
-export function preSealBody(body: MergeTrainArtifactDraft): CanonicalBody {
-  return {
-    landGroupId: body.landGroupId,
-    authorityDecisionId: body.authorityDecisionId,
-    integrationNodeId: body.integrationNodeId,
-    proofRoot: body.proofRoot,
-    mainSha: body.receipt.mainSha,
-    members: body.members.map((member) => ({ ordinal: member.ordinal, memberKey: member.memberKey })),
-  };
-}
-
-/** The canonical pre-seal bytes the bundle's `artifactDigest` content-addresses. */
-export function preSealBytes(draft: MergeTrainArtifactDraft): Uint8Array {
-  return new TextEncoder().encode(canonicalJson(preSealBody(draft)));
-}
-
-export function buildBindings(evidence: Evidence, artifactDigest: Digest): BundleBindings {
-  const { decision } = evidence;
-  return {
-    integrationNodeId: decision.integration_node_id,
-    memberSetHash: decision.member_set_hash,
-    preparedHeadSha: decision.head_sha,
-    jjTreeId: decision.head_sha,
-    artifactDigest,
-    expectedMainSha: decision.expected_main_sha,
-    issuedAt: evidence.issuedAt,
-    expiresAt: evidence.issuedAt,
-    nonce: `land-group-${evidence.completed.landGroupId}`,
-  };
-}
-
-/** Ordered proof-unit drafts: proof root, each member, deploy, demo. Order is signed. */
-export function buildDrafts(body: MergeTrainArtifactDraft): ProofUnitDraft[] {
-  const drafts: ProofUnitDraft[] = [
-    {
-      kind: "artifact_provenance",
-      verdict: "passed",
-      subjectId: body.integrationNodeId,
-      body: { proofRoot: body.proofRoot },
-    },
-  ];
-  for (const member of body.members) {
-    drafts.push({
-      kind: "artifact_provenance",
-      verdict: "passed",
-      subjectId: member.memberKey,
-      body: { ordinal: member.ordinal, runId: member.runId, specId: member.specId, prNumber: member.prNumber },
-    });
-  }
-  drafts.push({
-    kind: "artifact_provenance",
-    verdict: "passed",
-    subjectId: body.deploy.deploymentId,
-    body: { provider: body.deploy.provider, appId: body.deploy.appId, url: body.deploy.url, state: body.deploy.state },
-  });
-  drafts.push({
-    kind: "runtime_behavior",
-    verdict: "passed",
-    subjectId: body.landGroupId,
-    body: {
-      surfaceKind: body.demo.surfaceKind,
-      behaviorCount: body.demo.behaviorCount,
-      passed: body.demo.passed,
-      failed: body.demo.failed,
-    },
-  });
-  return drafts;
-}
-
-export interface MergeTrainSealSink {
-  persist(input: MergeTrainPersistInput): Promise<{ inserted: boolean }>;
-}
-
-export interface MergeTrainPersistInput {
-  readonly orgId: string;
-  readonly projectId: string;
-  readonly landGroupId: string;
-  readonly authorityDecisionId: string;
-  readonly integrationNodeId: string;
-  readonly proofRoot: string;
-  readonly receiptAuditId: string;
-  readonly receiptMainSha: string;
-  readonly deployProvider: string;
-  readonly deployAppId: string;
-  readonly deployDeploymentId: string;
-  readonly demoSurfaceKind: string;
-  readonly demoBehaviorCount: number;
-  readonly demoPassed: number;
-  readonly bundleId: string;
-  readonly bundleDigest: string;
-  readonly bytesDigest: string;
-  readonly contentHash: string;
-  readonly artifact: MergeTrainArtifactV1;
-  readonly runId: string;
-  readonly specId: string;
-}
-
-export interface SealDeps {
-  readonly proofSubstrate: ProofSubstrate;
-  readonly casByteStore: CasByteStore;
-  readonly store: MergeTrainSealSink;
-}
-
-export type SealOutcome =
-  | { readonly status: "sealed"; readonly inserted: boolean; readonly artifact: MergeTrainArtifactV1 }
-  | { readonly status: "verification_failed"; readonly reason: string };
-
-/**
- * Seal gathered evidence through the injected substrate, then persist idempotently.
- * A bundle the sole substrate cannot verify NEVER becomes a delivery (no persist).
- * Deps-only — no database — so both the happy path and the tamper path unit-test freely.
- */
-export async function sealEvidence(deps: SealDeps, evidence: Evidence): Promise<SealOutcome> {
-  const draft = assembleDraftBody(evidence);
-  // The pre-seal projection is content-addressed FIRST so the bundle's `artifactDigest`
-  // binding references a real CAS row (a harmless orphan blob if the seal later aborts).
-  const artifactRef = await deps.casByteStore.put({
-    orgId: evidence.lineage.orgId,
-    bytes: preSealBytes(draft),
-    mediaType: MERGE_TRAIN_ARTIFACT_MEDIA_TYPE,
-  });
-  const refs = await deps.proofSubstrate.ingestUnits({
-    orgId: evidence.lineage.orgId,
-    projectId: evidence.lineage.projectId,
-    drafts: buildDrafts(draft),
-  });
-  const sealed = await deps.proofSubstrate.constructBundle({
-    orgId: evidence.lineage.orgId,
-    projectId: evidence.lineage.projectId,
-    members: refs,
-    bindings: buildBindings(evidence, artifactRef.digest),
-  });
-  const verification = await deps.proofSubstrate.verify(sealed);
-  if (!verification.valid) {
-    return { status: "verification_failed", reason: verification.reason ?? "invalid" };
-  }
-  await deps.proofSubstrate.persistBundle(sealed);
-
-  const artifact = finalizeMergeTrainArtifact({
-    ...draft,
-    sealedBundle: {
-      bundleId: sealed.bundleId,
-      bundleDigest: sealed.bundleDigest,
-      proofRoot: sealed.proofRoot,
-      bytesDigest: sealed.bytesDigest,
-      signingKeyId: sealed.signingKeyId,
-      rootSignatureHex: Buffer.from(sealed.rootSignature).toString("hex"),
-    },
-  });
-  const casRef = await deps.casByteStore.put({
-    orgId: evidence.lineage.orgId,
-    bytes: encodeMergeTrainArtifactBytes(artifact),
-    mediaType: MERGE_TRAIN_ARTIFACT_MEDIA_TYPE,
-  });
-  const result = await deps.store.persist({
-    orgId: evidence.lineage.orgId,
-    projectId: evidence.lineage.projectId,
-    landGroupId: evidence.completed.landGroupId,
-    authorityDecisionId: evidence.completed.decisionId,
-    integrationNodeId: evidence.decision.integration_node_id,
-    proofRoot: evidence.decision.proof_root,
-    receiptAuditId: evidence.receiptAuditId,
-    receiptMainSha: evidence.receiptMainSha,
-    deployProvider: evidence.deploy.provider,
-    deployAppId: evidence.deploy.appId,
-    deployDeploymentId: evidence.deploy.deploymentId,
-    demoSurfaceKind: evidence.demo.surfaceKind,
-    demoBehaviorCount: evidence.demo.behaviorCount,
-    demoPassed: evidence.demo.passed,
-    bundleId: sealed.bundleId,
-    bundleDigest: sealed.bundleDigest,
-    bytesDigest: casRef.digest,
-    contentHash: artifact.contentHash,
-    artifact,
-    runId: evidence.lineage.runId,
-    specId: evidence.lineage.specId,
-  });
-  return { status: "sealed", inserted: result.inserted, artifact };
 }

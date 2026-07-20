@@ -15,12 +15,12 @@ import type {
   ProofUnitRef,
 } from "../src/engine/contracts/cas.js";
 import { validateMergeTrainArtifact } from "../src/engine/contracts/mergeTrainArtifact.js";
+import { gatherEvidenceFromClient } from "../src/engine/postMerge/mergeTrainArtifactGates.js";
 import {
-  gatherEvidenceFromClient,
   type MergeTrainPersistInput,
   type MergeTrainSealSink,
   sealEvidence,
-} from "../src/engine/postMerge/mergeTrainArtifactGates.js";
+} from "../src/engine/postMerge/mergeTrainArtifactSeal.js";
 import { PgMergeTrainArtifactStore } from "../src/engine/postMerge/mergeTrainArtifactStore.js";
 import { evidenceFixture } from "./mergeTrainArtifactContract.test.js";
 
@@ -133,16 +133,30 @@ interface FakeRows {
   authority_land_receipts?: unknown[];
   proof_root?: unknown[];
   land_group_members?: unknown[];
+  release_instances?: unknown[];
+  // Terminal-family events, dispatched by the event_type set the query asks for.
+  formed?: unknown[];
+  deploy?: unknown[];
+  demo?: unknown[];
 }
 
-function fakeClient(rows: FakeRows) {
+// The deploy/demo/formed terminal queries share one SQL shape (event_type = ANY), so
+// dispatch on the parameter array (the requested event-type set) rather than SQL text.
+function fakeClientWithEvents(rows: FakeRows) {
   return {
-    query: async (sql: string): Promise<{ rows: unknown[] }> => {
+    query: async (sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> => {
       if (sql.includes("FROM land_groups")) return { rows: rows.land_groups ?? [] };
       if (sql.includes("FROM authority_decisions")) return { rows: rows.authority_decisions ?? [] };
       if (sql.includes("FROM authority_land_receipts")) return { rows: rows.authority_land_receipts ?? [] };
       if (sql.includes("integration.proof_root.composed")) return { rows: rows.proof_root ?? [] };
       if (sql.includes("FROM land_group_members")) return { rows: rows.land_group_members ?? [] };
+      if (sql.includes("FROM release_instances")) return { rows: rows.release_instances ?? [] };
+      if (sql.includes("event_type = ANY")) {
+        const types = (params?.[2] as string[]) ?? [];
+        if (types.includes("merge.group.formed")) return { rows: rows.formed ?? [] };
+        if (types.includes("deploy.verified")) return { rows: rows.deploy ?? [] };
+        if (types.includes("demo.completed")) return { rows: rows.demo ?? [] };
+      }
       return { rows: [] };
     },
   } as never;
@@ -169,27 +183,28 @@ function happyRows(): FakeRows {
     authority_land_receipts: [{ audit_id: "audit1", main_sha: "mainsha1" }],
     proof_root: [{ payload: { integrationNodeId: "node1", proofRoot: `sha256:${"a".repeat(64)}` } }],
     land_group_members: [
-      { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11" },
-      { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null },
+      { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11", outcome: "landed" },
+      { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null, outcome: "landed" },
+    ],
+    release_instances: [{ source_ref: "mainsha1", state: "live" }],
+    formed: [{ event_type: "merge.group.formed", payload: { groupId: "lg1", memberKeys: ["mk-a", "mk-b"] } }],
+    deploy: [
+      {
+        event_type: "deploy.verified",
+        payload: { provider: "fly", appId: "app1", deploymentId: "dep1", url: "https://x", state: "live" },
+      },
+    ],
+    demo: [
+      { event_type: "demo.completed", payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 } },
     ],
   };
 }
 
-function events(overrides: Record<string, unknown | undefined> = {}) {
-  const base: Record<string, { payload: unknown } | undefined> = {
-    "merge.group.formed": { payload: { groupId: "lg1" } },
-    "deploy.verified": {
-      payload: { provider: "fly", appId: "app1", deploymentId: "dep1", url: "https://x", state: "live" },
-    },
-    "demo.completed": { payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 } },
-    ...overrides,
-  };
-  return async (eventType: string) => base[eventType];
-}
+const gather = (rows: FakeRows) => gatherEvidenceFromClient(fakeClientWithEvents(rows), LINEAGE, COMPLETED, "run-b");
 
 describe("mq-15 gatherEvidenceFromClient", () => {
   it("returns full evidence when every bound input is exact", async () => {
-    const evidence = await gatherEvidenceFromClient(fakeClient(happyRows()), LINEAGE, COMPLETED, "run-b", events());
+    const evidence = await gather(happyRows());
     expect(evidence?.members).toHaveLength(2);
     expect(evidence?.decision.integration_node_id).toBe("node1");
   });
@@ -197,43 +212,80 @@ describe("mq-15 gatherEvidenceFromClient", () => {
   it("fails closed on a cross-project authority decision", async () => {
     const rows = happyRows();
     rows.authority_decisions = [{ ...(rows.authority_decisions![0] as object), project_id: "other-project" }];
-    expect(await gatherEvidenceFromClient(fakeClient(rows), LINEAGE, COMPLETED, "run-b", events())).toBeUndefined();
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed when the decision head_sha ≠ the land authorizedSha (Finding 3)", async () => {
+    const rows = happyRows();
+    rows.authority_decisions = [{ ...(rows.authority_decisions![0] as object), head_sha: "different-head" }];
+    expect(await gather(rows)).toBeUndefined();
   });
 
   it("fails closed on a missing proof_root.composed", async () => {
     const rows = happyRows();
     rows.proof_root = [];
-    expect(await gatherEvidenceFromClient(fakeClient(rows), LINEAGE, COMPLETED, "run-b", events())).toBeUndefined();
+    expect(await gather(rows)).toBeUndefined();
   });
 
   it("fails closed on a stale receipt (main sha drift)", async () => {
     const rows = happyRows();
     rows.authority_land_receipts = [{ audit_id: "audit1", main_sha: "other" }];
-    expect(await gatherEvidenceFromClient(fakeClient(rows), LINEAGE, COMPLETED, "run-b", events())).toBeUndefined();
+    expect(await gather(rows)).toBeUndefined();
   });
 
   it("fails closed on a wrong merge.group.formed group", async () => {
-    const bad = events({ "merge.group.formed": { payload: { groupId: "other-group" } } });
-    expect(await gatherEvidenceFromClient(fakeClient(happyRows()), LINEAGE, COMPLETED, "run-b", bad)).toBeUndefined();
+    const rows = happyRows();
+    rows.formed = [
+      { event_type: "merge.group.formed", payload: { groupId: "other-group", memberKeys: ["mk-a", "mk-b"] } },
+    ];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed on a SUBSET member payload (Finding 1)", async () => {
+    const rows = happyRows();
+    const subset = { ...COMPLETED, memberKeys: ["mk-a"] };
+    expect(await gatherEvidenceFromClient(fakeClientWithEvents(rows), LINEAGE, subset, "run-b")).toBeUndefined();
+  });
+
+  it("fails closed on a non-landed member (Finding 1)", async () => {
+    const rows = happyRows();
+    rows.land_group_members = [
+      { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11", outcome: "landed" },
+      { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null, outcome: "reverted" },
+    ];
+    expect(await gather(rows)).toBeUndefined();
   });
 
   it("fails closed on an unsuccessful demo (a failed behavior)", async () => {
-    const bad = events({
-      "demo.completed": { payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 2, failed: 1 } },
-    });
-    expect(await gatherEvidenceFromClient(fakeClient(happyRows()), LINEAGE, COMPLETED, "run-b", bad)).toBeUndefined();
-  });
-
-  it("fails closed on a missing verified deploy", async () => {
-    const bad = events({ "deploy.verified": undefined });
-    expect(await gatherEvidenceFromClient(fakeClient(happyRows()), LINEAGE, COMPLETED, "run-b", bad)).toBeUndefined();
-  });
-
-  it("fails closed on a tampered (unknown) member key", async () => {
     const rows = happyRows();
-    // Drop mk-b so the ordered memberKeys can no longer be resolved.
-    rows.land_group_members = [rows.land_group_members![0]];
-    expect(await gatherEvidenceFromClient(fakeClient(rows), LINEAGE, COMPLETED, "run-b", events())).toBeUndefined();
+    rows.demo = [
+      { event_type: "demo.completed", payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 2, failed: 1 } },
+    ];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed when the NEWEST terminal demo is a failure (Finding 2)", async () => {
+    const rows = happyRows();
+    rows.demo = [{ event_type: "demo.failed", payload: {} }];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed when the NEWEST terminal deploy is a failure (Finding 2)", async () => {
+    const rows = happyRows();
+    rows.deploy = [{ event_type: "deploy.failed", payload: {} }];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed on a STALE deploy release for a prior SHA (Finding 2)", async () => {
+    const rows = happyRows();
+    rows.release_instances = [{ source_ref: "prior-sha", state: "live" }];
+    expect(await gather(rows)).toBeUndefined();
+  });
+
+  it("fails closed when the deploy's release row is missing", async () => {
+    const rows = happyRows();
+    rows.release_instances = [];
+    expect(await gather(rows)).toBeUndefined();
   });
 });
 

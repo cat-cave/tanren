@@ -8,8 +8,9 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
+import { parseDigest, type ProofBundleSealed, type ProofUnitKind, type ProofUnitVerdict } from "../contracts/cas.js";
 import { type MergeTrainArtifactV1, validateMergeTrainArtifact } from "../contracts/mergeTrainArtifact.js";
-import type { MergeTrainPersistInput, MergeTrainSealSink } from "./mergeTrainArtifactGates.js";
+import type { MergeTrainPersistInput, MergeTrainSealSink } from "./mergeTrainArtifactSeal.js";
 
 /** One member's projected summary for the train list panel. */
 export interface MergeTrainArtifactSummary {
@@ -172,4 +173,88 @@ export class PgMergeTrainArtifactStore implements MergeTrainSealSink {
     if (row === undefined) return undefined;
     return validateMergeTrainArtifact(row.manifest);
   }
+
+  /**
+   * Reconstruct the persisted `ProofBundleSealed` for a bundle id from `proof_bundles`
+   * + its ordered `proof_bundle_units` + `proof_units`, so the export route can re-invoke
+   * `ProofSubstrate.verify` on the served artifact. Undefined when any row is missing
+   * (a dangling reference fails closed rather than serving an unverifiable artifact).
+   */
+  static async loadSealedBundle(
+    client: pg.PoolClient,
+    orgId: string,
+    bundleId: string,
+  ): Promise<ProofBundleSealed | undefined> {
+    const bundle = (
+      await client.query<BundleRow>(
+        `SELECT bundle_digest, proof_root, bytes_digest, integration_node_id, member_set_hash,
+                prepared_head_sha, jj_tree_id, artifact_digest, expected_main_sha, signing_key_id,
+                root_signature, nonce, issued_at, expires_at
+           FROM proof_bundles WHERE org_id = $1 AND id = $2`,
+        [orgId, bundleId],
+      )
+    ).rows[0];
+    if (bundle === undefined) return undefined;
+    const units = (
+      await client.query<BundleUnitRow>(
+        `SELECT u.proof_unit_digest, u.ordinal, p.kind, p.verdict
+           FROM proof_bundle_units u
+           JOIN proof_units p ON p.org_id = u.org_id AND p.proof_unit_digest = u.proof_unit_digest
+          WHERE u.org_id = $1 AND u.bundle_id = $2
+          ORDER BY u.ordinal ASC`,
+        [orgId, bundleId],
+      )
+    ).rows;
+    if (units.length === 0) return undefined;
+    return {
+      bundleId,
+      bundleDigest: parseDigest(bundle.bundle_digest),
+      proofRoot: parseDigest(bundle.proof_root),
+      members: units.map((unit) => ({
+        bundleUnitId: `${bundleId}-${unit.ordinal}`,
+        unitDigest: parseDigest(unit.proof_unit_digest),
+        kind: unit.kind as ProofUnitKind,
+        verdict: unit.verdict as ProofUnitVerdict,
+        ordinal: unit.ordinal,
+      })),
+      bindings: {
+        integrationNodeId: bundle.integration_node_id,
+        memberSetHash: bundle.member_set_hash,
+        preparedHeadSha: bundle.prepared_head_sha,
+        jjTreeId: bundle.jj_tree_id,
+        artifactDigest: parseDigest(bundle.artifact_digest),
+        expectedMainSha: bundle.expected_main_sha,
+        issuedAt: toIso(bundle.issued_at),
+        expiresAt: toIso(bundle.expires_at),
+        nonce: bundle.nonce,
+      },
+      bytesDigest: parseDigest(bundle.bytes_digest),
+      signingKeyId: bundle.signing_key_id,
+      rootSignature: new Uint8Array(bundle.root_signature),
+    };
+  }
+}
+
+interface BundleRow {
+  readonly bundle_digest: string;
+  readonly proof_root: string;
+  readonly bytes_digest: string;
+  readonly integration_node_id: string;
+  readonly member_set_hash: string;
+  readonly prepared_head_sha: string;
+  readonly jj_tree_id: string;
+  readonly artifact_digest: string;
+  readonly expected_main_sha: string;
+  readonly signing_key_id: string;
+  readonly root_signature: Buffer;
+  readonly nonce: string;
+  readonly issued_at: Date | string;
+  readonly expires_at: Date | string;
+}
+
+interface BundleUnitRow {
+  readonly proof_unit_digest: string;
+  readonly ordinal: number;
+  readonly kind: string;
+  readonly verdict: string;
 }

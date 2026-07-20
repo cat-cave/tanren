@@ -10,11 +10,13 @@ import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { ProofSubstrate } from "../../engine/contracts/cas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import {
   MergeTrainArtifactInvalidError,
   encodeMergeTrainArtifactBytes,
   MERGE_TRAIN_ARTIFACT_MEDIA_TYPE,
+  type MergeTrainArtifactV1,
 } from "../../engine/contracts/mergeTrainArtifact.js";
 import { PgMergeTrainArtifactStore } from "../../engine/postMerge/mergeTrainArtifactStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -25,6 +27,13 @@ const MAX_LIMIT = 100;
 
 interface TrainArtifactRoutesOptions {
   pool: pg.Pool;
+  /**
+   * The sole `ProofSubstrate`, injected so the export route RE-VERIFIES the served
+   * artifact's persisted bundle cryptographically (not just its strict shape + content
+   * hash). Absent (no substrate wired), the watcher can never have sealed a row, so the
+   * route has nothing to serve and stays fail-closed by construction.
+   */
+  proofSubstrate?: ProofSubstrate;
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
@@ -84,14 +93,31 @@ export function createMergeTrainArtifactRoutes(options: TrainArtifactRoutesOptio
     if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "merge_train_artifact_not_found" }, 404);
     const projectId = c.req.param("projectId");
     const groupId = c.req.param("groupId");
-    let artifact;
+    let artifact: MergeTrainArtifactV1 | null;
     try {
       artifact = await withProject({
         pool: options.pool,
         actor,
         orgId,
         projectId,
-        read: (client) => PgMergeTrainArtifactStore.getByLandGroup(client, orgId, projectId, groupId),
+        read: async (client): Promise<MergeTrainArtifactV1 | null> => {
+          const manifest = await PgMergeTrainArtifactStore.getByLandGroup(client, orgId, projectId, groupId);
+          if (manifest === undefined) return null;
+          // Finding 4: a signed-artifact export re-invokes the sole substrate's `verify`
+          // on the persisted bundle. A dangling bundle or a failed re-verification fails
+          // closed (served as not-found), never as a verified delivery.
+          if (options.proofSubstrate !== undefined) {
+            const bundle = await PgMergeTrainArtifactStore.loadSealedBundle(
+              client,
+              orgId,
+              manifest.sealedBundle.bundleId,
+            );
+            if (bundle === undefined) return null;
+            const verification = await options.proofSubstrate.verify(bundle);
+            if (!verification.valid) return null;
+          }
+          return manifest;
+        },
       });
     } catch (error) {
       // A corrupted/mismatched persisted manifest fails closed as unavailable.
@@ -99,7 +125,7 @@ export function createMergeTrainArtifactRoutes(options: TrainArtifactRoutesOptio
         return c.json({ error: "merge_train_artifact_not_found" }, 404);
       throw error;
     }
-    if (artifact === null || artifact === undefined) return c.json({ error: "merge_train_artifact_not_found" }, 404);
+    if (artifact === null) return c.json({ error: "merge_train_artifact_not_found" }, 404);
     if (c.req.query("format") === "bytes") {
       c.header("content-type", MERGE_TRAIN_ARTIFACT_MEDIA_TYPE);
       return c.body(Buffer.from(encodeMergeTrainArtifactBytes(artifact)));

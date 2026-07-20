@@ -21,7 +21,8 @@ import type { CasByteStore, ProofSubstrate } from "../contracts/cas.js";
 // SINGLE module (keeping autonomyLoops' dependency count within the lint budget).
 export type { CasByteStore, ProofSubstrate } from "../contracts/cas.js";
 import { createLogger } from "../observability/logger.js";
-import { CompletedPayload, type Evidence, gatherEvidenceFromClient, sealEvidence } from "./mergeTrainArtifactGates.js";
+import { CompletedPayload, type Evidence, gatherEvidenceFromClient } from "./mergeTrainArtifactGates.js";
+import { sealEvidence } from "./mergeTrainArtifactSeal.js";
 import { PgMergeTrainArtifactStore } from "./mergeTrainArtifactStore.js";
 import { loadValidatedRunEvent } from "./runLineage.js";
 import type { RunMergeWatcher } from "./subscriber.js";
@@ -77,9 +78,7 @@ export class MergeTrainArtifactWatcher implements RunMergeWatcher {
     if (completed.data.projectId !== lineage.projectId) return undefined;
 
     return runWithOrgScope(this.deps.pool, lineage.orgId, (client) =>
-      gatherEvidenceFromClient(client, lineage, completed.data, runId, (eventType) =>
-        loadValidatedRunEvent(client, { runId, eventType, requireEventSpec: false }),
-      ),
+      gatherEvidenceFromClient(client, lineage, completed.data, runId),
     );
   }
 }

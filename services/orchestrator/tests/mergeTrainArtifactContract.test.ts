@@ -14,15 +14,16 @@ import {
   validateMergeTrainArtifact,
 } from "../src/engine/contracts/mergeTrainArtifact.js";
 import {
-  buildBindings,
-  buildDrafts,
   decisionSatisfies,
   demoIsSuccessful,
   landGroupSatisfies,
-  resolveMembers,
+  memberSetDigest,
+  releaseBindsToLand,
+  resolveExactMembers,
   type CompletedData,
   type Evidence,
 } from "../src/engine/postMerge/mergeTrainArtifactGates.js";
+import { buildBindings, buildDrafts } from "../src/engine/postMerge/mergeTrainArtifactSeal.js";
 
 const SHA = (c: string): string => `sha256:${c.repeat(64)}`;
 
@@ -101,7 +102,7 @@ const completed: CompletedData = {
   landGroupId: "lg1",
   decisionId: "decision-node1-headsha",
   expectedMainSha: "expmain",
-  authorizedSha: "authsha",
+  authorizedSha: "headsha",
   mainSha: "mainsha1",
   memberKeys: ["mk-a", "mk-b"],
 };
@@ -121,7 +122,7 @@ describe("mq-15 pure fail-closed gates", () => {
     expect(landGroupSatisfies({ ...ok, decision_id: "other" }, completed)).toBe(false);
   });
 
-  it("decisionSatisfies rejects a cross-project or main-sha-mismatched decision", () => {
+  it("decisionSatisfies rejects cross-project, main-sha drift, OR head_sha≠authorizedSha", () => {
     const ok = {
       project_id: "proj1",
       integration_node_id: "node1",
@@ -133,6 +134,8 @@ describe("mq-15 pure fail-closed gates", () => {
     expect(decisionSatisfies(ok, completed, "proj1")).toBe(true);
     expect(decisionSatisfies(ok, completed, "other-project")).toBe(false);
     expect(decisionSatisfies({ ...ok, expected_main_sha: "drift" }, completed, "proj1")).toBe(false);
+    // Finding 3: a decision authorizing a DIFFERENT head than the land's authorizedSha.
+    expect(decisionSatisfies({ ...ok, head_sha: "other-head" }, completed, "proj1")).toBe(false);
     expect(decisionSatisfies(undefined, completed, "proj1")).toBe(false);
   });
 
@@ -143,20 +146,59 @@ describe("mq-15 pure fail-closed gates", () => {
     expect(demoIsSuccessful({ surfaceKind: "web_url", behaviorCount: 2, passed: 2, failed: 1 })).toBe(false);
   });
 
-  it("resolveMembers maps ordered keys and fails closed on a missing/partial member", () => {
-    const rows = [
-      { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11" },
-      { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null },
-    ];
-    const members = resolveMembers(rows, ["mk-a", "mk-b"]);
+  const landedRows = [
+    { member_key: "mk-b", run_id: "run-b", spec_id: "spec-b", pr_number: null, outcome: "landed" },
+    { member_key: "mk-a", run_id: "run-a", spec_id: "spec-a", pr_number: "11", outcome: "landed" },
+  ];
+
+  it("resolveExactMembers canonicalizes order + requires exact full set, all landed", () => {
+    // Rows arrive out of order; the artifact members are canonicalized (sorted by key).
+    const members = resolveExactMembers({
+      rows: landedRows,
+      completedKeys: ["mk-a", "mk-b"],
+      formedKeys: ["mk-b", "mk-a"],
+    });
     expect(members).toEqual([
       { ordinal: 0, memberKey: "mk-a", runId: "run-a", specId: "spec-a", prNumber: 11 },
       { ordinal: 1, memberKey: "mk-b", runId: "run-b", specId: "spec-b", prNumber: null },
     ]);
-    expect(resolveMembers(rows, ["mk-a", "mk-missing"])).toBeUndefined();
+  });
+
+  it("resolveExactMembers fails closed on subset / extra / non-landed / formed-mismatch", () => {
+    // (a) completed lists a SUBSET of the real member set → block.
+    expect(resolveExactMembers({ rows: landedRows, completedKeys: ["mk-a"], formedKeys: ["mk-a"] })).toBeUndefined();
+    // (b) completed lists an EXTRA/foreign key not in the table → block.
     expect(
-      resolveMembers([{ member_key: "mk-a", run_id: null, spec_id: "s", pr_number: null }], ["mk-a"]),
+      resolveExactMembers({
+        rows: landedRows,
+        completedKeys: ["mk-a", "mk-b", "mk-x"],
+        formedKeys: ["mk-a", "mk-b", "mk-x"],
+      }),
     ).toBeUndefined();
+    // (c) a member whose outcome is not 'landed' → block.
+    const reverted = [landedRows[0]!, { ...landedRows[1]!, outcome: "reverted" }];
+    expect(
+      resolveExactMembers({ rows: reverted, completedKeys: ["mk-a", "mk-b"], formedKeys: ["mk-a", "mk-b"] }),
+    ).toBeUndefined();
+    // (d) group.formed disagrees with the completed member set → block.
+    expect(
+      resolveExactMembers({ rows: landedRows, completedKeys: ["mk-a", "mk-b"], formedKeys: ["mk-a", "mk-x"] }),
+    ).toBeUndefined();
+  });
+
+  it("memberSetDigest is order-insensitive over the resolved set", () => {
+    expect(memberSetDigest(["mk-a", "mk-b"])).toBe(memberSetDigest(["mk-b", "mk-a"]));
+    expect(memberSetDigest(["mk-a", "mk-b"])).not.toBe(memberSetDigest(["mk-a", "mk-c"]));
+  });
+
+  it("releaseBindsToLand requires an alive release FOR the sealed tip", () => {
+    expect(releaseBindsToLand({ source_ref: "mainsha1", state: "live" }, completed)).toBe(true);
+    expect(releaseBindsToLand({ source_ref: "headsha", state: "live" }, completed)).toBe(true);
+    // A prior/unrelated SHA does not satisfy the gate.
+    expect(releaseBindsToLand({ source_ref: "prior-sha", state: "live" }, completed)).toBe(false);
+    // A dead release for the right SHA is still blocked.
+    expect(releaseBindsToLand({ source_ref: "mainsha1", state: "rolled_back" }, completed)).toBe(false);
+    expect(releaseBindsToLand(undefined, completed)).toBe(false);
   });
 
   it("buildDrafts emits proof-root, ordered members, deploy, then demo", () => {
