@@ -27,6 +27,7 @@ import {
   MergeQueueRepairRoutesClient,
   type MergeQueueRepairRoutesListResponse,
 } from "../../api/mergeQueueRepairRoutes.js";
+import { MergeQueueTrainClient, type MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
 
@@ -50,6 +51,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
     let authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
     let repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
+    let mergeTrain: MergeTrainListResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -67,12 +69,17 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes] = await Promise.all([
+      const trainClient = new MergeQueueTrainClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [metrics, stats, authoritySignals, authorityEvaluations, repairRoutes, mergeTrain] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
         signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
         evaluationClient.listAuthorityEvaluations(ctx.org.id, project.projectId),
         repairClient.listRepairRoutes(ctx.org.id, project.projectId),
+        trainClient.listTrain(ctx.org.id, project.projectId),
       ]);
     }
 
@@ -86,6 +93,9 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         authoritySignals={authoritySignals}
         authorityEvaluations={authorityEvaluations}
         repairRoutes={repairRoutes}
+        mergeTrain={mergeTrain}
+        orgId={ctx.org?.id ?? ""}
+        projectId={project?.projectId ?? ""}
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}

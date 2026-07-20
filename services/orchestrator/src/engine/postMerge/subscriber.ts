@@ -52,6 +52,15 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
    * clean no-op. ISOLATED — a demo failure is logged and never suppresses the others.
    */
   demoWatcher?: RunMergeWatcher;
+  /**
+   * The mq-15 merge-train artifact watcher (a sealed delivery PROJECTION): driven on
+   * the SAME wake, AFTER the demo watcher, so by the time it runs the deploy + demo
+   * evidence it projects is already durable. It seals ONE artifact per completed land
+   * group only when every bound input is exact, and is a clean no-op otherwise.
+   * ISOLATED — a seal failure is logged and never suppresses the others. Optional:
+   * wired only when a `ProofSubstrate` is available to inject (no signer of its own).
+   */
+  mergeTrainArtifactWatcher?: RunMergeWatcher;
 }
 
 /**
@@ -64,6 +73,7 @@ export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
   private readonly deployWatcher: RunMergeWatcher | undefined;
   private readonly demoWatcher: RunMergeWatcher | undefined;
+  private readonly mergeTrainArtifactWatcher: RunMergeWatcher | undefined;
   private reconnectHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -73,6 +83,7 @@ export class PostMergeSubscriber {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
     this.deployWatcher = deps.deployWatcher;
     this.demoWatcher = deps.demoWatcher;
+    this.mergeTrainArtifactWatcher = deps.mergeTrainArtifactWatcher;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -162,6 +173,15 @@ export class PostMergeSubscriber {
       if (this.demoWatcher !== undefined) {
         await this.demoWatcher.check(runId).catch((error: unknown) => {
           log.error("demo-on-deploy failed", { runId }, error);
+        });
+      }
+      // The mq-15 merge-train artifact watcher runs AFTER the demo watcher (so the
+      // deploy + demo evidence it projects is durable) and is equally ISOLATED: a seal
+      // failure is logged and never suppresses the issue/deploy/demo watchers. A run
+      // that is not a completed land-group tail is a clean no-op.
+      if (this.mergeTrainArtifactWatcher !== undefined) {
+        await this.mergeTrainArtifactWatcher.check(runId).catch((error: unknown) => {
+          log.error("merge-train-artifact failed", { runId }, error);
         });
       }
     } while (this.rePending.has(runId));

@@ -18,7 +18,13 @@ import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/bu
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
-import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
+import {
+  buildDeployOnMergeWatcher,
+  buildDemoOnDeployWatcher,
+  buildMergeTrainArtifactWatcher,
+  type CasByteStore,
+  type ProofSubstrate,
+} from "../postMerge/deployOnMerge.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
@@ -54,6 +60,15 @@ export interface AutonomyLoopsDeps {
    * over mTLS when TANREN_DATA_PLANE_REMOTE_WRITES=1.
    */
   runStateWriter: RunStateWriter;
+  /**
+   * mq-15: the sole `ProofSubstrate` (engine/contracts/cas.ts) + its CAS byte store,
+   * injected so the merge-train artifact watcher can SEAL a completed land group into a
+   * signed delivery projection. The watcher adds NO signer of its own — absent a
+   * substrate it is simply not constructed, so no artifact ever seals and the read/UI
+   * stay `unknown` (fail-closed). Wired here only when the boot supplies a substrate.
+   */
+  proofSubstrate?: ProofSubstrate;
+  casByteStore?: CasByteStore;
 }
 
 export interface AutonomyLoops {
@@ -205,6 +220,18 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
   });
+  // mq-15 merge-train artifact watcher: a sealed-delivery PROJECTION driven AFTER the
+  // demo watcher. Constructed ONLY when the sole ProofSubstrate + CAS byte store are
+  // injected (it invents no signer); absent them it is not wired, so a completed land
+  // group never seals and the read/UI stay `unknown` (fail-closed by construction).
+  const mergeTrainArtifactWatcher =
+    deps.proofSubstrate !== undefined && deps.casByteStore !== undefined
+      ? buildMergeTrainArtifactWatcher({
+          pool: deps.pool,
+          proofSubstrate: deps.proofSubstrate,
+          casByteStore: deps.casByteStore,
+        })
+      : undefined;
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
@@ -212,6 +239,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     githubHttp: deps.githubHttp,
     deployWatcher,
     demoWatcher,
+    ...(mergeTrainArtifactWatcher !== undefined && { mergeTrainArtifactWatcher }),
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).

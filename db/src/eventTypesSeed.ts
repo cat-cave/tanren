@@ -247,6 +247,7 @@ export const eventTypesSeed = [
   { name: "merge.scheduled", defaultSeverity: "info" },
   { name: "merge.signal.classified", defaultSeverity: "info" },
   { name: "merge.speculative_held", defaultSeverity: "info" },
+  { name: "merge.train.artifact.sealed", defaultSeverity: "ok" },
   { name: "notification.enqueued", defaultSeverity: "info" },
   { name: "notification.failed", defaultSeverity: "warn" },
   { name: "notification.sent", defaultSeverity: "info" },

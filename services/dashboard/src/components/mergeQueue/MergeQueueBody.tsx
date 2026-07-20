@@ -19,7 +19,9 @@ import { AuthoritySignalPanel } from "./AuthoritySignalPanel.js";
 import { mqDuration, mqInt, mqPercent, mqTokens } from "./format.js";
 import { MultiMemberAuthorityPanel } from "./MultiMemberAuthorityPanel.js";
 import { RepairRouteLineagePanel } from "./RepairRouteLineagePanel.js";
+import { MergeTrainPanel } from "./MergeTrainPanel.js";
 import type { MergeQueueRepairRoutesListResponse } from "../../api/mergeQueueRepairRoutes.js";
+import type { MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 
 export interface MergeQueueBodyProps {
@@ -33,6 +35,12 @@ export interface MergeQueueBodyProps {
   authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
   /** mq-10 durable autonomous-repair + respec lineage (undefined when read failed / no project). */
   repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
+  /** mq-15 durable sealed merge-train projection (undefined when read failed / no project). */
+  mergeTrain: MergeTrainListResponse | undefined;
+  /** Org id for the mq-15 artifact links. */
+  orgId: string;
+  /** Project id for the mq-15 artifact links. */
+  projectId: string;
   /** Active window pill (7d / 30d / 90d). */
   windowDays: number;
   /** Project name for the eyebrow scope line. */
@@ -155,8 +163,19 @@ function StatGrid(props: { cards: StatCard[] }) {
 }
 
 export function MergeQueueBody(props: MergeQueueBodyProps) {
-  const { metrics, stats, authoritySignals, authorityEvaluations, repairRoutes, windowDays, projectName, noProject } =
-    props;
+  const {
+    metrics,
+    stats,
+    authoritySignals,
+    authorityEvaluations,
+    repairRoutes,
+    mergeTrain,
+    orgId,
+    projectId,
+    windowDays,
+    projectName,
+    noProject,
+  } = props;
   const v = verdict(metrics);
   return (
     <>
@@ -186,6 +205,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
             </section>
           ) : (
             <>
+              <MergeTrainPanel projection={mergeTrain} orgId={orgId} projectId={projectId} />
               <MultiMemberAuthorityPanel projection={authorityEvaluations} />
               <RepairRouteLineagePanel projection={repairRoutes} />
               <AuthoritySignalPanel projection={authoritySignals} />

@@ -33,6 +33,12 @@ export const casArtifactsReference = pgTable("cas_artifacts", {
   digest: text("digest").notNull(),
 });
 
+/** Reference-only sealed proof-bundle identity (migration 0035). */
+export const proofBundlesReference = pgTable("proof_bundles", {
+  orgId: text("org_id").notNull(),
+  id: text("id").notNull(),
+});
+
 export const proofUnitsReference = pgTable("proof_units", {
   orgId: text("org_id").notNull(),
   projectId: text("project_id").notNull(),
