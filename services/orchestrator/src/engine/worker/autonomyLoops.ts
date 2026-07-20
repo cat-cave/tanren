@@ -21,6 +21,7 @@ import {
   startPostMergeSubscriber,
   buildDeployOnMergeWatcher,
   buildDemoOnDeployWatcher,
+  buildDeliveryDagDriver,
   buildMergeTrainArtifactWatcher,
   type CasByteStore,
 } from "../postMerge/subscriber.js";
@@ -222,6 +223,18 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
   });
+  // in-17 durable post-merge DELIVERY DAG: consumes the in-16 `delivery_runs` outbox and
+  // drives reconcile → lease → materialize → attach → deploy → verify → stimulate → observe
+  // → record-evidence, resuming from the last durable stage. The deploy/demo watchers above
+  // are its internal, idempotent stage runners — this REPLACES the old fixed deploy → demo
+  // chain the subscriber used to sequence directly.
+  const deliveryDriver = buildDeliveryDagDriver({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    deployWatcher,
+    demoWatcher,
+    runStateWriter: deps.runStateWriter,
+  });
   // SP-3 × mq-15 CONNECT-UP: construct the sole production `ProofSubstrate`
   // (`PgProofSubstrate`) over the shared pool + secret store, over a SINGLE shared
   // `PgCasByteStore` (so the substrate's own proof/bundle bytes and the watcher's
@@ -248,10 +261,12 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     });
   }
   // mq-15 merge-train artifact watcher: a sealed-delivery PROJECTION driven AFTER the
-  // demo watcher. It invents NO signer — sealing/verification are DELEGATED to the sole
-  // production `PgProofSubstrate` constructed just above (its seal path is now LIVE, not
-  // dormant). A completed land group seals into a signed delivery artifact; missing the
-  // signing key fails LOUD at seal time (fail-closed), never silently no-ops.
+  // delivery DAG driver (in-17). It invents NO signer — sealing/verification are DELEGATED
+  // to the sole production `PgProofSubstrate` constructed just above (its seal path is now
+  // LIVE, not dormant). Once the delivery DAG has driven deploy → verify → demo to durable
+  // completion for a land group, this seals that completed land group into a signed
+  // delivery artifact; missing the signing key fails LOUD at seal time (fail-closed), never
+  // silently no-ops.
   const mergeTrainArtifactWatcher = buildMergeTrainArtifactWatcher({
     pool: deps.pool,
     proofSubstrate,
@@ -262,15 +277,14 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
-    deployWatcher,
-    demoWatcher,
+    deliveryDriver,
     mergeTrainArtifactWatcher,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
     runStateWriter: deps.runStateWriter,
   });
-  log.info("post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
+  log.info("post-merge auto-issue + durable delivery-DAG subscriber started (in-17)");
   // Notifications: build the dispatcher ONCE (channel registry with the real
   // channel deps — `secrets` resolves Slack/webhook/etc. write-only credential
   // refs; the shared App minter authenticates github_checks) + the code-level default

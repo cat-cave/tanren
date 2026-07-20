@@ -11,11 +11,17 @@ export interface DeployTriggerGate {
 }
 
 export class PgDeployTriggerGate implements DeployTriggerGate {
-  constructor(private readonly pool: pg.Pool) {}
+  // The advisory-lock key prefix. Defaults to the deploy trigger; a DISTINCT prefix (e.g.
+  // the in-17 delivery demo gate) gives a separate lock namespace so cross-stage effects
+  // never contend on one lock.
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly keyPrefix: string = "deploy.triggered",
+  ) {}
 
   async run<T>(runId: string, work: () => Promise<T>): Promise<{ acquired: boolean; value?: T }> {
     const client = await this.pool.connect();
-    const key = `deploy.triggered:${runId}`;
+    const key = `${this.keyPrefix}:${runId}`;
     try {
       const result = await client.query<{ acquired: boolean }>(
         "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired",

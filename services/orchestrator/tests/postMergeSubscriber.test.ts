@@ -156,4 +156,67 @@ describe("PostMergeSubscriber", () => {
     await sub.stop();
     expect(listener.unsubscribeCount).toBe(1);
   });
+
+  // in-17 × mq-15 RE-HOME: the mq-15 merge-train artifact watcher used to run AFTER the
+  // fixed demo watcher; the in-17 delivery DAG REPLACED that fixed chain, so the merge-train
+  // watcher's new home is strictly AFTER the delivery DAG driver (which internally drives the
+  // deploy → demo cluster and durably emits the `deploy.verified` / `demo.completed` evidence
+  // the seal projects). These prove the new ordering + the preserved isolation.
+  it("drives the delivery driver BEFORE the merge-train artifact watcher on one wake (re-home)", async () => {
+    const order: string[] = [];
+    const issue = new RecordingWatcher(async () => void order.push("issue"));
+    const deliveryDriver = new RecordingWatcher(async () => void order.push("delivery"));
+    const mergeTrainArtifactWatcher = new RecordingWatcher(async () => void order.push("merge-train"));
+    const listener = new FakeNotifyListener();
+    const sub = new PostMergeSubscriber({
+      pool: {} as never,
+      secrets: {} as never,
+      githubHttp: {} as never,
+      notifyListener: listener as never,
+      watcher: issue as unknown as PostMergeWatcher,
+      deliveryDriver,
+      mergeTrainArtifactWatcher,
+    });
+    await sub.start();
+    await flush();
+
+    listener.fire(RUN_ACTIVITY_CHANNEL, "run_landed");
+    await flush();
+
+    // The seal is a PROJECTION of the delivery DAG's evidence, so it must run last — after
+    // the delivery driver has driven deploy → verify → demo to durable completion.
+    expect(order).toEqual(["issue", "delivery", "merge-train"]);
+    expect(deliveryDriver.checks).toEqual(["run_landed"]);
+    expect(mergeTrainArtifactWatcher.checks).toEqual(["run_landed"]);
+    await sub.stop();
+  });
+
+  it("the merge-train artifact watcher still fires when the delivery driver throws (isolation)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The delivery driver throws on check — its failure must stay isolated.
+    const deliveryDriver = new RecordingWatcher(undefined, true);
+    const mergeTrainArtifactWatcher = new RecordingWatcher();
+    const listener = new FakeNotifyListener();
+    const sub = new PostMergeSubscriber({
+      pool: {} as never,
+      secrets: {} as never,
+      githubHttp: {} as never,
+      notifyListener: listener as never,
+      watcher: new RecordingWatcher() as unknown as PostMergeWatcher,
+      deliveryDriver,
+      mergeTrainArtifactWatcher,
+    });
+    await sub.start();
+    await flush();
+
+    expect(() => listener.fire(RUN_ACTIVITY_CHANNEL, "run_iso")).not.toThrow();
+    await flush();
+
+    // A delivery-driver throw is logged + isolated; the seal watcher still gets its wake.
+    expect(deliveryDriver.checks).toEqual(["run_iso"]);
+    expect(mergeTrainArtifactWatcher.checks).toEqual(["run_iso"]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+    await sub.stop();
+  });
 });
