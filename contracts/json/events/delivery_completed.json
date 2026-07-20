@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "deliveryRunId": {
+      "type": "string"
+    },
+    "deploymentId": {
+      "type": "string"
+    },
+    "evidenceDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "mergeSha": {
+      "type": "string"
+    },
+    "observedEffect": {
+      "enum": [
+        "none",
+        "deploy_verified",
+        "demo_observed"
+      ],
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    },
+    "stagesConfirmed": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "deliveryRunId",
+    "mergeSha",
+    "stagesConfirmed",
+    "observedEffect",
+    "evidenceDigest",
+    "signature"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.delivery.completed"
+}

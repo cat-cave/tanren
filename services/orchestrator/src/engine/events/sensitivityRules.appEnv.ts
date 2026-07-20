@@ -14,6 +14,28 @@ export const appEnvSensitivityRules: SensitivityRule[] = [
   ]),
 ];
 
+// in-17 durable post-merge delivery DAG (release activation) — colocated on this
+// deploy/runtime-env activation vocab file so `sensitivityRules.ts` imports it off an
+// EXISTING slot (honoring the import-slot ceiling). ALL fields public: references +
+// digests only (no token, no secret value, no provider response body).
+export const deliveryDagSensitivityRules: SensitivityRule[] = [
+  ...rulesFor("delivery.completed", [
+    ["deliveryRunId", "public"],
+    ["mergeSha", "public"],
+    ["deploymentId", "public"],
+    ["stagesConfirmed[]", "public"],
+    ["observedEffect", "public"],
+    ["evidenceDigest", "public"],
+    ["signature", "public"],
+  ]),
+  ...rulesFor("delivery.degraded", [
+    ["deliveryRunId", "public"],
+    ["stage", "public"],
+    ["classification", "public"],
+    ["detail", "public"],
+  ]),
+];
+
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
   return entries.map(([path, tag]) => ({ eventName, path, tag }));
 }
