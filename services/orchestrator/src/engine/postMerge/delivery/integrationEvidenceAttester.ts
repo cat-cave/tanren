@@ -6,9 +6,11 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { canonicalJson, type CanonicalBody, type ProofBundleSealed, type ProofSubstrate } from "../../contracts/cas.js";
+import { a3CorrelationId } from "../../verification/acceptance/httpCauseDriver.js";
 import type { DeliveryLineage } from "./stageModel.js";
 import type {
   BehaviorVerdictEvidence,
+  DeploymentEvidence,
   EvidenceCoordinate,
   GrantEvidence,
   IndependentObservation,
@@ -33,6 +35,17 @@ export type ReadyEvidence = {
   readonly observation: IndependentObservation;
   readonly attachment: RuntimeAttachment;
   readonly grant: GrantEvidence;
+  readonly checklist: NegativeControlChecklist;
+};
+
+/** Every sealed check is derived from immutable correlation evidence, never asserted. */
+export type NegativeControlChecklist = {
+  readonly authorizedMergeShaMatchesDeployment: boolean;
+  readonly bindingGenerationAttachedBeforeDeploy: boolean;
+  readonly correlationMatchesIndependentObservation: boolean;
+  readonly independentObservationIsExactlyOne: boolean;
+  readonly exactlyOnePassedBehaviorVerdict: boolean;
+  readonly grantActiveAtSeal: boolean;
 };
 
 export type IntegrationEvidenceJoinResult =
@@ -107,7 +120,7 @@ export class IntegrationEvidenceAttester {
     input: EvidenceCoordinate,
     coordinate: SealedIntegrationCoordinate,
     attachments: readonly RuntimeAttachment[],
-    deployments: readonly { readonly deploymentId: string; readonly deploySha: string }[],
+    deployments: readonly DeploymentEvidence[],
   ): Promise<IntegrationEvidenceJoinResult> {
     const [verdicts, observations, grant] = await Promise.all([
       this.readers.readBehaviorVerdicts(input, coordinate.behaviorRevisionId),
@@ -185,7 +198,7 @@ export class IntegrationEvidenceAttester {
           member.digest,
           dsse.signatures[0]?.sig ?? "",
           evidence.coordinate.channelTemplateDigest,
-          JSON.stringify(negativeControls()),
+          JSON.stringify(evidence.checklist),
           bundle.bundleId,
           bundle.bundleDigest,
           bundle.bytesDigest,
@@ -232,52 +245,102 @@ export function assembleIntegrationEvidence(input: {
   readonly input: EvidenceCoordinate;
   readonly coordinate: SealedIntegrationCoordinate;
   readonly attachments: readonly RuntimeAttachment[];
-  readonly deployments: readonly { readonly deploymentId: string; readonly deploySha: string }[];
+  readonly deployments: readonly DeploymentEvidence[];
   readonly verdicts: readonly BehaviorVerdictEvidence[];
   readonly observations: readonly IndependentObservation[];
   readonly grant: GrantEvidence | undefined;
 }): IntegrationEvidenceJoinResult {
-  const { coordinate, attachments, deployments, verdicts, observations, grant } = input;
+  const { coordinate, grant } = input;
+  const checklist = deriveNegativeControlChecklist(input);
+  if (!checklist.authorizedMergeShaMatchesDeployment) {
+    return blocked("correlation_join_mismatch", "verified deployed artifact does not equal the authorized merge SHA");
+  }
+  if (!checklist.bindingGenerationAttachedBeforeDeploy) {
+    return blocked(
+      "correlation_join_mismatch",
+      "sealed binding generation was not attached before the verified authorized deploy",
+    );
+  }
+  if (grant?.status === "revoked") return blocked("grant_revoked", "integration grant is revoked; detail redacted");
+  if (grant === undefined || !checklist.grantActiveAtSeal) {
+    return blocked("evidence_unavailable", "sealed integration grant is not active at its recorded generation");
+  }
+  if (!checklist.exactlyOnePassedBehaviorVerdict) {
+    return blocked("correlation_join_mismatch", "exactly one passed post-merge behavior verdict is required");
+  }
+  if (!checklist.independentObservationIsExactlyOne) {
+    return blocked("correlation_join_mismatch", "exactly one independent A3 observation is required");
+  }
+  if (!checklist.correlationMatchesIndependentObservation) {
+    return blocked("correlation_join_mismatch", "A3 correlation does not recompute from its sealed coordinate");
+  }
   const attachment = only(
-    attachments.filter(
+    input.attachments.filter(
       (row) =>
         row.bindingId === coordinate.bindingId &&
         row.bindingGeneration === coordinate.bindingGeneration &&
         row.deploySha === input.input.mergeSha,
     ),
   );
-  if (attachment === undefined) {
-    return blocked(
-      "correlation_join_mismatch",
-      "sealed binding generation was not attached before the authorized deploy",
-    );
+  const deployment = only(input.deployments.filter((row) => row.deploymentId === input.input.deploymentId));
+  const verdict = only(input.verdicts);
+  const observation = only(input.observations);
+  if (attachment === undefined || deployment === undefined || verdict === undefined || observation === undefined) {
+    return blocked("evidence_unavailable", "validated correlation evidence disappeared before sealing");
   }
-  const deployment = only(
-    deployments.filter(
-      (row) => row.deploymentId === input.input.deploymentId && row.deploySha === input.input.mergeSha,
+  return { kind: "ready", evidence: { coordinate, verdict, observation, attachment, grant, checklist } };
+}
+
+/** Compute, never assert, the control values embedded in a DSSE attestation. */
+export function deriveNegativeControlChecklist(input: {
+  readonly input: EvidenceCoordinate;
+  readonly coordinate: SealedIntegrationCoordinate;
+  readonly attachments: readonly RuntimeAttachment[];
+  readonly deployments: readonly DeploymentEvidence[];
+  readonly verdicts: readonly BehaviorVerdictEvidence[];
+  readonly observations: readonly IndependentObservation[];
+  readonly grant: GrantEvidence | undefined;
+}): NegativeControlChecklist {
+  const { coordinate } = input;
+  const attachment = only(
+    input.attachments.filter(
+      (row) =>
+        row.bindingId === coordinate.bindingId &&
+        row.bindingGeneration === coordinate.bindingGeneration &&
+        row.deploySha === input.input.mergeSha,
     ),
   );
-  if (deployment === undefined) {
-    return blocked("correlation_join_mismatch", "deployed artifact does not resolve to the authorized merge SHA");
-  }
-  if (grant?.status === "revoked") return blocked("grant_revoked", "integration grant is revoked; detail redacted");
-  if (grant === undefined || grant.status !== "active" || grant.generation !== coordinate.grantGeneration) {
-    return blocked("evidence_unavailable", "sealed integration grant is not active at its recorded generation");
-  }
-  const verdict = only(verdicts);
-  if (verdict === undefined)
-    return blocked("correlation_join_mismatch", "exactly one passed post-merge behavior verdict is required");
-  const observation = only(observations);
-  if (
-    observation === undefined ||
-    observation.classification !== "ok" ||
-    observation.occurrenceCount !== 1 ||
-    observation.correlationId === "" ||
-    observation.providerReceiptId === ""
-  ) {
-    return blocked("correlation_join_mismatch", "exactly one independent A3 observation is required");
-  }
-  return { kind: "ready", evidence: { coordinate, verdict, observation, attachment, grant } };
+  const deployment = only(input.deployments.filter((row) => row.deploymentId === input.input.deploymentId));
+  const observation = only(input.observations);
+  const independentObservationIsExactlyOne =
+    observation !== undefined &&
+    observation.classification === "ok" &&
+    observation.occurrenceCount === 1 &&
+    observation.correlationId !== "" &&
+    observation.providerReceiptId !== "";
+  const correlationMatchesIndependentObservation =
+    independentObservationIsExactlyOne &&
+    observation !== undefined &&
+    observation.correlationId ===
+      a3CorrelationId({
+        deliveryRunId: input.input.deliveryRunId,
+        behaviorRevisionId: coordinate.behaviorRevisionId,
+        bindingId: coordinate.bindingId,
+        bindingGeneration: coordinate.bindingGeneration,
+        causeOrdinal: observation.causeOrdinal,
+      });
+  return {
+    authorizedMergeShaMatchesDeployment:
+      deployment !== undefined && deployment.verifiedSourceRef === input.input.mergeSha,
+    bindingGenerationAttachedBeforeDeploy:
+      attachment !== undefined &&
+      deployment !== undefined &&
+      attachment.attachedAt.getTime() < deployment.verifiedAt.getTime(),
+    correlationMatchesIndependentObservation,
+    independentObservationIsExactlyOne,
+    exactlyOnePassedBehaviorVerdict: input.verdicts.length === 1,
+    grantActiveAtSeal: input.grant?.status === "active" && input.grant.generation === coordinate.grantGeneration,
+  };
 }
 
 async function buildDsse(
@@ -341,7 +404,7 @@ function evidenceBody(input: EvidenceCoordinate, evidence: ReadyEvidence): Canon
     correlationId: evidence.observation.correlationId,
     providerReceiptId: evidence.observation.providerReceiptId,
     observation: sanitizedObservation(evidence.observation),
-    negativeControlChecklist: negativeControls(),
+    negativeControlChecklist: evidence.checklist,
   };
 }
 
@@ -354,16 +417,6 @@ function sanitizedObservation(observation: IndependentObservation): CanonicalBod
     occurrenceCount: observation.occurrenceCount,
     classification: observation.classification,
     providerReceiptId: observation.providerReceiptId,
-  };
-}
-
-function negativeControls(): CanonicalBody {
-  return {
-    authorizedMergeShaMatchesDeployment: true,
-    bindingGenerationAttachedBeforeDeploy: true,
-    correlationMatchesIndependentObservation: true,
-    independentObservationIsExactlyOne: true,
-    grantActiveAtSeal: true,
   };
 }
 

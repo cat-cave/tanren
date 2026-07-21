@@ -33,17 +33,21 @@ export type RuntimeAttachment = {
   readonly bindingId: string;
   readonly bindingGeneration: number;
   readonly deploySha: string;
+  readonly attachedAt: Date;
 };
 
 export type DeploymentEvidence = {
   readonly deploymentId: string;
-  readonly deploySha: string;
+  /** The source SHA the verified live deployment says was actually released. */
+  readonly verifiedSourceRef: string;
+  readonly verifiedAt: Date;
 };
 
 export type BehaviorVerdictEvidence = { readonly behaviorVerdictId: string };
 
 export type IndependentObservation = {
   readonly correlationId: string;
+  readonly causeOrdinal: number;
   readonly providerReceiptId: string;
   readonly observationId: string;
   readonly observer: string;
@@ -63,7 +67,7 @@ export interface IntegrationEvidenceReaders {
   readSealedCoordinates(input: EvidenceCoordinate): Promise<readonly SealedIntegrationCoordinate[]>;
   /** 3. Pre-deploy generation attachment rows. */
   readRuntimeAttachments(input: EvidenceCoordinate): Promise<readonly RuntimeAttachment[]>;
-  /** 4. Triggered and verified deployment resolve to the authorized SHA. */
+  /** 4. The verified live deployment itself resolves to the authorized SHA. */
   readDeployment(input: EvidenceCoordinate): Promise<readonly DeploymentEvidence[]>;
   /** 5. Post-merge passed behavior verdicts. */
   readBehaviorVerdicts(
@@ -157,14 +161,29 @@ export class PgIntegrationEvidenceReaders implements IntegrationEvidenceReaders 
 
   public async readRuntimeAttachments(input: EvidenceCoordinate): Promise<readonly RuntimeAttachment[]> {
     return runWithOrgScope(this.pool, input.orgId, async (client) => {
-      const result = await client.query<{ binding_id: unknown; binding_generation: unknown; deploy_sha: unknown }>(
-        `SELECT binding_id, binding_generation, deploy_sha FROM integration_runtime_attachments
+      const result = await client.query<{
+        binding_id: unknown;
+        binding_generation: unknown;
+        deploy_sha: unknown;
+        attached_at: unknown;
+      }>(
+        `SELECT binding_id, binding_generation, deploy_sha, attached_at FROM integration_runtime_attachments
           WHERE org_id = $1 AND project_id = $2 AND delivery_run_id = $3 ORDER BY binding_id, binding_generation`,
         [input.orgId, input.projectId, input.deliveryRunId],
       );
       return result.rows.flatMap((row) =>
-        nonBlank(row.binding_id) && positiveInt(row.binding_generation) && nonBlank(row.deploy_sha)
-          ? [{ bindingId: row.binding_id, bindingGeneration: row.binding_generation, deploySha: row.deploy_sha }]
+        nonBlank(row.binding_id) &&
+        positiveInt(row.binding_generation) &&
+        nonBlank(row.deploy_sha) &&
+        validDate(row.attached_at)
+          ? [
+              {
+                bindingId: row.binding_id,
+                bindingGeneration: row.binding_generation,
+                deploySha: row.deploy_sha,
+                attachedAt: row.attached_at,
+              },
+            ]
           : [],
       );
     });
@@ -172,29 +191,34 @@ export class PgIntegrationEvidenceReaders implements IntegrationEvidenceReaders 
 
   public async readDeployment(input: EvidenceCoordinate): Promise<readonly DeploymentEvidence[]> {
     return runWithOrgScope(this.pool, input.orgId, async (client) => {
-      const result = await client.query<{ triggered: unknown; verified: unknown; deploy_sha: unknown }>(
-        `SELECT triggered.payload AS triggered, verified.payload AS verified,
-                COALESCE(triggered.payload->>'ref', verified.payload->>'sourceRef') AS deploy_sha
+      const result = await client.query<{
+        deployment_id: unknown;
+        verified_source_ref: unknown;
+        verified_at: unknown;
+      }>(
+        `SELECT verified.payload->>'deploymentId' AS deployment_id,
+                verified.payload->>'sourceRef' AS verified_source_ref,
+                verified.ts AS verified_at
            FROM events verified
-           LEFT JOIN events triggered
-             ON triggered.org_id = verified.org_id AND triggered.project_id = verified.project_id
-            AND triggered.run_id = verified.run_id AND triggered.event_type = 'deploy.triggered'
-            AND triggered.payload->>'deploymentId' = verified.payload->>'deploymentId'
           WHERE verified.org_id = $1 AND verified.project_id = $2 AND verified.run_id = $3
             AND verified.event_type = 'deploy.verified' AND verified.payload->>'deploymentId' = $4
-            AND (triggered.payload->>'ref' = $5 OR verified.payload->>'sourceRef' = $5)`,
+            AND verified.payload->>'sourceRef' = $5`,
         [input.orgId, input.projectId, input.runId, input.deploymentId, input.mergeSha],
       );
-      return result.rows.flatMap((row) => {
-        const triggered = record(row.triggered);
-        const verified = record(row.verified);
-        return verified?.["deploymentId"] === input.deploymentId &&
-          nonBlank(row.deploy_sha) &&
-          row.deploy_sha === input.mergeSha &&
-          (triggered === undefined || triggered["deploymentId"] === input.deploymentId)
-          ? [{ deploymentId: input.deploymentId, deploySha: input.mergeSha }]
-          : [];
-      });
+      return result.rows.flatMap((row) =>
+        row.deployment_id === input.deploymentId &&
+        nonBlank(row.verified_source_ref) &&
+        row.verified_source_ref === input.mergeSha &&
+        validDate(row.verified_at)
+          ? [
+              {
+                deploymentId: input.deploymentId,
+                verifiedSourceRef: row.verified_source_ref,
+                verifiedAt: row.verified_at,
+              },
+            ]
+          : [],
+      );
     });
   }
 
@@ -300,9 +324,12 @@ function observationFrom(
   if (!nonBlank(row.classification) || !(row.created_at instanceof Date)) return [];
   if (row.observer !== coordinate.observer || row.provider !== coordinate.provider) return [];
   if (payload["providerReceiptId"] !== row.provider_object_hash || !DIGEST.test(row.provider_object_hash)) return [];
+  const causeOrdinal = payload["causeOrdinal"];
+  if (!nonnegativeInt(causeOrdinal)) return [];
   return [
     {
       correlationId: payload["correlationId"],
+      causeOrdinal,
       providerReceiptId: row.provider_object_hash,
       observationId: row.observation_id,
       observer: row.observer,
@@ -331,4 +358,12 @@ function nonBlank(value: unknown): value is string {
 
 function positiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function nonnegativeInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function validDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
 }

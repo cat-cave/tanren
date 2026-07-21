@@ -156,6 +156,20 @@ export async function verifyDeploy(
     { provider: args.providerKind, appId: target.appId },
     args.deploymentId,
   );
+  const release = await ctx.releaseInstances.getByDeployment({
+    orgId: target.orgId,
+    provider: args.providerKind,
+    appId: target.appId,
+    deploymentId: args.deploymentId,
+  });
+  if (
+    release === undefined ||
+    release.projectId !== args.projectId ||
+    release.state !== "live" ||
+    release.sourceRef === ""
+  ) {
+    throw new Error(`deployOnMerge: verified deployment '${args.deploymentId}' has no live source SHA`);
+  }
   await runWithJobOrgId(target.orgId, async () => {
     await ctx.eventStore.append({
       runId: args.runId,
@@ -166,6 +180,7 @@ export async function verifyDeploy(
         provider: target.provider,
         appId: target.appId,
         deploymentId: args.deploymentId,
+        sourceRef: release.sourceRef,
         url: verification.url,
         state: verification.state,
         smokeStatus: verification.smokeStatus,
