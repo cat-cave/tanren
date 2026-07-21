@@ -410,3 +410,11 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// in-20: re-export the GET-only `/v1/orgs/.../integrations/*` read-surface
+// factory so `mountFeatureRoutes.ts` can import both the existing command
+// surface (`createIntegrationRoutes`) and the new read surface from a single
+// module — keeps that file under the `import/max-dependencies` cap. The
+// factory itself lives in `reads.ts` (separate concern, separate file).
+export { createIntegrationReadRoutes } from "./reads.js";
+export { INTEGRATION_READ_SURFACE_VERSION } from "./contract.js";

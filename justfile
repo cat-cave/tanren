@@ -71,6 +71,15 @@ dashboard-types-drift:
 rv-read-compat:
   corepack pnpm run check:rv-read-compat
 
+# in-20 read-compat guard for the integration HTTP read surface. Same SEMANTIC
+# shape as rv-read-compat: pins the exposed response shape against the committed
+# floor (contracts/integration-read-compat/v1.json) and fails ONLY on a backward-
+# INCOMPATIBLE change — an additive change passes. Keeps the in-21 Control Center
+# UI + external readers from silently breaking. Regen with
+# `codegen:integration-read-compat`. Shares the same pure classifier as rv-22.
+integration-read-compat:
+  corepack pnpm run check:integration-read-compat
+
 # Trust-at-boundary lint (audit RC-6): rejects re-introduced `as Date` (and
 # `.parse(...) as <ClosedEnum>`) casts in the run-detail read seam
 # (services/orchestrator/src/routes/runs/**), so a reverted Zod-decode fix fails
@@ -107,7 +116,7 @@ spelling:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat knip spelling typecheck test compose-config
+fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat integration-read-compat knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -156,7 +165,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat knip spelling typecheck test build compose-config
+ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
