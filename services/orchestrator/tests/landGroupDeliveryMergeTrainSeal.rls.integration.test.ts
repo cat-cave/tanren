@@ -9,6 +9,7 @@ import { MergeTrainArtifactWatcher } from "../src/engine/postMerge/mergeTrainArt
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import { groupDeployVerifiedPayload } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployerHelpers.js";
 import { ProductionGroupDeliveryDeployer } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { PgLandGroupDeliveryStore } from "../src/engine/postMerge/landGroupDelivery/landGroupDeliveryStore.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
 import {
@@ -34,29 +35,37 @@ describeDb("mq-13 × mq-15 — a land group's group-loop evidence seals a merge-
 
   afterAll(() => db.drop());
 
-  it("recovers deploy.verified for a live group stranded by a throw (idempotent) → mq-15 seals (Findings A + C)", async () => {
+  it("HEALTH-GATED recovery: unhealthy live prod → NO deploy.verified; healthy → emits (idempotent) → mq-15 seals (Findings A + C)", async () => {
     const { app, owner } = db;
     const plan = { ...basePlan(), landGroupId: LG };
-    // rel-prod is live (source_ref = MAIN) but RUN has NO deploy.verified (a prior attempt threw
-    // after the release went live and finalized needs_attention). Recovery must emit it now.
-    const deployer = new ProductionGroupDeliveryDeployer({
-      pool: app,
-      secrets: {} as never,
-      transport: {} as never,
-      eventStore: new PgEventStore(app),
-      // eslint-disable-next-line @typescript-eslint/require-await
-      urlProbe: { probe: async () => 200 },
-    });
-    await deployer.recoverDeployVerified({ plan, target: TARGET });
-    // Finding C: a SECOND recovery does NOT double-emit (idempotent at the write).
-    await deployer.recoverDeployVerified({ plan, target: TARGET });
-    const dv = await runWithOrgScope(app, ORG, (client) =>
-      client.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM events WHERE org_id = $1 AND run_id = $2 AND event_type = 'deploy.verified'",
-        [ORG, RUN],
-      ),
-    );
-    expect(dv.rows[0]?.n).toBe(1);
+    const build = (status: number): ProductionGroupDeliveryDeployer =>
+      new ProductionGroupDeliveryDeployer({
+        pool: app,
+        secrets: {} as never,
+        transport: {} as never,
+        eventStore: new PgEventStore(app),
+        intentStore: new PgLandGroupDeliveryStore(app),
+        // eslint-disable-next-line @typescript-eslint/require-await
+        urlProbe: { probe: async () => status },
+      });
+    const countDeployVerified = async (): Promise<number> => {
+      const r = await runWithOrgScope(app, ORG, (client) =>
+        client.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM events WHERE org_id = $1 AND run_id = $2 AND event_type = 'deploy.verified'",
+          [ORG, RUN],
+        ),
+      );
+      return r.rows[0]?.n ?? 0;
+    };
+    // rel-prod is DB-live (source_ref = MAIN) but its smoke probe returns 503 (UNHEALTHY). Recovery
+    // MUST NOT emit deploy.verified — else mq-15 would seal a broken product on false evidence.
+    await build(503).recoverDeployVerified({ plan, target: TARGET });
+    expect(await countDeployVerified()).toBe(0);
+    // The production recovers (HEALTHY 200) → recovery emits exactly once (Finding C: idempotent).
+    const healthy = build(200);
+    await healthy.recoverDeployVerified({ plan, target: TARGET });
+    await healthy.recoverDeployVerified({ plan, target: TARGET });
+    expect(await countDeployVerified()).toBe(1);
     // The recovered deploy.verified + demo.completed → mq-15 seals (the live group is not starved).
     await insertEvents(owner, RUN, [
       ["demo.completed", { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 }],

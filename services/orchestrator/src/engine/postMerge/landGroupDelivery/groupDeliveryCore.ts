@@ -154,9 +154,13 @@ export interface GroupDeliveryDeployer {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
-    /** The claim fence token — the intent marker + fenced write are keyed on it (Finding A). */
-    token?: string;
-    /** Immediate fence-recheck before the external deploy (Finding C). */
+    /**
+     * The claim fence token — the intent marker + fenced write are keyed on it. REQUIRED (this
+     * round's Finding B): the irreversible-effect path must be intent-fenced, so a mis-composition
+     * is a COMPILE error, not just a runtime throw.
+     */
+    token: string;
+    /** Immediate fence-recheck before the external deploy. */
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPreviewOutcome>;
   /**
@@ -197,8 +201,8 @@ export interface GroupDeliveryDeployer {
     target: ResolvedGroupDeployTarget;
     artifact: GroupArtifact;
     preview: GroupPreview;
-    /** The claim fence token — the intent marker + fenced write are keyed on it (Finding A). */
-    token?: string;
+    /** The claim fence token — the intent marker + fenced write are keyed on it. REQUIRED (Finding B). */
+    token: string;
     /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPromoteOutcome>;
@@ -266,8 +270,8 @@ export async function runGroupDelivery(deps: {
   readonly attribution: GroupRegressionAttribution;
   readonly plan: GroupDeliveryPlan;
   readonly target: ResolvedGroupDeployTarget;
-  /** The claim fence token — threaded to the intent-marked external steps (Finding A). */
-  readonly token?: string;
+  /** The claim fence token — threaded (REQUIRED, Finding B) to the intent-marked external steps. */
+  readonly token: string;
   /**
    * A progress sign-of-life the loop calls between phases to RENEW its liveness lease (Finding
    * 5); it THROWS if the claim was taken over (a stale owner) so this drive aborts before
@@ -290,7 +294,7 @@ export async function runGroupDelivery(deps: {
     plan,
     target,
     artifact,
-    ...(token !== undefined && { token }),
+    token,
     heartbeat: beat,
   });
   if (previewOutcome.kind === "ambiguous") return ambiguousDegrade(artifact.artifactDigest, null);
@@ -336,7 +340,7 @@ export async function runGroupDelivery(deps: {
       artifact,
       preview,
       beat,
-      ...(token !== undefined && { token }),
+      token,
     });
   } catch (error) {
     if (error instanceof LandGroupDeliveryClaimLostError) {
@@ -359,7 +363,7 @@ async function driveFromVerifiedPreview(deps: {
   readonly artifact: GroupArtifact;
   readonly preview: GroupPreview;
   readonly beat: () => Promise<void>;
-  readonly token?: string;
+  readonly token: string;
 }): Promise<GroupDeliveryOutcome> {
   const { deployer, attribution, plan, target, artifact, preview, beat, token } = deps;
   const previewFailed = (): GroupDeliveryOutcome => ({
@@ -394,7 +398,7 @@ async function driveFromVerifiedPreview(deps: {
     target,
     artifact,
     preview,
-    ...(token !== undefined && { token }),
+    token,
     heartbeat: beat,
   });
   if (promoteOutcome.kind === "ambiguous") {

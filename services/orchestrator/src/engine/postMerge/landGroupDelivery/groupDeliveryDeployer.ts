@@ -48,6 +48,7 @@ import {
   readBackGroupRelease,
   findGroupLiveProductionRelease,
   findGroupRelease,
+  isHealthySmokeStatus,
   resolveGroupBehaviorRevisionIds,
 } from "./groupDeliveryDeployerHelpers.js";
 import {
@@ -89,8 +90,12 @@ export interface ProductionGroupDeliveryDeployerDeps {
   readonly verifyPoll?: VerifyPollPolicy;
   /** Injectable DeployAdapter (tests); defaults to the production `direct_api` adapter per drive. */
   readonly deployAdapter?: DeployAdapter;
-  /** The intent-marker store (Finding A) — wired by the factory; absent ⇒ no intent gating (tests). */
-  readonly intentStore?: GroupIntentStore;
+  /**
+   * The intent-marker store (INTENT-MARKER-BEFORE-EFFECT). REQUIRED (this round's Finding B): the
+   * irreversible-effect path must be intent-fenced, so a mis-composition is a COMPILE error. The
+   * runtime guard in `markIntentOrAbort` remains as defense-in-depth against a type-cast bypass.
+   */
+  readonly intentStore: GroupIntentStore;
 }
 
 /** The `deploy.<provider>` provider kind maps onto the `deployRef.provider`. */
@@ -197,13 +202,10 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   }
 
   /**
-   * Write the step's intent marker FENCED (Finding A) BEFORE the external effect — which is ALSO
-   * the atomic immediate fence-recheck (the prior-round Finding C). A lost fence ⇒ throw claim-lost
-   * (abort before firing).
-   *
-   * FAIL-CLOSED (this round's Finding B): the intent store + fence token are REQUIRED before ANY
-   * irreversible external effect. A mis-composed deployer (missing either) MUST NOT fall through to
-   * firing without an intent marker — that would re-open the double-deploy window. Abort LOUD.
+   * Write the step's intent marker FENCED BEFORE the external effect (also the atomic immediate
+   * fence-recheck; a lost fence ⇒ throw claim-lost, abort before firing). FAIL-CLOSED (Finding B):
+   * the intent store + fence token are type-REQUIRED; this runtime guard is defense-in-depth against
+   * a type-cast bypass — a missing either MUST NOT fall through to firing without an intent marker.
    */
   private async markIntentOrAbort(
     plan: GroupDeliveryPlan,
@@ -486,8 +488,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       );
     }
     const smoke = await this.urlProbe.probe(poll.url);
-    const reachable = (smoke >= 200 && smoke < 400) || smoke === 401 || smoke === 403;
-    if (!reachable) {
+    if (!isHealthySmokeStatus(smoke)) {
       throw new Error(
         `land-group delivery: deployment '${deploymentId}' URL '${poll.url}' not reachable (HTTP ${String(smoke)})`,
       );

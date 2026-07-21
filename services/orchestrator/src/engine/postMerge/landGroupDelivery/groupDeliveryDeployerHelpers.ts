@@ -12,9 +12,24 @@ import { ReleaseInstancesStore } from "../../repositories/releaseInstances.js";
 import type { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
 import { loadSpecBehaviors } from "../demoOnDeployReads.js";
 import { deployAuditEnvelope } from "../deployOnMergeAuthority.js";
+import { createLogger } from "../../observability/logger.js";
 import type { GroupDeliveryPlan, PriorGoodRelease, ResolvedGroupDeployTarget } from "./groupDeliveryCore.js";
 
+const log = createLogger("land-group-delivery-deployer");
+
 const PROBEABLE_RELEASE_STATES = new Set(["built", "preview", "promoting", "live"]);
+
+/**
+ * The SINGLE deploy-health predicate shared by the happy-path verify (`verifyReadiness`) AND the
+ * recovery / no-op `deploy.verified` emit (`ensureGroupDeployVerified`), so both AGREE on what
+ * "live + reachable" means. Healthy = 2xx/3xx OR a 401/403 (a running deployment fronted by an
+ * auth gate — Vercel/Fly deployment protection — is up + serving). ANY other status (5xx, etc.) is
+ * UNHEALTHY: `deploy.verified` must NEVER be emitted for it (mq-15 would seal a broken product on
+ * false evidence).
+ */
+export function isHealthySmokeStatus(smokeStatus: number): boolean {
+  return (smokeStatus >= 200 && smokeStatus < 400) || smokeStatus === 401 || smokeStatus === 403;
+}
 
 /**
  * Build the GROUP's `deploy.verified` payload — the shape mq-15's `gatherEvidenceFromClient` and
@@ -115,6 +130,18 @@ export async function ensureGroupDeployVerified(
 ): Promise<void> {
   if (await deployVerifiedExists(deps.pool, plan)) return;
   const smokeStatus = await deps.urlProbe.probe(release.url);
+  // HEALTH GATE (Finding A): emit `deploy.verified` ONLY when the smoke probe is genuinely HEALTHY
+  // — the SAME predicate the happy-path `verifyReadiness` enforces. A DB-live-but-unhealthy
+  // production (5xx/etc.) must NEVER be recorded as verified (mq-15 would seal a broken product on
+  // false evidence). Leave it un-emitted; a later wake retries once the production recovers.
+  if (!isHealthySmokeStatus(smokeStatus)) {
+    log.warn("group live release is DB-live but unhealthy — NOT emitting deploy.verified (retry next wake)", {
+      landGroupId: plan.landGroupId,
+      deploymentId: release.deploymentId,
+      smokeStatus,
+    });
+    return;
+  }
   await emitGroupDeployVerified(deps, plan, target, {
     deploymentId: release.deploymentId,
     url: release.url,
