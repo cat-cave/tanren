@@ -112,18 +112,17 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         eagerBeams,
         semanticSchedule,
         groupDelivery,
-      ] =
-        await Promise.all([
-          client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
-          client.getQueueStats(ctx.org.id, project.projectId, windowDays),
-          signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
-          evaluationClient.listAuthorityEvaluations(ctx.org.id, project.projectId),
-          repairClient.listRepairRoutes(ctx.org.id, project.projectId),
-          trainClient.listTrain(ctx.org.id, project.projectId),
-          eagerBeamClient.listEagerBeams(ctx.org.id, project.projectId),
-          scheduleClient.getSchedule(ctx.org.id, project.projectId),
-          groupDeliveryClient.listDeliveries(ctx.org.id, project.projectId),
-        ]);
+      ] = await Promise.all([
+        client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
+        client.getQueueStats(ctx.org.id, project.projectId, windowDays),
+        signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
+        evaluationClient.listAuthorityEvaluations(ctx.org.id, project.projectId),
+        repairClient.listRepairRoutes(ctx.org.id, project.projectId),
+        trainClient.listTrain(ctx.org.id, project.projectId),
+        eagerBeamClient.listEagerBeams(ctx.org.id, project.projectId),
+        scheduleClient.getSchedule(ctx.org.id, project.projectId),
+        groupDeliveryClient.listDeliveries(ctx.org.id, project.projectId),
+      ]);
       const nodeId = mergeTrain?.artifacts?.[0]?.integrationNodeId;
       if (nodeId !== undefined) {
         const evidenceClient = new MergeQueueEvidenceContractsClient({
