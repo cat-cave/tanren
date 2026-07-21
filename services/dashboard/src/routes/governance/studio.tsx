@@ -17,11 +17,16 @@ import {
 import type { ProjectSummary } from "../../api/types.js";
 import { clientDepsFor } from "../../api/clientDeps.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
-import { GovernanceStudioBody, type GovernanceStudioFlash } from "../../components/governance/GovernanceStudioBody.js";
+import {
+  GovernanceStudioBody,
+  type ActiveReceipt,
+  type GovernanceStudioFlash,
+} from "../../components/governance/GovernanceStudioBody.js";
 
 type FormText = { readonly kind: "absent" | "invalid" } | { readonly kind: "text"; readonly value: string };
 type OptionalText = { readonly valid: true; readonly value: string | undefined } | { readonly valid: false };
 type ReceiptState = ReceiptRead | { readonly kind: "not_requested" | "invalid_query" };
+type ReceiptResult = { readonly receipt: ReceiptState; readonly activeReceipt: ActiveReceipt };
 type ReceiptCoordinate =
   | {
       readonly kind: "coordinate";
@@ -91,26 +96,52 @@ async function receiptFor(
   orgId: string,
   projectId: string,
   data: GovernanceStudioData,
-): Promise<ReceiptState> {
+): Promise<ReceiptResult> {
   const coordinate = receiptCoordinate(c, data);
-  if (coordinate.kind !== "coordinate") return coordinate;
-  const receipt = await readClient(c, deps).getReceipt(orgId, projectId, coordinate.subjectKind, coordinate.subjectId);
-  if (!coordinate.defaultActiveBinding || receipt.kind !== "found") return receipt;
   const binding = data.activeBinding;
-  const tier = binding === undefined ? undefined : data.tiersById.get(binding.tierId);
-  const revision = data.revisions.find((candidate) => candidate.id === receipt.snapshot.policyRevisionId);
-  if (
-    binding === undefined ||
-    tier === undefined ||
-    receipt.snapshot.bindingId !== binding.id ||
-    receipt.snapshot.tierId !== tier.id ||
-    receipt.snapshot.effectivePolicyHash !== binding.effectivePolicyHash ||
-    revision === undefined ||
-    revision.policyHash !== receipt.snapshot.effectivePolicyHash
-  ) {
-    return { kind: "malformed", status: 502 };
+  let receipt: ReceiptState = coordinate.kind === "coordinate" ? { kind: "not_requested" } : coordinate;
+  let activationReceipt: ReceiptRead | undefined;
+  if (coordinate.kind === "coordinate") {
+    const requested = await readClient(c, deps).getReceipt(
+      orgId,
+      projectId,
+      coordinate.subjectKind,
+      coordinate.subjectId,
+    );
+    receipt = requested;
+    if (binding !== undefined && coordinate.subjectKind === "activation" && coordinate.subjectId === binding.id)
+      activationReceipt = requested;
   }
-  return receipt;
+  if (binding === undefined) return { receipt, activeReceipt: { kind: "unverified" } };
+  const verified =
+    activationReceipt ?? (await readClient(c, deps).getReceipt(orgId, projectId, "activation", binding.id));
+  const tier = data.tiersById.get(binding.tierId);
+  const revision =
+    verified.kind === "found"
+      ? data.revisions.find((candidate) => candidate.id === verified.snapshot.policyRevisionId)
+      : undefined;
+  const activeReceipt: ActiveReceipt =
+    verified.kind === "found" &&
+    tier !== undefined &&
+    verified.snapshot.subjectKind === "activation" &&
+    verified.snapshot.subjectId === binding.id &&
+    verified.snapshot.bindingId === binding.id &&
+    verified.snapshot.tierId === tier.id &&
+    verified.snapshot.effectivePolicyHash === binding.effectivePolicyHash &&
+    revision !== undefined &&
+    revision.policyHash === verified.snapshot.effectivePolicyHash
+      ? { kind: "verified", snapshot: verified.snapshot }
+      : { kind: "unverified" };
+  if (
+    coordinate.kind === "coordinate" &&
+    coordinate.subjectKind === "activation" &&
+    coordinate.subjectId === binding.id &&
+    receipt.kind === "found" &&
+    activeReceipt.kind !== "verified"
+  ) {
+    receipt = { kind: "malformed", status: 502 };
+  }
+  return { receipt, activeReceipt };
 }
 
 async function renderStudio(
@@ -120,6 +151,7 @@ async function renderStudio(
     readonly requestedId: string | undefined;
     readonly flash?: GovernanceStudioFlash;
     readonly loaded?: GovernanceStudioRead;
+    readonly receipts?: ReceiptResult;
   },
 ): Promise<Response> {
   const ctx = await loadShellContext(c, deps, { activeNavId: "governance", projectId: input.requestedId });
@@ -129,10 +161,11 @@ async function renderStudio(
     project === undefined || ctx.org === undefined
       ? undefined
       : (input.loaded ?? (await readClient(c, deps).readProject(ctx.org.id, project.projectId)));
-  const receipt =
-    read?.ok === true && ctx.org !== undefined && project !== undefined
+  const receipts =
+    input.receipts ??
+    (read?.ok === true && ctx.org !== undefined && project !== undefined
       ? await receiptFor(c, deps, ctx.org.id, project.projectId, read.data)
-      : { kind: "not_requested" as const };
+      : { receipt: { kind: "not_requested" as const }, activeReceipt: { kind: "unverified" as const } });
   return renderShell(
     c,
     scopedCtx,
@@ -142,7 +175,8 @@ async function renderStudio(
       project={project}
       studio={read?.ok === true ? read.data : undefined}
       readFailure={read?.ok === false ? read.failure : undefined}
-      receipt={receipt}
+      receipt={receipts.receipt}
+      activeReceipt={receipts.activeReceipt}
       receiptKind={c.req.query("receiptKind")}
       receiptId={c.req.query("receiptId")}
       flash={input.flash}
@@ -295,22 +329,24 @@ export function mountGovernanceStudioScreen(app: Hono, deps: ShellDeps): void {
         flash: rejectedMessage("Revision lifecycle activation", result.status),
       });
     const confirmed = await readClient(c, deps).readProject(scope.orgId, projectId);
+    const receipts = confirmed.ok ? await receiptFor(c, deps, scope.orgId, projectId, confirmed.data) : undefined;
     const matched =
-      confirmed.ok &&
-      confirmed.data.revisions.some(
-        (revision) => revision.id === result.value.id && revision.policyHash === result.value.policyHash,
-      );
+      receipts?.activeReceipt.kind === "verified" &&
+      receipts.activeReceipt.snapshot.policyRevisionId === result.value.id &&
+      receipts.activeReceipt.snapshot.effectivePolicyHash === result.value.policyHash;
     return renderStudio(c, deps, {
       requestedId: projectId,
       loaded: confirmed,
+      receipts,
       flash: matched
         ? {
             kind: "ok",
-            message: `Lifecycle activation was confirmed by governance authority for revision ${revisionId}. Binding activation is a separate command.`,
+            message: `Lifecycle activation was confirmed by governance authority through the durable activation receipt for revision ${revisionId}. Binding activation is a separate command.`,
           }
         : {
             kind: "unknown",
-            message: "Lifecycle activation returned a response, but the revision coordinate could not be reloaded.",
+            message:
+              "Lifecycle activation returned a response, but its durable activation receipt is pending/unconfirmed for this revision.",
           },
     });
   });

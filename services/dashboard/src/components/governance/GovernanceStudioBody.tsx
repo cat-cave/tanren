@@ -13,6 +13,9 @@ import { CsrfField } from "../shell/CsrfField.js";
 import { GOVERNANCE_STUDIO_CSS } from "./studioStyles.js";
 
 export type GovernanceStudioFlash = { readonly kind: "ok" | "error" | "unknown"; readonly message: string } | undefined;
+export type ActiveReceipt =
+  | { readonly kind: "verified"; readonly snapshot: EffectivePolicySnapshot }
+  | { readonly kind: "unverified" };
 
 export interface GovernanceStudioBodyProps {
   readonly projects: readonly ProjectSummary[];
@@ -20,6 +23,7 @@ export interface GovernanceStudioBodyProps {
   readonly studio: GovernanceStudioData | undefined;
   readonly readFailure: "unavailable" | "malformed" | undefined;
   readonly receipt: ReceiptRead | { readonly kind: "not_requested" | "invalid_query" };
+  readonly activeReceipt: ActiveReceipt;
   readonly receiptKind: string | undefined;
   readonly receiptId: string | undefined;
   readonly flash: GovernanceStudioFlash;
@@ -51,7 +55,7 @@ function ProjectPicker(props: Pick<GovernanceStudioBodyProps, "projects" | "proj
   );
 }
 
-function BindingPanel(props: { data: GovernanceStudioData }) {
+function BindingPanel(props: { data: GovernanceStudioData; activeReceipt: ActiveReceipt }) {
   const binding = props.data.activeBinding;
   const tier = binding === undefined ? undefined : props.data.tiersById.get(binding.tierId);
   return (
@@ -68,13 +72,18 @@ function BindingPanel(props: { data: GovernanceStudioData }) {
               No active policy is asserted. Bind a verified tier through the governance authority.
             </span>
           </>
-        ) : (
+        ) : props.activeReceipt.kind === "verified" ? (
           <>
             <strong data-governance-active-tier={tier.id}>{tier.tierName}</strong>
             <Fact label="binding" value={binding.id} />
             <Fact label="tier" value={`${tier.preset} · ${tier.id}`} />
             <Fact label="effective hash" value={binding.effectivePolicyHash} />
           </>
+        ) : (
+          <div class="state unavailable" data-governance-active-unverified>
+            active-unverified — the authority reports a binding, but its exact activation receipt is unavailable or
+            inconsistent. The active policy claim is blocked.
+          </div>
         )}
       </div>
     </section>
@@ -402,7 +411,7 @@ export function GovernanceStudioBody(props: GovernanceStudioBodyProps) {
           ) : (
             <>
               <div class="studio-grid">
-                <BindingPanel data={props.studio} />
+                <BindingPanel data={props.studio} activeReceipt={props.activeReceipt} />
                 <ReceiptPanel
                   receipt={props.receipt}
                   receiptKind={props.receiptKind}

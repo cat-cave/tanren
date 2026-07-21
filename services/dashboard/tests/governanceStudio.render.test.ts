@@ -86,6 +86,8 @@ let revisions: (typeof REVISION)[];
 let bindings: (typeof BINDING)[];
 let receipt: typeof RECEIPT;
 let revisionStatus: number;
+let receiptStatus: number;
+let activationReceiptReads: number;
 let capturedWrites: Array<{ path: string; body: unknown; headers: Record<string, string> }>;
 
 function stubPool(): pg.Pool {
@@ -108,7 +110,12 @@ function mockOrchestrator(): void {
     if (method === "GET" && path === `${base}/revisions`) return json({ revisions }, revisionStatus);
     if (method === "GET" && path === `${base}/tiers`) return json({ tiers: [TIER] });
     if (method === "GET" && path === `${base}/bindings`) return json({ bindings });
-    if (method === "GET" && path === `${base}/effective/activation/${BINDING.id}`) return json({ snapshot: receipt });
+    if (method === "GET" && path === `${base}/effective/activation/${BINDING.id}`) {
+      activationReceiptReads += 1;
+      return receiptStatus === 200
+        ? json({ snapshot: receipt })
+        : json({ error: "effective_policy_snapshot_not_found" }, receiptStatus);
+    }
     if (method === "GET" && path.startsWith(`${base}/effective/`))
       return json({ error: "effective_policy_snapshot_not_found" }, 404);
     if (method === "POST") {
@@ -136,6 +143,8 @@ beforeEach(() => {
   bindings = [BINDING];
   receipt = RECEIPT;
   revisionStatus = 200;
+  receiptStatus = 200;
+  activationReceiptReads = 0;
   capturedWrites = [];
   mockOrchestrator();
 });
@@ -196,11 +205,21 @@ describe("Governance Studio", () => {
     expect(html).not.toContain('data-governance-receipt="effective_policy_snapshot_1"');
   });
 
+  it("suppresses the active-tier claim when its exact activation receipt is not found", async () => {
+    receiptStatus = 404;
+    const html = await (await (await build()).request("/governance?projectId=project_easy")).text();
+    expect(html).toContain("data-governance-receipt-not-found");
+    expect(html).not.toContain("data-governance-active-tier");
+    expect(html).toContain("data-governance-active-unverified");
+  });
+
   it("rejects a default activation receipt whose binding coordinate diverges from the active binding", async () => {
     receipt = { ...RECEIPT, bindingId: "policy_binding_other" };
     const html = await (await (await build()).request("/governance?projectId=project_easy")).text();
     expect(html).toContain("data-governance-receipt-unavailable");
     expect(html).not.toContain('data-governance-receipt="effective_policy_snapshot_1"');
+    expect(html).not.toContain("data-governance-active-tier");
+    expect(html).toContain("data-governance-active-unverified");
   });
 
   it("rejects malformed author input before any governance command", async () => {
@@ -236,6 +255,7 @@ describe("Governance Studio", () => {
       body: `projectId=project_easy&parentRevisionId=policy_revision_1&fragmentConfig=${encodeURIComponent(JSON.stringify(FRAGMENT_CONFIG))}`,
     });
     expect(await author.text()).toContain("created and reloaded from the authoritative lineage");
+    activationReceiptReads = 0;
     const activate = await app.request("/governance/revisions/activate", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -247,6 +267,40 @@ describe("Governance Studio", () => {
       `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/revisions/${REVISION.id}/activate`,
     ]);
     expect(capturedWrites.every((write) => write.headers["x-csrf-token"] === "csrf-live")).toBe(true);
+    expect(activationReceiptReads).toBe(1);
+  });
+
+  it("keeps lifecycle activation pending when its durable activation receipt is unavailable", async () => {
+    receiptStatus = 404;
+    const response = await (
+      await build()
+    ).request("/governance/revisions/activate", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "projectId=project_easy&revisionId=policy_revision_1",
+    });
+    const html = await response.text();
+    expect(html).toContain("pending/unconfirmed");
+    expect(html).not.toContain("Lifecycle activation was confirmed by governance authority");
+    expect(html).not.toContain("data-governance-active-tier");
+    expect(html).toContain("data-governance-active-unverified");
+    expect(activationReceiptReads).toBe(1);
+  });
+
+  it("keeps lifecycle activation pending when the durable receipt names another revision", async () => {
+    receipt = { ...RECEIPT, policyRevisionId: "policy_revision_other" };
+    const response = await (
+      await build()
+    ).request("/governance/revisions/activate", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "projectId=project_easy&revisionId=policy_revision_1",
+    });
+    const html = await response.text();
+    expect(html).toContain("pending/unconfirmed");
+    expect(html).not.toContain("Lifecycle activation was confirmed by governance authority");
+    expect(html).not.toContain("data-governance-active-tier");
+    expect(html).toContain("data-governance-active-unverified");
   });
 
   it("activates the observed tier only through the canonical binding command", async () => {
