@@ -130,6 +130,14 @@ export const NAV_GROUPS: NavGroup[] = [
         spec: "P2B-0003",
       },
       {
+        id: "governance",
+        glyph: "⌘",
+        label: "governance studio",
+        path: "/governance",
+        phase: "2b",
+        spec: "gv-15",
+      },
+      {
         id: "config",
         glyph: "▮",
         label: "tanren-config",

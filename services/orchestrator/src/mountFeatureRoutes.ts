@@ -123,6 +123,10 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     identitySecretRef: deps.identitySecretRef,
   };
   const forgeAnswerers = buildForgeRouteAnswererFactories(forgeInfra);
+  // gv-15: the existing gv-7..14 authority must be registered on the real
+  // production app. The dashboard consumes these routes; a constructed but
+  // unmounted factory is not an HTTP surface.
+  forgeAnswerers.mountGovernanceRoutes(app);
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
   // Wave-2 operator API: the "Connect AI provider" + billing-mode settings surface.
   // Mounted on the org-scoping pool (reads/writes `organizations.config` under RLS)
