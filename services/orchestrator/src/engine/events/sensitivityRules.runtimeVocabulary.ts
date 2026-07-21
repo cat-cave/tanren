@@ -34,7 +34,15 @@ export const runtimeVocabularySensitivityRules: SensitivityRule[] = [
   ...publicRules("behavior.attempt.started", ["behaviorRevisionId", "shardId", "attempt"]),
   ...publicRules("behavior.action.observed", ["behaviorRevisionId", "shardId", "actionId", "surface"]),
   ...publicRules("behavior.assertion.observed", ["behaviorRevisionId", "shardId", "assertionId", "satisfied"]),
-  ...publicRules("behavior.effect.observed", ["behaviorRevisionId", "shardId", "correlationId", "providerReceiptId"]),
+  ...publicRules("behavior.effect.observed", [
+    "behaviorRevisionId",
+    "shardId",
+    "correlationId",
+    "providerReceiptId",
+    "deliveryRunId",
+    "causeOrdinal",
+    "occurrenceCount",
+  ]),
   ...publicRules("design.render.captured", ["behaviorRevisionId", "checkpointId", "viewport", "theme"]),
   ...publicRules("design.render.verdict_recorded", ["behaviorRevisionId", "checkpointId", "verdict"]),
   ...publicRules("behavior.verdict.recorded", [

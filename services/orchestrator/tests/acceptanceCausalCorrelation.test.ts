@@ -13,6 +13,7 @@ import {
   type AcceptanceEventSink,
   type AcceptancePlan,
   type AcceptanceRunStore,
+  type AcceptanceSurfaceDriver,
   type CausalEffectReader,
   type CauseDriveInput,
   type CauseFiring,
@@ -196,6 +197,42 @@ function twoSiblingSameCursorPlan(): AcceptancePlan {
 }
 
 describe("rv-12 A3 causal-correlation orchestration", () => {
+  it("EXACTLY-ONCE: reserves a causal HTTP action for the intent-fenced cause driver", async () => {
+    const drivenPlans: AcceptancePlan[] = [];
+    let causeFires = 0;
+    const surfaceDriver: AcceptanceSurfaceDriver = {
+      surface: "api",
+      drive: async (input) => {
+        drivenPlans.push(input.plan);
+        return { observations: [] };
+      },
+    };
+    const causalDriver: AcceptanceCauseDriver = {
+      surface: "api",
+      fireCause: async () => {
+        causeFires += 1;
+        return FIRING;
+      },
+    };
+    const plan = {
+      ...causalPlan("has_cardinality", 1),
+      requiredSurfaces: ["api"] as const,
+      httpProbes: [{ probeId: "post_order", method: "POST", path: "/orders" }],
+    };
+    const result = await new AcceptanceOrchestrator({
+      store: new InMemoryAcceptanceRunStore(),
+      events: new NullEventSink(),
+      drivers: [surfaceDriver],
+      causeDrivers: [causalDriver],
+      effectReader: reader([effect({ cursor: "1500", triggerIdHash: ID(1), providerObjectHash: ID(9) })]),
+    }).execute(request(plan));
+
+    expect(drivenPlans).toHaveLength(1);
+    expect(drivenPlans[0]?.httpProbes).toEqual([]);
+    expect(causeFires).toBe(1);
+    expect(result.behaviors[0]?.outcome).toBe("passed");
+  });
+
   it("exactly one correlated effect passes the has_cardinality(1) assertion", async () => {
     const store = new InMemoryAcceptanceRunStore();
     const orchestrator = new AcceptanceOrchestrator({
@@ -240,6 +277,52 @@ describe("rv-12 A3 causal-correlation orchestration", () => {
     expect(result.behaviors[0]?.outcome).toBe("failed_product");
     expect(result.behaviors[0]?.outcome).not.toBe("passed");
     expect(result.passedVerdictCount).toBe(0);
+  });
+
+  it("FAIL-CLOSED: two matching provider messages fail exactly_once instead of collapsing to one observation row", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new NullEventSink(),
+      causeDrivers: [causeDriver(FIRING)],
+      // The live Slack reader records one immutable duplicate observation with
+      // occurrenceCount=2. Correlation must expand that exact multiplicity.
+      effectReader: reader([
+        effect({
+          cursor: "1500",
+          triggerIdHash: ID(1),
+          providerObjectHash: ID(9),
+          occurrenceCount: 2,
+          classification: "duplicate",
+        }),
+      ]),
+    });
+
+    const result = await orchestrator.execute(request(causalPlan("exactly_once", ID(9))));
+
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
+    expect(result.passedVerdictCount).toBe(0);
+  });
+
+  it("FAIL-CLOSED: duplicate occurrences fail equals against the exact expected effect multiset", async () => {
+    const orchestrator = new AcceptanceOrchestrator({
+      store: new InMemoryAcceptanceRunStore(),
+      events: new NullEventSink(),
+      causeDrivers: [causeDriver(FIRING)],
+      effectReader: reader([
+        effect({
+          cursor: "1500",
+          triggerIdHash: ID(1),
+          providerObjectHash: ID(9),
+          occurrenceCount: 2,
+          classification: "duplicate",
+        }),
+      ]),
+    });
+
+    const result = await orchestrator.execute(request(causalPlan("equals", [ID(9)])));
+
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
   });
 
   it("DECISIVE: a pre-existing effect (before the cause fired) is not counted", async () => {

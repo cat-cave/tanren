@@ -5,6 +5,7 @@
 // → repair route vs ambiguous → needs_attention (no fabricated repair target).
 
 import { describe, expect, it } from "vitest";
+import type { GroupDeliveryA3Gate } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryA3Gate.js";
 import {
   LandGroupDeliveryClaimLostError,
   runGroupDelivery,
@@ -29,6 +30,7 @@ const PLAN: GroupDeliveryPlan = {
   mainSha: "sha-main",
   tailRunId: "run-tail",
   tailSpecId: "spec-tail",
+  deliveryRunId: "delivery-decision",
   memberRunIds: ["run-a", "run-tail"],
   memberSpecIds: ["spec-a", "spec-tail"],
 };
@@ -132,10 +134,36 @@ class FakeAttribution implements GroupRegressionAttribution {
   }
 }
 
+class FakeA3Gate implements GroupDeliveryA3Gate {
+  readonly calls: string[] = [];
+  constructor(
+    private readonly result: {
+      readonly seal?: "confirmed" | "blocked";
+      readonly complete?: "confirmed" | "blocked";
+    } = {},
+  ) {}
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async seal(): Promise<{ readonly kind: "confirmed" } | { readonly kind: "blocked"; readonly reason: string }> {
+    this.calls.push("seal");
+    return this.result.seal === "blocked"
+      ? { kind: "blocked", reason: "A3 binding is unsealed" }
+      : { kind: "confirmed" };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async complete(): Promise<{ readonly kind: "confirmed" } | { readonly kind: "blocked"; readonly reason: string }> {
+    this.calls.push("complete");
+    return this.result.complete === "blocked"
+      ? { kind: "blocked", reason: "A3 effect is absent or inconclusive" }
+      : { kind: "confirmed" };
+  }
+}
+
 const UNATTRIBUTED = new FakeAttribution({ kind: "unattributed", reason: "inconclusive" });
 
-function drive(deployer: FakeDeployer, attribution: GroupRegressionAttribution) {
-  return runGroupDelivery({ deployer, attribution, plan: PLAN, target: TARGET });
+function drive(deployer: FakeDeployer, attribution: GroupRegressionAttribution, a3Gate = new FakeA3Gate()) {
+  return runGroupDelivery({ deployer, a3Gate, attribution, plan: PLAN, target: TARGET, token: "group-claim" });
 }
 
 describe("runGroupDelivery — fail-closed group delivery", () => {
@@ -156,6 +184,32 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
     expect(outcome.disposition).toBe("none");
     expect(outcome.productionReleaseInstanceId).toBe("rel-prod");
     expect(outcome.artifactDigest).toBe(ARTIFACT.artifactDigest);
+  });
+
+  it("A3 control: a sealed member effect fires the production demo, passes the exact gate, and completes", async () => {
+    const deployer = new FakeDeployer();
+    const a3Gate = new FakeA3Gate();
+    const outcome = await drive(deployer, UNATTRIBUTED, a3Gate);
+    expect(deployer.calls).toContain("demo:production");
+    expect(a3Gate.calls).toEqual(["seal", "complete"]);
+    expect(outcome.state).toBe("completed");
+  });
+
+  it("A3 negative control: an unsealed member binding blocks completion before the production trigger", async () => {
+    const deployer = new FakeDeployer();
+    const outcome = await drive(deployer, UNATTRIBUTED, new FakeA3Gate({ seal: "blocked" }));
+    expect(deployer.calls).not.toContain("demo:production");
+    expect(outcome.state).toBe("needs_attention");
+    expect(outcome.productionReleaseInstanceId).toBe("rel-prod");
+  });
+
+  it("A3 negative control: an unobserved member effect blocks completion after the production trigger", async () => {
+    const deployer = new FakeDeployer();
+    const a3Gate = new FakeA3Gate({ complete: "blocked" });
+    const outcome = await drive(deployer, UNATTRIBUTED, a3Gate);
+    expect(deployer.calls).toContain("demo:production");
+    expect(a3Gate.calls).toEqual(["seal", "complete"]);
+    expect(outcome.state).toBe("needs_attention");
   });
 
   it("failed preview demo → NO promote + preview teardown (gravest fail-open blocked)", async () => {
@@ -247,7 +301,15 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
       if (deployer.calls.includes("applyPreview")) throw new LandGroupDeliveryClaimLostError("lg-1");
     };
     await expect(
-      runGroupDelivery({ deployer, attribution: UNATTRIBUTED, plan: PLAN, target: TARGET, heartbeat }),
+      runGroupDelivery({
+        deployer,
+        a3Gate: new FakeA3Gate(),
+        attribution: UNATTRIBUTED,
+        plan: PLAN,
+        target: TARGET,
+        token: "group-claim",
+        heartbeat,
+      }),
     ).rejects.toThrow(LandGroupDeliveryClaimLostError);
     expect(deployer.calls).toContain("applyPreview");
     // never promoted after the claim was lost; the applied preview was torn down (no leak)

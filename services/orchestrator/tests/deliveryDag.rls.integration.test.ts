@@ -74,6 +74,10 @@ describeDb("DeliveryDagDriver — real-Postgres durable resumable delivery DAG",
       deployRunner: deploy,
       demoRunner: demo,
       saga: { driveForOrg: () => Promise.resolve({ stateUnknown: 0, needsAttention: 0 }) },
+      // This legacy DAG substrate fixture has no product binding generations.
+      // A3's production factory wires PgDeliveryBindingSetSealer; this test only
+      // exercises the pre-existing run/fence/RLS state machine.
+      bindingSetSealer: { seal: () => Promise.resolve({ kind: "sealed" as const, count: 0 }) },
       evidence: { eventStore: new PgEventStore(orgScopingPool(appPool)), signer: contentAddressedEvidenceSigner },
       demoGate: new PgDeployTriggerGate(appPool, "delivery.demo"),
     });

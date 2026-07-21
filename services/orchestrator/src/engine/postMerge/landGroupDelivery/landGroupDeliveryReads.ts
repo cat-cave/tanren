@@ -114,6 +114,7 @@ export async function resolveCompletedGroup(pool: pg.Pool, runId: string): Promi
       mainSha: completed.mainSha,
       tailRunId: lineage.runId,
       tailSpecId: lineage.specId,
+      deliveryRunId: `delivery-${completed.decisionId}`,
       memberRunIds: members.runIds,
       memberSpecIds: members.specIds,
     };

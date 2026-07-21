@@ -108,25 +108,34 @@ describe("signed delivery evidence", () => {
 describe("reconcile_binding stage", () => {
   it("confirms when the saga converged", async () => {
     const { deps } = stagesDeps();
-    expect((await new DeliveryStages(deps).run("reconcile_binding", lineage, "d-1", newDriveMemo())).kind).toBe(
-      "confirmed",
-    );
+    expect(
+      (await new DeliveryStages(deps).run("reconcile_binding", lineage, "d-1", newDriveMemo(), "claim-1")).kind,
+    ).toBe("confirmed");
   });
   it("degrades on an unresolved reconcile (state_unknown / needs_attention)", async () => {
     const { deps } = stagesDeps({ saga: { driveForOrg: async () => ({ stateUnknown: 1, needsAttention: 0 }) } });
-    const out = await new DeliveryStages(deps).run("reconcile_binding", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("reconcile_binding", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out.kind).toBe("degraded");
+  });
+  it("FAIL-CLOSED: does not advance when the exact release binding set cannot be sealed", async () => {
+    const { deps } = stagesDeps({
+      bindingSetSealer: { seal: async () => ({ kind: "unavailable", detail: "missing generation" }) },
+    });
+    const out = await new DeliveryStages(deps).run("reconcile_binding", lineage, "d-1", newDriveMemo(), "claim-1");
+    expect(out).toMatchObject({ kind: "degraded", classification: "release_binding_set_unconfirmed" });
   });
 });
 
 describe("mint_lease stage (fail-closed on unavailable scoped-lease backend)", () => {
   it("no-ops when there are no provisioned production secrets", async () => {
     const { deps } = stagesDeps();
-    expect((await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo())).kind).toBe("confirmed");
+    expect((await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo(), "claim-1")).kind).toBe(
+      "confirmed",
+    );
   });
   it("degrades fail-closed when product secrets exist but no minter is available", async () => {
     const { deps } = stagesDeps({ signals: fakeSignals({ provisionedProductionSecretRefs: async () => ["ref/a"] }) });
-    const out = await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out).toMatchObject({ kind: "degraded", classification: "scoped_lease_backend_unavailable" });
   });
   it("mints the activation-scoped lease over exactly the project secret refs", async () => {
@@ -147,7 +156,9 @@ describe("mint_lease stage (fail-closed on unavailable scoped-lease backend)", (
         },
       },
     });
-    expect((await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo())).kind).toBe("confirmed");
+    expect((await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo(), "claim-1")).kind).toBe(
+      "confirmed",
+    );
     expect(minted).toEqual([["ref/a", "ref/b"]]);
   });
   it("degrades when the mint throws (never a silent pass)", async () => {
@@ -159,7 +170,7 @@ describe("mint_lease stage (fail-closed on unavailable scoped-lease backend)", (
         },
       },
     });
-    const out = await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("mint_lease", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out).toMatchObject({ kind: "degraded", classification: "scoped_lease_mint_failed" });
   });
 });
@@ -171,7 +182,7 @@ describe("deploy + demo cluster stages drive the idempotent runners once", () =>
     const stages = new DeliveryStages(deps);
     const memo = newDriveMemo();
     for (const s of ["materialize_env", "attach_runtime", "deploy", "verify_deploy"] as DeliveryStage[]) {
-      expect((await stages.run(s, lineage, "d-1", memo)).kind).toBe("confirmed");
+      expect((await stages.run(s, lineage, "d-1", memo, "claim-1")).kind).toBe("confirmed");
     }
     expect(deployRunner.calls).toEqual(["run-1"]);
   });
@@ -189,7 +200,7 @@ describe("deploy + demo cluster stages drive the idempotent runners once", () =>
         },
       }),
     });
-    const out = await new DeliveryStages(deps).run("materialize_env", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("materialize_env", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(threwSeen).toBe(true);
     expect(out.kind).toBe("degraded");
   });
@@ -199,16 +210,18 @@ describe("deploy + demo cluster stages drive the idempotent runners once", () =>
     });
     const stages = new DeliveryStages(deps);
     const memo = newDriveMemo();
-    expect((await stages.run("stimulate", lineage, "d-1", memo)).kind).toBe("confirmed");
-    expect((await stages.run("observe", lineage, "d-1", memo)).kind).toBe("confirmed");
+    expect((await stages.run("stimulate", lineage, "d-1", memo, "claim-1")).kind).toBe("confirmed");
+    expect((await stages.run("observe", lineage, "d-1", memo, "claim-1")).kind).toBe("confirmed");
   });
 });
 
 describe("record_evidence stage (the fail-closed completion gate)", () => {
-  it("degrades fail-closed when a product integration requires an unobservable A3 effect", async () => {
-    const { deps, events } = stagesDeps({ signals: fakeSignals({ releaseRequiredCount: async () => 1 }) });
-    const out = await new DeliveryStages(deps).run("record_evidence", lineage, "d-1", newDriveMemo());
-    expect(out).toMatchObject({ kind: "degraded", classification: "product_integration_effect_unobservable" });
+  it("degrades fail-closed when a release-required A3 effect lacks positive evidence", async () => {
+    const { deps, events } = stagesDeps({
+      signals: fakeSignals({ releaseRequiredA3Count: async () => ({ required: 1, confirmed: 0 }) }),
+    });
+    const out = await new DeliveryStages(deps).run("record_evidence", lineage, "d-1", newDriveMemo(), "claim-1");
+    expect(out).toMatchObject({ kind: "degraded", classification: "product_integration_effect_unconfirmed" });
     // NEVER a completed attestation without the effect
     expect(events.appended).toHaveLength(0);
   });
@@ -220,7 +233,7 @@ describe("record_evidence stage (the fail-closed completion gate)", () => {
         verifiedDeploymentId: async () => "dep-9",
       }),
     });
-    const out = await new DeliveryStages(deps).run("record_evidence", lineage, "d-2", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("record_evidence", lineage, "d-2", newDriveMemo(), "claim-1");
     expect(out.kind).toBe("confirmed");
     expect(events.appended).toHaveLength(1);
     const ev = events.appended[0];
@@ -229,9 +242,9 @@ describe("record_evidence stage (the fail-closed completion gate)", () => {
   });
   it("does not double-emit on resume when the attestation already exists", async () => {
     const { deps, events } = stagesDeps({ signals: fakeSignals({ deliveryCompletedExists: async () => true }) });
-    expect((await new DeliveryStages(deps).run("record_evidence", lineage, "d-1", newDriveMemo())).kind).toBe(
-      "confirmed",
-    );
+    expect(
+      (await new DeliveryStages(deps).run("record_evidence", lineage, "d-1", newDriveMemo(), "claim-1")).kind,
+    ).toBe("confirmed");
     expect(events.appended).toHaveLength(0);
   });
 });

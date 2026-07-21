@@ -11,7 +11,10 @@
  * carries the cause's propagated correlation id, so a concurrent cause's effect
  * with a different id is excluded. An observed-ABSENCE ("missing") is never an
  * occurrence. There is no fabricated or over-broad match: every predicate is a
- * genuine ordering / identity fact drawn from the observation itself.
+ * genuine ordering / identity fact drawn from the observation itself. A compact
+ * provider observation can attest multiple matching objects; it is expanded to
+ * its exact occurrence multiplicity so a duplicate can never masquerade as one
+ * set member for `equals`, `exactly_once`, or cardinality assertions.
  *
  * This module is a leaf: it holds only pure functions + the causal contract
  * types, so both the orchestrator and the causal stage import from it without a
@@ -137,18 +140,31 @@ export function correlateEffects(input: CorrelateInput): readonly EffectObservat
     if (compareCursor(sibling, lower) < 0) continue;
     if (upper === undefined || compareCursor(sibling, upper) < 0) upper = sibling;
   }
-  return input.effects.filter((effect) => {
-    if (effect.classification === "missing") return false;
+  return input.effects.flatMap((effect) => {
+    const occurrences = validatedOccurrenceCount(effect);
+    if (effect.classification === "missing") return [];
     const cursor = effectCursor(effect);
-    if (cursor === undefined) return false;
-    if (compareCursor(cursor, lower) <= 0) return false;
-    if (upper !== undefined && compareCursor(cursor, upper) >= 0) return false;
+    if (cursor === undefined) return [];
+    if (compareCursor(cursor, lower) <= 0) return [];
+    if (upper !== undefined && compareCursor(cursor, upper) >= 0) return [];
     if (input.requireCorrelationId) {
-      if (input.cause.correlationId === undefined) return false;
-      if (effect.triggerIdHash !== input.cause.correlationId) return false;
+      if (input.cause.correlationId === undefined) return [];
+      if (effect.triggerIdHash !== input.cause.correlationId) return [];
     }
-    return true;
+    return Array.from({ length: occurrences }, () => effect);
   });
+}
+
+function validatedOccurrenceCount(effect: EffectObservation): number {
+  if (!Number.isSafeInteger(effect.occurrenceCount) || effect.occurrenceCount < 0) {
+    throw new Error("effect observation has an invalid occurrence count");
+  }
+  if (effect.classification === "missing") {
+    if (effect.occurrenceCount !== 0) throw new Error("missing effect observation has non-zero occurrence count");
+    return 0;
+  }
+  if (effect.occurrenceCount < 1) throw new Error("positive effect observation has zero occurrence count");
+  return effect.occurrenceCount;
 }
 
 const COUNT_OPERATORS = new Set<ComparisonOperator>([

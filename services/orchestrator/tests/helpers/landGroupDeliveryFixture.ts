@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import type { ActorContext } from "../../src/auth/schemas.js";
 import type { ActorContextEnv } from "../../src/middleware/auth.js";
 import { createLandGroupDeliveryRoutes } from "../../src/routes/mergeQueue/landGroupDelivery.js";
+import type { GroupDeliveryA3Gate } from "../../src/engine/postMerge/landGroupDelivery/groupDeliveryA3Gate.js";
 import type {
   GroupArtifact,
   GroupAttributionResult,
@@ -323,6 +324,7 @@ export function basePlan(): GroupDeliveryPlan {
     mainSha: MAIN,
     tailRunId: RUN,
     tailSpecId: SPEC,
+    deliveryRunId: "delivery-dec",
     memberRunIds: [RUN_A, RUN],
     memberSpecIds: [SPEC_A, SPEC],
   };
@@ -367,6 +369,18 @@ export class HappyFakeDeployer implements GroupDeliveryDeployer {
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async rollback(): Promise<void> {}
+}
+
+/** A non-production loop fixture has no live integration bindings to seal. */
+export class PassingA3Gate implements GroupDeliveryA3Gate {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async seal(): Promise<{ readonly kind: "confirmed" }> {
+    return { kind: "confirmed" };
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async complete(): Promise<{ readonly kind: "confirmed" }> {
+    return { kind: "confirmed" };
+  }
 }
 
 export class NoopAttribution implements GroupRegressionAttribution {

@@ -7,10 +7,25 @@
       "minLength": 1,
       "type": "string"
     },
+    "causeOrdinal": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
     "correlationId": {
       "maxLength": 256,
       "minLength": 1,
       "type": "string"
+    },
+    "deliveryRunId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "occurrenceCount": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
     },
     "providerReceiptId": {
       "maxLength": 256,

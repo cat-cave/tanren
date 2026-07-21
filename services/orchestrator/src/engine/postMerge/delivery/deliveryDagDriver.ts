@@ -56,7 +56,13 @@ export interface DeliveryStagePlanStore {
 
 /** The stage executor subset the plan driver needs (injectable). */
 export interface DeliveryStagesLike {
-  run(stage: DeliveryStage, lineage: DeliveryLineage, deliveryRunId: string, memo: DriveMemo): Promise<StageOutcome>;
+  run(
+    stage: DeliveryStage,
+    lineage: DeliveryLineage,
+    deliveryRunId: string,
+    memo: DriveMemo,
+    token: string,
+  ): Promise<StageOutcome>;
 }
 
 /** The terminal disposition of one drive. `claim_lost` ⇒ superseded; record nothing terminal. */
@@ -98,7 +104,7 @@ export async function driveDeliveryStagePlan(input: {
     const attemptId = await store.startStageAttempt(orgId, deliveryRunId, token, stage, attempt);
     if (attemptId === undefined) return "claim_lost";
 
-    const outcome = await stages.run(stage, lineage, deliveryRunId, memo);
+    const outcome = await stages.run(stage, lineage, deliveryRunId, memo, token);
 
     if (outcome.kind === "confirmed") {
       if (!(await store.succeedStageAttempt(orgId, deliveryRunId, token, attemptId))) return "claim_lost";

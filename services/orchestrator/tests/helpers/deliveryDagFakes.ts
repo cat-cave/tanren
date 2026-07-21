@@ -40,7 +40,7 @@ export function fakeSignals(overrides: Partial<DeliverySignals> = {}): DeliveryS
   return {
     deployReach: async () => "none",
     demoReach: async () => "none",
-    releaseRequiredCount: async () => 0,
+    releaseRequiredA3Count: async () => ({ required: 0, confirmed: 0 }),
     provisionedProductionSecretRefs: async () => [],
     verifiedDeploymentId: async () => {},
     deliveryCompletedExists: async () => false,
@@ -82,6 +82,7 @@ export function stagesDeps(overrides: Partial<DeliveryStageDeps> = {}): {
     deployRunner: fakeRunner(),
     demoRunner: fakeRunner(),
     saga: { driveForOrg: async () => ({ stateUnknown: 0, needsAttention: 0 }) },
+    bindingSetSealer: { seal: async () => ({ kind: "sealed", count: 0 }) },
     evidence: { eventStore: events, signer: contentAddressedEvidenceSigner },
     demoGate: fakeGate(),
     ...overrides,

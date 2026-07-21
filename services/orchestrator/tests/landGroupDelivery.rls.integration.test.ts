@@ -31,6 +31,7 @@ import {
   NoopAttribution,
   ORG,
   OTHER_ORG,
+  PassingA3Gate,
   PROJECT,
   routeApp,
   RUN,
@@ -358,6 +359,7 @@ describeDb("mq-13 land_group_delivery_loops — group delivery loop (RLS)", () =
     const loop = new LandGroupDeliveryLoop({
       pool: app,
       deployer: new HappyFakeDeployer(),
+      a3Gate: new PassingA3Gate(),
       attribution: new NoopAttribution(),
       store: new PgLandGroupDeliveryStore(app),
     });

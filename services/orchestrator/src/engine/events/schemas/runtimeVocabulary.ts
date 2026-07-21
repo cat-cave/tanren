@@ -157,6 +157,11 @@ export const BehaviorEffectObservedPayload = z
     shardId: Id,
     correlationId: Id,
     providerReceiptId: Id,
+    // Present only for the live A3 path. Legacy observer events remain valid but
+    // cannot satisfy the delivery gate, which requires this exact cause binding.
+    deliveryRunId: Id.optional(),
+    causeOrdinal: z.number().int().nonnegative().optional(),
+    occurrenceCount: z.number().int().positive().optional(),
   })
   .strict();
 

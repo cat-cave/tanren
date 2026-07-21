@@ -69,6 +69,10 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
             requiredScopes: ["chat:write", "channels:read", "channels:join"],
             plane: "product",
           },
+          // A3 reads the exact product-owned channel independently after the live
+          // product action. This is deliberately a separate privileged operation:
+          // a chat-write grant without history visibility cannot claim an effect.
+          { id: "verify", requiredScopes: ["channels:history"], plane: "product" },
         ],
       },
     ],

@@ -27,6 +27,7 @@ import { createLogger } from "../../observability/logger.js";
 import type { DeployTriggerGate } from "../deployTriggerGate.js";
 import type { RunMergeWatcher } from "../subscriber.js";
 import type { DeliverySignals, DemoReach, DeployReach } from "./deliverySignals.js";
+import type { DeliveryBindingSetSealer } from "./deliveryBindingSet.js";
 import {
   appendDeliveryCompleted,
   appendDemoStimulusStarted,
@@ -51,6 +52,8 @@ export interface DeliveryStageDeps {
   readonly demoRunner: RunMergeWatcher;
   /** The in-11 production-binding reconciliation saga. */
   readonly saga: ReconcileSagaLike;
+  /** Seals the exact release-required binding generation set for A3. */
+  readonly bindingSetSealer: DeliveryBindingSetSealer;
   /** The evidence writer + signer for the record_evidence gate. */
   readonly evidence: RecordEvidenceDeps;
   /**
@@ -113,10 +116,11 @@ export class DeliveryStages {
     lineage: DeliveryLineage,
     deliveryRunId: string,
     memo: DriveMemo,
+    token: string,
   ): Promise<StageOutcome> {
     switch (stage) {
       case "reconcile_binding":
-        return this.reconcileBinding(lineage);
+        return this.reconcileBinding(lineage, deliveryRunId, token);
       case "mint_lease":
         return this.mintLease(lineage);
       case "materialize_env":
@@ -134,7 +138,11 @@ export class DeliveryStages {
     }
   }
 
-  private async reconcileBinding(lineage: DeliveryLineage): Promise<StageOutcome> {
+  private async reconcileBinding(
+    lineage: DeliveryLineage,
+    deliveryRunId: string,
+    token: string,
+  ): Promise<StageOutcome> {
     const summary = await this.deps.saga.driveForOrg(lineage.orgId, lineage.projectId);
     if (summary.stateUnknown > 0 || summary.needsAttention > 0) {
       return degraded(
@@ -142,6 +150,8 @@ export class DeliveryStages {
         `production binding reconcile did not converge (state_unknown=${summary.stateUnknown}, needs_attention=${summary.needsAttention})`,
       );
     }
+    const sealed = await this.deps.bindingSetSealer.seal({ lineage, deliveryRunId, token });
+    if (sealed.kind === "unavailable") return degraded("release_binding_set_unconfirmed", sealed.detail);
     return confirmed;
   }
 
@@ -273,7 +283,7 @@ export class DeliveryStages {
       // and record NO intent, so a resume never false-degrades a no-op demo.
       const deployReach = await this.deps.signals.deployReach(lineage, memo.deployRunnerThrew);
       if (deployReach !== "verified") {
-        await this.fireDemoRunner(lineage, memo);
+        await this.fireDemoRunner(lineage, undefined, memo);
         return;
       }
       // Verified: the fire-intent is the LAST awaitable before the dispatch (nothing between it
@@ -281,14 +291,18 @@ export class DeliveryStages {
       // double-fire. A throw from the append itself propagates (→ needs_attention) with the
       // intent durably committed ⇒ a later wake degrades — safe, never re-fires.
       await appendDemoStimulusStarted(this.deps.evidence, lineage, deliveryRunId);
-      await this.fireDemoRunner(lineage, memo);
+      await this.fireDemoRunner(lineage, deliveryRunId, memo);
     });
     if (!gate.acquired) memo.demoLockHeld = true;
   }
 
-  private async fireDemoRunner(lineage: DeliveryLineage, memo: DriveMemo): Promise<void> {
+  private async fireDemoRunner(
+    lineage: DeliveryLineage,
+    deliveryRunId: string | undefined,
+    memo: DriveMemo,
+  ): Promise<void> {
     try {
-      await this.deps.demoRunner.check(lineage.runId);
+      await this.deps.demoRunner.check(lineage.runId, deliveryRunId === undefined ? undefined : { deliveryRunId });
     } catch (error) {
       memo.demoRunnerThrew = true;
       log.error("demo cluster runner failed", { runId: lineage.runId }, error);
@@ -300,15 +314,14 @@ export class DeliveryStages {
     deliveryRunId: string,
     memo: DriveMemo,
   ): Promise<StageOutcome> {
-    // FAIL-CLOSED: a product integration whose behavior must be observed post-deploy to
-    // release cannot yet prove its A3 Then (the independent provider-effect probe is not
-    // built on `main`). Such a delivery must degrade, never report a complete it cannot
-    // evidence. The common path (no such requirement) has zero rows and proceeds.
-    const releaseRequired = await this.deps.signals.releaseRequiredCount(lineage);
-    if (releaseRequired > 0) {
+    // EXACT, positive A3 proof: `confirmed === required` alone is unsafe when
+    // required is zero, so no release-required integrations is an explicit
+    // no-op while any non-empty set requires every independent effect event.
+    const a3 = await this.deps.signals.releaseRequiredA3Count(lineage, deliveryRunId);
+    if (a3.required > 0 && a3.confirmed !== a3.required) {
       return degraded(
-        "product_integration_effect_unobservable",
-        `${releaseRequired} product integration(s) require independent post-deploy effect observation, which is not yet available`,
+        "product_integration_effect_unconfirmed",
+        `${String(a3.confirmed)}/${String(a3.required)} release-required product integration effect(s) have exact independent A3 evidence`,
       );
     }
     const deployReach = await this.deps.signals.deployReach(lineage, memo.deployRunnerThrew);

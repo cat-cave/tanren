@@ -44,7 +44,7 @@ const log = createLogger("post-merge");
 
 /** The minimal per-run watcher shape the subscriber drives on each bus wake. */
 export interface RunMergeWatcher {
-  check(runId: string): Promise<void>;
+  check(runId: string, context?: { readonly deliveryRunId?: string }): Promise<void>;
 }
 
 export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {

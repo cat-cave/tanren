@@ -147,7 +147,8 @@ export class DemoOnDeployWatcher {
     // rv-18: the `web_url` arm drives the real rv-11 acceptance orchestrator over the run's
     // real release URL (built by the factory; the verdict lands as append-only `demo.*`
     // evidence, not the pre-merge `behavior_verdicts` ledger — see proofBackedWebDemo.ts).
-    this.proofBackedWebDemo = deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, this.eventStore);
+    this.proofBackedWebDemo =
+      deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, this.eventStore, deps.secrets);
   }
 
   /**
@@ -164,7 +165,7 @@ export class DemoOnDeployWatcher {
    * detail is a FIXED non-secret summary (the raw error stays in the run logs via the
    * re-throw).
    */
-  async check(runId: string): Promise<void> {
+  async check(runId: string, context?: { readonly deliveryRunId?: string }): Promise<void> {
     if (runId === "") return;
     const verified = await runWithSystemScope(this.deps.pool, (client) => loadVerifiedDeploy(client, runId));
     // No verified deploy ⇒ no live surface to exercise ⇒ clean no-op (not an error).
@@ -183,7 +184,13 @@ export class DemoOnDeployWatcher {
     try {
       const surface = await this.resolveSurface(verified);
       surfaceKind = surface.kind;
-      const target = { runId, specId: verified.specId, projectId: verified.projectId, orgId: verified.orgId };
+      const target = {
+        runId,
+        specId: verified.specId,
+        projectId: verified.projectId,
+        orgId: verified.orgId,
+        ...(context?.deliveryRunId === undefined ? {} : { deliveryRunId: context.deliveryRunId }),
+      };
 
       // rv-18: a deployed WEB product is demoed PROOF-BACKED — the acceptance orchestrator
       // executes its declared behaviors against the REAL release URL and the demo verdict is
