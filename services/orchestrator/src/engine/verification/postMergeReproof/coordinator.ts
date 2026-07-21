@@ -27,6 +27,10 @@ import type { ProductionResolutionStageResult, ResolutionJob } from "../../contr
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import { ReleaseInstancesStore } from "../../repositories/releaseInstances.js";
 import { revertLiveToPrior } from "../../repositories/releaseInstanceRevert.js";
+import {
+  PgAcceptanceCompletenessChecker,
+  type AcceptanceCompletenessResult,
+} from "../acceptance/completenessInvariant.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
@@ -53,6 +57,8 @@ export interface PostMergeReproofCoordinatorDeps {
   /** Test seam; production always runs on `runWithOrgScope` over the control pool. */
   readonly withOrgScope?: OrgScope;
   readonly eventsForClient?: (client: QueryClient) => EventStore;
+  /** Production defaults to the RLS-scoped persisted completeness checker. */
+  readonly completenessChecker?: Pick<PgAcceptanceCompletenessChecker, "check">;
 }
 
 export interface SettleReproofInput {
@@ -70,10 +76,12 @@ export interface SettleReproofInput {
 export class PostMergeReproofCoordinator {
   private readonly withOrgScope: OrgScope;
   private readonly eventsForClient: (client: QueryClient) => EventStore;
+  private readonly completenessChecker: Pick<PgAcceptanceCompletenessChecker, "check">;
 
   public constructor(private readonly deps: PostMergeReproofCoordinatorDeps) {
     this.withOrgScope = deps.withOrgScope ?? ((orgId, operation) => runWithOrgScope(deps.pool, orgId, operation));
     this.eventsForClient = deps.eventsForClient ?? ((client) => new PgEventStore(client));
+    this.completenessChecker = deps.completenessChecker ?? new PgAcceptanceCompletenessChecker(deps.pool);
   }
 
   public async settle(input: SettleReproofInput): Promise<ReproofDeployDecision> {
@@ -103,6 +111,7 @@ export class PostMergeReproofCoordinator {
       const events = this.eventsForClient(client);
       switch (input.result.outcome) {
         case "passed":
+          await this.requireAcceptanceCompleteness(input, release.releaseInstanceId, release.artifactDigest);
           return this.promote(events, input, release.deploymentId, release.artifactDigest, release.sourceRef);
         case "failed":
           return this.rollback(
@@ -123,6 +132,22 @@ export class PostMergeReproofCoordinator {
         `unsupported production re-proof outcome: ${String((input.result as { outcome: unknown }).outcome)}`,
       );
     });
+  }
+
+  private async requireAcceptanceCompleteness(
+    input: SettleReproofInput,
+    releaseInstanceId: string,
+    promotedArtifactDigest: string,
+  ): Promise<void> {
+    const completeness: AcceptanceCompletenessResult = await this.completenessChecker.check({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      releaseInstanceId,
+      promotedArtifactDigest,
+    });
+    if (!completeness.complete) {
+      throw new PostMergeReproofBindingError(`acceptance completeness blocks promotion: ${completeness.failure}`);
+    }
   }
 
   private async promote(
