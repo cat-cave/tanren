@@ -334,7 +334,7 @@ describe("authorizeAndLand — the ds-4 DESIGN-RENDER verdict gates the REAL lan
 
   it("REQUIRED but INCONCLUSIVE/absent design verdict → NOT authorized (fail-closed; inconclusive ≠ passed)", async () => {
     const { host, disposition } = await landWithDesignRender({
-      kind: "inconclusive",
+      kind: "inconclusive_infrastructure",
       reason: "the project has a published design system but no design-render verdict (required-but-absent)",
     });
     expect(disposition.kind).toBe("blocked");

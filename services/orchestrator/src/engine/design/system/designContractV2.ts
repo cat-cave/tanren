@@ -231,7 +231,14 @@ export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
 
 // The default web target profile the ds-2 `WebDesignTargetAdapter` composes against
 // (the sole registered adapter). `required: true` — a real run needs the web system.
-const WEB_TARGET_PROFILE: DesignTargetProfileIntent = { target: "web-react", capabilities: [], required: true };
+// This is contract intent for a V1 migration, not an adapter-default fallback at
+// conformance time. It gives the default required target a non-vacuous set that
+// a receipt must check exactly; an explicitly authored V2 profile is preserved.
+const WEB_TARGET_PROFILE: DesignTargetProfileIntent = {
+  target: "web-react",
+  capabilities: ["css-variables", "tailwind", "shadcn", "radix", "catalog", "storybook", "exports", "dtcg"],
+  required: true,
+};
 
 /**
  * Derive the `desiredSurfaces` a project's design must cover FROM the contract's own

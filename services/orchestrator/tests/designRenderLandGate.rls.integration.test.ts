@@ -4,7 +4,7 @@
 // decision table is pinned in designRenderLandGate.test.ts; this proves the SQL join
 // (runs → design_render_land_verdicts for the run's project) + the org-scoped read + the
 // producer's persistence seam (`recordDesignRenderVerdict`). Gated on TANREN_RLS_DB_TEST.
-import { migrate } from "@tanren/db";
+import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveDesignRenderGate } from "../src/engine/merge/designRenderLandGate.js";
@@ -19,6 +19,11 @@ const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
 const ORG = "org_dsgate";
 const PROJECT = "project_dsgate";
 const SPEC_ID = "spec_dsgate";
+const RECEIPT_PROJECT = "project_dsgate_receipt";
+const RECEIPT_SPEC = "spec_dsgate_receipt";
+const RECEIPT_RELEASE = "release_dsgate_receipt";
+const RECEIPT_ARTIFACT = "artifact_dsgate_receipt";
+const HASH = (character: string): string => `sha256:${character.repeat(64)}`;
 
 function databaseName(): string {
   return `tanren_dsgate_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -52,12 +57,60 @@ async function seedTenant(owner: Pool): Promise<void> {
   );
 }
 
-async function seedRun(owner: Pool, runId: string): Promise<void> {
+async function seedRun(owner: Pool, runId: string, projectId = PROJECT, specId = SPEC_ID): Promise<void> {
   await owner.query(
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
      VALUES ($1, $2, $3, $4, 'cli', 'feat', 'running')`,
-    [runId, SPEC_ID, PROJECT, ORG],
+    [runId, specId, projectId, ORG],
   );
+}
+
+async function seedPublishedReceiptFixture(owner: Pool): Promise<void> {
+  await owner.query(
+    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+     VALUES ($1, $1, 'https://example.com/receipt.git', 'main', 'runner:v0', $2, '{}'::jsonb)`,
+    [RECEIPT_PROJECT, ORG],
+  );
+  await owner.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+     VALUES ($1, $2, $3, 'receipt', 'receipt gate coverage', 'in_flight')`,
+    [RECEIPT_SPEC, RECEIPT_PROJECT, ORG],
+  );
+  await owner.query(
+    `INSERT INTO design_contracts (id, org_id, project_id, version, domain, contract)
+     VALUES ('contract_dsgate_receipt', $1, $2, 1, 'web', $3::jsonb)`,
+    [
+      ORG,
+      RECEIPT_PROJECT,
+      JSON.stringify({
+        version: 2,
+        domain: "web",
+        identity: "receipt-gated web surface",
+        intent: "land only on real adapter conformance",
+        targetProfiles: [{ target: "web-react", capabilities: ["css-variables"], required: true }],
+      }),
+    ],
+  );
+  await owner.query(
+    `INSERT INTO design_systems (org_id, id, slug, name)
+     VALUES ($1, 'system_dsgate_receipt', 'receipt-gate', 'Receipt gate')`,
+    [ORG],
+  );
+  await owner.query(
+    `INSERT INTO design_artifacts
+       (org_id, id, design_system_id, digest, media_type, manifest_version, object_store_key, byte_size)
+     VALUES ($1, $2, 'system_dsgate_receipt', $3, 'application/json', 1, 'sha256/test', 1)`,
+    [ORG, RECEIPT_ARTIFACT, HASH("a")],
+  );
+  await owner.query(
+    `INSERT INTO design_system_releases
+       (org_id, id, design_system_id, version, state, contract_id, contract_version, contract_digest,
+        manifest_schema_version, canonical_artifact_id, created_by, published_by, published_at)
+     VALUES ($1, $2, 'system_dsgate_receipt', 1, 'published', 'contract_dsgate_receipt', 1, $3,
+             1, $4, 'tester', 'tester', now())`,
+    [ORG, RECEIPT_RELEASE, HASH("b"), RECEIPT_ARTIFACT],
+  );
+  await seedRun(owner, "run_dsgate_receipt", RECEIPT_PROJECT, RECEIPT_SPEC);
 }
 
 function verification(
@@ -108,6 +161,7 @@ describeDb("resolveDesignRenderGate — org-scoped land-time read", () => {
     await migrate(owner);
     app = new Pool({ connectionString: connectionUrl(database, { user: APP_ROLE, password: APP_PASSWORD }) });
     await seedTenant(owner);
+    await seedPublishedReceiptFixture(owner);
   }, 60_000);
 
   afterAll(async () => {
@@ -147,7 +201,7 @@ describeDb("resolveDesignRenderGate — org-scoped land-time read", () => {
   it("an inconclusive_infrastructure verdict → inconclusive (fail closed; inconclusive ≠ passed)", async () => {
     await seedRun(owner, "run_incon");
     await persist(app, "inconclusive_infrastructure");
-    expect((await resolveDesignRenderGate(app, ORG, "run_incon")).kind).toBe("inconclusive");
+    expect((await resolveDesignRenderGate(app, ORG, "run_incon")).kind).toBe("inconclusive_infrastructure");
   });
 
   it("a not_applicable verdict (posture 'none') → not_applicable (advisory design never blocks)", async () => {
@@ -170,5 +224,21 @@ describeDb("resolveDesignRenderGate — org-scoped land-time read", () => {
     // reader resolves no run/verdict at all → not_applicable (RLS denies by default).
     expect((await resolveDesignRenderGate(app, ORG, "run_scope")).kind).toBe("failed");
     expect(await resolveDesignRenderGate(app, "org_other", "run_scope")).toEqual({ kind: "not_applicable" });
+  });
+
+  it("NEGATIVE CONTROL — a forced failed adapter-conformance row is read at land time and blocks", async () => {
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query(
+        `INSERT INTO design_adapter_conformance_runs
+           (org_id, project_id, id, release_id, artifact_id, target, adapter_version,
+            artifact_digest, receipt_digest, receipt, outcome, notes)
+         VALUES ($1, $2, 'receipt_failed_row', $3, $4, 'web-react', 'tanren.web-react.v1',
+                 $5, $6, NULL, 'failed', 'forced negative control')`,
+        [ORG, RECEIPT_PROJECT, RECEIPT_RELEASE, RECEIPT_ARTIFACT, HASH("a"), HASH("c")],
+      ),
+    );
+    const gate = await resolveDesignRenderGate(app, ORG, "run_dsgate_receipt");
+    expect(gate).toMatchObject({ kind: "inconclusive_infrastructure" });
+    expect(gate.kind === "inconclusive_infrastructure" && gate.reason).toContain("recorded 'failed'");
   });
 });

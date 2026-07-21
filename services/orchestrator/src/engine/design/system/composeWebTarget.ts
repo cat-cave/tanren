@@ -7,22 +7,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { WebDesignTargetAdapter } from "./webAdapter.js";
+import type { WebArtifactBuildResult } from "./webAdapter.js";
 import { WEB_DESIGN_TARGET } from "./webAdapter.js";
 import { type DesignAdapterConformanceStore, type DesignAdapterConformanceRunRow } from "./adapterConformanceStore.js";
 import { buildWebConformanceReceipt, newConformanceRunId } from "./composeProjectTargetDesignSystemsHelpers.js";
 import type { ComposeProjectTargetDesignSystemsDeps } from "./composeProjectTargetDesignSystems.js";
 import type { DesignTargetAdapterSet } from "./designTargetRegistry.js";
-
-const WEB_REACT_DEFAULT_CAPABILITIES = [
-  "css-variables",
-  "tailwind",
-  "shadcn",
-  "radix",
-  "catalog",
-  "storybook",
-  "exports",
-  "dtcg",
-] as const;
 
 /** The shared composition context the per-target loop threads through. */
 export interface TargetCompositionContext {
@@ -44,7 +34,7 @@ export async function publishWebTarget(
   deps: ComposeProjectTargetDesignSystemsDeps,
   adapterSet: DesignTargetAdapterSet,
   context: TargetCompositionContext,
-): Promise<{ readonly artifactId: string; readonly artifactDigest: string }> {
+): Promise<{ readonly artifactId: string; readonly artifactDigest: string; readonly build: WebArtifactBuildResult }> {
   const artifactId = `design_web_artifact_${randomUUID()}`;
   const persisted = await adapterSet.web.publish({
     artifactId,
@@ -58,7 +48,7 @@ export async function publishWebTarget(
     orgId: context.orgId,
     projectId: context.projectId,
   });
-  return { artifactId, artifactDigest: persisted.artifactDigest };
+  return { artifactId, artifactDigest: persisted.artifactDigest, build: persisted.build };
 }
 
 /** Record the web-react conformance run over the EXACT persisted CAS digest
@@ -74,21 +64,19 @@ export async function recordWebConformanceRun(
     readonly artifactId: string;
     /** The EXACT persisted CAS digest `publishWebTarget` returned. */
     readonly artifactDigest: string;
+    /** The exact build whose manifest bytes `publishWebTarget` persisted. */
+    readonly build: WebArtifactBuildResult;
     readonly adapterVersion: string;
     readonly requiredCapabilities: readonly string[];
   },
 ): Promise<DesignAdapterConformanceRunRow> {
-  const profile = { target: WEB_DESIGN_TARGET, capabilities: [] };
-  const plain = await web.bootstrapPlainSystem(profile);
-  const materialized = await web.materialize([], plain);
-  const scenarios = await web.renderScenarioMatrix(materialized, profile);
-  const requiredCapabilities =
-    input.requiredCapabilities.length > 0 ? input.requiredCapabilities : WEB_REACT_DEFAULT_CAPABILITIES;
-  const receipt = buildWebConformanceReceipt({
+  const receipt = await buildWebConformanceReceipt({
+    web,
+    artifactId: input.artifactId,
     artifactDigest: input.artifactDigest,
-    scenarios,
+    build: input.build,
     adapterVersion: input.adapterVersion,
-    requiredCapabilities,
+    requiredCapabilities: input.requiredCapabilities,
   });
   return store.record({
     orgId: input.orgId,

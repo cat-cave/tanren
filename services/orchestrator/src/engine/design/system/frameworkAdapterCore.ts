@@ -268,46 +268,60 @@ export class FrameworkDesignTargetAdapter implements DesignTargetAdapter {
     readonly artifactDigest: string;
     readonly scenarios: readonly DesignRenderScenario[];
     readonly adapterVersion: string;
+    /** The non-empty capability set REQUIRED by the V2 contract, not this adapter's advertised set. */
+    readonly requiredCapabilities: readonly string[];
+    /** Capability probes run by the conformance runner against the target profile. */
+    readonly resolvedCapabilities: readonly ResolvedDesignCapabilityV1[];
+    /** The static validator's observed result over the materialized projection. */
+    readonly staticResult: DesignAdapterCheckResult;
   }): DesignAdapterConformanceReceiptV1 {
     const scenarioMatrixDigest = designAdapterScenarioMatrixDigest(input.scenarios);
     const suite = this.conformanceSuite();
     const descriptorsByPath = new Map(this.descriptors().map((descriptor) => [descriptor.path, descriptor]));
-
-    const resolvedCapabilities: ResolvedDesignCapabilityV1[] = this.#spec.capabilities.map((capability) => {
-      const evidence = this.capabilityEvidencePath(capability);
-      const descriptor = descriptorsByPath.get(evidence);
-      return {
-        capability,
-        supported: descriptor !== undefined,
-        evidenceDigest: descriptor?.digest ?? NULL_SHA256,
-      };
-    });
+    const resolvedCapabilities = input.resolvedCapabilities.map((capability) => ({ ...capability }));
+    const tokensResolved = descriptorsByPath.has(this.#spec.tokenPath);
+    const staticPassed = input.staticResult.ok;
+    const renderPassed = staticPassed && input.scenarios.length > 0;
 
     const criticalProofs: DesignAdapterCriticalProofV1[] = [
       {
         key: `${this.target}.build`,
         kind: "build",
         evidenceDigest: input.artifactDigest,
-        passed: true,
+        // A projected source file is not a native Cargo/Xcode/Gradle/etc. build.
+        // No framework toolchain is available to this orchestrator process, so
+        // this proof is deliberately non-passing. The receipt below records the
+        // resulting infrastructure inconclusive state; it never self-certifies.
+        passed: false,
       },
       {
         key: `${this.target}.tokens`,
         kind: "token",
         evidenceDigest:
           resolvedCapabilities.find((capability) => capability.capability === "tokens")?.evidenceDigest ?? NULL_SHA256,
-        passed: resolvedCapabilities.some((capability) => capability.capability === "tokens" && capability.supported),
+        passed: staticPassed && tokensResolved,
+      },
+      {
+        key: `${this.target}.accessibility`,
+        kind: "accessibility",
+        evidenceDigest: scenarioMatrixDigest,
+        // The framework targets have no target-native a11y harness here. A
+        // non-empty matrix is evidence of enumeration, not an a11y verdict.
+        passed: false,
       },
       {
         key: `${this.target}.render`,
         kind: "render",
         evidenceDigest: scenarioMatrixDigest,
-        passed: input.scenarios.length > 0,
+        passed: renderPassed,
       },
       {
         key: `${this.target}.export`,
         kind: "export",
         evidenceDigest: input.artifactDigest,
-        passed: this.#spec.exportFormats.length > 0,
+        // Emitting a descriptor is not an observed native export. Keep this
+        // inconclusive until a real target toolchain validator is wired.
+        passed: false,
       },
     ];
 
@@ -317,7 +331,7 @@ export class FrameworkDesignTargetAdapter implements DesignTargetAdapter {
         key: positive.key,
         description: positive.description,
         evidenceDigest: descriptor?.digest ?? NULL_SHA256,
-        passed: descriptor !== undefined,
+        passed: staticPassed && descriptor !== undefined,
       };
     });
 
@@ -337,7 +351,12 @@ export class FrameworkDesignTargetAdapter implements DesignTargetAdapter {
       };
     });
 
-    const requiredCapabilities = [...this.#spec.capabilities];
+    const capabilityFailed = resolvedCapabilities.some((capability) => !capability.supported);
+    const observedFailure =
+      !staticPassed ||
+      !renderPassed ||
+      positiveCases.some((positive) => !positive.passed) ||
+      negativeControls.some((control) => !control.passed);
     const receipt: DesignAdapterConformanceReceiptV1 = {
       version: 1,
       schemaVersion: "design_adapter_conformance.v1",
@@ -345,13 +364,19 @@ export class FrameworkDesignTargetAdapter implements DesignTargetAdapter {
       adapterVersion: input.adapterVersion,
       artifactDigest: input.artifactDigest,
       scenarioMatrixDigest,
-      requiredCapabilities,
+      requiredCapabilities: [...input.requiredCapabilities],
       resolvedCapabilities,
       criticalProofs,
       positiveCases,
       negativeControls,
-      outcome: "passed",
-      notes: "",
+      // Capability/static regressions are decisive failures. Otherwise the
+      // missing native build/a11y/export validator is infrastructure-inconclusive
+      // and must block publication/land rather than being treated as green.
+      outcome: capabilityFailed || observedFailure ? "failed" : "inconclusive_infrastructure",
+      notes:
+        capabilityFailed || observedFailure
+          ? "target projection did not satisfy the contract capability/static conformance checks"
+          : "no target-native build, accessibility, or export validator is available in the orchestrator",
     };
     return receipt;
   }

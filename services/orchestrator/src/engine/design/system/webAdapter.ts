@@ -68,6 +68,11 @@ export interface WebArtifactBuildResult {
   readonly exports: readonly WebExportProjection[];
 }
 
+/** The exact build object whose bytes the publish path persisted to CAS. */
+export interface PublishedWebArtifact extends PersistedWebArtifact {
+  readonly build: WebArtifactBuildResult;
+}
+
 /**
  * A deterministic web projection. The constructor receives ds-1's already
  * resolved DTCG token set; every method below implements the ds-0 adapter seam.
@@ -217,20 +222,22 @@ export class WebDesignTargetAdapter implements DesignTargetAdapter {
   }
 
   /** Persist the built artifact through ds-1's CAS store and ds-0's org-scoped tables. */
-  async publish(input: WebArtifactBuildInput & WebArtifactPublishContext): Promise<PersistedWebArtifact> {
+  async publish(input: WebArtifactBuildInput & WebArtifactPublishContext): Promise<PublishedWebArtifact> {
     const { artifactId, contractDigest, plainReleaseDigest, polishedReleaseDigest, fragmentLineage, ...context } =
       input;
-    return persistWebDesignArtifact({
+    const build = this.buildArtifact({
+      artifactId,
+      contractDigest,
+      plainReleaseDigest,
+      polishedReleaseDigest,
+      fragmentLineage,
+    });
+    const persisted = await persistWebDesignArtifact({
       ...context,
       designSystemId: this.designSystem.designSystemId,
-      artifact: this.buildArtifact({
-        artifactId,
-        contractDigest,
-        plainReleaseDigest,
-        polishedReleaseDigest,
-        fragmentLineage,
-      }),
+      artifact: build,
     });
+    return { ...persisted, build };
   }
 
   private descriptors(): DesignArtifactFileV1[] {

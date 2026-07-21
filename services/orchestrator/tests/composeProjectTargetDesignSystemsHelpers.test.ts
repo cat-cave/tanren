@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { buildBevyAdapter } from "../src/engine/design/system/bevyAdapter.js";
+import { sha256Digest } from "../src/engine/design/system/artifactStore.js";
 import {
   buildFrameworkArtifact,
   buildWebAdapterForF2d,
@@ -94,7 +95,7 @@ describe("composeProjectTargetDesignSystemsHelpers — pure helpers", () => {
     expect(() => resolveFrameworkAdapter(set, "web-react")).toThrow(/framework target/u);
   });
 
-  it("recordFrameworkConformanceRun builds a passed receipt for a valid adapter", async () => {
+  it("NEGATIVE CONTROL — a Bevy projection without a native validator is infrastructure-inconclusive, never passed", async () => {
     const adapter = buildBevyAdapter(PLAIN_BASE_TOKENS);
     const profile = { target: adapter.target, capabilities: [] };
     const plain = await adapter.bootstrapPlainSystem(profile);
@@ -105,17 +106,43 @@ describe("composeProjectTargetDesignSystemsHelpers — pure helpers", () => {
     const receipt = await recordFrameworkConformanceRun(adapter, {
       artifactDigest: digest,
       adapterVersion: "tanren.bevy.v1",
+      requiredCapabilities: ["tokens", "catalog", "components", "bevy-ui", "bevy-asset", "cargo"],
     });
     expect(receipt.target).toBe("bevy");
     expect(receipt.artifactDigest).toBe(digest);
-    expect(receiptPasses(receipt)).toBe(true);
+    expect(receipt.outcome).toBe("inconclusive_infrastructure");
+    expect(receipt.criticalProofs.find((proof) => proof.kind === "build")?.passed).toBe(false);
+    expect(receiptPasses(receipt)).toBe(false);
   });
 
-  it("buildWebConformanceReceipt returns a passed receipt when scenarios are non-empty", () => {
-    const digest = digestOf("artifact-web");
-    const receipt = buildWebConformanceReceipt({
-      artifactDigest: digest,
-      scenarios: [{ scenarioKey: "button:light:desktop:en-US" }],
+  it("NEGATIVE CONTROL — a V2-required capability unsupported by the framework adapter records failed, never adapter-default pass", async () => {
+    const adapter = buildBevyAdapter(PLAIN_BASE_TOKENS);
+    const receipt = await recordFrameworkConformanceRun(adapter, {
+      artifactDigest: digestOf("artifact-unsupported-framework"),
+      adapterVersion: "tanren.bevy.v1",
+      requiredCapabilities: ["tokens", "contract-only-capability"],
+    });
+    expect(receipt.requiredCapabilities).toEqual(["tokens", "contract-only-capability"]);
+    expect(receipt.resolvedCapabilities).toContainEqual(
+      expect.objectContaining({ capability: "contract-only-capability", supported: false }),
+    );
+    expect(receipt.outcome).toBe("failed");
+    expect(receiptPasses(receipt)).toBe(false);
+  });
+
+  it("buildWebConformanceReceipt observes the real web static/build/export/matrix checks before passing", async () => {
+    const web = buildWebAdapterForF2d("ds_web", "release_web", resolveDtcgTokens(PLAIN_BASE_TOKENS));
+    const build = web.buildArtifact({
+      artifactId: "artifact_web",
+      contractDigest: digestOf("contract-web"),
+      plainReleaseDigest: digestOf("plain-web"),
+      polishedReleaseDigest: digestOf("polished-web"),
+    });
+    const receipt = await buildWebConformanceReceipt({
+      web,
+      artifactId: build.manifest.artifactId,
+      artifactDigest: sha256Digest(build.manifestBytes),
+      build,
       adapterVersion: "tanren.web-react.v1",
       requiredCapabilities: ["css-variables", "tailwind"],
     });
@@ -124,14 +151,26 @@ describe("composeProjectTargetDesignSystemsHelpers — pure helpers", () => {
     expect(receiptPasses(receipt)).toBe(true);
   });
 
-  it("buildWebConformanceReceipt NEVER passes when scenarios are empty (render proof fails)", () => {
-    const digest = digestOf("artifact-web");
-    const receipt = buildWebConformanceReceipt({
-      artifactDigest: digest,
-      scenarios: [],
-      adapterVersion: "tanren.web-react.v1",
-      requiredCapabilities: ["css-variables"],
+  it("NEGATIVE CONTROL — a capability required by the V2 contract but unsupported by web-react is not passed", async () => {
+    const web = buildWebAdapterForF2d("ds_web", "release_web", resolveDtcgTokens(PLAIN_BASE_TOKENS));
+    const build = web.buildArtifact({
+      artifactId: "artifact_web_unsupported",
+      contractDigest: digestOf("contract-web"),
+      plainReleaseDigest: digestOf("plain-web"),
+      polishedReleaseDigest: digestOf("polished-web"),
     });
+    const receipt = await buildWebConformanceReceipt({
+      web,
+      artifactId: build.manifest.artifactId,
+      artifactDigest: sha256Digest(build.manifestBytes),
+      build,
+      adapterVersion: "tanren.web-react.v1",
+      requiredCapabilities: ["css-variables", "nonexistent-contract-capability"],
+    });
+    expect(receipt.outcome).toBe("failed");
+    expect(receipt.resolvedCapabilities).toContainEqual(
+      expect.objectContaining({ capability: "nonexistent-contract-capability", supported: false }),
+    );
     expect(receiptPasses(receipt)).toBe(false);
   });
 
@@ -140,11 +179,19 @@ describe("composeProjectTargetDesignSystemsHelpers — pure helpers", () => {
     expect(adapter.target).toBe("web-react");
   });
 
-  it("the frozen receipt parses + preserves every required field", () => {
-    const digest = digestOf("artifact-1");
-    const receipt = buildWebConformanceReceipt({
-      artifactDigest: digest,
-      scenarios: [{ scenarioKey: "k1" }],
+  it("the frozen receipt parses + preserves every required field", async () => {
+    const web = buildWebAdapterForF2d("ds_web", "release_web", resolveDtcgTokens(PLAIN_BASE_TOKENS));
+    const build = web.buildArtifact({
+      artifactId: "artifact_web_receipt",
+      contractDigest: digestOf("contract-web"),
+      plainReleaseDigest: digestOf("plain-web"),
+      polishedReleaseDigest: digestOf("polished-web"),
+    });
+    const receipt = await buildWebConformanceReceipt({
+      web,
+      artifactId: build.manifest.artifactId,
+      artifactDigest: sha256Digest(build.manifestBytes),
+      build,
       adapterVersion: "tanren.web-react.v1",
       requiredCapabilities: ["tokens", "catalog"],
     });

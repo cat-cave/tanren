@@ -140,9 +140,11 @@ describe("gateVerdictWithDesignRenderGates — the MQ-2 per-member design-render
   });
 
   it("ANY member inconclusive design render → the batch gate verdict is forced to failed (fail closed)", () => {
-    expect(gateVerdictWithDesignRenderGates("passed", [{ kind: "inconclusive", reason: "required-but-absent" }])).toBe(
-      "failed",
-    );
+    expect(
+      gateVerdictWithDesignRenderGates("passed", [
+        { kind: "inconclusive_infrastructure", reason: "required-but-absent" },
+      ]),
+    ).toBe("failed");
   });
 });
 

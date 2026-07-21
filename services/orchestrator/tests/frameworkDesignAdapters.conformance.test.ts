@@ -22,6 +22,7 @@ import { buildFlutterAdapter } from "../src/engine/design/system/flutterAdapter.
 import { buildReactNativeAdapter } from "../src/engine/design/system/reactNativeAdapter.js";
 import { buildGenericWebAdapter } from "../src/engine/design/system/genericWebAdapter.js";
 import { buildDocumentMediaAdapter } from "../src/engine/design/system/documentMediaAdapter.js";
+import { recordFrameworkConformanceRun } from "../src/engine/design/system/composeProjectTargetDesignSystemsHelpers.js";
 import { DesignVfs } from "../src/engine/design/system/designVfs.js";
 
 const PLAIN_BASE_TOKENS = {
@@ -51,25 +52,22 @@ const TARGETS: ReadonlyArray<{
 describe.each(TARGETS)("framework adapter — $target", ({ target, build }) => {
   const artifactDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-  it("projects every required capability to a target-native file (POSITIVE)", async () => {
+  it("projects contract-required capabilities but remains inconclusive without a native validator", async () => {
     const adapter = build();
-    const profile = { target, capabilities: [] };
-    const plain = await adapter.bootstrapPlainSystem(profile);
-    const scenarios = await adapter.renderScenarioMatrix(plain, profile);
-    expect(scenarios.length).toBeGreaterThan(0);
-    const receipt = adapter.buildConformanceReceipt({
+    const receipt = await recordFrameworkConformanceRun(adapter, {
       artifactDigest,
-      scenarios,
       adapterVersion: `tanren.${target}.v1`,
+      requiredCapabilities: ["tokens", "catalog", "components"],
     });
     expect(receipt.target).toBe(target);
-    expect(receipt.requiredCapabilities.length).toBeGreaterThan(0);
-    expect(receipt.resolvedCapabilities.length).toBe(receipt.requiredCapabilities.length);
+    expect(receipt.requiredCapabilities).toEqual(["tokens", "catalog", "components"]);
+    expect(receipt.resolvedCapabilities).toHaveLength(receipt.requiredCapabilities.length);
     for (const resolved of receipt.resolvedCapabilities) {
       expect(resolved.supported).toBe(true);
       expect(resolved.evidenceDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     }
-    expect(receiptPasses(receipt)).toBe(true);
+    expect(receipt.outcome).toBe("inconclusive_infrastructure");
+    expect(receiptPasses(receipt)).toBe(false);
   });
 
   it("NEGATIVE CONTROL — a missing token file is flagged p0 (validator catches the regression)", async () => {
@@ -99,19 +97,16 @@ describe.each(TARGETS)("framework adapter — $target", ({ target, build }) => {
 
   it("NEGATIVE CONTROL — every negative control in the suite is caught by the validator", async () => {
     const adapter = build();
-    const profile = { target, capabilities: [] };
-    const plain = await adapter.bootstrapPlainSystem(profile);
-    const scenarios = await adapter.renderScenarioMatrix(plain, profile);
-    const receipt = adapter.buildConformanceReceipt({
+    const receipt = await recordFrameworkConformanceRun(adapter, {
       artifactDigest,
-      scenarios,
       adapterVersion: `tanren.${target}.v1`,
+      requiredCapabilities: ["tokens", "catalog", "components"],
     });
     expect(receipt.negativeControls.length).toBeGreaterThanOrEqual(2);
     for (const control of receipt.negativeControls) {
       expect(control.passed).toBe(true);
     }
-    expect(receiptPasses(receipt)).toBe(true);
+    expect(receiptPasses(receipt)).toBe(false);
   });
 
   it("enumerates proof requirements including a CRITICAL build + render + export", async () => {

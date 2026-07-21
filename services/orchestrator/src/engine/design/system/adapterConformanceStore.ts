@@ -125,8 +125,12 @@ export class DesignAdapterConformanceStore {
         : parsed.outcome === "passed"
           ? "failed"
           : parsed.outcome;
+      // Keep the durable row outcome and the frozen receipt body truthful as a
+      // pair. In particular, a body that self-labels `passed` but fails the
+      // positive-only predicate is rewritten to `failed` here too; consumers
+      // must never read `receipt.outcome === 'passed'` from a failed row.
       const body: DesignAdapterConformanceReceiptV1 =
-        parsed.outcome === "passed" ? parsed : { ...parsed, outcome: persistedOutcome };
+        parsed.outcome === persistedOutcome ? parsed : { ...parsed, outcome: persistedOutcome };
       const receiptDigestPersisted = designAdapterConformanceReceiptDigest(body);
       await client.query(
         `INSERT INTO design_adapter_conformance_runs

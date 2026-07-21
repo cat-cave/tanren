@@ -360,7 +360,7 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
       ],
     };
   }
-  if (designRender.kind === "inconclusive") {
+  if (designRender.kind === "inconclusive_infrastructure") {
     return {
       kind: "blocked",
       reasons: [

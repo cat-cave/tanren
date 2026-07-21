@@ -293,5 +293,7 @@ describeDb("frameworkAdapterConformance.rls — org isolation", () => {
       receipt: badReceipt,
     });
     expect(recorded.outcome).toBe("failed");
+    expect(recorded.receipt?.outcome).toBe("failed");
+    expect(recorded.receiptDigest).toBe(designAdapterConformanceReceiptDigest(recorded.receipt!));
   });
 });

@@ -99,6 +99,17 @@ export interface ComposeProjectTargetDesignSystemsResult {
   readonly targets: readonly ComposeProjectTargetOutcome[];
 }
 
+/** A required target recorded a non-green conformance receipt; its draft release may not advance. */
+export class RequiredDesignAdapterConformanceError extends Error {
+  constructor(
+    readonly target: DesignAdapterConformanceTarget,
+    readonly outcome: DesignAdapterConformanceRunRow["outcome"],
+  ) {
+    super(`required design target '${target}' conformance is '${outcome}' — release publication is blocked`);
+    this.name = "RequiredDesignAdapterConformanceError";
+  }
+}
+
 /**
  * Compose (and publish) the project's design system across every required V2
  * target profile. Returns `undefined` when the project has no design contract
@@ -212,6 +223,11 @@ export async function composeProjectTargetDesignSystems(
         `composeProjectTargetDesignSystems: target '${profile.target}' is not in the frozen adapter union`,
       );
     }
+    if (profile.capabilities.length === 0) {
+      throw new Error(
+        `composeProjectTargetDesignSystems: required target '${profile.target}' must declare a non-empty capability set`,
+      );
+    }
     const target = profile.target as DesignAdapterConformanceTarget;
     const outcome = await composeTargetOutcome(deps, adapterSet, {
       target,
@@ -227,6 +243,16 @@ export async function composeProjectTargetDesignSystems(
       conformanceRunId: outcome.conformanceRunId,
       conformanceOutcome: outcome.conformanceOutcome,
     });
+  }
+
+  // A receipt row is durable evidence, not an advisory log. Every required
+  // target must be decisively green before a draft release may advance. This
+  // deliberately happens AFTER recording all outcomes so an operator can see
+  // the exact failed/inconclusive target, and BEFORE canonical selection or
+  // release publication so no non-green target can leak into a release.
+  const nonPassingTarget = outcomes.find((outcome) => outcome.conformanceOutcome !== "passed");
+  if (nonPassingTarget !== undefined) {
+    throw new RequiredDesignAdapterConformanceError(nonPassingTarget.target, nonPassingTarget.conformanceOutcome);
   }
 
   if (canonicalArtifactId === undefined) {
@@ -247,9 +273,11 @@ export async function composeProjectTargetDesignSystems(
     publishedBy: deps.createdBy,
   });
 
-  // 6) ds-4 design-render VERIFY over the web target's published catalog (the
-  // gate-binding verdict). Non-web targets carry a conformance receipt instead.
-  if (adapterSet.web.target === WEB_DESIGN_TARGET) {
+  // 6) ds-4 design-render VERIFY runs ONLY for the required web-react target,
+  // and always against that target's own artifact/matrix coordinate. A non-web
+  // canonical fallback is never fed through the web adapter (proof≠effect).
+  const webOutcome = outcomes.find((outcome) => outcome.target === WEB_DESIGN_TARGET);
+  if (webOutcome !== undefined) {
     const profile = { target: WEB_DESIGN_TARGET, capabilities: [] };
     const plain = await adapterSet.web.bootstrapPlainSystem(profile);
     const materialized = await adapterSet.web.materialize(requiredDesignFragmentsFromSurfaces(contractV2), plain);
@@ -259,7 +287,7 @@ export async function composeProjectTargetDesignSystems(
       projectId,
       designSystemId,
       releaseId,
-      artifactId: canonicalArtifactId,
+      artifactId: webOutcome.artifactId,
       contractDigest,
       plainReleaseDigest: plainDigest,
       polishedReleaseDigest: polishedDigest,

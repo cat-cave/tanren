@@ -23,7 +23,7 @@ import { parseDesignContract } from "../src/engine/design/designContract.js";
 import { FilesystemArtifactStore } from "../src/engine/design/system/artifactStore.js";
 import { composeProjectTargetDesignSystems } from "../src/engine/design/system/composeProjectTargetDesignSystems.js";
 import { DesignAdapterConformanceStore } from "../src/engine/design/system/adapterConformanceStore.js";
-import { resolveProjectWebDesignSystem } from "../src/engine/design/system/designSystemStore.js";
+import { resolveDesignRenderGate } from "../src/engine/merge/designRenderLandGate.js";
 import type { DesignFragmentDraftV1 } from "../src/engine/design/system/authoring/index.js";
 import { DesignContractStore } from "../src/engine/repositories/designContracts.js";
 
@@ -127,6 +127,11 @@ describeDb("composeProjectTargetDesignSystems — multi-target composition (web 
        VALUES ($1, 'DS Multi', 'https://example.test/ds-multi.git', 'main', 'runner:test', $2, '{"version":1}'::jsonb)`,
       [PROJECT_ID, ORG_ID],
     );
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ('spec_ds7_multi', $1, $2, 'ds7 multi', 'conformance gate fixture', 'in_flight')`,
+      [PROJECT_ID, ORG_ID],
+    );
     // Seed a HEAD contract with ONE dimension → one desired surface. The default
     // V2 profile is web-react; the test overrides targetProfiles below to ALSO
     // declare bevy as a required target.
@@ -155,7 +160,11 @@ describeDb("composeProjectTargetDesignSystems — multi-target composition (web 
           WHERE org_id = $2 AND project_id = $3`,
         [
           JSON.stringify([
-            { target: "web-react", capabilities: [], required: true },
+            {
+              target: "web-react",
+              capabilities: ["css-variables", "tailwind", "shadcn", "radix", "catalog", "storybook", "exports", "dtcg"],
+              required: true,
+            },
             {
               target: "bevy",
               capabilities: ["tokens", "catalog", "components", "bevy-ui", "bevy-asset", "cargo"],
@@ -188,70 +197,70 @@ describeDb("composeProjectTargetDesignSystems — multi-target composition (web 
     await adminPool.end();
   }, 30_000);
 
-  it("composes web-react + bevy, persists both artifacts, records both receipts, and the gate-readable view serves them", async () => {
-    const events = new CapturingEventStore();
-    const result = await composeProjectTargetDesignSystems(
-      {
-        pool: runtimePool,
-        artifactStore: new FilesystemArtifactStore(artifactRoot),
-        fragmentAnswerer: fixtureFragmentAnswerer(),
-        eventStore: events,
-        createdBy: "tanren.ds7-multi.test",
-      },
-      { orgId: ORG_ID, projectId: PROJECT_ID },
-    );
+  it("NEGATIVE CONTROL — a required Bevy target without a native validator records inconclusive, blocks land, and never publishes", async () => {
+    await expect(
+      composeProjectTargetDesignSystems(
+        {
+          pool: runtimePool,
+          artifactStore: new FilesystemArtifactStore(artifactRoot),
+          fragmentAnswerer: fixtureFragmentAnswerer(),
+          eventStore: new CapturingEventStore(),
+          createdBy: "tanren.ds7-multi.test",
+        },
+        { orgId: ORG_ID, projectId: PROJECT_ID },
+      ),
+    ).rejects.toThrow(/required design target 'bevy' conformance is 'inconclusive_infrastructure'/u);
 
-    expect(result).toBeDefined();
-    expect(result?.alreadyPublished).toBe(false);
-    // BOTH required targets fired — web-react AND bevy.
-    expect(result?.targets.map((target) => target.target).sort()).toEqual(["bevy", "web-react"]);
-    for (const outcome of result?.targets ?? []) {
-      expect(outcome.conformanceOutcome).toBe("passed");
-      expect(outcome.artifactDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
-    }
-
-    // The release is PUBLISHED with the web artifact as canonical.
+    // The conformance rows are durable even though the release does not advance.
     const release = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
-      client.query<{ state: string; canonical_artifact_id: string }>(
-        "SELECT state, canonical_artifact_id FROM design_system_releases WHERE org_id = $1 AND id = $2",
-        [ORG_ID, result!.releaseId],
+      client.query<{ id: string; state: string; canonical_artifact_id: string | null }>(
+        `SELECT release.id, release.state, release.canonical_artifact_id
+           FROM design_system_releases release
+           JOIN design_contracts contract ON contract.org_id = release.org_id AND contract.id = release.contract_id
+          WHERE release.org_id = $1 AND contract.project_id = $2`,
+        [ORG_ID, PROJECT_ID],
       ),
     );
-    expect(release.rows[0]?.state).toBe("published");
-    expect(release.rows[0]?.canonical_artifact_id).toBe(result!.canonicalArtifactId);
+    expect(release.rows).toHaveLength(1);
+    expect(release.rows[0]?.state).toBe("draft");
+    expect(release.rows[0]?.canonical_artifact_id).toBeNull();
 
-    // Both target artifacts persisted.
-    const artifacts = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
-      client.query<{ id: string; digest: string }>(
-        "SELECT id, digest FROM design_artifacts WHERE org_id = $1 AND design_system_id = $2",
-        [ORG_ID, result!.designSystemId],
-      ),
-    );
-    expect(artifacts.rows.length).toBeGreaterThanOrEqual(2);
-
-    // The conformance runs are persisted for BOTH targets. ReadLatest returns
-    // the passed row for each. Proof≡effect (trap #7): each receipt's
-    // artifactDigest matches the persisted artifact row's digest.
     const store = new DesignAdapterConformanceStore(runtimePool);
-    for (const outcome of result?.targets ?? []) {
-      const row = await store.readLatest(ORG_ID, PROJECT_ID, outcome.target);
-      expect(row).toBeDefined();
-      expect(row?.outcome).toBe("passed");
-      expect(row?.artifactDigest).toBe(outcome.artifactDigest);
-      const matchingArtifact = artifacts.rows.find((candidate) => candidate.digest === outcome.artifactDigest);
-      expect(matchingArtifact).toBeDefined();
-    }
-
-    // The conformance panel returns BOTH targets.
     const panelRows = await store.listForProject(ORG_ID, PROJECT_ID);
     expect(panelRows.map((row) => row.target).sort()).toEqual(["bevy", "web-react"]);
+    const bevy = panelRows.find((row) => row.target === "bevy");
+    const web = panelRows.find((row) => row.target === "web-react");
+    expect(bevy?.outcome).toBe("inconclusive_infrastructure");
+    expect(web?.outcome).toBe("passed");
 
-    // THE READER LIGHTS UP — the run-context resolver now resolves a context.
-    const resolved = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
-      resolveProjectWebDesignSystem(client, { orgId: ORG_ID, projectId: PROJECT_ID }),
+    // There is no accidental publication, even though both artifacts and receipts exist.
+    const persistedArtifacts = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query<{ id: string; digest: string }>(
+        "SELECT id, digest FROM design_artifacts WHERE org_id = $1 AND id = ANY($2)",
+        [ORG_ID, panelRows.map((row) => row.artifactId)],
+      ),
     );
-    expect(resolved).toBeDefined();
-    expect(resolved?.releaseId).toBe(result?.releaseId);
+    expect(persistedArtifacts.rows).toHaveLength(2);
+
+    // Simulate an adversarial DB-only release-state escalation after the composer
+    // correctly refused it. The land reader must still consume the Bevy row and
+    // return its typed fail-closed block rather than trusting publication state.
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query(
+        `UPDATE design_system_releases
+            SET state = 'published', canonical_artifact_id = $1, published_by = 'adversary', published_at = now()
+          WHERE org_id = $2 AND id = $3`,
+        [web!.artifactId, ORG_ID, release.rows[0]!.id],
+      ),
+    );
+    await ownerPool.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ('run_ds7_multi', 'spec_ds7_multi', $1, $2, 'cli', 'feat', 'running')`,
+      [PROJECT_ID, ORG_ID],
+    );
+    const gate = await resolveDesignRenderGate(runtimePool, ORG_ID, "run_ds7_multi");
+    expect(gate).toMatchObject({ kind: "inconclusive_infrastructure" });
+    expect(gate.kind === "inconclusive_infrastructure" && gate.reason).toContain("bevy");
   });
 
   it("NEGATIVE CONTROL — an unregistered target in the contract is a LOUD typed error (no silent skip)", async () => {
@@ -306,9 +315,75 @@ describeDb("composeProjectTargetDesignSystems — multi-target composition (web 
     ).rejects.toThrow(/frozen adapter union/u);
 
     // No release was published for the forged project.
-    const resolved = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
-      resolveProjectWebDesignSystem(client, { orgId: ORG_ID, projectId: FORGED_PROJECT }),
+    const releases = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query(
+        `SELECT release.id
+           FROM design_system_releases release
+           JOIN design_contracts contract ON contract.org_id = release.org_id AND contract.id = release.contract_id
+          WHERE release.org_id = $1 AND contract.project_id = $2 AND release.state = 'published'`,
+        [ORG_ID, FORGED_PROJECT],
+      ),
     );
-    expect(resolved).toBeUndefined();
+    expect(releases.rows).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL — a Bevy-only contract never runs web render verification against a non-web coordinate", async () => {
+    const projectId = "project_ds7_bevy_only";
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ($1, 'DS Bevy only', 'https://example.test/ds-bevy.git', 'main', 'runner:test', $2, '{"version":1}'::jsonb)`,
+      [projectId, ORG_ID],
+    );
+    const contract = parseDesignContract({
+      version: 1,
+      domain: "game",
+      identity: "a Bevy-only HUD",
+      intent: "native game UI with no web surface",
+      dimensions: [{ key: "hud", label: "HUD", intent: "game overlay", guidance: "", personaRefs: [] }],
+    });
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      DesignContractStore.create(client, { orgId: ORG_ID, projectId, contract }, { kind: "operator" }),
+    );
+    await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query(
+        `UPDATE design_contracts
+            SET contract = jsonb_set(jsonb_set(contract, '{version}', '2'::jsonb), '{targetProfiles}', $1::jsonb)
+          WHERE org_id = $2 AND project_id = $3`,
+        [
+          JSON.stringify([
+            {
+              target: "bevy",
+              capabilities: ["tokens", "catalog", "components", "bevy-ui", "bevy-asset", "cargo"],
+              required: true,
+            },
+          ]),
+          ORG_ID,
+          projectId,
+        ],
+      ),
+    );
+
+    await expect(
+      composeProjectTargetDesignSystems(
+        {
+          pool: runtimePool,
+          artifactStore: new FilesystemArtifactStore(artifactRoot),
+          fragmentAnswerer: fixtureFragmentAnswerer(),
+          eventStore: new CapturingEventStore(),
+          createdBy: "tanren.ds7-multi.test",
+        },
+        { orgId: ORG_ID, projectId },
+      ),
+    ).rejects.toThrow(/required design target 'bevy' conformance/u);
+
+    const store = new DesignAdapterConformanceStore(runtimePool);
+    expect((await store.listForProject(ORG_ID, projectId)).map((row) => row.target)).toEqual(["bevy"]);
+    const renderVerdicts = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
+      client.query("SELECT id FROM design_render_land_verdicts WHERE org_id = $1 AND project_id = $2", [
+        ORG_ID,
+        projectId,
+      ]),
+    );
+    expect(renderVerdicts.rows).toEqual([]);
   });
 });

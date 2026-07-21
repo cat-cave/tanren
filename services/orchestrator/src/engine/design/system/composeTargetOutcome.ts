@@ -59,6 +59,7 @@ export async function composeTargetOutcome(
       releaseId: context.releaseId,
       artifactId: web.artifactId,
       artifactDigest: web.artifactDigest,
+      build: web.build,
       adapterVersion: "tanren.web-react.v1",
       requiredCapabilities: input.requiredCapabilities,
     });
@@ -97,6 +98,7 @@ export async function composeTargetOutcome(
   const receipt = await recordFrameworkConformanceRun(frameworkAdapter, {
     artifactDigest,
     adapterVersion: `tanren.${target}.v1`,
+    requiredCapabilities: input.requiredCapabilities,
   });
   const persisted = await conformanceStore.record({
     orgId: context.orgId,
