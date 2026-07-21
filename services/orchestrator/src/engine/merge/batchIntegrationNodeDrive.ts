@@ -1,7 +1,6 @@
 // JJ-local integration materializes the prospective head, evaluates the native gate via
 // immutable proof units, and is the sole batch-verdict consultation of integration nodes.
 
-import { createHash, randomUUID } from "node:crypto";
 import type { BatchAuthorityBinding, BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
 import type { CiConfigV1 } from "../ci/index.js";
 import type { IntegrationNode, IntegrationNodeMember, ProofReuseKeyInput } from "../contracts/integrationNodes.js";
@@ -14,9 +13,7 @@ import {
   type JjLocalIntegrationResult,
   withJjLocalIntegration,
 } from "../dag/jjLocalIntegration.js";
-import { hashGateConfig, resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
-import type { LiveProofKeyComponents } from "../dag/integrationProofReuse.js";
-import type { IntegrationProofUnitGraph } from "../dag/integrationProofUnits.js";
+import { hashGateConfig, resolveLiveKeyComponents, type LiveProofKeyComponents } from "../dag/integrationProofKey.js";
 import type { CoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 import type { NativeCiGateObservation, GateProofBundleSealer } from "./gateProofBundleTypes.js";
 export { batchFragmentEvidenceWiring } from "./batchFragmentEvidenceWiring.js";
@@ -110,9 +107,7 @@ export interface BatchNodeStore {
 
 export interface BatchNodeDriveDeps {
   nodes: BatchNodeStore;
-  /** The durable per-unit proof graph; this is the live gate's reuse authority. */
-  proofUnits: IntegrationProofUnitGraph;
-  /** The sole decisive V2 merge-evidence store. */
+  /** The sole decisive V2 merge-evidence store and the only gate-reuse authority. */
   gateBundles: GateProofBundleSealer;
   eventStore: EventStore;
   /** The A1 live-jj-workspace deps (allocator/ssh/secrets/vcsProvider/minter/facts). */
@@ -136,11 +131,9 @@ export interface BatchNodeDriveDeps {
  *      build returned (no host ref written).
  *   2. UPSERT the node (the memberKey identity + the materialized head/tree/status).
  *   3. RESOLVE the gate config from the same workspace → the gateConfigHash component.
- *   4. PROOF-UNIT REUSE (MQ-6): resolve the six live key components and evaluate the
- *      native pre-merge gate as a stamped proof unit. A matching unit short-circuits the
- *      gate; a miss runs the gate inside that unit, records it, and composes the Merkle root.
- *      The legacy whole-node proof is retained only as merge-authority evidence, never as
- *      the gate's pre-graph short-circuit. An unreadable config OR node ⇒ RECOMPUTE.
+ *   4. V2 REUSE: resolve the six live key components, then verify one sealed V2 bundle at
+ *      the exact base/head/tree/member/section coordinate. Only that verified bundle can
+ *      skip the native pre-merge gate; every miss or divergence runs the full gate.
  */
 export async function driveBatchThroughNode(
   facts: BatchNodeDriveFacts,
@@ -216,9 +209,8 @@ async function verdictForIntegrated(
     return (await deps.gate(live)).verdict;
   }
 
-  // 4. PROOF-UNIT REUSE (MQ-6) — resolve the live identity before evaluating the
-  // pre-merge gate. A partially-known identity remains fail-closed and runs the gate
-  // directly; it cannot be recorded or reused as a proof unit.
+  // 4. V2 REUSE — a partially-known identity remains fail-closed and runs the full
+  // native gate directly. It cannot be recorded or reused as a proof.
   const components = resolveLiveKeyComponents({
     config,
     runnerImage: facts.runnerImage,
@@ -229,10 +221,6 @@ async function verdictForIntegrated(
   const keyInput = resolvedKeyInput(node.memberKey, components);
   if (keyInput === undefined) return (await deps.gate(live)).verdict;
 
-  // The selector is strictly declarative. A malformed, absent, stale, or
-  // unmatched contract produces `fallback` and leaves the native pre-merge gate
-  // as the sole authority; it never becomes a command or a pass on its own.
-  let fragmentEvidence: FragmentEvidenceResolution = { kind: "fallback", reason: "manifest_absent" };
   const evidenceRequest: BatchFragmentEvidenceRequest = {
     orgId: facts.orgId,
     projectId: facts.projectId,
@@ -243,81 +231,54 @@ async function verdictForIntegrated(
     localRef: integrated.localRef,
     ssh: deps.jjWorkspaceDeps.ssh,
   };
-  if (deps.resolveFragmentEvidence !== undefined) {
-    try {
-      fragmentEvidence = await deps.resolveFragmentEvidence(live, evidenceRequest);
-    } catch {
-      // The evidence surface is advisory to proof selection, never to merge
-      // authority. An unobservable state therefore fails closed to the full gate.
-      fragmentEvidence = { kind: "fallback", reason: "manifest_unreadable" };
-    }
+  // `findExact` cryptographically verifies the sealed SP-3 bundle and requires exact
+  // base/head/tree/member/config/policy/quarantine plus an exact required section set.
+  // A V1 proof unit never participates here.
+  let bundle = await deps.gateBundles.findExact(gateBundleInput(facts, node, integrated, keyInput));
+  if (bundle !== undefined && bundle.gateVerdict === "passed") {
+    await deps.eventStore.append({
+      orgId: facts.orgId,
+      projectId: facts.projectId,
+      eventType: "integration.proof.reused",
+      payload: {
+        nodeId: node.nodeId,
+        recordedOnNodeId: bundle.integrationNodeId,
+        memberKey: node.memberKey,
+        proofReuseKey: proofReuseKey(keyInput),
+        verdict: "passed",
+        gateProofBundleId: bundle.gateProofBundleId,
+        proofBundleDigest: bundle.proofBundleDigest,
+        quarantineVersion: bundle.proofKeyInput.quarantineVersion,
+        baseSha: integrated.baseSha,
+        headSha: integrated.headSha,
+        sectionDigests: bundle.sections.flatMap((section) => section.unitDigests).sort(),
+      },
+    });
+    return passWithBinding(
+      { result: "pass", integrationBranch: integrated.localRef },
+      node,
+      integrated,
+      bundle,
+      keyInput,
+    );
   }
 
-  const stamp = proofUnitStamp(keyInput, fragmentEvidence);
-  let gated: Awaited<ReturnType<GateBatchWorkspace>> | undefined;
-  const evaluation = await deps.proofUnits.evaluate({
-    orgId: facts.orgId,
-    projectId: facts.projectId,
-    nodeId: node.nodeId,
-    evaluationId: `eval_batch_${randomUUID()}`,
-    ...stamp,
-    units: [
-      {
-        // Immutable observation of the selector decision. A failed observation
-        // means "use full gate", not "batch failed"; `pre_merge` remains the
-        // parent authority and still runs/reuses under its normal exact key.
-        key: "fragment_evidence",
-        kind: "artifact_provenance",
-        subjectId:
-          fragmentEvidence.kind === "selected"
-            ? "fragment_evidence:selected"
-            : `fragment_evidence:fallback:${fragmentEvidence.reason}`,
-        inputHash:
-          fragmentEvidence.kind === "selected"
-            ? fragmentEvidence.inputHash
-            : digest(["tanren.fragment-evidence-fallback.v1", proofReuseKey(keyInput), fragmentEvidence.reason]),
-        run: async () => ({
-          verdict: fragmentEvidence.kind === "selected" ? "pass" : "fail",
-          ...(fragmentEvidence.kind === "selected" ? { artifactHash: fragmentEvidence.artifactDigest } : {}),
-        }),
-      },
-      {
-        key: "pre_merge",
-        kind: "native_ci_tier",
-        subjectId: "pre_merge",
-        inputHash: batchGateUnitInputHash(keyInput, fragmentEvidence),
-        dependsOn: ["fragment_evidence"],
-        run: async () => {
-          gated = await deps.gate(live);
-          if (gated.passed && deps.captureFragmentEvidence !== undefined) {
-            try {
-              await deps.captureFragmentEvidence(live, evidenceRequest);
-            } catch {
-              // A capture failure leaves the authoritative native-gate verdict
-              // intact and prevents future selector reuse by leaving no artifact.
-            }
-          }
-          return {
-            verdict: gated.passed ? "pass" : "fail",
-            ...(fragmentEvidence.kind === "selected" ? { artifactHash: fragmentEvidence.artifactDigest } : {}),
-          };
-        },
-      },
-    ],
-  });
-  const proofUnit = evaluation.units.find((unit) => unit.kind === "native_ci_tier" && unit.subjectId === "pre_merge");
-  if (proofUnit === undefined) throw new Error("batch gate proof-unit evaluation produced no pre_merge unit");
-
-  // A reused proof-unit means work did not run, so it cannot itself provide native
-  // section evidence. It is useful only when the same exact sealed V2 bundle exists.
-  // Otherwise rerun the real producer; a legacy proof-unit can never authorize land.
-  let gateResult = gated ?? reusedGateResult(proofUnit.verdict, integrated.localRef);
-  let bundle =
-    gateResult.nativeCi === undefined
-      ? await deps.gateBundles.findExact(gateBundleInput(facts, node, integrated, keyInput))
-      : undefined;
-  if (gateResult.passed && gateResult.nativeCi === undefined && bundle === undefined) {
-    gateResult = await deps.gate(live);
+  // Preserve F2 artifact capture as an advisory production producer, but it has no
+  // authority over reuse or land. Any resolver/capture failure leaves the full gate path.
+  if (deps.resolveFragmentEvidence !== undefined) {
+    try {
+      await deps.resolveFragmentEvidence(live, evidenceRequest);
+    } catch {
+      // An unobservable selector cannot turn into a reuse or a pass.
+    }
+  }
+  const gateResult = await deps.gate(live);
+  if (gateResult.passed && deps.captureFragmentEvidence !== undefined) {
+    try {
+      await deps.captureFragmentEvidence(live, evidenceRequest);
+    } catch {
+      // Capture is non-authoritative; the V2 native section remains the decisive evidence.
+    }
   }
   if (gateResult.nativeCi !== undefined) {
     bundle = await deps.gateBundles.seal({
@@ -330,59 +291,6 @@ async function verdictForIntegrated(
     return { result: "fail", message: "native gate passed but its exact V2 gate proof bundle is incomplete" };
   }
   return passWithBinding(gateResult.verdict, node, integrated, bundle, keyInput);
-}
-
-function reusedGateResult(
-  verdict: "pass" | "fail" | "skipped",
-  integrationBranch: string,
-): Awaited<ReturnType<GateBatchWorkspace>> {
-  if (verdict === "pass") return { verdict: { result: "pass", integrationBranch }, passed: true };
-  return {
-    verdict: { result: "fail", message: `reused non-passing pre_merge proof unit (${verdict})` },
-    passed: false,
-  };
-}
-
-/** Stamp every persisted proof root with the exact live gate identity. */
-function proofUnitStamp(
-  keyInput: ProofReuseKeyInput,
-  evidence: FragmentEvidenceResolution,
-): {
-  quarantineEpoch: number;
-  toolchainHash: string;
-  designContractVersion: string;
-  behaviorManifestHash: string;
-} {
-  return {
-    quarantineEpoch: quarantineEpochForVersion(keyInput.quarantineVersion),
-    toolchainHash: digest(["tanren.batch-toolchain.v1", keyInput.runnerImage]),
-    designContractVersion: keyInput.policyVersion,
-    behaviorManifestHash: digest([
-      "tanren.batch-behavior-manifest.v1",
-      keyInput.gateConfigHash,
-      keyInput.appEnvHash,
-      keyInput.quarantineVersion,
-      evidence.kind === "selected" ? evidence.inputHash : "full_native_pre_merge",
-    ]),
-  };
-}
-
-/** The raw work input still includes the full integrated-content + gate identity. */
-function batchGateUnitInputHash(keyInput: ProofReuseKeyInput, evidence: FragmentEvidenceResolution): string {
-  return digest([
-    "tanren.batch-pre-merge-unit.v1",
-    proofReuseKey(keyInput),
-    evidence.kind === "selected" ? evidence.inputHash : "full_native_pre_merge",
-  ]);
-}
-
-/** Active quarantine currently has a content version, so derive its stable integer epoch. */
-function quarantineEpochForVersion(version: string): number {
-  return createHash("sha256").update(version).digest().readUInt32BE(0) & 0x7fff_ffff;
-}
-
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
 
 /** Add the exact node/proof identity only to a genuinely passing, fully-keyed verdict. */

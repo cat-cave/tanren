@@ -104,6 +104,7 @@ function rows(section?: { readonly required: boolean; readonly kind: string | nu
       jj_tree_id: input.treeHash,
       artifact_digest: batchArtifactDigestFor(input.headSha, input.treeHash),
       expected_main_sha: input.baseSha,
+      node_members: input.members,
       signing_key_id: "ed25519:unit",
       root_signature: new Uint8Array([1]),
       nonce: "nonce-v2-unit",

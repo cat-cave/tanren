@@ -6,6 +6,14 @@
       "minLength": 1,
       "type": "string"
     },
+    "decision": {
+      "enum": [
+        "authorized",
+        "blocked",
+        "needs_attention"
+      ],
+      "type": "string"
+    },
     "gateProofBundleId": {
       "minLength": 1,
       "type": "string"
@@ -14,52 +22,51 @@
       "minLength": 1,
       "type": "string"
     },
-    "memberKey": {
+    "mainSha": {
+      "minLength": 1,
       "type": "string"
     },
-    "nodeId": {
+    "memberSetHash": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "outcomeId": {
+      "minLength": 1,
       "type": "string"
     },
     "proofBundleDigest": {
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
-    "proofReuseKey": {
+    "proofRoot": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
     "quarantineVersion": {
       "minLength": 1,
       "type": "string"
     },
-    "recordedOnNodeId": {
-      "type": "string"
-    },
-    "sectionDigests": {
-      "items": {
-        "pattern": "^sha256:[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "minItems": 1,
-      "type": "array"
-    },
-    "verdict": {
-      "const": "passed",
+    "result": {
+      "enum": [
+        "landed",
+        "declined",
+        "quarantined"
+      ],
       "type": "string"
     }
   },
   "required": [
-    "nodeId",
-    "recordedOnNodeId",
-    "memberKey",
-    "proofReuseKey",
-    "verdict",
+    "outcomeId",
+    "decision",
+    "result",
     "gateProofBundleId",
     "proofBundleDigest",
+    "proofRoot",
     "quarantineVersion",
     "baseSha",
     "headSha",
-    "sectionDigests"
+    "memberSetHash"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.event.integration.proof.reused"
+  "x-tanren-schema-id": "tanren.event.merge.runtime_outcome.recorded"
 }

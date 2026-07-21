@@ -11,7 +11,9 @@ import type { BatchNodeDriveDeps } from "../../src/engine/merge/batchIntegration
 export async function productionV2BatchDriveDeps(
   pool: Pool,
   integrationBranch: string,
-): Promise<Pick<BatchNodeDriveDeps, "nodes" | "gateBundles" | "resolveConfig" | "gate">> {
+): Promise<
+  Pick<BatchNodeDriveDeps, "nodes" | "gateBundles" | "resolveConfig" | "gate"> & { proofSubstrate: PgProofSubstrate }
+> {
   const { privateKey } = generateKeyPairSync("ed25519");
   const secrets = new InMemorySecretStore();
   await secrets.put({
@@ -24,9 +26,10 @@ export async function productionV2BatchDriveDeps(
     when: { fast: ["pre_merge"], slow: ["pre_merge"] },
   } as const;
   const gateConfigHash = hashGateConfig(config);
+  const proofSubstrate = new PgProofSubstrate(pool, secrets);
   return {
     nodes: new PgIntegrationNodeModel(pool),
-    gateBundles: buildBatchGateProofSealer(pool, new PgProofSubstrate(pool, secrets)),
+    gateBundles: buildBatchGateProofSealer(pool, proofSubstrate),
     resolveConfig: async () => config,
     gate: async () => ({
       verdict: { result: "pass", integrationBranch },
@@ -42,5 +45,6 @@ export async function productionV2BatchDriveDeps(
         verdict: "passed",
       },
     }),
+    proofSubstrate,
   };
 }

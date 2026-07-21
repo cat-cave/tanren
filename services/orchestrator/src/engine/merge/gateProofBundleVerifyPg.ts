@@ -36,6 +36,7 @@ interface StoredBundleRow {
   jj_tree_id: string;
   artifact_digest: string;
   expected_main_sha: string;
+  node_members: unknown;
   signing_key_id: string;
   root_signature: Uint8Array;
   nonce: string;
@@ -120,13 +121,14 @@ async function readRows(pool: pg.Pool, input: Omit<GateProofBundleInput, "native
               b.gate_config_hash AS sealed_gate_config_hash, b.policy_version AS sealed_policy_version,
               b.runner_image, b.app_env_hash, b.quarantine_version,
               b.member_set_hash,
-              b.prepared_head_sha, b.jj_tree_id, b.artifact_digest, b.expected_main_sha,
+              b.prepared_head_sha, b.jj_tree_id, b.artifact_digest, b.expected_main_sha, n.members AS node_members,
               b.signing_key_id, b.root_signature, b.nonce, b.issued_at, b.expires_at,
               bu.id AS bundle_unit_id, bu.proof_unit_digest, pu.kind AS unit_kind, pu.verdict AS unit_verdict,
               pu.subject_id,
               bu.ordinal AS unit_ordinal, s.section_kind, s.required AS section_required, s.ordinal AS section_ordinal
          FROM gate_proof_bundles g
          JOIN proof_bundles b ON b.org_id = g.org_id AND b.id = g.proof_bundle_id
+         JOIN integration_nodes n ON n.org_id = g.org_id AND n.node_id = g.integration_node_id
          JOIN proof_bundle_units bu ON bu.org_id = b.org_id AND bu.bundle_id = b.id
          JOIN proof_units pu ON pu.org_id = bu.org_id AND pu.proof_unit_digest = bu.proof_unit_digest
          LEFT JOIN gate_proof_bundle_sections s
@@ -159,6 +161,7 @@ function sameBundleBinding(row: StoredBundleRow, input: Omit<GateProofBundleInpu
     row.prepared_head_sha === input.headSha &&
     row.jj_tree_id === input.treeHash &&
     row.expected_main_sha === input.baseSha &&
+    sameMembers(row.node_members, input.members) &&
     row.artifact_digest === batchArtifactDigestFor(input.headSha, input.treeHash)
   );
 }
@@ -185,6 +188,7 @@ function sameProjection(row: StoredBundleRow, first: StoredBundleRow): boolean {
     row.jj_tree_id === first.jj_tree_id &&
     row.artifact_digest === first.artifact_digest &&
     row.expected_main_sha === first.expected_main_sha &&
+    sameRawMembers(row.node_members, first.node_members) &&
     row.signing_key_id === first.signing_key_id &&
     row.nonce === first.nonce
   );
@@ -302,6 +306,48 @@ function requiredTextFromUnit(row: StoredBundleRow): string {
 
 function sectionKey(section: { readonly kind: GateSectionKind; readonly subjectId: string }): string {
   return `${section.kind}\u0000${section.subjectId}`;
+}
+
+/** Ordered full-member equality is separate from the member-set hash: no collision/loose set may reuse a V2 seal. */
+function sameMembers(raw: unknown, expected: GateProofBundleInput["members"]): boolean {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length !== expected.length) return false;
+  return raw.every((candidate, index) => {
+    const member = expected[index];
+    return (
+      candidate !== null &&
+      typeof candidate === "object" &&
+      member !== undefined &&
+      typeof member.specId === "string" &&
+      member.specId.trim() !== "" &&
+      typeof member.runId === "string" &&
+      member.runId.trim() !== "" &&
+      typeof member.branch === "string" &&
+      member.branch.trim() !== "" &&
+      typeof member.headSha === "string" &&
+      member.headSha.trim() !== "" &&
+      Reflect.get(candidate, "specId") === member.specId &&
+      Reflect.get(candidate, "runId") === member.runId &&
+      Reflect.get(candidate, "branch") === member.branch &&
+      Reflect.get(candidate, "headSha") === member.headSha
+    );
+  });
+}
+
+function sameRawMembers(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  return left.every((member, index) => {
+    const candidate = right[index];
+    return (
+      member !== null &&
+      typeof member === "object" &&
+      candidate !== null &&
+      typeof candidate === "object" &&
+      Reflect.get(member, "specId") === Reflect.get(candidate, "specId") &&
+      Reflect.get(member, "runId") === Reflect.get(candidate, "runId") &&
+      Reflect.get(member, "branch") === Reflect.get(candidate, "branch") &&
+      Reflect.get(member, "headSha") === Reflect.get(candidate, "headSha")
+    );
+  });
 }
 
 function requiredFirst<T>(values: readonly T[]): T {

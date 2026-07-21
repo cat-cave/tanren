@@ -11,7 +11,6 @@
 // The jj-local integration is injected as a FAKE port (no live runner) so the drive's
 // proof-reuse + node-upsert logic is asserted deterministically; the real jj integration
 // is conformance-pinned separately.
-
 import { describe, expect, it, vi } from "vitest";
 import { parseDigest } from "../src/engine/contracts/cas.js";
 import type { GateProofBundleV2 } from "../src/engine/contracts/gateProof.js";
@@ -19,8 +18,6 @@ import { type IntegrationNode, memberKey } from "../src/engine/contracts/integra
 import type { BatchCheckVerdict } from "../src/engine/contracts/batchMergeCoordinator.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
-import type { ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
-import { proofReuseKey } from "../src/engine/contracts/integrationNodes.js";
 import {
   type BatchNodeDriveDeps,
   type BatchNodeDriveFacts,
@@ -29,9 +26,7 @@ import {
   driveBatchThroughNode,
 } from "../src/engine/merge/batchIntegrationNodeDrive.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
-import { IntegrationProofUnitGraph } from "../src/engine/dag/integrationProofUnits.js";
 import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
-import { createInMemoryIntegrationProofUnitStore } from "./conformance/fakes/inMemoryMergeQueue.js";
 import type { GateProofBundleInput, GateProofBundleSealer } from "../src/engine/merge/gateProofBundleTypes.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
@@ -39,12 +34,16 @@ type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
 
 class FakeGateBundles implements GateProofBundleSealer {
   private readonly bundles = new Map<string, GateProofBundleV2>();
+  private readonly sealedSectionDigests = new Map<string, readonly string[]>();
+  private sequence = 0;
 
   async seal(input: GateProofBundleInput): Promise<GateProofBundleV2> {
+    const sequence = ++this.sequence;
+    const sectionDigest = parseDigest(`sha256:${sequence.toString(16).padStart(64, "0")}`);
     const bundle: GateProofBundleV2 = {
-      gateProofBundleId: `gate_proof_bundle:${input.nodeId}`,
-      proofBundleDigest: parseDigest(`sha256:${"d".repeat(64)}`),
-      proofRoot: parseDigest(`sha256:${"e".repeat(64)}`),
+      gateProofBundleId: `gate_proof_bundle:${input.nodeId}:${sequence}`,
+      proofBundleDigest: parseDigest(`sha256:${(sequence + 10).toString(16).padStart(64, "0")}`),
+      proofRoot: parseDigest(`sha256:${(sequence + 20).toString(16).padStart(64, "0")}`),
       integrationNodeId: input.nodeId,
       proofKeyInput: input.proofKeyInput,
       plan: {
@@ -55,25 +54,66 @@ class FakeGateBundles implements GateProofBundleSealer {
           kind: "native_ci",
           required: true,
           verdict: input.nativeCi.verdict,
-          unitDigests: [parseDigest(`sha256:${"f".repeat(64)}`)],
+          unitDigests: [sectionDigest],
         },
       ],
       gateVerdict: input.nativeCi.verdict,
     };
-    this.bundles.set(input.nodeId, bundle);
+    const key = bundleKey(input);
+    this.bundles.set(key, bundle);
+    this.sealedSectionDigests.set(key, sectionDigests(bundle));
     return bundle;
   }
 
   async findExact(input: Omit<GateProofBundleInput, "nativeCi">): Promise<GateProofBundleV2 | undefined> {
-    return this.bundles.get(input.nodeId);
+    const key = bundleKey(input);
+    const bundle = this.bundles.get(key);
+    return bundle !== undefined && sameStrings(sectionDigests(bundle), this.sealedSectionDigests.get(key))
+      ? bundle
+      : undefined;
   }
+
+  /** Test-only signature negative control: a changed sealed section must never reuse. */
+  corruptSection(input: Omit<GateProofBundleInput, "nativeCi">): void {
+    const key = bundleKey(input);
+    const bundle = this.bundles.get(key);
+    if (bundle === undefined) throw new Error("cannot corrupt a missing fake V2 bundle");
+    this.bundles.set(key, {
+      ...bundle,
+      sections: bundle.sections.map((section, index) =>
+        index === 0 ? { ...section, unitDigests: [parseDigest(`sha256:${"f".repeat(64)}`)] } : section,
+      ),
+    });
+  }
+}
+
+function bundleKey(input: Omit<GateProofBundleInput, "nativeCi">): string {
+  return JSON.stringify({
+    orgId: input.orgId,
+    projectId: input.projectId,
+    nodeId: input.nodeId,
+    baseSha: input.baseSha,
+    headSha: input.headSha,
+    treeHash: input.treeHash,
+    memberSetHash: input.memberSetHash,
+    members: input.members,
+    gateConfigHash: input.gateConfigHash,
+    policyVersion: input.policyVersion,
+    proofKeyInput: input.proofKeyInput,
+  });
+}
+
+function sectionDigests(bundle: GateProofBundleV2): string[] {
+  return bundle.sections.flatMap((section) => section.unitDigests).sort();
+}
+
+function sameStrings(left: readonly string[], right: readonly string[] | undefined): boolean {
+  return right !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 /** An in-memory node + proof store (the PgIntegrationNodeModel, behavior-equivalent). */
 class FakeNodeStore implements BatchNodeStore {
   readonly nodes = new Map<string, IntegrationNode>();
-  readonly proofs = new Map<string, { nodeId: string; verdict: string; evidence?: unknown }>();
-  readonly proofUnits = createInMemoryIntegrationProofUnitStore();
   readonly gateBundles = new FakeGateBundles();
   // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
@@ -99,44 +139,11 @@ class FakeNodeStore implements BatchNodeStore {
       treeHash: input.treeHash,
       status: "ready",
     });
-    if (!this.proofUnits.db.integrationNodes.some((node) => node.node_id === nodeId)) {
-      this.proofUnits.db.integrationNodes.push({
-        node_id: nodeId,
-        org_id: input.orgId,
-        project_id: input.projectId,
-        proof_root: null,
-        quarantine_epoch: null,
-        toolchain_hash: null,
-        design_contract_version: null,
-        behavior_manifest_hash: null,
-      });
-    }
     return nodeId;
   }
 
   async findByMemberKey(_orgId: string, key: string): Promise<IntegrationNode | undefined> {
     return this.nodes.get(key);
-  }
-
-  async findProof(_orgId: string, reuseKey: string): Promise<{ nodeId: string; verdict: string } | undefined> {
-    return this.proofs.get(reuseKey);
-  }
-
-  async recordProof(input: {
-    orgId: string;
-    projectId: string;
-    nodeId: string;
-    keyInput: ProofReuseKeyInput;
-    verdict: string;
-    evidence?: unknown;
-  }): Promise<string> {
-    const key = proofReuseKey(input.keyInput);
-    this.proofs.set(key, {
-      nodeId: input.nodeId,
-      verdict: input.verdict,
-      ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
-    });
-    return key;
   }
 }
 
@@ -206,7 +213,6 @@ function deps(
 ): BatchNodeDriveDeps {
   return {
     nodes: store,
-    proofUnits: new IntegrationProofUnitGraph(store.proofUnits, events),
     gateBundles: store.gateBundles,
     eventStore: events as never,
     jjWorkspaceDeps: { ssh: {} as never } as never,
@@ -260,8 +266,8 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       proof: { verdict: "passed" },
     });
     expect(authorityBinding.proof).toMatchObject({
-      gateProofBundleId: `gate_proof_bundle:${authorityBinding.nodeId}`,
-      proofRoot: `sha256:${"e".repeat(64)}`,
+      gateProofBundleId: `gate_proof_bundle:${authorityBinding.nodeId}:1`,
+      proofRoot: `sha256:${"15".padStart(64, "0")}`,
     });
     expect(gate).toHaveBeenCalledTimes(1);
 
@@ -284,9 +290,15 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const second = await driveBatchThroughNode(FACTS, d2);
     expect(second.result).toBe("pass");
     expect(gate2).not.toHaveBeenCalled();
-    // The production entrypoint's proof-unit graph narrates the skip.
-    expect(events2.appended.some((e) => e.eventType === "integration.proof_unit.reused")).toBe(true);
-    expect(events2.appended.some((e) => e.eventType === "integration.proof.reused")).toBe(false);
+    expect(events2.appended).toContainEqual({
+      eventType: "integration.proof.reused",
+      payload: expect.objectContaining({
+        gateProofBundleId: authorityBinding.proof.gateProofBundleId,
+        proofBundleDigest: authorityBinding.proof.proofBundleDigest,
+        baseSha: FACTS.baseSha,
+        headSha: INTEGRATED_HEAD,
+      }),
+    });
   });
 
   it("DRIFT (a changed runnerImage) forces the gate to RUN — no stale reuse", async () => {
@@ -360,11 +372,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       message: "native gate still failed",
     });
     expect(gate).toHaveBeenCalledTimes(1);
-    expect(
-      store.proofUnits.db.integrationProofUnits.some(
-        (unit) => unit.subject_id === "fragment_evidence:fallback:manifest_unreadable" && unit.verdict === "fail",
-      ),
-    ).toBe(true);
   });
 
   it("preserves a passing native-gate verdict when best-effort evidence capture throws", async () => {
@@ -430,7 +437,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       message: "node read-back requires a re-gate",
     });
     expect(gate).toHaveBeenCalledTimes(1);
-    expect(store.proofs.size).toBe(0);
   });
 
   it("runs the full gate when a proof-key identity component is absent", async () => {
@@ -444,34 +450,36 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       driveBatchThroughNode({ ...FACTS, policyVersion: undefined }, deps(store, new RecordingEventStore(), gate)),
     ).resolves.toEqual({ result: "fail", message: "policy identity is unresolved" });
     expect(gate).toHaveBeenCalledTimes(1);
-    expect(store.proofs.size).toBe(0);
   });
 
-  it("fails loud if the proof graph omits the authoritative native pre-merge unit", async () => {
+  it("fails closed when a sealed V2 section digest is changed: it re-runs the full gate", async () => {
     const store = new FakeNodeStore();
-    const gate = vi.fn<GateFn>();
-    const driven = deps(store, new RecordingEventStore(), gate);
-    driven.proofUnits = { evaluate: async () => ({ units: [] }) } as never;
-
-    await expect(driveBatchThroughNode(FACTS, driven)).rejects.toThrow(/no pre_merge unit/u);
-    expect(gate).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when a corrupted reused native unit is non-passing", async () => {
-    const store = new FakeNodeStore();
-    const gate = vi.fn<GateFn>();
-    const driven = deps(store, new RecordingEventStore(), gate);
-    driven.proofUnits = {
-      evaluate: async () => ({
-        units: [{ kind: "native_ci_tier", subjectId: "pre_merge", verdict: "skipped", reused: true }],
-      }),
-    } as never;
-
-    await expect(driveBatchThroughNode(FACTS, driven)).resolves.toEqual({
-      result: "fail",
-      message: "reused non-passing pre_merge proof unit (skipped)",
+    const firstGate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "pass", integrationBranch: "x" },
+      passed: true,
+    }));
+    const first = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), firstGate));
+    if (first.result !== "pass" || first.authorityBinding === undefined) throw new Error("expected V2 proof");
+    const binding = first.authorityBinding;
+    store.gateBundles.corruptSection({
+      orgId: FACTS.orgId,
+      projectId: FACTS.projectId,
+      nodeId: binding.nodeId,
+      baseSha: binding.baseSha,
+      headSha: binding.headSha,
+      treeHash: binding.treeHash,
+      memberSetHash: binding.memberSetHash,
+      members: binding.members,
+      gateConfigHash: binding.gateConfigHash,
+      policyVersion: binding.policyVersion,
+      proofKeyInput: binding.proof.keyInput,
     });
-    expect(gate).not.toHaveBeenCalled();
+    const rerun = vi.fn<GateFn>(async () => ({ verdict: { result: "fail", message: "seal changed" }, passed: false }));
+    await expect(driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), rerun))).resolves.toEqual({
+      result: "fail",
+      message: "seal changed",
+    });
+    expect(rerun).toHaveBeenCalledTimes(1);
   });
 
   it("negative control: an excluded changed test records only a fallback observation, runs the full gate, and cannot return a mergeable pass", async () => {
@@ -487,13 +495,5 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
 
     expect(verdict).toEqual({ result: "fail", message: "unselected changed test failed" });
     expect(gate).toHaveBeenCalledTimes(1);
-    const evidenceUnits = store.proofUnits.db.integrationProofUnits.filter(
-      (unit) => unit.subject_id === "fragment_evidence:fallback:selector_set_mismatch",
-    );
-    expect(evidenceUnits).toHaveLength(1);
-    expect(evidenceUnits[0]?.verdict).toBe("fail");
-    expect(
-      evidenceUnits.some((unit) => unit.subject_id === "fragment_evidence:selected" && unit.verdict === "pass"),
-    ).toBe(false);
   });
 });

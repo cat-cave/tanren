@@ -17,6 +17,7 @@ import {
   DagSpecSpeculativePayload,
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
+  MergeRuntimeOutcomeRecordedPayload,
 } from "./dag.js";
 
 export const dagEventRegistry = {
@@ -36,6 +37,7 @@ export const dagEventRegistry = {
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
   "integration.rebase": IntegrationRebasePayload,
   "integration.proof.reused": IntegrationProofReusedPayload,
+  "merge.runtime_outcome.recorded": MergeRuntimeOutcomeRecordedPayload,
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
   "dag.spec.attention_resolved": DagSpecAttentionResolvedPayload,
 } as const;

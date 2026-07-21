@@ -14,7 +14,8 @@ import type { TokenUsage } from "../providers/types.js";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { CreateSpecInput, CreateSpecRunInput, SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
-import type { AuditEnvelope } from "../events/schemas/audit.js";
+export type { FinalizeLandInput } from "./runStateLand.js";
+import type { FinalizeLandInput } from "./runStateLand.js";
 import type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
@@ -313,32 +314,6 @@ export interface ReconcileCostInput {
   totalCostUsd: number;
   /** The cost basis to stamp each repriced row with. */
   basis: "ccusage" | "credits";
-}
-
-/** Durable land finalize (§5): `merge.completed` + guarded spec `merged` in one org tx. */
-export interface FinalizeLandInput {
-  /** The owning run's org, so the finalize transaction is org-scoped server-side (or in-process). */
-  orgId: string;
-  runId: string;
-  specId: string;
-  projectId: string;
-  taskId: string;
-  prUrl: string;
-  prNumber: number;
-  /** Labels the `merge.completed` event (`direct_merge` / `native_queue`). */
-  integration: "direct_merge" | "native_queue";
-  /** The host sha `main` advanced to (recorded as `mergeSha` on `merge.completed`). */
-  mergeSha: string;
-  /**
-   * The authorizing `authority_decisions.id` this land recorded (in-16): the
-   * transactional delivery-run outbox row inserted in the SAME land transaction is
-   * FK-bound to it, so there is no "merged but nobody scheduled delivery" gap. The
-   * land store derives it deterministically from the authorization (`decision-<subject>-<headSha>`),
-   * matching the decision row persisted before the external land.
-   */
-  authorityDecisionId: string;
-  /** The policy version + initiating/approving actors stamped onto `merge.completed`. */
-  auditEnvelope: AuditEnvelope;
 }
 
 /**

@@ -45,7 +45,6 @@ import { batchFragmentEvidenceWiring, driveBatchThroughNode } from "./batchInteg
 import {
   batchNodeGate,
   batchNodeResolveConfig,
-  batchProofUnitGraph,
   buildBatchGateProofSealer,
   type BatchProofSubstrate,
 } from "./batchNodeGate.js";
@@ -275,7 +274,6 @@ export class PgBatchChecker implements BatchChecker {
         },
         {
           nodes: new PgIntegrationNodeModel(this.deps.pool),
-          proofUnits: batchProofUnitGraph(this.deps.pool, eventStore),
           gateBundles: buildBatchGateProofSealer(this.deps.pool, this.deps.proofSubstrate),
           eventStore,
           jjWorkspaceDeps: {
