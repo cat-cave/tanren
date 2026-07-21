@@ -1,6 +1,6 @@
 {
-  "id": "e0b095b2-d2b7-445c-af01-3baf623bd1de",
-  "prevId": "5149cbc1-2346-4e2b-aab5-5edb3d9fe81d",
+  "id": "6204f2d7-f4fb-42c9-9fe8-566158cc849d",
+  "prevId": "c928d237-ca16-4220-a930-acf35e013ed7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4006,6 +4006,486 @@
         }
       },
       "isRLSEnabled": false
+    },
+    "public.gate_proof_bundle_sections": {
+      "name": "gate_proof_bundle_sections",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "gate_proof_bundle_id": {
+          "name": "gate_proof_bundle_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proof_bundle_id": {
+          "name": "proof_bundle_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proof_unit_digest": {
+          "name": "proof_unit_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "section_kind": {
+          "name": "section_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required": {
+          "name": "required",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "gate_proof_bundle_sections_org_bundle_ordinal_unique": {
+          "name": "gate_proof_bundle_sections_org_bundle_ordinal_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "gate_proof_bundle_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundle_sections_org_id": {
+          "name": "gate_proof_bundle_sections_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundle_sections_org_project": {
+          "name": "gate_proof_bundle_sections_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "gate_proof_bundle_sections_org_id_organizations_id_fk": {
+          "name": "gate_proof_bundle_sections_org_id_organizations_id_fk",
+          "tableFrom": "gate_proof_bundle_sections",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundle_sections_project_fk": {
+          "name": "gate_proof_bundle_sections_project_fk",
+          "tableFrom": "gate_proof_bundle_sections",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundle_sections_gate_bundle_fk": {
+          "name": "gate_proof_bundle_sections_gate_bundle_fk",
+          "tableFrom": "gate_proof_bundle_sections",
+          "tableTo": "gate_proof_bundles",
+          "columnsFrom": [
+            "org_id",
+            "gate_proof_bundle_id",
+            "proof_bundle_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id",
+            "proof_bundle_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundle_sections_bundle_unit_fk": {
+          "name": "gate_proof_bundle_sections_bundle_unit_fk",
+          "tableFrom": "gate_proof_bundle_sections",
+          "tableTo": "proof_bundle_units",
+          "columnsFrom": [
+            "org_id",
+            "proof_bundle_id",
+            "proof_unit_digest"
+          ],
+          "columnsTo": [
+            "org_id",
+            "bundle_id",
+            "proof_unit_digest"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "gate_proof_bundle_sections_org_id_gate_proof_bundle_id_proof_unit_digest_pk": {
+          "name": "gate_proof_bundle_sections_org_id_gate_proof_bundle_id_proof_unit_digest_pk",
+          "columns": [
+            "org_id",
+            "gate_proof_bundle_id",
+            "proof_unit_digest"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"gate_proof_bundle_sections\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"gate_proof_bundle_sections\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "gate_proof_bundle_sections_section_kind_check": {
+          "name": "gate_proof_bundle_sections_section_kind_check",
+          "value": "\"gate_proof_bundle_sections\".\"section_kind\" IN ('native_ci', 'runtime_behavior', 'design_render', 'artifact_provenance')"
+        },
+        "gate_proof_bundle_sections_proof_unit_digest_check": {
+          "name": "gate_proof_bundle_sections_proof_unit_digest_check",
+          "value": "\"gate_proof_bundle_sections\".\"proof_unit_digest\" ~ '^sha256:[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.gate_proof_bundles": {
+      "name": "gate_proof_bundles",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "integration_node_id": {
+          "name": "integration_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "gate_config_hash": {
+          "name": "gate_config_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_version": {
+          "name": "policy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quarantine_version": {
+          "name": "quarantine_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proof_bundle_id": {
+          "name": "proof_bundle_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "gate_verdict": {
+          "name": "gate_verdict",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "gate_proof_bundles_org_proof_bundle_id_unique": {
+          "name": "gate_proof_bundles_org_proof_bundle_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proof_bundle_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundles_org_integration_node_id_unique": {
+          "name": "gate_proof_bundles_org_integration_node_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "integration_node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundles_org_id_proof_bundle_id_unique": {
+          "name": "gate_proof_bundles_org_id_proof_bundle_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proof_bundle_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundles_org_id": {
+          "name": "gate_proof_bundles_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gate_proof_bundles_org_project": {
+          "name": "gate_proof_bundles_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "gate_proof_bundles_org_id_organizations_id_fk": {
+          "name": "gate_proof_bundles_org_id_organizations_id_fk",
+          "tableFrom": "gate_proof_bundles",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundles_project_fk": {
+          "name": "gate_proof_bundles_project_fk",
+          "tableFrom": "gate_proof_bundles",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundles_integration_node_fk": {
+          "name": "gate_proof_bundles_integration_node_fk",
+          "tableFrom": "gate_proof_bundles",
+          "tableTo": "integration_nodes",
+          "columnsFrom": [
+            "org_id",
+            "integration_node_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "node_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gate_proof_bundles_proof_bundle_fk": {
+          "name": "gate_proof_bundles_proof_bundle_fk",
+          "tableFrom": "gate_proof_bundles",
+          "tableTo": "proof_bundles",
+          "columnsFrom": [
+            "org_id",
+            "proof_bundle_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "gate_proof_bundles_org_id_id_pk": {
+          "name": "gate_proof_bundles_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"gate_proof_bundles\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"gate_proof_bundles\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "gate_proof_bundles_gate_verdict_check": {
+          "name": "gate_proof_bundles_gate_verdict_check",
+          "value": "\"gate_proof_bundles\".\"gate_verdict\" IN ('passed', 'failed', 'unknown')"
+        }
+      },
+      "isRLSEnabled": true
     },
     "public.governance_fragments": {
       "name": "governance_fragments",
@@ -17207,192 +17687,6 @@
       },
       "isRLSEnabled": true
     },
-    "public.integration_evidence_failures": {
-      "name": "integration_evidence_failures",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_run_id": {
-          "name": "delivery_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_id": {
-          "name": "binding_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_generation": {
-          "name": "binding_generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "classification": {
-          "name": "classification",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "redacted_detail": {
-          "name": "redacted_detail",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_evidence_failures_coordinate_unique": {
-          "name": "integration_evidence_failures_coordinate_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "delivery_run_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "binding_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "binding_generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "classification",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "integration_evidence_failures_org_id": {
-          "name": "integration_evidence_failures_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "integration_evidence_failures_org_id_organizations_id_fk": {
-          "name": "integration_evidence_failures_org_id_organizations_id_fk",
-          "tableFrom": "integration_evidence_failures",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_evidence_failures_delivery_binding_fk": {
-          "name": "integration_evidence_failures_delivery_binding_fk",
-          "tableFrom": "integration_evidence_failures",
-          "tableTo": "delivery_run_bindings",
-          "columnsFrom": [
-            "org_id",
-            "project_id",
-            "delivery_run_id",
-            "binding_id",
-            "binding_generation"
-          ],
-          "columnsTo": [
-            "org_id",
-            "project_id",
-            "delivery_run_id",
-            "binding_id",
-            "binding_generation"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "integration_evidence_failures_org_id_id_pk": {
-          "name": "integration_evidence_failures_org_id_id_pk",
-          "columns": [
-            "org_id",
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"integration_evidence_failures\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"integration_evidence_failures\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "integration_evidence_failures_generation_check": {
-          "name": "integration_evidence_failures_generation_check",
-          "value": "\"integration_evidence_failures\".\"binding_generation\" >= 1"
-        },
-        "integration_evidence_failures_classification_check": {
-          "name": "integration_evidence_failures_classification_check",
-          "value": "\"integration_evidence_failures\".\"classification\" IN ('grant_revoked','correlation_join_mismatch','evidence_unavailable')"
-        }
-      },
-      "isRLSEnabled": true
-    },
     "public.integration_reconciliations": {
       "name": "integration_reconciliations",
       "schema": "",
@@ -17986,139 +18280,6 @@
       },
       "isRLSEnabled": true
     },
-    "public.integration_runtime_attachments": {
-      "name": "integration_runtime_attachments",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_run_id": {
-          "name": "delivery_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_id": {
-          "name": "binding_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_generation": {
-          "name": "binding_generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "deploy_sha": {
-          "name": "deploy_sha",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attached_at": {
-          "name": "attached_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_runtime_attachments_org_id": {
-          "name": "integration_runtime_attachments_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "integration_runtime_attachments_org_id_organizations_id_fk": {
-          "name": "integration_runtime_attachments_org_id_organizations_id_fk",
-          "tableFrom": "integration_runtime_attachments",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_runtime_attachments_delivery_binding_fk": {
-          "name": "integration_runtime_attachments_delivery_binding_fk",
-          "tableFrom": "integration_runtime_attachments",
-          "tableTo": "delivery_run_bindings",
-          "columnsFrom": [
-            "org_id",
-            "project_id",
-            "delivery_run_id",
-            "binding_id",
-            "binding_generation"
-          ],
-          "columnsTo": [
-            "org_id",
-            "project_id",
-            "delivery_run_id",
-            "binding_id",
-            "binding_generation"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "integration_runtime_attachments_org_id_delivery_run_id_binding_id_binding_generation_pk": {
-          "name": "integration_runtime_attachments_org_id_delivery_run_id_binding_id_binding_generation_pk",
-          "columns": [
-            "org_id",
-            "delivery_run_id",
-            "binding_id",
-            "binding_generation"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"integration_runtime_attachments\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"integration_runtime_attachments\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "integration_runtime_attachments_generation_check": {
-          "name": "integration_runtime_attachments_generation_check",
-          "value": "\"integration_runtime_attachments\".\"binding_generation\" >= 1"
-        }
-      },
-      "isRLSEnabled": true
-    },
     "public.integration_validation_proofs": {
       "name": "integration_validation_proofs",
       "schema": "",
@@ -18632,6 +18793,325 @@
         "integration_validation_proofs_verdict_check": {
           "name": "integration_validation_proofs_verdict_check",
           "value": "\"integration_validation_proofs\".\"verdict\" IN ('passed','failed','degraded')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_evidence_failures": {
+      "name": "integration_evidence_failures",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_run_id": {
+          "name": "delivery_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "classification": {
+          "name": "classification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "redacted_detail": {
+          "name": "redacted_detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_evidence_failures_coordinate_unique": {
+          "name": "integration_evidence_failures_coordinate_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "delivery_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_generation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "classification",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_evidence_failures_org_id": {
+          "name": "integration_evidence_failures_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_evidence_failures_org_id_organizations_id_fk": {
+          "name": "integration_evidence_failures_org_id_organizations_id_fk",
+          "tableFrom": "integration_evidence_failures",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_evidence_failures_delivery_binding_fk": {
+          "name": "integration_evidence_failures_delivery_binding_fk",
+          "tableFrom": "integration_evidence_failures",
+          "tableTo": "delivery_run_bindings",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "integration_evidence_failures_org_id_id_pk": {
+          "name": "integration_evidence_failures_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"integration_evidence_failures\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"integration_evidence_failures\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_evidence_failures_generation_check": {
+          "name": "integration_evidence_failures_generation_check",
+          "value": "\"integration_evidence_failures\".\"binding_generation\" >= 1"
+        },
+        "integration_evidence_failures_classification_check": {
+          "name": "integration_evidence_failures_classification_check",
+          "value": "\"integration_evidence_failures\".\"classification\" IN ('grant_revoked','correlation_join_mismatch','evidence_unavailable')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_runtime_attachments": {
+      "name": "integration_runtime_attachments",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_run_id": {
+          "name": "delivery_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "deploy_sha": {
+          "name": "deploy_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attached_at": {
+          "name": "attached_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_runtime_attachments_org_id": {
+          "name": "integration_runtime_attachments_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_runtime_attachments_org_id_organizations_id_fk": {
+          "name": "integration_runtime_attachments_org_id_organizations_id_fk",
+          "tableFrom": "integration_runtime_attachments",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_runtime_attachments_delivery_binding_fk": {
+          "name": "integration_runtime_attachments_delivery_binding_fk",
+          "tableFrom": "integration_runtime_attachments",
+          "tableTo": "delivery_run_bindings",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "integration_runtime_attachments_org_id_delivery_run_id_binding_id_binding_generation_pk": {
+          "name": "integration_runtime_attachments_org_id_delivery_run_id_binding_id_binding_generation_pk",
+          "columns": [
+            "org_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"integration_runtime_attachments\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"integration_runtime_attachments\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_runtime_attachments_generation_check": {
+          "name": "integration_runtime_attachments_generation_check",
+          "value": "\"integration_runtime_attachments\".\"binding_generation\" >= 1"
         }
       },
       "isRLSEnabled": true
