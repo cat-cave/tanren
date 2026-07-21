@@ -65,12 +65,18 @@ export class GovernanceStoreMemoryClient {
     if (statement.includes("COALESCE(MAX(revision_number)")) return this.allocateRevisionNumber(params);
     if (
       statement.includes("FROM governance_policy_revisions") &&
-      statement.includes("AND (id = $3 OR revision_number = $4)")
+      statement.includes("AND (r.id = $3 OR r.revision_number = $4)")
     ) {
       return this.getRevision(params);
     }
-    if (statement.includes("FROM governance_policy_revisions") && statement.includes("AND policy_hash = $3")) {
+    if (statement.includes("FROM governance_policy_revisions") && statement.includes("AND r.policy_hash = $3")) {
       return this.findRevisionByHash(params);
+    }
+    if (
+      statement.includes("FROM governance_policy_revisions") &&
+      statement.includes("ORDER BY r.revision_number, r.id")
+    ) {
+      return this.listRevisions(params);
     }
 
     if (statement.startsWith("INSERT INTO governance_tiers")) return this.insertTier(params);
@@ -144,7 +150,7 @@ export class GovernanceStoreMemoryClient {
       created_at: this.timestamp(),
     };
     this.revisions.push(row);
-    return this.result([this.withoutOrgId(row)]);
+    return this.result([this.revisionRead(row)]);
   }
 
   private parentRevision(params: readonly unknown[]) {
@@ -170,7 +176,7 @@ export class GovernanceStoreMemoryClient {
         row.project_id === projectId &&
         (row.id === revisionId || row.revision_number === revisionNumber),
     );
-    return this.result(revision === undefined ? [] : [this.withoutOrgId(revision)]);
+    return this.result(revision === undefined ? [] : [this.revisionRead(revision)]);
   }
 
   private findRevisionByHash(params: readonly unknown[]) {
@@ -178,7 +184,19 @@ export class GovernanceStoreMemoryClient {
     const revision = this.revisions
       .filter((row) => row.org_id === orgId && row.project_id === projectId && row.policy_hash === policyHash)
       .sort((left, right) => Number(right.revision_number) - Number(left.revision_number))[0];
-    return this.result(revision === undefined ? [] : [this.withoutOrgId(revision)]);
+    return this.result(revision === undefined ? [] : [this.revisionRead(revision)]);
+  }
+
+  private listRevisions(params: readonly unknown[]) {
+    const [orgId, projectId] = params;
+    const revisions = this.revisions
+      .filter((row) => row.org_id === orgId && row.project_id === projectId)
+      .sort(
+        (left, right) =>
+          Number(left.revision_number) - Number(right.revision_number) ||
+          String(left.id).localeCompare(String(right.id)),
+      );
+    return this.result(revisions.map((revision) => this.revisionRead(revision)));
   }
 
   private insertTier(params: readonly unknown[]) {
@@ -388,6 +406,21 @@ export class GovernanceStoreMemoryClient {
     if (payload === null || typeof payload !== "object") return undefined;
     const revisionId = (payload as { revisionId?: unknown }).revisionId;
     return typeof revisionId === "string" ? revisionId : undefined;
+  }
+
+  private revisionRead(row: Row): Row {
+    return {
+      ...this.withoutOrgId(row),
+      status: this.events.some(
+        (event) =>
+          event.orgId === row.org_id &&
+          event.projectId === row.project_id &&
+          event.eventType === "governance.policy.activated" &&
+          this.eventPayloadRevisionId(event.payload) === row.id,
+      )
+        ? "active"
+        : "inactive",
+    };
   }
 
   private assertNoOtherActiveBinding(orgId: string, projectId: string): void {

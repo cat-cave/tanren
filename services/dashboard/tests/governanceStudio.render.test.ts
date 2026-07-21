@@ -25,6 +25,7 @@ const REVISION = {
   policyHash: HASH,
   createdBy: "user_admin",
   createdAt: "2026-07-21T00:00:00.000Z",
+  status: "inactive",
 };
 const TIER = {
   id: "governance_tier_private",
@@ -81,20 +82,13 @@ const RECEIPT = {
   createdAt: "2026-07-21T00:00:00.000Z",
   createdBy: "user_admin",
 };
-const REVISION_ACTIVATION_RECEIPT = {
-  ...RECEIPT,
-  id: "effective_policy_snapshot_revision_activation_1",
-  subjectId: REVISION.id,
-};
-
 let revisions: (typeof REVISION)[];
 let bindings: (typeof BINDING)[];
 let bindingReceipt: typeof RECEIPT;
-let revisionActivationReceipt: typeof REVISION_ACTIVATION_RECEIPT;
 let revisionStatus: number;
 let bindingReceiptStatus: number;
-let revisionActivationReceiptStatus: number;
 let receiptReads: string[];
+let activationReadStatus: "inactive" | "active";
 let capturedWrites: Array<{ path: string; body: unknown; headers: Record<string, string> }>;
 
 function stubPool(): pg.Pool {
@@ -123,12 +117,6 @@ function mockOrchestrator(): void {
         ? json({ snapshot: bindingReceipt })
         : json({ error: "effective_policy_snapshot_not_found" }, bindingReceiptStatus);
     }
-    if (method === "GET" && path === `${base}/effective/activation/${REVISION.id}`) {
-      receiptReads.push(path);
-      return revisionActivationReceiptStatus === 200
-        ? json({ snapshot: revisionActivationReceipt })
-        : json({ error: "effective_policy_snapshot_not_found" }, revisionActivationReceiptStatus);
-    }
     if (method === "GET" && path.startsWith(`${base}/effective/`))
       return json({ error: "effective_policy_snapshot_not_found" }, 404);
     if (method === "POST") {
@@ -142,7 +130,12 @@ function mockOrchestrator(): void {
           201,
         );
       }
-      if (path === `${base}/revisions/${REVISION.id}/activate`) return json({ revision: REVISION });
+      if (path === `${base}/revisions/${REVISION.id}/activate`) {
+        revisions = revisions.map((revision) =>
+          revision.id === REVISION.id ? { ...revision, status: activationReadStatus } : revision,
+        );
+        return json({ revision: { ...REVISION, status: "active" } });
+      }
       if (path === `${base}/tiers/${TIER.id}/bind`)
         return json({ tier: TIER, binding: BINDING, policyRevisionId: REVISION.id }, 201);
     }
@@ -155,11 +148,10 @@ beforeEach(() => {
   revisions = [REVISION];
   bindings = [BINDING];
   bindingReceipt = RECEIPT;
-  revisionActivationReceipt = REVISION_ACTIVATION_RECEIPT;
   revisionStatus = 200;
   bindingReceiptStatus = 200;
-  revisionActivationReceiptStatus = 200;
   receiptReads = [];
+  activationReadStatus = "active";
   capturedWrites = [];
   mockOrchestrator();
 });
@@ -266,7 +258,7 @@ describe("Governance Studio", () => {
     expect(capturedWrites).toEqual([]);
   });
 
-  it("confirms a revision lifecycle activation from its revision-named receipt through canonical commands", async () => {
+  it("confirms a revision lifecycle activation when the canonical re-read reports it active", async () => {
     const app = await build();
     const author = await app.request("/governance/revisions", {
       method: "POST",
@@ -283,6 +275,7 @@ describe("Governance Studio", () => {
     const html = await activate.text();
     expect(html).toContain("Lifecycle activation was confirmed by governance authority");
     expect(html).not.toContain("pending/unconfirmed");
+    expect(html).toContain('data-governance-revision-state="active"');
     expect(capturedWrites.map((write) => write.path)).toEqual([
       `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/revisions`,
       `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/revisions/${REVISION.id}/activate`,
@@ -290,12 +283,11 @@ describe("Governance Studio", () => {
     expect(capturedWrites.every((write) => write.headers["x-csrf-token"] === "csrf-live")).toBe(true);
     expect(receiptReads).toEqual([
       `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/effective/activation/${BINDING.id}`,
-      `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/effective/activation/${REVISION.id}`,
     ]);
   });
 
-  it("keeps revision lifecycle activation pending when its revision-named receipt is unavailable", async () => {
-    revisionActivationReceiptStatus = 404;
+  it("keeps revision lifecycle activation pending when its canonical re-read remains inactive", async () => {
+    activationReadStatus = "inactive";
     const response = await (
       await build()
     ).request("/governance/revisions/activate", {
@@ -308,26 +300,10 @@ describe("Governance Studio", () => {
     expect(html).not.toContain("Lifecycle activation was confirmed by governance authority");
     expect(html).toContain('data-governance-active-tier="governance_tier_private"');
     expect(html).toContain('data-governance-binding-state="active"');
+    expect(html).toContain('data-governance-revision-state="inactive"');
     expect(receiptReads).toEqual([
       `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/effective/activation/${BINDING.id}`,
-      `/orgs/${ORG.id}/projects/${PROJECT.projectId}/governance/effective/activation/${REVISION.id}`,
     ]);
-  });
-
-  it("keeps revision lifecycle activation pending when its receipt names another revision", async () => {
-    revisionActivationReceipt = { ...REVISION_ACTIVATION_RECEIPT, policyRevisionId: "policy_revision_other" };
-    const response = await (
-      await build()
-    ).request("/governance/revisions/activate", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "projectId=project_easy&revisionId=policy_revision_1",
-    });
-    const html = await response.text();
-    expect(html).toContain("pending/unconfirmed");
-    expect(html).not.toContain("Lifecycle activation was confirmed by governance authority");
-    expect(html).toContain('data-governance-active-tier="governance_tier_private"');
-    expect(html).toContain('data-governance-binding-state="active"');
   });
 
   it("activates the observed tier only through the canonical binding command", async () => {

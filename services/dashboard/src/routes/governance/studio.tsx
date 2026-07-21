@@ -330,17 +330,14 @@ export function mountGovernanceStudioScreen(app: Hono, deps: ShellDeps): void {
       });
     const confirmed = await readClient(c, deps).readProject(scope.orgId, projectId);
     const receipts = confirmed.ok ? await receiptFor(c, deps, scope.orgId, projectId, confirmed.data) : undefined;
-    const revisionReceipt = confirmed.ok
-      ? await readClient(c, deps).getReceipt(scope.orgId, projectId, "activation", result.value.id)
-      : undefined;
     const matched =
       confirmed.ok &&
       confirmed.data.revisions.some(
-        (revision) => revision.id === result.value.id && revision.policyHash === result.value.policyHash,
-      ) &&
-      revisionReceipt?.kind === "found" &&
-      revisionReceipt.snapshot.policyRevisionId === result.value.id &&
-      revisionReceipt.snapshot.effectivePolicyHash === result.value.policyHash;
+        (revision) =>
+          revision.id === result.value.id &&
+          revision.policyHash === result.value.policyHash &&
+          revision.status === "active",
+      );
     return renderStudio(c, deps, {
       requestedId: projectId,
       loaded: confirmed,
@@ -348,12 +345,12 @@ export function mountGovernanceStudioScreen(app: Hono, deps: ShellDeps): void {
       flash: matched
         ? {
             kind: "ok",
-            message: `Lifecycle activation was confirmed by governance authority through the revision activation receipt for ${revisionId}. Binding activation is a separate command.`,
+            message: `Lifecycle activation was confirmed by governance authority after the canonical revision re-read reported ${revisionId} active. Binding activation is a separate command.`,
           }
         : {
             kind: "unknown",
             message:
-              "Lifecycle activation returned a response, but its durable activation receipt is pending/unconfirmed for this revision.",
+              "Lifecycle activation returned a response, but the canonical revision re-read is pending/unconfirmed for this revision.",
           },
     });
   });

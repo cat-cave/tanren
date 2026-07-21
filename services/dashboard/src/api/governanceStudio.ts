@@ -92,6 +92,7 @@ export const PolicyRevisionSchema = z
     parentRevisionId: IdentifierSchema.optional(),
     createdBy: IdentifierSchema,
     createdAt: TimestampSchema,
+    status: z.enum(["inactive", "active"]),
   })
   .strict();
 export type PolicyRevision = z.infer<typeof PolicyRevisionSchema>;

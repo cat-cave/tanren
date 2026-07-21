@@ -134,6 +134,7 @@ function RevisionLineage(props: { data: GovernanceStudioData; projectId: string;
                   <td>{revision.policyHash}</td>
                   <td>{revision.createdBy}</td>
                   <td>
+                    <span data-governance-revision-state={revision.status}>{revision.status}</span>
                     <form class="inline" method="post" action="/governance/revisions/activate">
                       <CsrfField token={props.csrfToken} />
                       <input type="hidden" name="projectId" value={props.projectId} />

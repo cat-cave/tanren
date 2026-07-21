@@ -6,6 +6,7 @@ import {
   compilePolicyRevision,
   createPolicyRevision,
   getPolicyRevision,
+  listPolicyRevisions,
 } from "./policyRevisionStore.js";
 import type { PolicyAst } from "./policyAst.js";
 
@@ -73,6 +74,10 @@ describe.skipIf(!enabled)("gv-7 PostgreSQL RLS and append-only proof", () => {
     expect(loaded.policyHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
     await runWithOrgScope(database, orgId, (client) => compilePolicyRevision(client, orgId, loaded));
     await runWithOrgScope(database, orgId, (client) => activatePolicyRevision(client, orgId, loaded));
+    const activeRevision = (
+      await runWithOrgScope(database, orgId, (client) => listPolicyRevisions(client, orgId, projectId))
+    ).find((candidate) => candidate.id === revision.id);
+    expect(activeRevision).toMatchObject({ id: revision.id, status: "active" });
 
     const hidden = await runWithOrgScope(database, `${orgId}_other`, (client) =>
       client.query("SELECT id FROM governance_policy_revisions WHERE id = $1", [revision.id]),

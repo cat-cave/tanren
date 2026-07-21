@@ -5,6 +5,7 @@ import {
   createPolicyRevision,
   findPolicyRevisionByHash,
   getPolicyRevision,
+  listPolicyRevisions,
   PolicyContradictionError,
   PolicyRevisionIntegrityError,
   PolicyRevisionNotFoundError,
@@ -130,7 +131,7 @@ describe("policy revisions — append-only business rules", () => {
     ).rejects.toThrow("parent policy revision belongs to another project");
   });
 
-  it("fails closed on a non-reproducible stored compilation and emits each lifecycle fact once", async () => {
+  it("projects the durable activation event as active in the canonical revisions read", async () => {
     const client = clientWithProject();
     const revision = await createPolicyRevision(client as never, {
       orgId,
@@ -140,8 +141,14 @@ describe("policy revisions — append-only business rules", () => {
     });
 
     await compilePolicyRevision(client as never, orgId, revision);
+    await expect(listPolicyRevisions(client as never, orgId, projectId)).resolves.toMatchObject([
+      { id: revision.id, status: "inactive" },
+    ]);
     await activatePolicyRevision(client as never, orgId, revision);
     await activatePolicyRevision(client as never, orgId, revision);
+    await expect(listPolicyRevisions(client as never, orgId, projectId)).resolves.toMatchObject([
+      { id: revision.id, status: "active" },
+    ]);
     expect(client.events.map((event) => event.eventType)).toEqual([
       "governance.policy.created",
       "governance.policy.compiled",
