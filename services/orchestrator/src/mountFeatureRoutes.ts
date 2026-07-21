@@ -32,6 +32,7 @@ import { createAuditRoutes } from "./routes/audits/index.js";
 import { createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
+import { createRequirementCompilerRoutes } from "./routes/requirementCompiler/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
 import {
@@ -343,6 +344,12 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     }),
   );
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
+  // in-5: the requirement-compiler CALLABLE PRODUCER. The allocating Forge adapter
+  // (the SAME infra every Forge surface uses) backs the actor — production wires it
+  // via `forgeInfra`; the actor re-validates every LLM candidate via
+  // `parseIntegrationRequirement` (fail-loud, no lexical fallback). Org-scoped on
+  // the scoped pool; events append through the sole PgEventStore.
+  app.route("/orgs", createRequirementCompilerRoutes({ pool: scopedPool, forgeInfra }));
   // Codex H3 Surface 7 finding #21: the operator-facing manual_external DEPLOY
   // CONFIRMATION route. `POST /orgs/:orgId/projects/:projectId/deploys/:deploymentId/confirm`
   // flips a pending-manual-confirmation attestation → confirmed + emits
