@@ -24,6 +24,15 @@ const RawIntegrationEvent = z
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+// A3 observations are behavior vocabulary (not `integration.*`) but are the
+// operator-visible proof of an integration effect. Keep this a positive list so
+// unrelated runtime events never leak into the integrations timeline.
+const INTEGRATION_EFFECT_EVENT_TYPES = [
+  "behavior.effect.observed",
+  "behavior.effect.missing",
+  "behavior.effect.duplicate",
+  "observer.inconclusive_external",
+] as const;
 
 export interface IntegrationEventRead {
   id: string;
@@ -80,10 +89,10 @@ export function mountIntegrationEventsRead(app: Hono<ActorContextEnv>, database:
              FROM events
             WHERE org_id = $1
               AND project_id = $2
-              AND event_type LIKE 'integration.%'
+              AND (event_type LIKE 'integration.%' OR event_type = ANY($3::text[]))
             ORDER BY ts DESC, id DESC
-            LIMIT $3`,
-          [orgId, projectId, limit],
+            LIMIT $4`,
+          [orgId, projectId, INTEGRATION_EFFECT_EVENT_TYPES, limit],
         );
         return {
           access: "allowed" as const,

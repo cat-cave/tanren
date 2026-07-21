@@ -51,6 +51,8 @@ export interface DemoTarget {
   projectId: string;
   /** The org the tenant `events` writes are scoped under (RLS). */
   orgId: string;
+  /** The sealed in-17 binding set when this is a delivery-DAG live exercise. */
+  deliveryRunId?: string;
 }
 
 /** The dependencies the demo engine runs over (the event sink + the surface-exercise probes). */

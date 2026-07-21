@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Digest } from "../src/engine/contracts/cas.js";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   AcceptanceOrchestrator,
   BehaviorRevisionNotFoundError,
@@ -252,7 +253,7 @@ describeDb("rv-18 A2 proof-backed web demo — real Pg resolver + real HTTP, end
     // The REAL production factory: PERSISTING PgAcceptanceRunStore + the real
     // PgVerificationEnvironmentResolver (NOT the ephemeral sink / fabricated env id).
     const events = new RecordingEventStore();
-    const demo = buildProofBackedWebDemo(app, events);
+    const demo = buildProofBackedWebDemo(app, events, new InMemorySecretStore());
     const release = await loadRunReleaseInstance(app, ORG, PROJECT, NODE_ID);
     expect(release).toBeDefined();
 

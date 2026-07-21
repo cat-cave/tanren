@@ -83,6 +83,29 @@ export interface AcceptancePlan {
   readonly visualVerification?: VisualVerificationRequirement;
 }
 
+/**
+ * The ordinary API surface driver must never fire a probe that a causal API
+ * driver owns. The causal driver captures its provider watermark, propagates
+ * its correlation, and fires the action exactly once after the durable delivery
+ * intent marker. Letting both drivers send the same probe would create an
+ * unfenced duplicate external effect.
+ */
+export function withoutCausalApiTriggers(plan: AcceptancePlan): AcceptancePlan {
+  const referencedCauses = new Set(
+    plan.assertions.flatMap((assertion) =>
+      assertion.correlation === undefined ? [] : [assertion.correlation.causeId],
+    ),
+  );
+  const causalActions = new Set(
+    (plan.causes ?? [])
+      .filter((cause) => cause.surface === "api" && referencedCauses.has(cause.causeId))
+      .map((cause) => cause.action),
+  );
+  if (causalActions.size === 0 || plan.httpProbes === undefined) return plan;
+  const httpProbes = plan.httpProbes.filter((probe) => !causalActions.has(probe.probeId));
+  return httpProbes.length === plan.httpProbes.length ? plan : { ...plan, httpProbes };
+}
+
 export interface AcceptanceDriveInput {
   readonly orgId: string;
   readonly projectId: string;
@@ -113,6 +136,8 @@ export interface AcceptanceRunRequest {
   readonly specId?: string;
   readonly externalRunId?: string;
   readonly runtimeBehaviorContextHash?: Digest;
+  /** The exact in-17 delivery binding set the live release was attached with. */
+  readonly deliveryRunId?: string;
   readonly plans: readonly AcceptancePlan[];
 }
 

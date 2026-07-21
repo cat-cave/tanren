@@ -106,7 +106,7 @@ describe("demo stage idempotency (non-idempotent demo — never re-fire a maybe-
       demoRunner,
       signals: fakeSignals({ demoTerminalExists: async () => false, demoStimulusIntentExists: async () => true }),
     });
-    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out).toMatchObject({ kind: "degraded", classification: "demo_effect_in_flight_unknown" });
     // NEVER re-fired the maybe-dispatched effect
     expect(demoRunner.calls).toHaveLength(0);
@@ -129,7 +129,7 @@ describe("demo stage idempotency (non-idempotent demo — never re-fire a maybe-
         demoReach: async () => (fired ? "observed" : "none"),
       }),
     });
-    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out.kind).toBe("confirmed");
     // the effect ran
     expect(demoRunner.calls).toEqual(["run-1"]);
@@ -144,7 +144,7 @@ describe("demo stage idempotency (non-idempotent demo — never re-fire a maybe-
       demoRunner,
       signals: fakeSignals({ deployReach: async () => "none", demoReach: async () => "none" }),
     });
-    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out.kind).toBe("confirmed");
     // invoked (a clean no-op)
     expect(demoRunner.calls).toEqual(["run-1"]);
@@ -161,7 +161,7 @@ describe("demo stage idempotency (non-idempotent demo — never re-fire a maybe-
         demoReach: async () => "observed",
       }),
     });
-    const out = await new DeliveryStages(deps).run("observe", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("observe", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out.kind).toBe("confirmed");
     expect(demoRunner.calls).toHaveLength(0);
   });
@@ -169,7 +169,7 @@ describe("demo stage idempotency (non-idempotent demo — never re-fire a maybe-
   it("degrades this pass when another worker holds the demo advisory lock", async () => {
     const demoRunner = fakeRunner();
     const { deps } = stagesDeps({ demoRunner, demoGate: fakeGate(false) });
-    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo());
+    const out = await new DeliveryStages(deps).run("stimulate", lineage, "d-1", newDriveMemo(), "claim-1");
     expect(out).toMatchObject({ kind: "degraded", classification: "demo_locked_elsewhere" });
     // lock not acquired ⇒ did not fire
     expect(demoRunner.calls).toHaveLength(0);

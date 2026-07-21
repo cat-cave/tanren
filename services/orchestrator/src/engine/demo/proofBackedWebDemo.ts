@@ -31,12 +31,14 @@ import { randomUUID } from "node:crypto";
 import { runWithJobOrgId } from "@tanren/db";
 import type pg from "pg";
 import type { ReleaseInstanceRecord } from "../contracts/deployAdapter.js";
+import type { SecretStore } from "../contracts/secretStore.js";
 import type { BehaviorVerdictOutcome } from "../contracts/runtimeVerificationAdapters.js";
 import type { EventStore } from "../eventStore.js";
 import {
   AcceptanceOrchestrator,
   BehaviorRevisionNotFoundError,
   HttpAcceptanceSurfaceDriver,
+  HttpAcceptanceCauseDriver,
   MalformedAcceptanceSpecError,
   PgAcceptancePlanLoader,
   PgAcceptanceRunStore,
@@ -59,6 +61,7 @@ import {
   type RecordAttemptInput,
   type StoredAcceptanceVerdict,
 } from "../verification/acceptance/index.js";
+import { LiveSlackEffectProbe } from "../verification/effectObserver/liveSlackEffectProbe.js";
 import { PgCasByteStore } from "../cas/pgCasByteStore.js";
 import {
   PgVerificationEnvironmentResolver,
@@ -219,6 +222,7 @@ export class ProofBackedWebDemo {
       purpose: "post_merge_production",
       specId: target.specId,
       externalRunId: target.runId,
+      ...(target.deliveryRunId === undefined ? {} : { deliveryRunId: target.deliveryRunId }),
       plans,
     };
   }
@@ -318,7 +322,9 @@ export class EphemeralAcceptanceEventSink implements AcceptanceEventSink {
  * factory so the demo-on-deploy watcher imports ONE demo symbol (keeps that file under its
  * dependency cap; mirrors `buildDemoOnDeployWatcher`).
  */
-export function buildProofBackedWebDemo(pool: pg.Pool, events: EventStore): ProofBackedWebDemo {
+export function buildProofBackedWebDemo(pool: pg.Pool, events: EventStore, secrets: SecretStore): ProofBackedWebDemo {
+  const liveSlackEffectProbe = new LiveSlackEffectProbe(pool, secrets);
+  const baseUrlResolver = new PgReleaseInstanceBaseUrlResolver(pool);
   const orchestrator = new AcceptanceOrchestrator({
     // rv-env: the PERSISTING store — the demo's real per-behavior verdict now lands in the
     // 0079-hardened `behavior_verdicts` ledger (bound to the deploy-created env), not a sink.
@@ -326,7 +332,14 @@ export function buildProofBackedWebDemo(pool: pg.Pool, events: EventStore): Proo
     // The orchestrator's pre-merge `behavior.verification.*` events stay swallowed; the demo
     // surfaces its own `demo.*` events via `events` below.
     events: new EphemeralAcceptanceEventSink(),
-    drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(pool) })],
+    drivers: [new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: baseUrlResolver })],
+    // A3: this is the production binding, not a test-only injected fake. The
+    // cause fires a declared live HTTP probe; the effect reader independently
+    // reads Slack history at the sealed delivery binding coordinate.
+    causeDrivers: [
+      new HttpAcceptanceCauseDriver({ resolveBaseUrl: baseUrlResolver, watermarkProbe: liveSlackEffectProbe }),
+    ],
+    effectReader: liveSlackEffectProbe,
     // rv-9: content-address the demo drive's response/render captures into the SP-3 CAS +
     // verification_artifacts; the persisted verdict carries the durable evidence link so the
     // demo's proof-backed evidence resolves from the ledger, not just the ephemeral result.

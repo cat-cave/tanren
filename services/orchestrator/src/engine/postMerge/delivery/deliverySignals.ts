@@ -28,8 +28,11 @@ export interface DeliverySignals {
   deployReach(lineage: DeliveryLineage, runnerThrew: boolean): Promise<DeployReach>;
   /** The durably-observed reach of the demo/A3 cluster given the deploy reach. */
   demoReach(lineage: DeliveryLineage, deployReach: DeployReach): Promise<DemoReach>;
-  /** Count of product integrations that REQUIRE independent post-deploy effect observation. */
-  releaseRequiredCount(lineage: DeliveryLineage): Promise<number>;
+  /** Exact release-required A3 requirement set and the subset with positive, bound provider evidence. */
+  releaseRequiredA3Count(
+    lineage: DeliveryLineage,
+    deliveryRunId: string,
+  ): Promise<{ required: number; confirmed: number }>;
   /** The project's provisioned PRODUCTION secret refs (what an activation lease scopes over). */
   provisionedProductionSecretRefs(lineage: DeliveryLineage): Promise<string[]>;
   /** The verified deployment's provider handle, when a deploy verified. */
@@ -107,23 +110,55 @@ export class PgDeliverySignals implements DeliverySignals {
   }
 
   /**
-   * The independent provider-effect A3 observation seam (relay receipt / provider events /
-   * `conversations.history` — the `IntegrationEffectProbe`) is NOT yet built on `main`; the
-   * buildable observed effect is the demo's live behavior exercise. So a project that
-   * REQUIRES a release-validated product integration cannot yet prove its A3 Then, and the
-   * delivery must fail CLOSED to `degraded` (see the record_evidence stage). The common
-   * path (no such requirement) has zero rows and proceeds.
+   * Positive A3 evidence only: every release-required requirement must have one
+   * sealed binding generation, a post-merge passed behavior verdict, and a
+   * `behavior.effect.observed` event carrying that SAME behavior + binding generation.
+   * Empty/missing/extra evidence therefore never completes a delivery.
    */
-  async releaseRequiredCount(lineage: DeliveryLineage): Promise<number> {
+  async releaseRequiredA3Count(
+    lineage: DeliveryLineage,
+    deliveryRunId: string,
+  ): Promise<{ required: number; confirmed: number }> {
     const result = await runWithSystemScope(this.pool, (client) =>
-      client.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM integration_requirements
-          WHERE org_id = $1 AND project_id = $2 AND plane = 'product'
-            AND status = 'active' AND criticality = 'release_required'`,
-        [lineage.orgId, lineage.projectId],
+      client.query<{ required: string; confirmed: string }>(
+        `WITH required_requirements AS (
+           SELECT id FROM integration_requirements
+            WHERE org_id = $1 AND project_id = $2 AND plane = 'product'
+              AND status = 'active' AND criticality = 'release_required'
+         ), confirmed_requirements AS (
+           SELECT DISTINCT r.id
+             FROM required_requirements r
+             JOIN delivery_run_bindings drb
+               ON drb.org_id = $1 AND drb.project_id = $2 AND drb.delivery_run_id = $4
+             JOIN integration_binding_generations g
+               ON g.org_id = drb.org_id AND g.project_id = drb.project_id
+              AND g.binding_id = drb.binding_id AND g.generation = drb.binding_generation
+              AND g.requirement_id = r.id
+             JOIN behavior_integration_requirements bir
+               ON bir.org_id = $1 AND bir.project_id = $2 AND bir.requirement_id = r.id
+              AND bir.relation_role = 'requires'
+             JOIN behavior_verification_runs vr
+               ON vr.org_id = $1 AND vr.project_id = $2 AND vr.run_id = $3
+              AND vr.purpose = 'post_merge_production' AND vr.status = 'completed'
+             JOIN behavior_verdicts v
+               ON v.org_id = vr.org_id AND v.project_id = vr.project_id AND v.run_id = vr.id
+              AND v.behavior_revision_id = bir.behavior_revision_id AND v.outcome = 'passed'
+             JOIN events e
+               ON e.org_id = $1 AND e.project_id = $2 AND e.run_id = $3
+              AND e.event_type = 'behavior.effect.observed'
+              AND e.payload->>'behaviorRevisionId' = bir.behavior_revision_id
+              AND e.payload->>'shardId' = ('a3:' || g.binding_id || ':' || g.generation::text)
+         )
+         SELECT (SELECT count(*)::text FROM required_requirements) AS required,
+                (SELECT count(*)::text FROM confirmed_requirements) AS confirmed`,
+        [lineage.orgId, lineage.projectId, lineage.runId, deliveryRunId],
       ),
     );
-    return Number(result.rows[0]?.n ?? "0");
+    const row = result.rows[0];
+    if (row === undefined || !/^[0-9]+$/u.test(row.required) || !/^[0-9]+$/u.test(row.confirmed)) {
+      throw new Error("release-required A3 evidence count is unreadable");
+    }
+    return { required: Number(row.required), confirmed: Number(row.confirmed) };
   }
 
   async provisionedProductionSecretRefs(lineage: DeliveryLineage): Promise<string[]> {

@@ -14,6 +14,7 @@ import type { RunMergeWatcher } from "../subscriber.js";
 import { DeliveryDagDriver } from "./deliveryDagDriver.js";
 import { contentAddressedEvidenceSigner } from "./deliveryEvidence.js";
 import { PgDeliverySignals } from "./deliverySignals.js";
+import { PgDeliveryBindingSetSealer } from "./deliveryBindingSet.js";
 
 export function buildDeliveryDagDriver(deps: {
   pool: pg.Pool;
@@ -37,6 +38,7 @@ export function buildDeliveryDagDriver(deps: {
     deployRunner: deps.deployWatcher,
     demoRunner: deps.demoWatcher,
     saga,
+    bindingSetSealer: new PgDeliveryBindingSetSealer(deps.pool),
     evidence: { eventStore, signer: contentAddressedEvidenceSigner },
     // A DISTINCT advisory-lock namespace from the deploy trigger gate so the demo effect
     // and the deploy trigger never contend on one lock.

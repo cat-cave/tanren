@@ -108,7 +108,8 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   constructor(private readonly deps: ProductionGroupDeliveryDeployerDeps) {
     this.releaseInstances = deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool);
     this.behaviorRevisions = deps.behaviorRevisions ?? new PgBehaviorRevisionResolver(deps.pool);
-    this.proofBackedWebDemo = deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, deps.eventStore);
+    this.proofBackedWebDemo =
+      deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, deps.eventStore, deps.secrets);
     this.urlProbe = deps.urlProbe ?? fetchUrlReachabilityProbe();
   }
 

@@ -42,6 +42,7 @@ export function IntegrationEventsViewer(props: IntegrationEventsViewerProps) {
         <div class="integration-events-screen">
           <section class="panel">
             <div class="panel-pad">
+              <div class="eyebrow">Lifecycle and independently observed A3 provider effects</div>
               {events === undefined ? (
                 <div class="empty" data-integration-events-unavailable>
                   Integration events unavailable — the orchestrator read failed. No event list is fabricated.
