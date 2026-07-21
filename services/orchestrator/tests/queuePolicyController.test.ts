@@ -90,6 +90,30 @@ describe("QueuePolicyController final claim fence", () => {
     ).resolves.toMatchObject({ kind: "admit", policyId: "policy_1", route: "main", batchLimit: 1 });
   });
 
+  it("leaves admission, coordination, and the final claim fence transparent with no active policy", async () => {
+    const controller = new QueuePolicyController({} as never);
+    const admissionDb = client([{ rows: [] }]);
+    await expect(
+      controller.applyOnClient(admissionDb as never, {
+        kind: "admission",
+        orgId: "org_1",
+        projectId: "project_1",
+        targetBranch: "main",
+      }),
+    ).resolves.toEqual({ kind: "admit" });
+
+    const noPolicyRow = { ...QUEUE_ROW, policy_snapshot: null, route_snapshot: null, priority_snapshot: null };
+    const coordinateDb = client([{ rows: [noPolicyRow] }, { rows: [] }]);
+    await expect(
+      controller.applyOnClient(coordinateDb as never, { kind: "coordinate", orgId: "org_1", projectId: "project_1" }),
+    ).resolves.toEqual(new Set());
+    expect(coordinateDb.calls.some((call) => call.sql.includes("SET status = 'held_policy'"))).toBe(false);
+
+    const claimDb = client([{ rows: [noPolicyRow] }, { rows: [] }]);
+    await expect(controller.applyOnClient(claimDb as never, claim())).resolves.toBe(true);
+    expect(claimDb.calls.some((call) => call.sql.includes("SET status = 'held_policy'"))).toBe(false);
+  });
+
   it("holds admission on a live blackout and leaves an empty coordination pass non-terminal", async () => {
     const blackoutDb = client([
       { rows: [{ id: "policy_1", body: POLICY, active: true }] },

@@ -3,7 +3,11 @@
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
 import type { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
-import type { QueuePolicyController, QueuePolicyDecision } from "./queuePolicyController.js";
+import {
+  isPolicyQueueAdmission,
+  type QueuePolicyController,
+  type QueuePolicyDecision,
+} from "./queuePolicyController.js";
 
 export interface QueueAdmissionInput {
   projectId: string;
@@ -31,13 +35,14 @@ export async function insertPolicyQueueEntry(input: {
     targetBranch,
   });
   if (!isQueuePolicyDecision(applied)) throw new Error("queue policy admission returned an invalid decision");
+  const policyAdmission = isPolicyQueueAdmission(applied) ? applied : undefined;
   const partition = await input.partitions.ensureOnClient(input.client, {
     orgId: input.orgId,
     projectId: input.entry.projectId,
     specId: input.entry.specId,
     targetBranch,
     ...(input.entry.scopeFingerprint === undefined ? {} : { scopeFingerprint: input.entry.scopeFingerprint }),
-    ...(applied.kind === "admit" ? { mode: applied.mode, capacity: applied.capacity } : {}),
+    ...(policyAdmission ? { mode: policyAdmission.mode, capacity: policyAdmission.capacity } : {}),
   });
   await input.client.query(
     `INSERT INTO merge_queue
@@ -56,15 +61,15 @@ export async function insertPolicyQueueEntry(input: {
       partition.id,
       input.entry.scopeFingerprint ?? `spec:${input.entry.specId}`,
       targetBranch,
-      applied.kind === "admit" ? JSON.stringify({ policyId: applied.policyId }) : null,
-      applied.kind === "admit"
+      policyAdmission ? JSON.stringify({ policyId: policyAdmission.policyId }) : null,
+      policyAdmission
         ? JSON.stringify({
-            route: applied.route,
-            batchLimit: applied.batchLimit,
-            deployGroupLimit: applied.deployGroupLimit,
+            route: policyAdmission.route,
+            batchLimit: policyAdmission.batchLimit,
+            deployGroupLimit: policyAdmission.deployGroupLimit,
           })
         : null,
-      applied.kind === "admit" ? JSON.stringify({ priority: applied.priority, aging: applied.aging }) : null,
+      policyAdmission ? JSON.stringify({ priority: policyAdmission.priority, aging: policyAdmission.aging }) : null,
       applied.kind === "hold" ? applied.reason : null,
     ],
   );

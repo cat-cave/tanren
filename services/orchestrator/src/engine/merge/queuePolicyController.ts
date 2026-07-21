@@ -1,5 +1,4 @@
-// The native queue's policy/control seam. It decides only whether a queue row
-// may be admitted or remain eligible; it has no MergeAuthority or CodeHost input.
+// The queue policy/control seam decides only row eligibility; no active policy preserves native queue behavior.
 import { randomUUID } from "node:crypto";
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -9,7 +8,6 @@ import { activeQueueWindows } from "./queuePolicyWindows.js";
 
 type ScopedClient = pg.PoolClient;
 type HoldReason =
-  | "missing_policy"
   | "malformed_policy"
   | "route_unmatched"
   | "window_closed"
@@ -48,6 +46,7 @@ export type QueuePolicyDecision =
       batchLimit: number;
       deployGroupLimit: number;
     }
+  | { kind: "admit" }
   | { kind: "hold"; reason: HoldReason };
 
 export interface QueuePolicyAdmission {
@@ -171,7 +170,7 @@ export class QueuePolicyController {
 
   private async admission(client: ScopedClient, input: QueuePolicyAdmission): Promise<QueuePolicyDecision> {
     const policy = await this.activePolicy(client, input.orgId, input.projectId);
-    if (policy === undefined) return { kind: "hold", reason: "missing_policy" };
+    if (policy === undefined) return transparentQueueAdmission();
     return this.evaluatePolicy(client, input.orgId, policy, input.projectId, input.targetBranch);
   }
 
@@ -229,6 +228,18 @@ export class QueuePolicyController {
     row: QueueRow,
     phase: "admission" | "claim",
   ): Promise<QueuePolicyDecision> {
+    if (hasNoPolicySnapshots(row)) {
+      const policy = await this.activePolicy(client, orgId, row.project_id);
+      if (policy === undefined) return transparentQueueAdmission();
+      if (row.target_branch === null || row.target_branch.trim() === "")
+        return { kind: "hold", reason: "malformed_policy" };
+      const decision = await this.evaluatePolicy(client, orgId, policy, row.project_id, row.target_branch, phase);
+      if (decision.kind === "hold") return decision;
+      if (row.partition_state !== "active" && !(phase === "claim" && row.partition_state === "draining")) {
+        return { kind: "hold", reason: "partition_not_active" };
+      }
+      return decision;
+    }
     const policySnapshot = policyIdFrom(row.policy_snapshot);
     if (
       policySnapshot === undefined ||
@@ -238,9 +249,9 @@ export class QueuePolicyController {
     ) {
       return { kind: "hold", reason: "malformed_policy" };
     }
-    const policy = await this.policyById(client, orgId, policySnapshot);
-    if (policy === undefined) return { kind: "hold", reason: "missing_policy" };
-    if (!policy.active) return { kind: "hold", reason: "policy_revised" };
+    const policy = await this.activePolicy(client, orgId, row.project_id);
+    if (policy === undefined) return transparentQueueAdmission();
+    if (policy.id !== policySnapshot) return { kind: "hold", reason: "policy_revised" };
     if (row.target_branch === null || row.target_branch.trim() === "")
       return { kind: "hold", reason: "malformed_policy" };
     const decision = await this.evaluatePolicy(client, orgId, policy, row.project_id, row.target_branch, phase);
@@ -258,7 +269,7 @@ export class QueuePolicyController {
     projectId: string,
     targetBranch: string,
     phase: "admission" | "claim" = "admission",
-  ): Promise<QueuePolicyDecision> {
+  ): Promise<Extract<QueuePolicyDecision, { kind: "hold" } | { policyId: string }>> {
     const parsed = QueuePolicyV1Schema.safeParse(policy.body);
     if (!parsed.success) return { kind: "hold", reason: "malformed_policy" };
     const windows = await activeQueueWindows(client, orgId, policy.id, projectId, targetBranch);
@@ -289,14 +300,6 @@ export class QueuePolicyController {
     const result = await client.query<PolicyRow>(
       "SELECT id, body, active FROM merge_queue_policies WHERE org_id = $1 AND project_id = $2 AND active = true",
       [orgId, projectId],
-    );
-    return result.rows[0];
-  }
-
-  private async policyById(client: ScopedClient, orgId: string, id: string): Promise<PolicyRow | undefined> {
-    const result = await client.query<PolicyRow>(
-      "SELECT id, body, active FROM merge_queue_policies WHERE org_id = $1 AND id = $2",
-      [orgId, id],
     );
     return result.rows[0];
   }
@@ -412,6 +415,20 @@ function policyIdFrom(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || !("policyId" in value)) return undefined;
   const id = Reflect.get(value, "policyId");
   return typeof id === "string" && id.trim() !== "" ? id : undefined;
+}
+
+function hasNoPolicySnapshots(row: QueueRow): boolean {
+  return row.policy_snapshot === null && row.route_snapshot === null && row.priority_snapshot === null;
+}
+
+function transparentQueueAdmission(): QueuePolicyDecision {
+  return { kind: "admit" };
+}
+
+export function isPolicyQueueAdmission(
+  decision: QueuePolicyDecision,
+): decision is Extract<QueuePolicyDecision, { policyId: string }> {
+  return decision.kind === "admit" && "policyId" in decision;
 }
 
 function validRouteSnapshot(value: unknown): boolean {

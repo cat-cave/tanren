@@ -13,7 +13,9 @@ export function effectiveQueuePriority(input: {
   snapshot: unknown;
   override: unknown;
   laterEntries: unknown;
+  basePriority?: unknown;
 }): SpecPriorityValue {
+  if (input.snapshot === null) return SpecPriority.parse(input.basePriority);
   if (input.override !== null) return SpecPriority.parse(input.override);
   const snapshot = parsePrioritySnapshot(input.snapshot);
   if (!Number.isInteger(input.laterEntries) || typeof input.laterEntries !== "number" || input.laterEntries < 0) {

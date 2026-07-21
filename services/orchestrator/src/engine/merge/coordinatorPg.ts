@@ -36,6 +36,7 @@ interface QueueEntryRow {
   pr_url: string;
   pr_number: string;
   depends_on: unknown;
+  priority: unknown;
   rn: string | number;
   total: string | number;
   partition_id: string | null;
@@ -127,12 +128,11 @@ export class PgMergeQueueModel implements MergeQueueModel {
       // Ordered deterministically by enqueue time for a stable orderKey tiebreak.
       const entryRows = await client.query<QueueEntryRow>(
         `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
-                s.depends_on, mq.partition_id, mq.scope_fingerprint, mq.route_snapshot, mq.priority_snapshot, mq.priority_override,
+                s.depends_on, s.priority, mq.partition_id, mq.scope_fingerprint, mq.route_snapshot, mq.priority_snapshot, mq.priority_override,
                 row_number() OVER (ORDER BY mq.enqueued_at, mq.queue_id) AS rn, count(*) OVER () AS total
            FROM merge_queue mq
            JOIN specs s ON s.org_id = mq.org_id AND s.spec_id = mq.spec_id
           WHERE mq.org_id = $2 AND mq.project_id = $1 AND mq.status = 'queued'
-            AND mq.policy_snapshot IS NOT NULL AND mq.route_snapshot IS NOT NULL AND mq.priority_snapshot IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
                 FROM merge_queue held
@@ -172,6 +172,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
           snapshot: row.priority_snapshot,
           override: row.priority_override,
           laterEntries: Number(row.total) - Number(row.rn),
+          basePriority: row.priority,
         }),
         orderKey: Number(row.rn),
         ...(row.partition_id === null ? {} : { partitionId: row.partition_id }),
