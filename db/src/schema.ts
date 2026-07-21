@@ -31,7 +31,6 @@ import {
 import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
 import { events } from "./schemaEvents.js";
 import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
-
 export {
   enumCheck,
   integrationNodes,
