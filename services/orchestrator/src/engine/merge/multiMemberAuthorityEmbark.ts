@@ -13,6 +13,7 @@ import type {
   MultiMemberAuthorityMemberOutcome,
 } from "./multiMemberAuthorityTypes.js";
 import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
+import { CanonicalQueueAuthorityDrive } from "./canonicalQueueAuthorityDrive.js";
 import { confirmQueuePolicyBeforeLand } from "./queuePolicyLandFence.js";
 
 const AUTHORITY_RETRY_AFTER_MS = 3000;
@@ -113,7 +114,7 @@ async function landAuthorizedGroup(
     await releaseClaims(input.deps, claimed);
     return holdResult(input, "all_blocked");
   }
-  const landed = await input.deps.authorityEvaluator.landAuthorizedGroup!({
+  const landed = await new CanonicalQueueAuthorityDrive(input.deps.authorityEvaluator).land({
     projectId: input.projectId,
     entries: input.batch,
     binding: requiredBinding(input.binding),
@@ -172,7 +173,6 @@ export async function authorizeMultiMemberEmbark(input: {
   readonly binding: BatchAuthorityBinding | undefined;
   readonly queueDepth: number;
 }): Promise<MultiMemberEmbarkDecision> {
-  if (input.batch.length < 2) return { kind: "continue", entries: input.batch };
   if (input.binding === undefined) return hold(input, "all_blocked");
 
   let evaluation: MultiMemberAuthorityEvaluation;

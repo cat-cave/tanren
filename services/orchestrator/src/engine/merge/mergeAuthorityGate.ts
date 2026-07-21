@@ -1,11 +1,9 @@
 // The LIVE merge-path adapter onto `MergeAuthority` (tanren-owns-the-engine.md §5,
 // §8) — the Wave-2 / S1 cutover surface. It is the SINGLE place the live merge path
-// (the in-loop `direct_merge` AND the coordinator's `native_queue` DRIVE pass, which
-// flow through the SAME `MergeDispatcher.directMerge`) hands off to the guaranteed
-// core: it builds the integration node from the run's PR, resolves the concrete
-// land target (PR head + current main) through the `CodeHost`, gathers the
-// fail-closed signals, builds the binding envelope, and runs `authorizeLand → land`. ONE
-// authority, never two gate authorities (§8 guardrail) — both modes route here.
+// preserves the pre-authorize TOCTOU guards for a legacy per-run dispatch attempt.
+// Automatic land itself is queue-only: `CanonicalQueueAuthorityDrive` receives the
+// persisted node/proof binding emitted by the batch checker and calls V2 through the
+// durable group store. This file must never recreate that binding from a raw PR.
 //
 // The OUTPUT is a typed disposition the dispatcher records with its existing event
 // vocabulary (merged / blocked / needs_attention / conflict / merge_state_unknown) —
@@ -13,20 +11,12 @@
 // landAuthorizedRef` (the ff-only CAS push of the authorized commit), NOT the host's
 // "merge PR" API: Tanren made the decision; the host lands what was authorized.
 
-import { createHash } from "node:crypto";
-import { memberKey as computeMemberKey } from "../contracts/integrationNodes.js";
-import { MergeAuthorityV2Impl, SubjectEqualityRevalidator, type AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
-import { buildAuthorizeLandInput, type MergeAuthoritySignals } from "./mergeAuthorityInputs.js";
-import { LandCasRejectedError } from "../providers/githubCodeHost.js";
-import { parseDigest } from "../contracts/cas.js";
 import type { CodeHost, CodeHostRepoRef } from "../contracts/codeHost.js";
 import type { Finding } from "../contracts/findings.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { PullRequestMergeability } from "../contracts/codeHostTypes.js";
-import type { Digest } from "../contracts/cas.js";
-import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { BehaviorLandGate } from "./behaviorLandGate.js";
 import type { DesignRenderGate } from "./designRenderLandGate.js";
@@ -103,8 +93,6 @@ export interface MergeAuthorityGateInput {
    * `not_applicable` never blocks; `failed`/`inconclusive` fail closed.
    */
   designRenderGate: DesignRenderGate;
-  /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
-  store: AuthorityLandStore;
   /** Native-queue claim/policy fence invoked after proof and immediately before host CAS. */
   confirmBeforeAuthorityCas?: () => Promise<boolean>;
 }
@@ -166,17 +154,6 @@ export async function runAuthorityLand(input: {
     hitlSignoff: bundle.hitlSignoff,
     conflictsResolved: mergeability.state !== "dirty",
   };
-  const store = bundle.landStoreFor({
-    orgId: bundle.orgId,
-    runId: context.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    taskId: context.taskId,
-    prUrl: context.prUrl,
-    prNumber: context.prNumber,
-    integration: input.integration,
-    auditEnvelope: input.auditEnvelope,
-  });
   return authorizeAndLand({
     codeHost: bundle.codeHost,
     repo: context.repo,
@@ -193,7 +170,6 @@ export async function runAuthorityLand(input: {
     signals,
     behaviorGate: bundle.behaviorGate,
     designRenderGate: bundle.designRenderGate,
-    store,
     ...(input.confirmBeforeAuthorityCas === undefined
       ? {}
       : { confirmBeforeAuthorityCas: input.confirmBeforeAuthorityCas }),
@@ -209,59 +185,14 @@ async function requireBranchSha(codeHost: CodeHost, repo: CodeHostRepoRef, branc
   return sha;
 }
 
-/** A stable `sha256:<hex>` {@link Digest} over the canonical JSON of `body`. */
-function contentDigest(body: unknown): Digest {
-  return parseDigest(`sha256:${createHash("sha256").update(JSON.stringify(body)).digest("hex")}`);
-}
-
 /**
- * Build the V2 land binding envelope for a direct single-member PR land. `headSha` is
- * the PR branch head (the materialized landable commit); `expectedMainSha` is the
- * current default-branch head (the CAS base). `memberSetHash` is the frozen
- * integrationNodes bare-hex member key over `baseSha + [headSha]`. `artifactDigest` +
- * `proofRoot` are genuine content digests of the binding (an SP-3/SP-7 producer replaces
- * them with the sealed bundle digests when the runtime/mergequeue consumers wire them).
- */
-function buildEnvelope(
-  input: MergeAuthorityGateInput,
-  subject: LandSubject,
-  baseSha: string,
-  headSha: string,
-): LandBindingEnvelope {
-  const memberSetHash = computeMemberKey(baseSha, [headSha]);
-  return {
-    subject,
-    members: [{ specId: input.specId, runId: input.runId, branch: input.headBranch, headSha, disposition: "admit" }],
-    headSha,
-    expectedMainSha: baseSha,
-    artifactDigest: contentDigest({ repo: input.repo, intoMain: input.intoMain, headSha }),
-    proofRoot: contentDigest({
-      memberSetHash,
-      gateConfigHash: input.gateConfigHash,
-      policyVersion: input.policyVersion,
-      headSha,
-    }),
-    memberSetHash,
-    policyVersion: input.policyVersion,
-    target: { repo: input.repo, intoMain: input.intoMain },
-  };
-}
-
-/**
- * Run the FULL guaranteed land for one PR through `MergeAuthorityV2`:
- *   authorizeLand (re-validate the binding + the fail-closed truth table)
- *     → land (persist decision + intent → host CAS land → record receipt, with the
- *       merge_state_unknown reconcile).
- * Returns the dispatcher's disposition. The CodeHost's `landAuthorizedIntegration`
- * rejection (main raced ahead) is surfaced as `cas_rejected` (a benign retryable race),
- * kept distinct from `merge_state_unknown` (the land succeeded but the record failed).
+ * Preserve the live TOCTOU and governance guards for a legacy dispatch attempt, but
+ * never manufacture an integration-node subject or digest for it. The only automatic
+ * land route is the canonical queue path, which begins at `driveBatchThroughNode`.
  */
 export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<MergeAuthorityDisposition> {
   const { codeHost, repo } = input;
-  const baseSha = await requireBranchSha(codeHost, repo, input.intoMain);
   const headSha = await requireBranchSha(codeHost, repo, input.headBranch);
-  const subject: LandSubject = { kind: "integration_node", id: `land-${input.runId}` };
-  const envelope = buildEnvelope(input, subject, baseSha, headSha);
 
   // COMMIT-BINDING (the gate↔land TOCTOU guard, §5): the gate verdict must be FOR
   // EXACTLY the commit being landed. A passing gate is honored ONLY when its
@@ -370,21 +301,6 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
     };
   }
 
-  const authority = new MergeAuthorityV2Impl(codeHost, new SubjectEqualityRevalidator(), input.store);
-
-  const authorizeInput = buildAuthorizeLandInput({
-    subject,
-    ...input.signals,
-  } satisfies MergeAuthoritySignals);
-  const auth = await authority.authorizeLand(authorizeInput, envelope);
-
-  if (auth.decision === "blocked") {
-    return { kind: "blocked", reasons: auth.reasons.map((r) => `${r.input}: ${r.detail}`) };
-  }
-  if (auth.decision === "needs_attention") {
-    return { kind: "needs_attention", reasons: auth.reasons.map((r) => `${r.input}: ${r.detail}`) };
-  }
-
   // The final irreversible authority boundary. Native-queue callers compose the
   // durable owner/epoch renewal with QueuePolicyController.apply(claim), so a
   // freeze or blackout inserted after proof but before this point turns the row
@@ -394,23 +310,10 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
     return { kind: "blocked", reasons: ["native queue claim or policy fence could not be confirmed before host CAS"] };
   }
 
-  // authorized: execute the transactional land. A CAS rejection (main raced ahead)
-  // throws from the host land; surface it as a benign retryable race, distinct from
-  // the dangerous post-land finalize failure (merge_state_unknown). The classification
-  // is TYPED (`instanceof LandCasRejectedError`), NOT a message regex: the old
-  // `/...|CAS|.../iu` matched any "case"/"cascade"/"showcase" substring in an unrelated
-  // failure message and mis-mapped a genuine fault into a benign retry.
-  let outcome;
-  try {
-    outcome = await authority.land(auth);
-  } catch (error) {
-    if (error instanceof LandCasRejectedError) {
-      return { kind: "cas_rejected", reason: error.message };
-    }
-    throw error;
-  }
-  if (outcome.kind === "landed") {
-    return { kind: "merged", mainSha: outcome.mainSha };
-  }
-  return { kind: "merge_state_unknown", reason: outcome.reason, reconcileToken: outcome.reconcileToken };
+  return {
+    kind: "blocked",
+    reasons: [
+      "canonical queue authority is required: no persisted ready integration node and matching passed proof were supplied",
+    ],
+  };
 }

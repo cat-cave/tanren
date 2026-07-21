@@ -1,8 +1,10 @@
 // MQ2-A4/A5: pre-embark member authority settlement never drives a failed member.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BatchChecker } from "../src/engine/contracts/batchMergeCoordinator.js";
+import type { CoordinateResult, MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 import type { BatchAuthorityEvaluator } from "../src/engine/merge/multiMemberAuthorityTypes.js";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { driveMultiMemberPass } from "../src/engine/merge/multiMemberAuthorityEmbark.js";
 import {
   InMemoryBatchChecker,
   RecordingBatchGateReworkRouter,
@@ -15,7 +17,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
-import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
+import { allowExactBatchAuthority, fakeBatchAuthorityBinding } from "./helpers/mq2BatchAuthority.js";
 import { makeTestIntegrationGraphScheduler } from "./helpers/integrationGraphScheduler.js";
 
 const PROJECT = "project_mq2_cutover";
@@ -124,5 +126,77 @@ describe("MQ-2 batch authority production cutover", () => {
     expect(result).toMatchObject({ holdReason: "all_blocked" });
     expect(harness.runner.drives).toEqual([]);
     expect(harness.gateRework.routed).toEqual([]);
+  });
+
+  it("lands only through the canonical exact-group seam after every member is claimed and re-proved", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    queue.seed({ projectId: PROJECT, runId: "run_a", specId: "spec_a", dependsOn: [], priority: "P1" });
+    queue.seed({ projectId: PROJECT, runId: "run_b", specId: "spec_b", dependsOn: [], priority: "P1" });
+    const batch = (await queue.loadSnapshot(PROJECT)).entries;
+    const events = new RecordingMergeQueueEventEmitter();
+    const landAuthorizedGroup = vi.fn<NonNullable<BatchAuthorityEvaluator["landAuthorizedGroup"]>>(async (input) => {
+      await expect(input.confirmBeforeLand()).resolves.toBe(true);
+      return { kind: "landed" as const, mainSha: input.binding.headSha };
+    });
+    const drive = vi.fn<(entries: ReadonlyArray<MergeQueueEntry>) => Promise<CoordinateResult>>(async () => ({
+      projectId: PROJECT,
+      queueDepth: batch.length,
+    }));
+    const emitPassed = vi.fn<(entries: ReadonlyArray<MergeQueueEntry>, branch: string) => Promise<void>>(
+      async () => {},
+    );
+
+    const result = await driveMultiMemberPass({
+      deps: {
+        queue,
+        events,
+        escalator: new RecordingSpecEscalator(queue),
+        authorityEvaluator: { ...allowExactBatchAuthority(), landAuthorizedGroup },
+      },
+      projectId: PROJECT,
+      batch,
+      binding: fakeBatchAuthorityBinding(batch),
+      integrationBranch: "tanren/canonical-group",
+      queueDepth: batch.length,
+      emitPassed,
+      drive,
+    });
+
+    expect(result).toMatchObject({ mergedSpecId: "spec_b" });
+    expect(landAuthorizedGroup).toHaveBeenCalledOnce();
+    expect(queue.statusOf("run_a")).toBe("merged");
+    expect(queue.statusOf("run_b")).toBe("merged");
+    expect(events.events.filter((event) => event.type === "merge.queue.advanced")).toHaveLength(2);
+    expect(emitPassed).toHaveBeenCalledOnce();
+    expect(drive).not.toHaveBeenCalled();
+  });
+
+  it("holds the exact group when the final policy confirmation cannot be re-proved", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    queue.seed({ projectId: PROJECT, runId: "run_a", specId: "spec_a", dependsOn: [], priority: "P1" });
+    queue.seed({ projectId: PROJECT, runId: "run_b", specId: "spec_b", dependsOn: [], priority: "P1" });
+    queue.holdAtPolicyConfirmation("run_b");
+    const batch = (await queue.loadSnapshot(PROJECT)).entries;
+    const landAuthorizedGroup = vi.fn<NonNullable<BatchAuthorityEvaluator["landAuthorizedGroup"]>>();
+
+    const result = await driveMultiMemberPass({
+      deps: {
+        queue,
+        events: new RecordingMergeQueueEventEmitter(),
+        escalator: new RecordingSpecEscalator(queue),
+        authorityEvaluator: { ...allowExactBatchAuthority(), landAuthorizedGroup },
+      },
+      projectId: PROJECT,
+      batch,
+      binding: fakeBatchAuthorityBinding(batch),
+      integrationBranch: "tanren/canonical-group",
+      queueDepth: batch.length,
+      emitPassed: async () => {},
+      drive: async () => ({ projectId: PROJECT, queueDepth: batch.length }),
+    });
+
+    expect(result).toMatchObject({ holdReason: "all_blocked" });
+    expect(landAuthorizedGroup).not.toHaveBeenCalled();
+    expect(queue.statusOf("run_b")).toBe("held_policy");
   });
 });

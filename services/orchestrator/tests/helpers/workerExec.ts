@@ -28,7 +28,10 @@ import type {
 import { createProject, createQueuedRunFromSpec, createSpec } from "../../src/engine/workflow/projectSpec.js";
 import { runPlannerLoopWorkflow } from "../../src/engine/workflow/plannerRun.js";
 import { InMemoryCodeHost } from "../conformance/fakes/inMemoryCodeHost.js";
-import type { MergeAuthorityBundle } from "../../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import type {
+  MergeAuthorityBundle,
+  NativeQueueEnqueuer,
+} from "../../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 import { noRequiredReviewGate } from "../../src/engine/governance/reviewRules.js";
 import {
   buildPlan,
@@ -48,10 +51,10 @@ import {
 import { WorkerPool } from "./workerPool.js";
 import { DirectRunStateWriter } from "../../src/engine/worker/directRunStateWriter.js";
 
-function directMergeConfig(): Record<string, unknown> {
+function nativeQueueConfig(): Record<string, unknown> {
   return {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: { githubCredentialRef },
   };
@@ -145,6 +148,7 @@ function passingAdapters() {
 // with fake adapters / usage probe injected through its existing seams, so the
 // dequeue→execute body is exercised end-to-end without real Codex/SSH/GitHub.
 export function fakeWorkflowRunner(github: GitHubHttpClient) {
+  const nativeQueueEnqueuer = inMemoryNativeQueueEnqueuer();
   return (input: Parameters<typeof runPlannerLoopWorkflow>[0]) =>
     runPlannerLoopWorkflow({
       ...input,
@@ -153,6 +157,7 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
       sleep: async () => {},
       buildAdapters: () => passingAdapters(),
       buildUsageProbe: () => fakeProbe(),
+      nativeQueueEnqueuer,
       // review→merge tail: approve the review and no-op the merge so the
       // dequeue→execute seam runs end-to-end without real GitHub review/merge.
       reviewProbe: {
@@ -174,11 +179,19 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         readBaseBranch: async () => "main",
         retargetBase: async () => {},
       },
-      // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host
-      // PR-merge). Seed the in-memory host for the worker run's repo/PR head so the
-      // dequeue→execute seam lands end-to-end without real GitHub.
+      // The first native-queue pass records the durable queue hand-off; it never synthesizes
+      // a per-run canonical node/proof or calls the host land seam.
       mergeAuthority: workerAuthorityBundle(),
     });
+}
+
+function inMemoryNativeQueueEnqueuer(): NativeQueueEnqueuer {
+  let queued = false;
+  return async () => {
+    const created = !queued;
+    queued = true;
+    return { created };
+  };
 }
 
 const WORKER_AUTHORITY_REPO = { owner: "cat-cave", name: "tanren-fixture-easy" };
@@ -230,7 +243,7 @@ export async function setupSeededRun() {
       repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
       defaultBranch: "main",
       config: {
-        ...directMergeConfig(),
+        ...nativeQueueConfig(),
         credentials: {
           defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
           githubCredentialRef,

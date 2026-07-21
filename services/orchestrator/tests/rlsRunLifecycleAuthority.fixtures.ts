@@ -12,6 +12,20 @@ import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 
+export const LIFECYCLE_BASE_SHA = "b".repeat(40);
+export const LIFECYCLE_TREE_SHA = "c".repeat(40);
+
+export function lifecycleAuthorityHost(input: {
+  repo: { owner: string; name: string };
+  headBranch: string;
+  headSha: string;
+}): InMemoryCodeHost {
+  const host = new InMemoryCodeHost();
+  host.seed(input.repo, "main", LIFECYCLE_BASE_SHA);
+  void host.pushRef({ repo: input.repo, localRef: "feat", remoteBranch: input.headBranch, sha: input.headSha });
+  return host;
+}
+
 export function lifecycleAuthorityBundle(input: {
   pool: Pool;
   orgId: string;
@@ -19,9 +33,7 @@ export function lifecycleAuthorityBundle(input: {
   headBranch: string;
   headSha: string;
 }): MergeAuthorityBundle {
-  const host = new InMemoryCodeHost();
-  host.seed(input.repo, "main", "sha-main");
-  void host.pushRef({ repo: input.repo, localRef: "feat", remoteBranch: input.headBranch, sha: input.headSha });
+  const host = lifecycleAuthorityHost(input);
   // Audit D-R3.2: buildLandFinalizer now requires the writer (the in-process pool fallback
   // was unreachable in production after PR #714). Use the Direct writer over the same pool —
   // its `finalizeLand` runs the byte-identical `applyFinalizeLand` org-scoped transaction.

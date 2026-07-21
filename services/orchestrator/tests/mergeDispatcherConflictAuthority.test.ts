@@ -27,7 +27,7 @@ import {
 
 /**
  * The §5 land path with the default (`resolved:true`) conflict resolver — the
- * authority-gated `direct_merge` dispatcher every test below the lazy-thunk cases
+ * authority-gated `native_queue` dispatcher every test below the lazy-thunk cases
  * uses. Wraps the shared `buildDispatcher` (tests/fixtures) with the parent file's
  * positional signature so the existing call sites read unchanged.
  */
@@ -76,7 +76,7 @@ function dispatcherLazy(
     context: context(),
     eventStore: events as never,
     taskId: "task_1",
-    integration: "direct_merge",
+    integration: "native_queue",
     pr: { repo: REPO, pullNumber: 1 },
     probe,
   };
@@ -123,24 +123,23 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(events.events).not.toContain("merge.completed");
   });
 
-  it("a clean conflict-resolved land goes through the writer-backed finalizer (one transaction)", async () => {
+  it("a clean conflict-resolved legacy attempt holds for canonical queue authority", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
-    // the resolution made the branch clean — the authority authorizes + lands.
+    // The resolution made the branch clean, but a raw PR no longer produces an
+    // integration-node/proof binding for the authority.
     const probe = scriptedProbe("clean");
     const events = recordingEventStore();
     const landed: string[] = [];
     const result = await dispatcher(probe, events, bundle(host, { landed })).directMerge();
 
-    expect(result.outcome).toBe("merged");
-    // The land went through the ff-only CAS (main advanced to the authorized head),
-    // and the §5 finalizer recorded the land.
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
-    expect(landed).toEqual(["sha-feat"]);
+    expect(result.outcome).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(landed).toEqual([]);
   });
 
-  it("a post-land durable-write failure on the conflict-resolved path → merge_state_unknown (never silent)", async () => {
+  it("a post-land durable-write seam is unreachable without canonical queue authority", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
@@ -149,12 +148,10 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     const landed: string[] = [];
     const result = await dispatcher(probe, events, bundle(host, { fail: true, landed })).directMerge();
 
-    // The host land fired (main advanced) but the durable record FAILED → the
-    // dispatcher holds it as a recoverable conflict carrying the reconcile reason,
-    // NEVER a silent merged/inconsistency. main DID advance (the external land fired).
-    expect(result.outcome).toBe("conflict");
-    expect(result.message).toMatch(/merge_state_unknown|durable receipt/u);
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    // Without a persisted node and matching proof, the host CAS and its receipt
+    // finalizer are both unreachable; this must hold instead of faking a direct land.
+    expect(result.outcome).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
     expect(events.events).not.toContain("merge.completed");
   });
 
@@ -228,7 +225,7 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
       context: context(),
       eventStore: events as never,
       taskId: "task_1",
-      integration: "direct_merge",
+      integration: "native_queue",
       pr: { repo: REPO, pullNumber: 1 },
       probe: cleanProbe,
     };
@@ -258,20 +255,20 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(events.events).not.toContain("merge.completed");
   });
 
-  it("REGRESSION LOCK (c): resolved-tree fresh pre_merge re-gate PASSES → lands via the authority + CAS + finalizer", async () => {
+  it("REGRESSION LOCK (c): resolved-tree fresh pre_merge re-gate PASSES but raw PR land still holds", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     const probe = scriptedProbe("clean");
     const events = recordingEventStore();
     const landed: string[] = [];
-    // The resolved-tree pre_merge re-gate PASSES → the authority authorizes + lands via
-    // the ff-only CAS + the §5 finalizer (not probe.merge).
+    // A passing re-gate is necessary but insufficient: it cannot stand in for the
+    // persisted canonical node and proof.
     const result = await dispatcher(probe, events, bundle(host, { landed }), "passed").directMerge();
 
-    expect(result.outcome).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
-    expect(landed).toEqual(["sha-feat"]);
+    expect(result.outcome).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(landed).toEqual([]);
   });
 
   it("TOCTOU LOCK: fresh pre_merge gate PASSED for sha A, head advanced to sha B before land → BLOCKED (gate is commit-bound)", async () => {
@@ -298,18 +295,19 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(events.events).not.toContain("merge.completed");
   });
 
-  it("TOCTOU LOCK: gate PASSED for the CURRENT head (sha unchanged) → lands (binding satisfied)", async () => {
+  it("TOCTOU LOCK: gate PASSED for the CURRENT head still needs the canonical node/proof binding", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     const probe = scriptedProbe("clean");
     const events = recordingEventStore();
     const landed: string[] = [];
-    // gatedHeadSha === the landed head (sha-feat, the default) → the binding clears.
+    // gatedHeadSha === the live head clears the preserved guard, but raw PR state
+    // never becomes a synthetic authority subject.
     const result = await dispatcher(probe, events, bundle(host, { landed }), "passed").directMerge();
 
-    expect(result.outcome).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
-    expect(landed).toEqual(["sha-feat"]);
+    expect(result.outcome).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(landed).toEqual([]);
   });
 });

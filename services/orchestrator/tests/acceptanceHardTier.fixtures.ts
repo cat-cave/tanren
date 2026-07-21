@@ -274,9 +274,9 @@ export async function setupSeededRun() {
           defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
           githubCredentialRef,
         },
-        // direct_merge + open posture so the merge stage actually attempts a merge
+        // native_queue + open posture so the merge stage actually attempts a merge
         // (the conflict branch) without needing a contributor probe.
-        mergeIntegration: "direct_merge",
+        mergeIntegration: "native_queue",
         governancePosture: "open",
       },
     },

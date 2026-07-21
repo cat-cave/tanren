@@ -97,8 +97,8 @@ function buildScenario(args: {
   return { dispatcher: new MergeDispatcher(deps), host, events, landed, reGateHeads };
 }
 
-describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED then lands", () => {
-  it("re-gates the CURRENT head, rebuilds the bundle (gated===landing), and lands", async () => {
+describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED before canonical authority", () => {
+  it("re-gates the CURRENT head and then holds the retired raw-PR route", async () => {
     const scenario = buildScenario({ reGate: async () => ({ status: "passed" }) });
     // The base-shift already advanced the live head to `sha-feat2` (current with main).
     await scenario.host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat2" });
@@ -108,10 +108,10 @@ describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED the
     // The re-gate verified the CURRENT head (the base-shift-advanced commit) — NOT the stale
     // gated sha — so the verdict binds to the landing commit (the §5 guarantee, re-gated not bypassed).
     expect(scenario.reGateHeads).toEqual(["sha-feat2"]);
-    // The land then proceeded fail-closed-CORRECT (gated === landing after the rebuild).
-    expect(result.outcome).toBe("merged");
-    expect(scenario.landed).toEqual(["sha-feat2"]);
-    expect(await scenario.host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat2");
+    // The queue must materialize the rebuilt exact node/proof before a host CAS.
+    expect(result.outcome).toBe("blocked");
+    expect(scenario.landed).toEqual([]);
+    expect(await scenario.host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
     // The re-gate trail is observable; no terminal conflict dequeue.
     expect(scenario.events.events).toContain("merge.rebased");
     expect(scenario.events.events).not.toContain("merge.conflict");
@@ -181,7 +181,7 @@ describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED the
 });
 
 describe("§5 v42: no re-gate when the gated head IS the current head (no needless work)", () => {
-  it("lands directly when gatedHeadSha === current head (no mismatch → no re-gate)", async () => {
+  it("holds raw PR land when gatedHeadSha === current head (no mismatch → no re-gate)", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
@@ -217,7 +217,7 @@ describe("§5 v42: no re-gate when the gated head IS the current head (no needle
 
     // No mismatch ⇒ the re-gate hook was NEVER called (no needless work), and the land proceeded.
     expect(reGateHeads).toEqual([]);
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual(["sha-feat"]);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
   });
 });

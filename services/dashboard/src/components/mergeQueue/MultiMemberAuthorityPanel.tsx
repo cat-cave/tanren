@@ -47,7 +47,7 @@ const MULTI_MEMBER_AUTHORITY_CSS = `
 function kindLabel(kind: MultiMemberAuthorityKind): string {
   switch (kind) {
     case "authorized_subset":
-      return "authorized · exact full node";
+      return "authorized · exact canonical node";
     case "member_failure":
       return "member failure · attributed";
     case "interaction_failure":
@@ -165,19 +165,19 @@ export function MultiMemberAuthorityPanel(props: MultiMemberAuthorityPanelProps)
       <style data-component="multi-member-authority" dangerouslySetInnerHTML={{ __html: MULTI_MEMBER_AUTHORITY_CSS }} />
       <div class="panel-pad">
         <div class="mini-eyebrow">
-          exact multi-member merge authority · mq-2 · durable evidence
+          exact canonical queue authority · mq-2 · durable evidence
           {props.projection?.latestEvaluationId === null || props.projection?.latestEvaluationId === undefined
             ? null
             : ` · ${props.projection.latestEvaluationId}`}
         </div>
         {props.projection === undefined ? (
           <div class="empty">
-            Multi-member authority evidence is unavailable. The exact node remains unknown and fail-closed; an
+            Canonical queue authority evidence is unavailable. The exact node remains unknown and fail-closed; an
             unavailable read is never authorization.
           </div>
         ) : evaluations.length === 0 ? (
           <div class="empty">
-            No durable multi-member authority evaluation has been recorded. The exact node remains unknown and
+            No durable canonical queue authority evaluation has been recorded. The exact node remains unknown and
             fail-closed; empty state is never green.
           </div>
         ) : (

@@ -33,7 +33,7 @@ function frozenWithAccept(acceptSteps: { name: string; run: string }[] | undefin
       when: { fast: ["per_iteration"], slow: ["pre_audit", "pre_merge"] },
     },
     governance: "strict",
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
   });
 }
 
@@ -124,7 +124,7 @@ function fakePool(opts: { mergeSha?: string; runVisible?: boolean }): {
         return opts.mergeSha === undefined
           ? { rows: [], rowCount: 0 }
           : {
-              rows: [{ payload: { mergeSha: opts.mergeSha, prUrl: "u", prNumber: 1, integration: "direct_merge" } }],
+              rows: [{ payload: { mergeSha: opts.mergeSha, prUrl: "u", prNumber: 1, integration: "native_queue" } }],
               rowCount: 1,
             };
       }

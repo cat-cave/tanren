@@ -67,8 +67,8 @@ describe("generic project creation deploy guard", () => {
       ["governancePosture"],
     ],
     [
-      "direct merge integration",
-      { version: 1, mergeIntegration: "direct_merge" },
+      "native queue integration",
+      { version: 1, mergeIntegration: "native_queue" },
       "manual_autonomous_project_config",
       ["mergeIntegration"],
     ],
@@ -222,8 +222,8 @@ describe("generic project creation deploy guard", () => {
       ["governancePosture"],
     ],
     [
-      "direct merge integration",
-      { version: 1, mergeIntegration: "direct_merge" },
+      "native queue integration",
+      { version: 1, mergeIntegration: "native_queue" },
       "manual_autonomous_project_config",
       ["mergeIntegration"],
     ],
@@ -422,8 +422,8 @@ describe("generic project creation deploy guard", () => {
       ["governancePosture"],
     ],
     [
-      "direct merge integration",
-      { version: 1, mergeIntegration: "direct_merge" },
+      "native queue integration",
+      { version: 1, mergeIntegration: "native_queue" },
       "manual_autonomous_project_config",
       ["mergeIntegration"],
     ],

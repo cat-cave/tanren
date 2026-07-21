@@ -21,7 +21,7 @@ import { fakeMergeWriter, ReviewMergePool, unusedHttp } from "./reviewMerge.fixt
 
 describe("review polling — Codex H3 #11 durable park (no more worker-pinning loop)", () => {
   it("PARKS the run on a pending human verdict + returns `parked` (worker releases to the pool)", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     let calls = 0;
     const probe: ReviewProbe = {
@@ -69,7 +69,7 @@ describe("review polling — Codex H3 #11 durable park (no more worker-pinning l
     // The awaiting-review prober's resume brings the successor run through the
     // walker — the successor's first `pollReviewForRun` fetch reads the now-terminal
     // verdict and proceeds to merge. NO polling loop, no park.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     let calls = 0;
     const probe: ReviewProbe = {
@@ -98,7 +98,7 @@ describe("review polling — Codex H3 #11 durable park (no more worker-pinning l
   });
 
   it("PROCEEDS to rework on a `changes_requested` verdict without parking", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe: ReviewProbe = {
       markReady: async () => {},

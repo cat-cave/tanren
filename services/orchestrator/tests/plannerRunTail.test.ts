@@ -22,7 +22,7 @@ import {
   changesThenApproveReview,
   conflictMerge,
   convergenceStalled,
-  directMergeConfig,
+  nativeQueueConfig,
   FailingReleaseAllocator,
   fakeProbe,
   healthyWindow,
@@ -76,8 +76,8 @@ const baseInput = (over: Record<string, unknown>) => ({
 });
 
 describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
-  it("re-plans against a changes-requested review, then completes on approval", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+  it("re-plans against a changes-requested review, then queues on approval", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound()]);
     // One shared adapter set across both passes; the planner records every call
     // so we can assert the second pass carried the reviewer feedback as steering.
@@ -109,11 +109,11 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    // Approved on the second pass, then explicitly authority-landed → completed/ok.
+    // Approved on the second pass, then enters the canonical native queue → completed/ok.
     expect(result.outcome.kind).toBe("passed");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
-    // The re-entry put the spec back in_flight before the final merged.
-    expect(pool.specStatuses).toEqual(["in_flight", "merged"]);
+    // The re-entry put the spec back in_flight; queue entry is not a land.
+    expect(pool.specStatuses).toEqual(["in_flight"]);
     // The loop re-entered: the planner was invoked a second time, and that
     // second prompt carried the reviewer's changes-requested feedback as the
     // seeded rejection steering (producer "reviewer" → renamed body in prose).
@@ -158,9 +158,9 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
   });
 });
 
-describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () => {
-  it("marks the spec merged and the run done/ok when the merge succeeds", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+describe("runPlannerLoopWorkflow — merge-outcome mapping (native_queue)", () => {
+  it("queues the first pass and completes the run without marking the spec merged", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
     const result = await runPlannerLoopScoped(
@@ -179,14 +179,13 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    expect(result.merge?.outcome).toBe("merged");
+    expect(result.merge?.outcome).toBe("queued");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
-    // A direct (authority) land marks the spec merged (not the handed-off "done").
-    expect(pool.specStatuses).toEqual(["merged"]);
+    expect(pool.specStatuses).toEqual([]);
   });
 
-  it("halts (recoverable) when the merge reports a conflict", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+  it("queues a first pass before the coordinator evaluates a potential conflict", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
     const result = await runPlannerLoopScoped(
@@ -213,12 +212,9 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    expect(result.merge?.outcome).toBe("conflict");
-    // UNIFIED RUN-FINALIZE (apex v35): a conflict is recoverable → the run halts and the
-    // spec RE-DRIVES to `open` (the walker re-attempts; work never discarded) — NOT merged,
-    // NOT parked at `needs_attention` (a resolvable conflict is not a human-decision).
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
-    expect(pool.specStatuses.at(-1)).toBe("open");
+    expect(result.merge?.outcome).toBe("queued");
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
+    expect(pool.specStatuses).toEqual([]);
   });
 
   // (DELETED with the host-merge land path) "fails the run when the merge fails outright":
@@ -281,7 +277,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
 // was torn down + listing any residual resources to reconcile.
 describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
   it("records a clean release.finalized (cleanedUp, no residuals) on a successful teardown", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
     await runPlannerLoopScoped(
@@ -310,7 +306,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
   });
 
   it("records a FAILED release.finalized (residual runner + bounded reason) when teardown throws, without masking the run", async () => {
-    const { ctx, pool, events, secrets, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, ssh } = await setup(nativeQueueConfig());
     const allocator = new FailingReleaseAllocator();
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
@@ -332,7 +328,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    expect(result.merge?.outcome).toBe("merged");
+    expect(result.merge?.outcome).toBe("queued");
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
 
     const finalized = events.events.find((e) => e.eventType === "release.finalized");

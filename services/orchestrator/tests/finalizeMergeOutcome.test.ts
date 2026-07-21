@@ -79,17 +79,18 @@ describe("finalizeMergeOutcome — CONVERGE: only a landed merge marks the spec 
     expect(pool.terminalRunWrite()).toEqual({ status: "completed", outcome: "ok" });
   });
 
-  it("a direct_merge `merged` marks the spec `merged` (CONVERGE)", async () => {
+  it("a native_queue DRIVE-pass `merged` marks the spec `merged` (CONVERGE)", async () => {
     const pool = new RecordingPool();
-    await run(pool, "merged", "direct_merge");
+    await run(pool, "merged", "native_queue");
     expect(pool.specStatusWritten()).toBe("merged");
     expect(pool.terminalRunWrite()).toEqual({ status: "completed", outcome: "ok" });
   });
 
-  it("a native_queue DRIVE-pass `merged` marks the spec `merged` (the merge landed)", async () => {
+  it("a native_queue DRIVE-pass `merged` records a completed run", async () => {
     const pool = new RecordingPool();
     await run(pool, "merged", "native_queue");
     expect(pool.specStatusWritten()).toBe("merged");
+    expect(pool.terminalRunWrite()).toEqual({ status: "completed", outcome: "ok" });
   });
 });
 
@@ -117,16 +118,16 @@ describe("finalizeMergeOutcome — RE-DRIVE: every transient hold re-drives, nev
     },
   );
 
-  it("a non-native `queued` outcome RE-DRIVES the spec (not parks)", async () => {
+  it("an external-reviewer `queued` outcome RE-DRIVES the spec (not parks)", async () => {
     const pool = new RecordingPool();
-    await run(pool, "queued", "direct_merge");
+    await run(pool, "queued", "external_reviewer");
     expect(pool.specStatusWritten()).toBe("open");
     expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
   });
 
   it("a `failed` merge outcome RE-DRIVES the spec (a transient merge fault, work never discarded)", async () => {
     const pool = new RecordingPool();
-    await run(pool, "failed", "direct_merge");
+    await run(pool, "failed", "external_reviewer");
     expect(pool.specStatusWritten()).toBe("open");
     expect(pool.terminalRunWrite()).toEqual({ status: "halted", outcome: "halted" });
   });

@@ -22,7 +22,7 @@ export class PlannerRunPool {
   private ciTask: { taskId: string; attempt: number } | undefined;
 
   // The project config the review/merge tail loads. Defaults to the not_configured
-  // hand-off; tests override to exercise direct_merge / other branches.
+  // hand-off; tests override to exercise native_queue / other branches.
   private readonly projectConfig: Record<string, unknown>;
 
   /** FakeEventStore the fixture shares with this pool — INSERT INTO events

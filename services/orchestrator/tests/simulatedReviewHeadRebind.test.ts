@@ -2,7 +2,8 @@
 //
 // review head A → head advances to B → re-review B must durably supersede the
 // authoritative receipt used for landing. Same-head retry remains idempotent.
-// A never authorizes B; landing B succeeds only from B's receipt.
+// A never authorizes B; B's receipt clears review freshness but canonical queue proof
+// remains mandatory before any host land.
 //
 // Composition under test (one authority / one event stream — no second store):
 //   markReviewTaskDoneWithEvent  → head-bound idempotency key + forge receipt
@@ -87,7 +88,7 @@ function landInput(host: InMemoryCodeHost, landingHead: string, reviewedHeadSha:
 }
 
 describe("gv-2 simulated review head rebind (former bug: first-wins blocked re-review)", () => {
-  it("review A → head advances to B → re-review B supersedes; land B only from B's receipt", async () => {
+  it("review A → head advances to B → re-review B supersedes; neither receipt can synthesize a land", async () => {
     const writer = new InMemoryRunStateWriter();
     const baseA = {
       runId: RUN_ID,
@@ -137,7 +138,7 @@ describe("gv-2 simulated review head rebind (former bug: first-wins blocked re-r
     // Land signals take LATEST — B supersedes A as the authoritative receipt.
     expect(latestReviewedHeadSha(writer)).toBe(HEAD_B);
 
-    // 4. Landing B succeeds only from B's receipt (not A's).
+    // 4. B's receipt clears the review bind, but only a canonical queue proof may land.
     const hostLand = new InMemoryCodeHost();
     hostLand.seed(REPO, "main", "sha-main");
     await hostLand.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: HEAD_B });
@@ -145,9 +146,12 @@ describe("gv-2 simulated review head rebind (former bug: first-wins blocked re-r
     expect(stillBlockedFromA.kind).toBe("blocked");
     expect(await hostLand.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
 
-    const landed = await authorizeAndLand(landInput(hostLand, HEAD_B, HEAD_B));
-    expect(landed.kind).toBe("merged");
-    expect(await hostLand.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe(HEAD_B);
+    const canonicalHold = await authorizeAndLand(landInput(hostLand, HEAD_B, HEAD_B));
+    expect(canonicalHold).toMatchObject({
+      kind: "blocked",
+      reasons: [expect.stringContaining("canonical queue authority is required")],
+    });
+    expect(await hostLand.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("same-head re-publish of approved remains first-wins idempotent (retry does not double-emit)", async () => {

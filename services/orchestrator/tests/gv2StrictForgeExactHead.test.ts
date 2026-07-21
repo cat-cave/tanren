@@ -31,7 +31,7 @@ const context: ReviewMergeRunContext = {
   prUrl: "https://github.com/o/r/pull/1",
   baseBranch: "main",
   headBranch: "feat",
-  mergeIntegration: "direct_merge",
+  mergeIntegration: "native_queue",
   governancePosture: "open",
   policyVersion: 1,
   policyIdentity: "policy-sha256:test-gv2",

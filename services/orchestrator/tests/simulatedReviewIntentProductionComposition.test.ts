@@ -116,7 +116,7 @@ describe("gv-2 production durable-intent composition", () => {
   });
 
   it("canonical polling fails before Answerer or forge I/O when its writer is append-only", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const writer = fakeMergeWriter(pool, new FakeEventStore());
     let answererCalls = 0;
     let forgeCalls = 0;

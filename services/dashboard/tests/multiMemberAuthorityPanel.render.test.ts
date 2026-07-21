@@ -85,7 +85,7 @@ describe("mq-2 multi-member authority dashboard surface", () => {
   it("visibly renders every closed consumer kind", async () => {
     const html = await render(ALL_STATES);
 
-    expect(html).toContain("authorized · exact full node");
+    expect(html).toContain("authorized · exact canonical node");
     expect(html).toContain("member failure · attributed");
     expect(html).toContain("interaction failure · hold");
     expect(html).toContain("flake observation · same tree");
@@ -143,6 +143,32 @@ describe("mq-2 multi-member authority dashboard surface", () => {
     expect(html).toContain("run · not durably linked");
     expect(html.match(/finding-policy-b/gu)).toHaveLength(1);
     expect(html).toContain("durable source · merge.signal.classified · durable-8");
+  });
+
+  it("renders one exact durable member as canonical authority, never as a direct merge", async () => {
+    const singleMember: MergeQueueAuthorityEvaluation = {
+      ...evaluation("authorized_subset", 9),
+      eligibleMemberIds: ["spec-a"],
+      members: [
+        {
+          ordinal: 0,
+          specId: "spec-a",
+          runId: "run-a",
+          branch: "tanren/spec-a",
+          headSha: "head-a",
+          disposition: "admit",
+          findingIds: [],
+          reasonCodes: [],
+        },
+      ],
+    };
+
+    const html = await render({ latestEvaluationId: singleMember.evaluationId, evaluations: [singleMember] });
+
+    expect(html).toContain("authorized · exact canonical node");
+    expect(html).toContain("member 1 · admit");
+    expect(html).toContain("spec-a");
+    expect(html).not.toContain("direct merge");
   });
 
   it("renders unavailable and empty reads as unknown, never green", async () => {

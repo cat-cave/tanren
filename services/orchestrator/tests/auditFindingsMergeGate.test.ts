@@ -1,11 +1,12 @@
 // WAVE-2 / SLICE S3a PROOF (tanren-owns-the-engine.md §4): the audit's P0–P3 FINDINGS
-// are the SOLE audit gate in the LIVE merge decision — the project `auditPosture`
+// are the SOLE audit gate in the canonical queue decision — the project `auditPosture`
 // (`decideFromFindings`) turns them into block/route/fix, and the legacy
 // passed/loop_to_planner/halt verdict path is gone. These tests drive the LIVE merge
-// path (`authorizeAndLand`, which builds the input through `buildAuthorizeLandInput` and
-// runs the real `MergeAuthorityImpl`), proving:
-//   (a) a P0/P1 finding at merge time → BLOCKED via the authority's decideFromFindings;
-//   (b) P2/P3 findings → NOT blocked (the merge lands), routed/fixed per posture;
+// path formerly fed `authorizeAndLand`. That per-run route is now fail-closed without
+// a persisted integration node/proof, so these tests prove the posture decision separately
+// and that the obsolete route can never reach the host, proving:
+//   (a) a P0/P1 finding at merge time → policy BLOCK;
+//   (b) P2/P3 findings → policy non-block, routed/fixed per posture;
 //   (c) a MISSING audit record → BLOCKED (fail-closed, no silent pass);
 //   (d) the DORA knob: the SAME findings block under strict vs route under velocity,
 //       end-to-end through the live merge path.
@@ -80,14 +81,14 @@ async function seedFeat(host: InMemoryCodeHost): Promise<void> {
 }
 
 describe("S3a — findings are the LIVE audit gate (a): a P0/P1 finding BLOCKS the merge", () => {
-  it("a P0 finding at merge time → BLOCKED via the authority's decideFromFindings (not a legacy verdict)", async () => {
+  it("a P0 finding policy-blocks; the obsolete per-run route also cannot reach the host", async () => {
     const host = seededHost();
     await seedFeat(host);
     const disposition = await authorizeAndLand(landInput(host, [P0], VELOCITY));
     expect(disposition.kind).toBe("blocked");
+    expect(decideFromFindings([P0], VELOCITY).block).toBe(true);
     const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
-    // The block names the FINDINGS input (the posture policy), not any legacy verdict.
-    expect(reasons).toMatch(/findings.*auditPosture|blocked by policy/u);
+    expect(reasons).toContain("canonical queue authority is required");
     // main never advanced — the un-audited-clean change did NOT land.
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
@@ -101,13 +102,14 @@ describe("S3a — findings are the LIVE audit gate (a): a P0/P1 finding BLOCKS t
   });
 });
 
-describe("S3a — findings are the LIVE audit gate (b): P2/P3 do NOT block; routed/fixed per posture", () => {
-  it("a P2 finding under velocity → NOT blocked: the merge LANDS", async () => {
+describe("S3a — findings are the canonical audit gate (b): P2/P3 do NOT block; routed/fixed per posture", () => {
+  it("a P2 finding under velocity is policy-clear, but an obsolete per-run call cannot land", async () => {
     const host = seededHost();
     await seedFeat(host);
     const disposition = await authorizeAndLand(landInput(host, [P2], VELOCITY));
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(decideFromFindings([P2], VELOCITY).block).toBe(false);
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("the residual P2/P3 are ROUTED as DAG specs under route-to-dag (the postureGate path)", () => {
@@ -164,8 +166,8 @@ describe("S3a — findings are the LIVE audit gate (c): a MISSING audit record B
   });
 });
 
-describe("S3a — findings are the LIVE audit gate (d): the DORA knob, end-to-end through the merge", () => {
-  it("the SAME P2 finding BLOCKS under strict but LANDS (routed) under velocity", async () => {
+describe("S3a — findings are the canonical audit gate (d): the DORA knob", () => {
+  it("the SAME P2 policy-blocks under strict but is routed under velocity; neither per-run call may land", async () => {
     // STRICT (blockReviewAt:P3) — a P2 is at-or-above P3 ⇒ blocks.
     const strictHost = seededHost();
     await seedFeat(strictHost);
@@ -173,12 +175,13 @@ describe("S3a — findings are the LIVE audit gate (d): the DORA knob, end-to-en
     expect(strict.kind).toBe("blocked");
     expect(await strictHost.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
 
-    // VELOCITY (blockReviewAt:P1) — a P2 is below P1 ⇒ does NOT block ⇒ lands.
+    // VELOCITY (blockReviewAt:P1) — a P2 is below P1 ⇒ does not policy-block.
     const velocityHost = seededHost();
     await seedFeat(velocityHost);
     const velocity = await authorizeAndLand(landInput(velocityHost, [P2], VELOCITY));
-    expect(velocity.kind).toBe("merged");
-    expect(await velocityHost.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(decideFromFindings([P2], VELOCITY).block).toBe(false);
+    expect(velocity.kind).toBe("blocked");
+    expect(await velocityHost.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
 
     // And under velocity the same P2 routes into the DAG (it was not dropped).
     expect(evaluatePostureGate([P2], VELOCITY, { idleAwaitingReview: false }).routeSpecs).toHaveLength(1);

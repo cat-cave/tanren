@@ -12,9 +12,8 @@
 //   2. AUDITOR REJECTION LOOP: after the tree gates green, the auditor returns
 //      `loop_to_planner` once → another `planner.rerequested` → re-plan, then
 //      passes on the next audit.
-//   3. CONFLICT RESOLUTION: the approved PR's direct merge reports a
-//      conflict; the conflict-resolver hook resolves it and the retried merge
-//      succeeds — the run lands a coherent terminal `done/ok`.
+//   3. NATIVE-QUEUE HAND-OFF: the approved PR is durably queued; the coordinator,
+//      not this per-run worker, owns future conflict resolution and land.
 //
 // Everything runs through `executeNextPlanJob` (claim a real queued plan job →
 // run the REAL `runPlannerLoopWorkflow` body) with fakes injected through the
@@ -61,7 +60,7 @@ import {
 } from "./acceptanceHardTier.fixtures.js";
 
 describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
-  it("drives re-plan + auditor rejection + conflict resolution through the worker to a coherent terminal state", async () => {
+  it("drives re-plan + auditor rejection, then hands the approved PR to the native queue", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
     await enqueuePlanJob(jobQueue, run);
@@ -100,16 +99,14 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     // twice (reject once, then pass), proving the rework re-entered the loop.
     expect(trace.gateCalls.filter((c) => c.when === "pre_audit").length).toBeGreaterThanOrEqual(2);
 
-    // Hard path 3 — conflict resolution: the land path evaluated mergeability twice
-    // (the `dirty` freshness read surfacing the conflict, then the `clean` read the
-    // authority landed on) and the resolver hook fired exactly once between them.
-    expect(trace.conflictResolved).toBe(1);
-    expect(trace.mergeAttempts).toBe(2);
-
-    // Coherent terminal state: the conflict was resolved, the merge succeeded,
-    // and the run + spec landed merged/done — NOT halted.
+    // The per-run pass must not enter the old direct land/conflict path. It records a
+    // durable native-queue hand-off; only the canonical coordinator may drive land.
+    expect(trace.conflictResolved).toBe(0);
+    expect(trace.mergeAttempts).toBe(0);
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
-    expect(pool.specStatus).toBe("merged");
+    expect(pool.specStatus).toBe("in_flight");
+    expect(pool.eventTypes).toContain("merge.scheduled");
+    expect(pool.eventTypes).toContain("merge.queued");
     // Within budget: the run did not exhaust the rerun budget (no halt).
     expect(await jobQueue.claim("plan")).toBeUndefined();
   });

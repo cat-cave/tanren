@@ -179,7 +179,7 @@ describe("§3.2 recoverable land dispositions", () => {
 });
 
 describe("§3.3 native rebase-on-CAS (unprotected repo, no GitHub `behind`)", () => {
-  it("a CAS rejection drives the baseShiftRebase hook + re-gate, then re-lands", async () => {
+  it("a legacy raw-PR attempt never reaches CAS or baseShiftRebase", async () => {
     // The host CAS-rejects the FIRST land (a sibling raced main ahead) then lands normally.
     const host = new RaceOnceCodeHost();
     host.seed(REPO, "main", "sha-main");
@@ -204,15 +204,12 @@ describe("§3.3 native rebase-on-CAS (unprotected repo, no GitHub `behind`)", ()
     const { dispatcher } = landDispatcher({ host, events, landed, buildBundle, baseShiftRebase });
     const result = await dispatcher.directMerge();
 
-    // The CAS rejection was handled by a NATIVE rebase-then-retry (not a terminal dequeue):
-    // the base-shift hook fired, the head re-gated, and the SECOND land succeeded.
-    expect(rebaseCalls).toBe(1);
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual(["sha-feat2"]);
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat2");
-    // A rebase-then-regate trail, never a terminal merge.conflict dequeue.
-    expect(events.events).toContain("merge.behind");
-    expect(events.events).toContain("merge.rebased");
+    // Node/proof materialization is required before host CAS, so no direct CAS
+    // rejection can invoke the rebase engine from this retired route.
+    expect(rebaseCalls).toBe(0);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
     expect(events.events).not.toContain("merge.conflict");
   });
 
@@ -239,7 +236,7 @@ describe("§3.3 native rebase-on-CAS (unprotected repo, no GitHub `behind`)", ()
 });
 
 describe("§3.3 native rebase-on-CAS is PROGRESS-based, not a fixed count", () => {
-  it("a CAS that keeps losing to an ADVANCING main keeps rebasing past the old 2-cap and lands", async () => {
+  it("an advancing-main CAS seam is unreachable from the retired raw-PR route", async () => {
     // Main advances under the run FOUR times (well past the old MAX_CAS_REBASE_RETRIES=2):
     // a different observed-main signature each rejection = genuine progress (live contention),
     // so the re-drive must continue UNBOUNDED and eventually land — never give up on a count.
@@ -269,14 +266,13 @@ describe("§3.3 native rebase-on-CAS is PROGRESS-based, not a fixed count", () =
     const { dispatcher } = landDispatcher({ host, events, landed, buildBundle, baseShiftRebase });
     const result = await dispatcher.directMerge();
 
-    // It rebased once PER advancing rejection (4 > the old 2-cap) and finally landed — no give-up.
-    expect(rebaseCalls).toBe(REJECTS);
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual([`sha-feat-r${REJECTS}`]);
+    expect(rebaseCalls).toBe(0);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
     expect(events.events).not.toContain("merge.conflict");
   });
 
-  it("a CAS stuck on an IDENTICAL non-advancing rejection recoverable-holds (non-convergence, not a count)", async () => {
+  it("a stuck-CAS seam is unreachable from the retired raw-PR route", async () => {
     // Main NEVER advances: the same rejection signature recurs → a fixed point (genuine stuck,
     // not contention). The progress guard holds RECOVERABLY rather than re-rebasing forever.
     const host = new StuckRaceCodeHost();
@@ -305,8 +301,6 @@ describe("§3.3 native rebase-on-CAS is PROGRESS-based, not a fixed count", () =
     expect(result.outcome).toBe("blocked");
     expect(events.events).not.toContain("merge.conflict");
     expect(landed).toEqual([]);
-    // It did NOT loop forever: the first rejection is progress (history of 1), it rebased once,
-    // then the second identical rejection is the fixed point that holds — a bounded, finite path.
-    expect(rebaseCalls).toBe(1);
+    expect(rebaseCalls).toBe(0);
   });
 });

@@ -209,7 +209,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
 
   private async appendFormed(client: pg.PoolClient, auth: LandAuthorization): Promise<void> {
     const tail = this.input.members.at(-1);
-    if (tail === undefined) throw new Error("a land group requires at least two members");
+    if (tail === undefined) throw new Error("a land group requires at least one member");
     await new PgEventStore(client).append({
       runId: tail.runId,
       specId: tail.specId,
@@ -250,7 +250,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
     );
     if (Number(unfinished.rows[0]?.count ?? "0") !== 0) throw new Error("land group members are not fully reconciled");
     const auditId = this.input.members.at(-1)?.runId;
-    if (auditId === undefined) throw new Error("a land group requires at least two members");
+    if (auditId === undefined) throw new Error("a land group requires at least one member");
     await client.query(
       `INSERT INTO authority_land_receipts (org_id, project_id, id, effect_intent_id, main_sha, audit_id)
          VALUES ($1,$2,$3,$4,$5,$6)
@@ -269,7 +269,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
 
   private async appendCompleted(client: pg.PoolClient, auth: LandAuthorization, mainSha: string): Promise<void> {
     const tail = this.input.members.at(-1);
-    if (tail === undefined) throw new Error("a land group requires at least two members");
+    if (tail === undefined) throw new Error("a land group requires at least one member");
     await new PgEventStore(client).append({
       runId: tail.runId,
       specId: tail.specId,
@@ -289,7 +289,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
   }
 
   private assertMembers(auth: LandAuthorization): void {
-    if (this.input.members.length < 2 || this.input.members.length !== auth.envelope.members.length) {
+    if (this.input.members.length === 0 || this.input.members.length !== auth.envelope.members.length) {
       throw new Error("land group must bind every authorized member");
     }
     if (

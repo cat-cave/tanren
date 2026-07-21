@@ -21,7 +21,6 @@ import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
-  AUTHORITY_HEAD_SHA,
   ReviewMergePool,
   authorityBundle,
   authorityHost,
@@ -35,8 +34,8 @@ const CLEAN = { state: "clean" as const, behind: false, baseBranch: "main", head
 const REBASED_PR_HEAD = "d".repeat(40);
 
 describe("P2a up-to-date enforcement (merge stage)", () => {
-  it("branch BEHIND → baseShiftRebase → re-gate CI green → merge.behind + merge.rebased + authority land", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("branch BEHIND → baseShiftRebase → re-gate CI green → canonical proof hold", async () => {
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     // behind on the freshness read; clean once the rebase advanced it (the read the
     // authority then re-judges — the land only clears on `clean`).
@@ -47,6 +46,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     const baseShiftCalls: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -66,21 +66,20 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       },
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    // Order: detected behind → unified rebase → re-gated CI → landed via the authority.
+    expect(result.outcome).toBe("blocked");
+    // Order: detected behind → unified rebase → re-gated CI → canonical-proof hold.
     expect(baseShiftCalls).toEqual(["main"]);
     expect(reGateCalls).toBe(1);
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.behind");
     expect(types).toContain("merge.rebased");
-    expect(types).toContain("merge.completed");
+    expect(types).not.toContain("merge.completed");
     expect(events.events.find((e) => e.eventType === "merge.rebased")?.payload).toMatchObject({ reGatedCi: true });
   });
 
   it("baseShiftRebase reports a CONFLICT → routed to conflict hook, merge.conflict, NO land", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
@@ -88,6 +87,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     let hookCalls = 0;
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -120,13 +120,14 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     // §5h: the unified base-shift hook is REQUIRED on the land path (the legacy server-side
     // update-branch fallback is GONE). An absent hook is a wiring bug → a recoverable HOLD,
     // never a silent server-side update or a merge of an un-rebased stale branch.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -150,7 +151,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     // is the WRITER's to fix on the new base — route to rework carrying the gate error, then
     // emit the RECOVERABLE conflict so the reworked spec re-enters the queue. NEVER the old
     // terminal merge.failed that stranded a fixable spec.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
@@ -158,6 +159,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     const reworked: Array<{ specId: string; gateError: string }> = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -200,13 +202,14 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
   it("re-gated CI FAILS with NO rework router wired → recoverable conflict (never a terminal merge.failed)", async () => {
     // An out-of-band / test caller with no rework router: still RECOVERABLE (the recovery
     // surface re-drives), NEVER the old terminal merge.failed — never a silent merge either.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -236,13 +239,14 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     // emitted as a TERMINAL conflict and DEQUEUED, stranding the PR forever. The fix: a distinct
     // re_gate_pending RECOVERABLE outcome (the task stays running) the coordinator re-drives
     // until the gate finishes — never dequeued, never a fixed attempt cap.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -273,13 +277,14 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     // The branch was behind and the unified rebase advanced it, but the required post-rebase
     // CI re-gate hook is absent. The default of a required verification is a HOLD, not "land
     // anyway": the dispatcher emits the recoverable conflict outcome and NEVER lands.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
     const host = authorityHost();
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -306,8 +311,8 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
-  it("a CLEAN branch lands directly with no rebase call", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("a CLEAN branch reaches the canonical-proof hold with no rebase call", async () => {
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: CLEAN });
     const host = authorityHost();
@@ -315,6 +320,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     let baseShiftCalls = 0;
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -333,8 +339,8 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       },
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
     // freshness is read TWICE: once by `ensureUpToDate` (no rebase on clean) and once by the
     // authority land (re-judging the clean tree). No rebase on clean.
     expect(probe.mergeabilityCalls).toBe(2);

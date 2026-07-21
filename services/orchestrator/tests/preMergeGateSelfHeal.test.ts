@@ -26,7 +26,7 @@ import {
   buildPlan,
   cleanAudit,
   completeCheck,
-  directMergeConfig,
+  nativeQueueConfig,
   fakeProbe,
   healthyWindow,
   loopStageAdapters,
@@ -127,7 +127,7 @@ function selfHealAdapters() {
 
 describe("pre-merge gate self-heal (apex v34)", () => {
   it("a failed pre_merge ('merge'-tier) gate re-enters the WRITER with the failing step's output, NOT a code:internal strand", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     // The cucumber/stryker error the writer must see to fix its own tier-3.
     const tier3Error = "Failures:\n  cypress/e2e/redirect.feature:12 expected 302 got 404";
     // pre_merge FAILS on the first attempt, PASSES after the writer re-authors.
@@ -180,7 +180,7 @@ describe("pre-merge gate self-heal (apex v34)", () => {
   });
 
   it("a pre_merge gate failing the IDENTICAL way halts LOUD at a FIXED POINT (no count, never loops / never silently passes)", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     // pre_merge fails the IDENTICAL way EVERY time — the writer never changes the error.
     const { runGate, preMergeCalls } = scriptedGate([
       failGate("tier-3", "pre_merge", "stryker", "mutation score 41% < 60%"),

@@ -39,11 +39,13 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { StaticRunnerAllocator } from "../src/engine/allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
   lifecycleAuthorityBundle,
+  driveLifecycleNativeQueueLand,
   accounting,
   approvingReview,
   fakeProbe,
@@ -230,15 +232,14 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
           // replaces the retired CI-poll `ci` task.
           reviewProbe: approvingReview(),
           mergeProbe: noopMerge(),
-          // The land is the unconditional MergeAuthority. The CAS lands on an in-memory
-          // host; the REAL writer-backed finalizer (`buildLandFinalizer` over the enforced
-          // app pool) records `merge.completed` + flips the spec to `merged` in ONE
-          // org-scoped transaction — the lifecycle tenant writes this test locks under RLS.
+          // The first native-queue pass only enqueues, but retain the lifecycle authority
+          // harness the canonical coordinator drive reuses below for its in-memory host +
+          // real RLS-backed land finalization.
           mergeAuthority: lifecycleAuthorityBundle({
             pool: appPool,
             orgId: ORG,
             repo: LIFECYCLE_REPO,
-            headBranch: "tanren/run_1",
+            headBranch: "tanren/lifecycle",
             headSha: FAKE_HEAD_SHA,
           }),
           sleep: async () => {},
@@ -248,6 +249,29 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     // (1) The run completed cleanly — every lifecycle write was admitted by RLS.
     expect(result.kind).toBe("completed");
     expect(result).toMatchObject({ runId: RUN, outcome: "passed" });
+
+    // `native_queue` intentionally ends the run-loop's first pass after ENQUEUE.
+    // Drive its queued one-member canonical node through the real queue-to-land
+    // authority now: this is where `merge.completed` and spec → `merged` must be
+    // admitted by the enforced app-pool RLS policy.
+    const nativeQueue = new PgMergeQueueModel(appPool);
+    const queued = (await nativeQueue.loadSnapshot(PROJECT)).entries;
+    expect(queued).toHaveLength(1);
+    const entry = queued[0];
+    const target = ssh.commands[0]?.target;
+    if (entry === undefined || target === undefined)
+      throw new Error("lifecycle native-queue drive has no queued entry or runner target");
+    await driveLifecycleNativeQueueLand({
+      pool: appPool,
+      orgId: ORG,
+      entry,
+      queue: nativeQueue,
+      repo: LIFECYCLE_REPO,
+      headBranch: "tanren/lifecycle",
+      headSha: FAKE_HEAD_SHA,
+      ssh,
+      target,
+    });
 
     // (2) The run landed completed/ok (owner read = RLS-exempt ground truth).
     const run = await ownerPool.query<{ status: string; outcome: string | null; pr_url: string | null }>(
@@ -305,7 +329,13 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     );
     expect(events.rows.every((r) => r.org_id === ORG)).toBe(true);
     const eventTypes = new Set(events.rows.map((r) => r.event_type));
-    for (const expected of ["runner.allocated", "workspace.prepared", "github.pr.created", "runner.released"]) {
+    for (const expected of [
+      "runner.allocated",
+      "workspace.prepared",
+      "github.pr.created",
+      "merge.completed",
+      "runner.released",
+    ]) {
       expect(eventTypes).toContain(expected);
     }
 
@@ -381,10 +411,10 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
   );
   // A version:1 project config carrying both credential refs and an explicit merge
   // integration, so resolveCredentialsForRun resolves from project config (no real
-  // secrets needed) and this fixture proves the successful direct-merge lifecycle.
+  // secrets needed) and this fixture proves the successful native-queue lifecycle.
   const config = {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: {
       defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },
@@ -416,7 +446,7 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
 async function seedForeignCredentialRun(owner: Pool): Promise<void> {
   const config = {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: {
       defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },

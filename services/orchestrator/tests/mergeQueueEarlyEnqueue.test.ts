@@ -55,7 +55,7 @@ function recordingEnqueuer(opts: { created?: boolean } = {}): {
 
 async function publishWithSeam(input: {
   enqueue?: NativeQueueEnqueuer;
-  mergeIntegration?: "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
+  mergeIntegration?: "native_queue" | "external_reviewer" | "not_configured";
 }): Promise<{ events: FakeEventStore }> {
   const secrets = new FakeSecretStore();
   await secrets.put({ ref: "credential/github/org/org_42/dev", value: "ghp_test" });
@@ -180,12 +180,11 @@ describe("apex v67/v69 — merge_queue enqueue after github.pr.created", () => {
     expect(events.events.some((e) => e.eventType === "github.pr.created")).toBe(true);
   });
 
-  it("direct_merge project → seam is no-op (no early enqueue, no merge.scheduled)", async () => {
+  it("not_configured project → seam is no-op (no early enqueue, no merge.scheduled)", async () => {
     const { enqueue, calls } = recordingEnqueuer({ created: true });
-    const { events } = await publishWithSeam({ enqueue, mergeIntegration: "direct_merge" });
+    const { events } = await publishWithSeam({ enqueue, mergeIntegration: "not_configured" });
 
-    // direct_merge has NO queue concept — the late-path mergeForRun does an immediate
-    // host merge. An early enqueue would race the coordinator. The seam must skip.
+    // A project that has not opted into automatic merge must not get a queue row.
     expect(calls).toHaveLength(0);
     expect(events.events.some((e) => e.eventType === "merge.scheduled")).toBe(false);
     expect(events.events.some((e) => e.eventType === "github.pr.created")).toBe(true);

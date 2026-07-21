@@ -32,13 +32,26 @@ export function runPlannerLoopScoped(
     runStateWriter?: RunPlannerLoopInput["runStateWriter"];
   },
 ): Promise<PlannerRunResult> {
+  const nativeQueueEnqueuer = input.nativeQueueEnqueuer ?? inMemoryNativeQueueEnqueuer();
   const resolved: RunPlannerLoopInput = {
     ...input,
+    nativeQueueEnqueuer,
     runStateWriter: input.runStateWriter ?? new DirectRunStateWriter(input.pool),
   };
   // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration
   // enforces the tenant-scope invariant), so the fixture always provides it.
   return runWithSystemJobScope(() => runWithJobOrgId(input.context.orgId, () => runPlannerLoopWorkflow(resolved)));
+}
+
+/** Native-queue planner fixtures model the durable queue's idempotent insert:
+ * the PR-open seam creates the row and the later merge stage observes it. */
+function inMemoryNativeQueueEnqueuer(): NonNullable<RunPlannerLoopInput["nativeQueueEnqueuer"]> {
+  let queued = false;
+  return async () => {
+    const created = !queued;
+    queued = true;
+    return { created };
+  };
 }
 
 export {
@@ -175,10 +188,10 @@ export async function setup(projectConfig?: Record<string, unknown>) {
 }
 
 // direct-merge + open posture; merge probe decides merged/conflict/failed.
-export function directMergeConfig(): Record<string, unknown> {
+export function nativeQueueConfig(): Record<string, unknown> {
   return {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: { githubCredentialRef: "credential/github/org/org_planner_test/dev" },
   };
@@ -256,18 +269,15 @@ export function conflictMerge() {
   };
 }
 
-// A clean mergeability/branch-state probe — the freshness read for a land that proceeds
-// to the `MergeAuthority` (no host `merge()`). Used both for the `direct_merge` land
-// tests (paired with a `mergeAuthority` bundle) and the `not_configured` hand-off tests
-// (where the merge stage hands off and never reads mergeability).
+// A clean mergeability/branch-state probe. Native-queue first passes queue this work;
+// canonical coordinator-drive tests use the same clean state before proving a node.
 export function mergedMerge() {
   return { ...cleanFreshness() };
 }
 
 // inject an approving review probe so the post-CI review→merge tail completes without
 // hitting GitHub. The default test-pool config resolves mergeIntegration=not_configured →
-// the merge stage hands off (no land); the `direct_merge` configs pair this with a
-// `mergeAuthority` bundle so the land flows through the authority.
+// the merge stage hands off; native-queue fixtures queue work for a later canonical drive.
 export function approvingReview() {
   return {
     markReady: async () => {},
@@ -284,8 +294,8 @@ export function noopMerge() {
   return { ...cleanFreshness() };
 }
 
-// The authority-land oracle (`plannerAuthorityHost` / `plannerAuthorityBundle`) lives in
-// plannerRunAuthority.fixtures.ts; re-exported so existing import sites keep pulling it here.
+// The pre-canonical authority fixture (`plannerAuthorityHost` / `plannerAuthorityBundle`)
+// lives in plannerRunAuthority.fixtures.ts; re-exported for legacy planner inputs.
 export {
   PLANNER_AUTHORITY_HEAD_SHA,
   PLANNER_AUTHORITY_REPO,
@@ -295,6 +305,7 @@ export {
 // The RLS-lifecycle land bundle (real writer-backed finalizer) — re-exported so the
 // lifecycle integration test pulls it through this one fixtures barrel (dep-cap friendly).
 export { lifecycleAuthorityBundle } from "./rlsRunLifecycleAuthority.fixtures.js";
+export { driveLifecycleNativeQueueLand } from "./rlsRunLifecycleNativeQueueDrive.fixtures.js";
 
 // The forge calls of a passing native run: PR-list + create, then the `tanren/gate`
 // verdict-PUBLISH (a COMMIT STATUS, `POST /statuses/{sha}` → 201, NOT a check-run —

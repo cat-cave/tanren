@@ -2,7 +2,8 @@
 // integration. The first run-loop pass ENTERS the ready run into Tanren's native
 // merge queue (emits merge.queued, NEVER calls the merge API); the coordinator's
 // DRIVE pass (`queueDrive: true`) runs the SAME directMerge path, labelled
-// `native_queue`. `direct_merge` is proven UNCHANGED (it still merges immediately).
+// `native_queue`. It is the only automatic merge mode: its first pass queues work;
+// only the coordinator drive may reach the authority land.
 
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -10,7 +11,6 @@ import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun, type NativeQueueEnqueuer } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
-  AUTHORITY_HEAD_SHA,
   ReviewMergePool,
   authorityBundle,
   authorityHost,
@@ -90,7 +90,7 @@ describe("P2d native_queue merge stage", () => {
     expect(events.events.some((e) => e.eventType === "merge.queued")).toBe(false);
   });
 
-  it("DRIVE pass (queueDrive) runs the real authority land, labelled native_queue", async () => {
+  it("DRIVE pass without a persisted node/proof blocks before the host land", async () => {
     const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
@@ -110,26 +110,13 @@ describe("P2d native_queue merge stage", () => {
       queueDrive: true,
     });
 
-    // The drive pass LANDS — the same directMerge → authority path — and labels native_queue.
-    expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
-    const completed = events.events.find((e) => e.eventType === "merge.completed");
-    expect(completed?.payload).toMatchObject({ integration: "native_queue", mergeSha: AUTHORITY_HEAD_SHA });
-    // AUDIT-EVIDENCE BASELINE: the terminal merge carries the governance policy
-    // version + the initiating SERVICE actor. The fixture's reviewPolicy is `human`,
-    // so a human APPROVER gated it — recorded as a generic human approving actor.
-    expect(completed?.payload).toMatchObject({
-      policyVersion: 1,
-      initiatingActor: { kind: "service", id: "tanren-engine" },
-      approvingActor: { kind: "human" },
-    });
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
   });
 
-  it("records NO approving actor on the AUTONOMOUS tier (reviewPolicy auto)", async () => {
-    // The autonomous tier has no human verdict — the audit trail records that honestly
-    // (no approving actor), distinct from the human tier above which records one.
-    const pool = new ReviewMergePool("direct_merge", "open", "auto");
+  it("autonomous review still cannot bypass the canonical node/proof requirement", async () => {
+    const pool = new ReviewMergePool("native_queue", "open", "auto");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const host = authorityHost();
@@ -143,23 +130,18 @@ describe("P2d native_queue merge stage", () => {
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
       runId: "run_1",
+      queueDrive: true,
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
-    expect(result.outcome).toBe("merged");
-    const completed = events.events.find((e) => e.eventType === "merge.completed");
-    expect(completed?.payload).toMatchObject({
-      policyVersion: 1,
-      initiatingActor: { kind: "service", id: "tanren-engine" },
-    });
-    // No human review gated this merge ⇒ no approving actor (an honest empty state).
-    const completedPayload = completed!.payload as Record<string, unknown>;
-    expect(completedPayload["approvingActor"]).toBeUndefined();
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
   });
 
-  it("direct_merge is UNCHANGED — it lands immediately (no queue)", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("native_queue with an enqueuer stays in the queue until a coordinator drive", async () => {
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const host = authorityHost();
@@ -176,15 +158,12 @@ describe("P2d native_queue merge stage", () => {
       runId: "run_1",
       mergeProbe: probe,
       mergeAuthority: authorityBundle(host, landed, { events }),
-      // Even with an enqueuer present, direct_merge ignores it and lands now.
       enqueueNativeQueue: enqueue,
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
-    // Never queued under direct_merge.
-    expect(enqueue.calls).toEqual([]);
-    const completed = events.events.find((e) => e.eventType === "merge.completed");
-    expect(completed?.payload).toMatchObject({ integration: "direct_merge" });
+    expect(result.outcome).toBe("queued");
+    expect(landed).toEqual([]);
+    expect(enqueue.calls).toEqual([{ runId: "run_1", specId: "spec_1", prNumber: 7 }]);
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
   });
 });
