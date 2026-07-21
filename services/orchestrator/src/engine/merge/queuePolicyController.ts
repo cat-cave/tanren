@@ -5,6 +5,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
 import { QueueCommandV1Schema, QueuePolicyV1Schema, matchesQueueMatcher, type QueueCommandV1 } from "./queuePolicy.js";
+import { activeQueueWindows } from "./queuePolicyWindows.js";
 
 type ScopedClient = pg.PoolClient;
 type HoldReason =
@@ -184,7 +185,7 @@ export class QueuePolicyController {
     );
     const held = new Set<string>();
     for (const row of queued.rows) {
-      const decision = await this.evaluateQueuedRow(client, input.orgId, row, true);
+      const decision = await this.evaluateQueuedRow(client, input.orgId, row, "admission");
       if (decision.kind === "hold") {
         const updated = await client.query(
           "UPDATE merge_queue SET status = 'held_policy', policy_hold_reason = $2 WHERE org_id = $3 AND queue_id = $1 AND status = 'queued'",
@@ -210,7 +211,7 @@ export class QueuePolicyController {
     );
     const row = result.rows[0];
     if (row === undefined) return false;
-    const decision = await this.evaluateQueuedRow(client, input.orgId, row, true);
+    const decision = await this.evaluateQueuedRow(client, input.orgId, row, "claim");
     if (decision.kind === "admit") return true;
     const held = await client.query(
       `UPDATE merge_queue SET status = 'held_policy', policy_hold_reason = $5, claimed_at = NULL, lease_owner = NULL, lease_expires_at = NULL
@@ -226,7 +227,7 @@ export class QueuePolicyController {
     client: ScopedClient,
     orgId: string,
     row: QueueRow,
-    requireActive: boolean,
+    phase: "admission" | "claim",
   ): Promise<QueuePolicyDecision> {
     const policySnapshot = policyIdFrom(row.policy_snapshot);
     if (
@@ -239,12 +240,14 @@ export class QueuePolicyController {
     }
     const policy = await this.policyById(client, orgId, policySnapshot);
     if (policy === undefined) return { kind: "hold", reason: "missing_policy" };
-    if (requireActive && !policy.active) return { kind: "hold", reason: "policy_revised" };
+    if (!policy.active) return { kind: "hold", reason: "policy_revised" };
     if (row.target_branch === null || row.target_branch.trim() === "")
       return { kind: "hold", reason: "malformed_policy" };
-    const decision = await this.evaluatePolicy(client, orgId, policy, row.project_id, row.target_branch);
+    const decision = await this.evaluatePolicy(client, orgId, policy, row.project_id, row.target_branch, phase);
     if (decision.kind === "hold") return decision;
-    if (row.partition_state !== "active") return { kind: "hold", reason: "partition_not_active" };
+    if (row.partition_state !== "active" && !(phase === "claim" && row.partition_state === "draining")) {
+      return { kind: "hold", reason: "partition_not_active" };
+    }
     return decision;
   }
 
@@ -254,12 +257,14 @@ export class QueuePolicyController {
     policy: PolicyRow,
     projectId: string,
     targetBranch: string,
+    phase: "admission" | "claim" = "admission",
   ): Promise<QueuePolicyDecision> {
     const parsed = QueuePolicyV1Schema.safeParse(policy.body);
     if (!parsed.success) return { kind: "hold", reason: "malformed_policy" };
-    const windows = await activeWindows(client, orgId, policy.id, projectId, targetBranch);
+    const windows = await activeQueueWindows(client, orgId, policy.id, projectId, targetBranch);
+    if (windows.malformed) return { kind: "hold", reason: "malformed_policy" };
     if (windows.blackout) return { kind: "hold", reason: "blackout" };
-    if (await isInterrupted(client, orgId, policy.id, projectId, targetBranch))
+    if (await isInterrupted(client, orgId, policy.id, projectId, targetBranch, phase))
       return { kind: "hold", reason: "partition_not_active" };
     for (const route of parsed.data.routes) {
       if (route.targetBranch !== targetBranch) continue;
@@ -458,33 +463,13 @@ function isPriority(value: unknown): value is "P0" | "P1" | "P2" | "tbd" {
   return value === "P0" || value === "P1" || value === "P2" || value === "tbd";
 }
 
-async function activeWindows(
-  client: ScopedClient,
-  orgId: string,
-  policyId: string,
-  projectId: string,
-  targetBranch: string,
-) {
-  const result = await client.query<{ name: string; kind: "allow" | "blackout" }>(
-    `SELECT DISTINCT w.name, w.kind
-       FROM merge_queue_windows w
-       CROSS JOIN LATERAL jsonb_array_elements(w.intervals) interval
-      WHERE w.org_id = $1 AND w.policy_id = $2 AND w.project_id = $3 AND (w.target_branch IS NULL OR w.target_branch = $4)
-        AND (interval ->> 'startsAt')::timestamptz <= now() AND (interval ->> 'endsAt')::timestamptz > now()`,
-    [orgId, policyId, projectId, targetBranch],
-  );
-  return {
-    allow: new Set(result.rows.filter((row) => row.kind === "allow").map((row) => row.name)),
-    blackout: result.rows.some((row) => row.kind === "blackout"),
-  };
-}
-
 async function isInterrupted(
   client: ScopedClient,
   orgId: string,
   policyId: string,
   projectId: string,
   targetBranch: string,
+  phase: "admission" | "claim",
 ): Promise<boolean> {
   const result = await client.query<{ command: string }>(
     `SELECT command FROM merge_queue_commands
@@ -494,5 +479,5 @@ async function isInterrupted(
     [orgId, policyId, projectId, targetBranch],
   );
   const command = result.rows[0]?.command;
-  return command === "pause" || command === "freeze" || command === "drain";
+  return command === "pause" || command === "freeze" || (phase === "admission" && command === "drain");
 }

@@ -6,6 +6,11 @@ const NonBlank = z.string().trim().min(1);
 const Identifier = NonBlank.max(160);
 const Priority = z.enum(["P0", "P1", "P2", "tbd"]);
 const PartitionMode = z.enum(["serial", "scoped", "isolated"]);
+const IanaTimezone = NonBlank.max(80).refine(
+  (value) => value === "UTC" || Intl.supportedValuesOf("timeZone").includes(value),
+  "timezone must be an IANA timezone",
+);
+const LocalTime = z.string().refine(isLocalTime, "local time must use HH:MM");
 
 const MatcherLeafSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("branch"), equals: NonBlank.max(255) }).strict(),
@@ -76,30 +81,57 @@ export const QueuePolicyV1Schema = z
   .strict();
 export type QueuePolicyV1 = z.infer<typeof QueuePolicyV1Schema>;
 
+const AbsoluteWindowIntervalSchema = z
+  .object({ startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }) })
+  .strict();
+const LocalWindowIntervalSchema = z
+  .object({
+    localStart: LocalTime,
+    localEnd: LocalTime,
+    /** ISO weekdays (1 = Monday). Omit for every local day. */
+    daysOfWeek: z.array(z.number().int().min(1).max(7)).min(1).optional(),
+  })
+  .strict();
+const QueueWindowIntervalSchema = z.union([AbsoluteWindowIntervalSchema, LocalWindowIntervalSchema]);
+
 export const QueueWindowV1Schema = z
   .object({
     schemaVersion: z.literal("queue_window.v1"),
     name: Identifier,
     kind: z.enum(["allow", "blackout"]),
-    timezone: NonBlank.max(80),
+    timezone: IanaTimezone,
     scope: z.object({ projectId: Identifier, targetBranch: NonBlank.max(255).optional() }).strict(),
-    intervals: z
-      .array(
-        z
-          .object({ startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }) })
-          .strict(),
-      )
-      .min(1),
+    intervals: z.array(QueueWindowIntervalSchema).min(1),
   })
   .strict()
   .superRefine((window, context) => {
     for (const [index, interval] of window.intervals.entries()) {
-      if (interval.startsAt >= interval.endsAt) {
+      if ("startsAt" in interval && Date.parse(interval.startsAt) >= Date.parse(interval.endsAt)) {
         context.addIssue({ code: "custom", path: ["intervals", index], message: "window interval must advance" });
+      }
+      if ("localStart" in interval && interval.localStart === interval.localEnd) {
+        context.addIssue({ code: "custom", path: ["intervals", index], message: "local window interval must advance" });
       }
     }
   });
 export type QueueWindowV1 = z.infer<typeof QueueWindowV1Schema>;
+
+function isLocalTime(value: string): boolean {
+  const parts = value.split(":");
+  if (parts.length !== 2) return false;
+  const [hour, minute] = parts;
+  if (hour === undefined || minute === undefined || hour.length !== 2 || minute.length !== 2) return false;
+  const parsedHour = Number(hour);
+  const parsedMinute = Number(minute);
+  return (
+    Number.isInteger(parsedHour) &&
+    Number.isInteger(parsedMinute) &&
+    parsedHour >= 0 &&
+    parsedHour <= 23 &&
+    parsedMinute >= 0 &&
+    parsedMinute <= 59
+  );
+}
 
 const CommandScopeSchema = z
   .object({ projectId: Identifier, targetBranch: NonBlank.max(255).optional(), queueId: Identifier.optional() })

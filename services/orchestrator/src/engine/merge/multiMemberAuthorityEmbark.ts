@@ -13,6 +13,7 @@ import type {
   MultiMemberAuthorityMemberOutcome,
 } from "./multiMemberAuthorityTypes.js";
 import type { AutonomousRepairRouter } from "./autonomousRepairRouter.js";
+import { confirmQueuePolicyBeforeLand } from "./queuePolicyLandFence.js";
 
 const AUTHORITY_RETRY_AFTER_MS = 3000;
 
@@ -103,12 +104,26 @@ async function landAuthorizedGroup(
       return holdResult(input, "serialized");
     }
   }
+  // The preflight fence makes every evaluator fail closed, including a legacy
+  // implementation that neglects to call the callback below. The PG evaluator
+  // invokes the same callback again immediately before its host CAS, closing the
+  // setup-time gap between this point and `authority.land()`.
+  const confirmBeforeLand = () => confirmGroupPolicy(input.deps.queue, claimed);
+  if (!(await confirmBeforeLand())) {
+    await releaseClaims(input.deps, claimed);
+    return holdResult(input, "all_blocked");
+  }
   const landed = await input.deps.authorityEvaluator.landAuthorizedGroup!({
     projectId: input.projectId,
     entries: input.batch,
     binding: requiredBinding(input.binding),
     evaluation,
+    confirmBeforeLand,
   });
+  if (landed.kind === "policy_held") {
+    await releaseClaims(input.deps, claimed);
+    return holdResult(input, "all_blocked");
+  }
   if (landed.kind !== "landed") {
     await releaseClaims(input.deps, claimed);
     return holdResult(input, "merge_retry", AUTHORITY_RETRY_AFTER_MS);
@@ -118,6 +133,13 @@ async function landAuthorizedGroup(
   }
   await input.emitPassed(input.batch, input.integrationBranch);
   return { projectId: input.projectId, queueDepth: input.queueDepth, mergedSpecId: input.batch.at(-1)?.specId };
+}
+
+async function confirmGroupPolicy(queue: MultiMemberEmbarkDeps["queue"], entries: ReadonlyArray<MergeQueueEntry>) {
+  for (const entry of entries) {
+    if (!(await confirmQueuePolicyBeforeLand(queue, entry.queueId))) return false;
+  }
+  return true;
 }
 
 function requiredBinding(binding: BatchAuthorityBinding | undefined): BatchAuthorityBinding {

@@ -26,6 +26,7 @@ import { settleFromParkOutcome } from "./parkSettle.js";
 import { settleOwnedRecoveryOrPark, type OwnedQueueSettle } from "./recoveryOwnedQueueSettlement.js";
 import { MergeClaimActivityLease } from "./mergeClaimActivityLease.js";
 import { createLogger } from "../observability/logger.js";
+import { confirmQueuePolicyBeforeLand } from "./queuePolicyLandFence.js";
 
 const log = createLogger("batch-coordinator");
 
@@ -464,8 +465,7 @@ export async function driveClaimedMerge(
       // authorization and immediately before the code-host CAS.
       confirmClaimBeforeLand: async () => {
         if (!(await lease.confirmBeforeLand())) return false;
-        const confirmPolicy = deps.queue.confirmPolicyBeforeLand;
-        return confirmPolicy === undefined ? true : confirmPolicy.call(deps.queue, entry.queueId);
+        return confirmQueuePolicyBeforeLand(deps.queue, entry.queueId);
       },
     });
   } catch (error) {

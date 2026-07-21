@@ -242,7 +242,7 @@ export interface MergeQueueModel {
   renewClaim?(queueId: string): Promise<boolean>;
 
   /** Re-check queue policy through the current claim fence immediately before host CAS. */
-  confirmPolicyBeforeLand?(queueId: string): Promise<boolean>;
+  confirmPolicyBeforeLand(queueId: string): Promise<boolean>;
 
   /** Reconciles queue-policy eligibility before the mq-9 comparator reads a snapshot. */
   reconcilePolicy?(projectId: string): Promise<void>;

@@ -109,6 +109,64 @@ it("routes an authorized two-member batch through the synced atomic land-group f
   expect(queue.statusOf("run_group_b")).toBe("merged");
 });
 
+it("holds a multi-member group when a freeze arrives after proof and claims but before the group CAS", async () => {
+  const queue = new InMemoryMergeQueueModel();
+  const landGroups = new RecordingLandGroupReconciler();
+  const renewClaim = queue.renewClaim.bind(queue);
+  let renewals = 0;
+  queue.renewClaim = async (queueId) => {
+    const renewed = await renewClaim(queueId);
+    renewals += 1;
+    // The second group-boundary renewal is after both members were claimed and
+    // after the exact batch proof; the next operation must be the policy fence.
+    if (renewals === 4) queue.holdAtPolicyConfirmation("run_group_a");
+    return renewed;
+  };
+  const authority = allowExactBatchAuthority();
+  const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(2),
+    authorityEvaluator: { ...authority, landAuthorizedGroup: (input) => landGroups.land(input) },
+    queue,
+    runner: new ScriptedMergeRunner(),
+    checker: new InMemoryBatchChecker(),
+    events: new RecordingMergeQueueEventEmitter(),
+    batchEvents: new RecordingBatchMergeEventEmitter(),
+    escalator: new RecordingSpecEscalator(queue),
+  });
+  queue.seed({ runId: "run_group_a", specId: "spec_group_a", dependsOn: [], priority: "P1" });
+  queue.seed({ runId: "run_group_b", specId: "spec_group_b", dependsOn: [], priority: "P1" });
+
+  await expect(coordinator.coordinate("project_conf")).resolves.toMatchObject({ holdReason: "all_blocked" });
+  expect(landGroups.lands).toEqual([]);
+  expect(queue.statusOf("run_group_a")).toBe("held_policy");
+  expect(queue.statusOf("run_group_b")).toBe("queued");
+});
+
+it("holds a group instead of landing through a runtime queue model without the policy fence", async () => {
+  const queue = new InMemoryMergeQueueModel();
+  // Simulate a stale external adapter bypassing TypeScript's now-required method.
+  Reflect.set(queue, "confirmPolicyBeforeLand", undefined);
+  const landGroups = new RecordingLandGroupReconciler();
+  const authority = allowExactBatchAuthority();
+  const coordinator = new BatchMergeCoordinator({
+    scheduler: makeTestIntegrationGraphScheduler(2),
+    authorityEvaluator: { ...authority, landAuthorizedGroup: (input) => landGroups.land(input) },
+    queue,
+    runner: new ScriptedMergeRunner(),
+    checker: new InMemoryBatchChecker(),
+    events: new RecordingMergeQueueEventEmitter(),
+    batchEvents: new RecordingBatchMergeEventEmitter(),
+    escalator: new RecordingSpecEscalator(queue),
+  });
+  queue.seed({ runId: "run_missing_fence_a", specId: "spec_missing_fence_a", dependsOn: [], priority: "P1" });
+  queue.seed({ runId: "run_missing_fence_b", specId: "spec_missing_fence_b", dependsOn: [], priority: "P1" });
+
+  await expect(coordinator.coordinate("project_conf")).resolves.toMatchObject({ holdReason: "all_blocked" });
+  expect(landGroups.lands).toEqual([]);
+  expect(queue.statusOf("run_missing_fence_a")).toBe("queued");
+  expect(queue.statusOf("run_missing_fence_b")).toBe("queued");
+});
+
 it("EXERCISES the synced fake: jj-assembles and materializes an authorized two-member subset", async () => {
   const baseSha = "a".repeat(40);
   const memberA = "b".repeat(40);

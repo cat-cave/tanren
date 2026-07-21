@@ -388,8 +388,8 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
   // The final irreversible authority boundary. Native-queue callers compose the
   // durable owner/epoch renewal with QueuePolicyController.apply(claim), so a
   // freeze or blackout inserted after proof but before this point turns the row
-  // into held_policy and prevents the host CAS. Absent confirmation is allowed
-  // only for the direct path, which has no queue claim to prove.
+  // into held_policy and prevents the host CAS. The direct path has no queue
+  // claim, so it intentionally does not supply this callback.
   if (input.confirmBeforeAuthorityCas !== undefined && !(await input.confirmBeforeAuthorityCas())) {
     return { kind: "blocked", reasons: ["native queue claim or policy fence could not be confirmed before host CAS"] };
   }

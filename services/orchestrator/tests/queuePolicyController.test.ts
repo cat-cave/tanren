@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { MergeQueueModel } from "../src/engine/contracts/mergeCoordinator.js";
+import { QueueWindowV1Schema } from "../src/engine/merge/queuePolicy.js";
 import { QueuePolicyController } from "../src/engine/merge/queuePolicyController.js";
+import { confirmQueuePolicyBeforeLand } from "../src/engine/merge/queuePolicyLandFence.js";
+import { activeQueueWindows, isQueueWindowActiveAt } from "../src/engine/merge/queuePolicyWindows.js";
 
 const POLICY = {
   schemaVersion: "queue_policy.v1",
@@ -28,6 +32,16 @@ const QUEUE_ROW = {
   lease_epoch: 7,
   partition_state: "active",
 };
+
+function activeWindow(name = "business", kind: "allow" | "blackout" = "allow") {
+  return {
+    name,
+    kind,
+    timezone: "UTC",
+    target_branch: null,
+    intervals: [{ localStart: "00:00", localEnd: "23:59" }],
+  };
+}
 
 interface QueryCall {
   sql: string;
@@ -61,7 +75,7 @@ describe("QueuePolicyController final claim fence", () => {
   it("admits only an active policy route with its required live window", async () => {
     const db = client([
       { rows: [{ id: "policy_1", body: POLICY, active: true }] },
-      { rows: [{ name: "business", kind: "allow" }] },
+      { rows: [activeWindow()] },
       { rows: [] },
     ]);
     const controller = new QueuePolicyController({} as never);
@@ -79,7 +93,7 @@ describe("QueuePolicyController final claim fence", () => {
   it("holds admission on a live blackout and leaves an empty coordination pass non-terminal", async () => {
     const blackoutDb = client([
       { rows: [{ id: "policy_1", body: POLICY, active: true }] },
-      { rows: [{ name: "emergency", kind: "blackout" }] },
+      { rows: [activeWindow("emergency", "blackout")] },
     ]);
     const controller = new QueuePolicyController({} as never);
 
@@ -199,7 +213,7 @@ describe("QueuePolicyController final claim fence", () => {
     const db = client([
       { rows: [QUEUE_ROW] },
       { rows: [{ id: "policy_1", body: POLICY, active: true }] },
-      { rows: [{ name: "business", kind: "allow" }] },
+      { rows: [activeWindow()] },
       { rows: [{ command: "freeze" }] },
       { rowCount: 1 },
       { rows: [] },
@@ -222,6 +236,154 @@ describe("QueuePolicyController final claim fence", () => {
     expect(await controller.applyOnClient(db as never, claim())).toBe(false);
     const hold = db.calls.find((call) => call.sql.includes("SET status = 'held_policy'"));
     expect(hold?.params).toEqual(["org_1", "queue_1", "worker_1", 7, "malformed_policy"]);
+  });
+
+  it("coordinates an already-queued entry into held_policy when a freeze is current", async () => {
+    const db = client([
+      { rows: [QUEUE_ROW] },
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [activeWindow()] },
+      { rows: [{ command: "freeze" }] },
+      { rowCount: 1 },
+      { rows: [] },
+    ]);
+    const controller = new QueuePolicyController({} as never);
+
+    await expect(
+      controller.applyOnClient(db as never, { kind: "coordinate", orgId: "org_1", projectId: "project_1" }),
+    ).resolves.toEqual(new Set(["queue_1"]));
+    expect(db.calls.some((call) => call.sql.includes("status = 'held_policy'"))).toBe(true);
+  });
+
+  it("re-evaluates a held entry under the live policy before putting it back in the queue", async () => {
+    const db = client([
+      { rows: [] },
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [{ target_branch: "main" }] },
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [activeWindow()] },
+      { rows: [] },
+      { rowCount: 1 },
+      { rowCount: 1 },
+      { rows: [] },
+    ]);
+    const controller = new QueuePolicyController({} as never);
+
+    await expect(
+      controller.applyOnClient(db as never, {
+        kind: "command",
+        orgId: "org_1",
+        projectId: "project_1",
+        actorId: "actor_1",
+        command: {
+          schemaVersion: "queue_command.v1",
+          command: "requeue",
+          idempotencyKey: "requeue_live_policy",
+          scope: { projectId: "project_1", queueId: "queue_1" },
+        },
+      }),
+    ).resolves.toEqual({ state: "queued", affected: 1, reEvaluated: true });
+    expect(db.calls.some((call) => call.sql.includes("policy_snapshot = $4::jsonb"))).toBe(true);
+  });
+
+  it("keeps a targeted refresh held when its queue row has no valid target branch", async () => {
+    const db = client([
+      { rows: [] },
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [{ target_branch: null }] },
+      { rowCount: 1 },
+      { rows: [] },
+    ]);
+    const controller = new QueuePolicyController({} as never);
+
+    await expect(
+      controller.applyOnClient(db as never, {
+        kind: "command",
+        orgId: "org_1",
+        projectId: "project_1",
+        actorId: "actor_1",
+        command: {
+          schemaVersion: "queue_command.v1",
+          command: "refresh",
+          idempotencyKey: "refresh_missing_target",
+          scope: { projectId: "project_1", queueId: "queue_1" },
+        },
+      }),
+    ).resolves.toEqual({ state: "held", affected: 0, reason: "malformed_policy" });
+  });
+
+  it("fails closed when a runtime adapter omits or throws from the required policy land fence", async () => {
+    await expect(confirmQueuePolicyBeforeLand({} as MergeQueueModel, "queue_1")).resolves.toBe(false);
+    await expect(
+      confirmQueuePolicyBeforeLand(
+        {
+          confirmPolicyBeforeLand: async () => {
+            throw new Error("unavailable");
+          },
+        } as MergeQueueModel,
+        "queue_1",
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("drain blocks new admission but lets a claimed in-flight entry reach its final land fence", async () => {
+    const controller = new QueuePolicyController({} as never);
+    const admissionDb = client([
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [activeWindow()] },
+      { rows: [{ command: "drain" }] },
+    ]);
+    await expect(
+      controller.applyOnClient(admissionDb as never, {
+        kind: "admission",
+        orgId: "org_1",
+        projectId: "project_1",
+        targetBranch: "main",
+      }),
+    ).resolves.toEqual({ kind: "hold", reason: "partition_not_active" });
+
+    const claimDb = client([
+      { rows: [{ ...QUEUE_ROW, partition_state: "draining" }] },
+      { rows: [{ id: "policy_1", body: POLICY, active: true }] },
+      { rows: [activeWindow()] },
+      { rows: [{ command: "drain" }] },
+    ]);
+    await expect(controller.applyOnClient(claimDb as never, claim())).resolves.toBe(true);
+    expect(claimDb.calls.some((call) => call.sql.includes("SET status = 'held_policy'"))).toBe(false);
+  });
+
+  it("evaluates recurring local windows in their stored IANA timezone", () => {
+    const window = QueueWindowV1Schema.parse({
+      schemaVersion: "queue_window.v1",
+      name: "central-business",
+      kind: "allow",
+      timezone: "America/Chicago",
+      scope: { projectId: "project_1" },
+      intervals: [{ localStart: "09:00", localEnd: "10:00", daysOfWeek: [1] }],
+    });
+    // 15:30 UTC is 09:30 Monday in Chicago (CST), not 09:30 UTC.
+    expect(isQueueWindowActiveAt(window, new Date("2026-01-05T15:30:00.000Z"))).toBe(true);
+    expect(isQueueWindowActiveAt(window, new Date("2026-01-05T16:30:00.000Z"))).toBe(false);
+  });
+
+  it("fails closed on a malformed stored window and observes an active blackout", async () => {
+    const malformedDb = client([
+      {
+        rows: [{ name: "business", kind: "allow", timezone: "UTC", target_branch: null, intervals: [{ bad: true }] }],
+      },
+    ]);
+    await expect(activeQueueWindows(malformedDb as never, "org_1", "policy_1", "project_1", "main")).resolves.toEqual({
+      allow: new Set(),
+      blackout: false,
+      malformed: true,
+    });
+
+    const blackoutDb = client([{ rows: [activeWindow("incident", "blackout")] }]);
+    await expect(activeQueueWindows(blackoutDb as never, "org_1", "policy_1", "project_1", "main")).resolves.toEqual({
+      allow: new Set(),
+      blackout: true,
+      malformed: false,
+    });
   });
 
   it("returns a stored command result without a second queue mutation or event", async () => {

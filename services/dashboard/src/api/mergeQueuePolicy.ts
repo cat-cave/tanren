@@ -21,7 +21,10 @@ export interface QueueWindowView {
   readonly kind: "allow" | "blackout";
   readonly timezone: string;
   readonly scope: { readonly projectId: string; readonly targetBranch?: string };
-  readonly intervals: readonly { readonly startsAt: string; readonly endsAt: string }[];
+  readonly intervals: readonly (
+    | { readonly startsAt: string; readonly endsAt: string }
+    | { readonly localStart: string; readonly localEnd: string; readonly daysOfWeek?: readonly number[] }
+  )[];
 }
 
 export interface MergeQueueWindowsResponse {
