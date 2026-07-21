@@ -42,10 +42,17 @@ import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { batchFragmentEvidenceWiring, driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
-import { batchNodeGate, batchNodeResolveConfig, batchProofUnitGraph } from "./batchNodeGate.js";
+import {
+  batchNodeGate,
+  batchNodeResolveConfig,
+  batchProofUnitGraph,
+  buildBatchGateProofSealer,
+  type BatchProofSubstrate,
+} from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 import { activeQuarantineVersion, loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
+export { buildBatchProofSubstrate } from "./batchGateProofProduction.js";
 
 const log = createLogger("merge");
 
@@ -87,6 +94,8 @@ export interface PgBatchCheckerDeps {
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
   runStateWriter: RunStateWriter;
+  /** Shared with the land authority so both producer and consumer verify SP-3 identically. */
+  proofSubstrate: BatchProofSubstrate;
   /**
    * ds-6 pre_merge seam (injected so this file stays under the runtime-import cap): after a
    * passing jj-local integration, bind the composed design system's eager render matrix to
@@ -267,6 +276,7 @@ export class PgBatchChecker implements BatchChecker {
         {
           nodes: new PgIntegrationNodeModel(this.deps.pool),
           proofUnits: batchProofUnitGraph(this.deps.pool, eventStore),
+          gateBundles: buildBatchGateProofSealer(this.deps.pool, this.deps.proofSubstrate),
           eventStore,
           jjWorkspaceDeps: {
             facts: {

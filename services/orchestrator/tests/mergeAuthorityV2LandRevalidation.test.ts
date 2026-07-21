@@ -3,12 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BatchAuthorityBinding } from "../src/engine/contracts/batchMergeCoordinator.js";
 import type { CodeHost } from "../src/engine/contracts/codeHost.js";
-import {
-  memberKey,
-  proofReuseKey,
-  type IntegrationNode,
-  type ProofReuseKeyInput,
-} from "../src/engine/contracts/integrationNodes.js";
+import { memberKey, type IntegrationNode } from "../src/engine/contracts/integrationNodes.js";
 import type { AuthorizeLandInput, LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
 import type { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 import { MergeAuthorityV2Impl, type AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
@@ -17,7 +12,8 @@ import { batchArtifactDigest, batchProofRoot } from "../src/engine/merge/multiMe
 
 interface RevalidationState {
   node: IntegrationNode | undefined;
-  proof: { nodeId: string; verdict: string } | undefined;
+  gateProofValid: boolean;
+  quarantineVersion: string;
   readonly refs: Map<string, string>;
 }
 
@@ -30,14 +26,6 @@ function binding(): BatchAuthorityBinding {
     "main-before",
     members.map((member) => member.headSha),
   );
-  const keyInput: ProofReuseKeyInput = {
-    memberKey: memberSetHash,
-    gateConfigHash: "gate-v1",
-    policyVersion: "policy-v1",
-    runnerImage: "runner@sha256:exact",
-    appEnvHash: "env-v1",
-    quarantineVersion: "quarantine-v1",
-  };
   return {
     nodeId: "inode-mq16",
     baseBranch: "main",
@@ -46,8 +34,22 @@ function binding(): BatchAuthorityBinding {
     treeHash: "integration-tree",
     members,
     memberSetHash,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
+    gateConfigHash: "gate-v1",
+    policyVersion: "policy-v1",
+    proof: {
+      verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-v1",
+        policyVersion: "policy-v1",
+        runnerImage: "runner-mq16",
+        appEnvHash: "env-mq16",
+        quarantineVersion: "quarantine-mq16-ready",
+      },
+      gateProofBundleId: "gate_proof_bundle:inode-mq16",
+      proofBundleDigest: `sha256:${"a".repeat(64)}` as BatchAuthorityBinding["proof"]["proofBundleDigest"],
+      proofRoot: `sha256:${"b".repeat(64)}` as BatchAuthorityBinding["proof"]["proofRoot"],
+    },
   };
 }
 
@@ -89,7 +91,7 @@ function persistedNode(exact: BatchAuthorityBinding): IntegrationNode {
     purpose: "merge_batch",
     members: [...exact.members],
     memberKey: exact.memberSetHash,
-    gateConfigHash: exact.proof.keyInput.gateConfigHash,
+    gateConfigHash: exact.gateConfigHash,
     policyVersion: exact.policyVersion,
     affectedFingerprint: "",
     headSha: exact.headSha,
@@ -103,14 +105,14 @@ function buildAuthority() {
   const value = envelope(exact);
   const state: RevalidationState = {
     node: persistedNode(exact),
-    proof: { nodeId: exact.nodeId, verdict: "passed" },
+    gateProofValid: true,
+    quarantineVersion: exact.proof.keyInput.quarantineVersion,
     refs: new Map([
       ["main", exact.baseSha],
       ...exact.members.map((member) => [member.branch, member.headSha] as const),
     ]),
   };
   const findByMemberKey = vi.fn<PgIntegrationNodeModel["findByMemberKey"]>(async () => state.node);
-  const findProof = vi.fn<PgIntegrationNodeModel["findProof"]>(async () => state.proof);
   const landAuthorizedIntegration = vi.fn<CodeHost["landAuthorizedIntegration"]>(async () => {
     throw new Error("host CAS must not run for a stale authorization");
   });
@@ -125,8 +127,9 @@ function buildAuthority() {
     host,
     repo: value.target.repo,
     intoMain: value.target.intoMain,
-    nodes: { findByMemberKey, findProof } as unknown as PgIntegrationNodeModel,
-    readQuarantineVersion: async () => exact.proof.keyInput.quarantineVersion,
+    nodes: { findByMemberKey } as unknown as PgIntegrationNodeModel,
+    verifyGateProof: async () => state.gateProofValid,
+    readQuarantineVersion: async () => state.quarantineVersion,
     readDecisionSignals: async () => ({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" }),
   });
   const store = {
@@ -164,9 +167,15 @@ describe("MergeAuthorityV2 land-time exact binding revalidation", () => {
       },
     },
     {
-      name: "the passing proof was revoked or changed",
+      name: "the sealed V2 gate-proof bundle was deleted after authorization",
       makeStale: (state) => {
-        state.proof = state.proof === undefined ? undefined : { ...state.proof, verdict: "failed" };
+        state.gateProofValid = false;
+      },
+    },
+    {
+      name: "a member behavior was quarantined after the V2 bundle was sealed",
+      makeStale: (state) => {
+        state.quarantineVersion = "quarantine-mq16-drifted";
       },
     },
     {

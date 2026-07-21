@@ -7,7 +7,6 @@ import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { BehaviorRevisionId } from "../src/engine/contracts/behaviorRevision.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
-import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
 import { PgEventStore, type AppendEventInput, type EventStore } from "../src/engine/eventStore.js";
 import { driveBatchThroughNode } from "../src/engine/merge/batchIntegrationNodeDrive.js";
@@ -16,6 +15,7 @@ import { BehaviorCoverageEdgesStore } from "../src/engine/repositories/behaviorC
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createBehaviorCoverageRoutes } from "../src/routes/behaviorCoverage/index.js";
+import { productionV2BatchDriveDeps } from "./helpers/behaviorCoverageProductionBatchDrive.js";
 
 // cspell:ignore locktype plpgsql xact
 
@@ -272,6 +272,7 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
       memberHeadShas: { spec_rv4_batch: batchMember },
     };
     const eventStore = scopedPgEvents(appPool);
+    const v2Deps = await productionV2BatchDriveDeps(appPool, integrated.localRef);
     const verdict = await driveBatchThroughNode(
       {
         orgId: ORG,
@@ -281,12 +282,12 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
         repoUrl: "https://example.test/rv4.git",
         runnerImage: "runner:v0",
         tailSpecId: "spec_rv4_batch",
-        members: [{ specId: "spec_rv4_batch", branch: "rv4-batch" }],
+        members: [{ specId: "spec_rv4_batch", runId: "run_rv4_batch", branch: "rv4-batch" }],
         policyVersion: "1",
         quarantineVersion: "1",
       },
       {
-        nodes: new PgIntegrationNodeModel(appPool),
+        ...v2Deps,
         eventStore,
         proofUnits: batchProofUnitGraph(appPool, eventStore),
         jjWorkspaceDeps: { ssh: diff } as never,
@@ -294,13 +295,6 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
           outcome: "integrated",
           value: await continuation({ target, workspacePath: "/workspace/rv4-batch" } as never, integrated),
         }),
-        resolveConfig: async () =>
-          ({
-            version: 1,
-            tiers: { fast: [{ name: "fast", run: "true" }], slow: [{ name: "slow", run: "true" }] },
-            when: { fast: ["pre_merge"], slow: ["pre_merge"] },
-          }) as never,
-        gate: async () => ({ verdict: { result: "pass", integrationBranch: integrated.localRef }, passed: true }),
         materializeReadyNode: buildCoverageAuthorityReadyNodeMaterializer(appPool),
       },
     );

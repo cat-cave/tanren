@@ -2,6 +2,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
 import { PgLandGroupStore } from "../src/engine/merge/landGroupStore.js";
+import { PgGateProofBundleVerifier } from "../src/engine/merge/gateProofBundleVerifyPg.js";
 import { buildPgExactBatchAuthority } from "../src/engine/merge/multiMemberAuthorityPgAuthority.js";
 import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
@@ -13,17 +14,18 @@ type CanonicalNodeInput = Parameters<typeof materializeLifecycleCanonicalNode>[0
 
 /** Build and authorize the actual one-member V2/group authority over a persisted node. */
 export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput) {
-  const { binding, envelope } = await materializeLifecycleCanonicalNode(input);
+  const { binding, envelope, proofSubstrate } = await materializeLifecycleCanonicalNode(input);
   const taskId = await mergeTaskId(input.pool, input.orgId, input.entry.runId);
   // The production in-process coordinator gives its direct writer this proxy so
   // queue event appends acquire a short RLS scope for every database operation.
   const writer = new DirectRunStateWriter(orgScopingPool(input.pool));
+  const host = lifecycleAuthorityHost({ repo: input.repo, headBranch: input.headBranch, headSha: input.headSha });
   const authority = buildPgExactBatchAuthority({
     pool: input.pool,
     orgId: input.orgId,
     binding,
     envelope,
-    host: lifecycleAuthorityHost({ repo: input.repo, headBranch: input.headBranch, headSha: input.headSha }),
+    host,
     repo: input.repo,
     intoMain: "main",
     context: {
@@ -38,6 +40,7 @@ export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput
       auditEnvelope: { policyVersion: 1, initiatingActor: serviceAuditActor },
     },
     runStateWriter: writer,
+    gateProofs: new PgGateProofBundleVerifier(input.pool, proofSubstrate),
     landStore: new PgLandGroupStore({
       pool: input.pool,
       orgId: input.orgId,
@@ -76,9 +79,56 @@ export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput
     memberFindings: [],
   });
   if (evaluation.kind !== "authorized_subset") {
-    throw new Error(`canonical lifecycle node was not authorized: ${evaluation.kind}`);
+    throw new Error(
+      `canonical lifecycle node was not authorized: ${evaluation.kind} (${evaluation.reasonCodes.join(",")}) ${JSON.stringify(evaluation.authorization?.reasons)}`,
+    );
   }
-  return { authority, binding, evaluation, writer };
+  return { authority, binding, evaluation, writer, host };
+}
+
+/** Real-land regression control for a quarantine generation that changes after V2 sealing. */
+export async function landLifecycleQuarantineDrift(input: CanonicalNodeInput) {
+  const bundle = await buildLifecycleCanonicalAuthority(input);
+  await runWithOrgScope(input.pool, input.orgId, (client) =>
+    client.query(
+      `INSERT INTO quarantined_tests
+         (id, project_id, check_name, test_id, toggled_sha_count, observation_count, evidence)
+       VALUES ($1, $2, 'member_behavior', $3, 1, 1, $4::jsonb)`,
+      [
+        "quarantine-lifecycle-member-behavior",
+        input.entry.projectId,
+        `${input.entry.runId}:member-behavior`,
+        JSON.stringify({ memberRunId: input.entry.runId, reason: "land-time quarantine drift control" }),
+      ],
+    ),
+  );
+  return {
+    outcome: await bundle.authority.land(bundle.evaluation.authorization),
+    hostLandCalls: bundle.host.landCalls,
+  };
+}
+
+/** Execute both decisive V2 negative controls against the real Pg land authority. */
+export async function runLifecycleV2LandNegativeControls(input: CanonicalNodeInput) {
+  const quarantineDrift = await landLifecycleQuarantineDrift(input);
+  const deleted = await buildLifecycleCanonicalAuthority(input);
+  await runWithOrgScope(input.pool, input.orgId, async (client) => {
+    await client.query("DELETE FROM gate_proof_bundle_sections WHERE org_id = $1 AND gate_proof_bundle_id = $2", [
+      input.orgId,
+      deleted.binding.proof.gateProofBundleId,
+    ]);
+    await client.query("DELETE FROM gate_proof_bundles WHERE org_id = $1 AND id = $2", [
+      input.orgId,
+      deleted.binding.proof.gateProofBundleId,
+    ]);
+  });
+  return {
+    quarantineDrift,
+    deletedBundle: {
+      outcome: await deleted.authority.land(deleted.evaluation.authorization),
+      hostLandCalls: deleted.host.landCalls,
+    },
+  };
 }
 
 async function mergeTaskId(pool: Pool, orgId: string, runId: string): Promise<string> {

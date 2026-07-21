@@ -15,13 +15,14 @@ import {
   resolveLandTimeSignals,
   type GovernanceReviewGate,
 } from "./landSignals.js";
-import { resolveLandTimeBehaviorGate, type BehaviorLandGate } from "./behaviorLandGate.js";
-import { resolveDesignRenderGate, type DesignRenderGate } from "./designRenderLandGate.js";
+import type { BehaviorLandGate } from "./behaviorLandGate.js";
+import type { DesignRenderGate } from "./designRenderLandGate.js";
 import { reviewVerdictFrom } from "./mergeAuthorityInputs.js";
 import { evaluateReviewRules, type ReviewRuleEvaluation } from "../governance/reviewRules.js";
 import { resolveEffectivePolicyBody } from "../governance/effectivePolicySnapshotStore.js";
 import { batchArtifactDigest, batchProofRoot, type MemberFindingAttribution } from "./multiMemberAuthorityTypes.js";
 import { loadBatchDecisionEvidence, type PersistedBatchDecisionSignals } from "./multiMemberAuthorityEvidencePg.js";
+import type { GateProofBundleVerifier } from "./gateProofBundleTypes.js";
 
 export interface ProjectAuthorityRow {
   readonly org_id: string | null;
@@ -38,10 +39,6 @@ interface MemberSignals {
   readonly headSha: string;
   /** gv-12 — this member run's immutable review rules + durable, actor-bound approval evidence. */
   readonly reviewGate: GovernanceReviewGate;
-  /** rv-gate — this member run's runtime behavior-acceptance outcome (fail-closed when required). */
-  readonly behaviorGate: BehaviorLandGate;
-  /** ds-4 — this member run's design-render acceptance outcome (fail-closed when required). */
-  readonly designRenderGate: DesignRenderGate;
 }
 
 /**
@@ -125,6 +122,7 @@ export interface GatheredMultiMemberAuthorityState {
 
 export async function gatherMultiMemberAuthorityState(
   pool: pg.Pool,
+  gateProofs: GateProofBundleVerifier,
   input: {
     readonly projectId: string;
     readonly entries: ReadonlyArray<MergeQueueEntry>;
@@ -143,24 +141,20 @@ export async function gatherMultiMemberAuthorityState(
   );
   const memberSignals = await Promise.all(
     input.binding.members.map(async (member): Promise<MemberSignals> => {
-      const [findings, signals, reviewGate, behaviorGate, designRenderGate] = await Promise.all([
+      const [findings, signals, reviewGate] = await Promise.all([
         resolveLandTimeFindings(pool, orgId, member.runId),
         resolveLandTimeSignals(pool, orgId, member.runId),
         resolveLandTimeReviewGate(pool, orgId, member.runId, compiledPolicy),
-        resolveLandTimeBehaviorGate(pool, orgId, member.runId),
-        resolveDesignRenderGate(pool, orgId, member.runId),
       ]);
       return {
         attribution: { specId: member.specId, runId: member.runId, findings },
         reviewVerdict: signals.reviewVerdict,
         headSha: member.headSha,
         reviewGate,
-        behaviorGate,
-        designRenderGate,
       };
     }),
   );
-  const decisionEvidence = await loadBatchDecisionEvidence(pool, orgId, input.projectId, input.binding);
+  const decisionEvidence = await loadBatchDecisionEvidence(pool, gateProofs, orgId, input.projectId, input.binding);
   return {
     project,
     orgId,
@@ -246,20 +240,10 @@ function decisionFromDurableState(
   );
   return {
     subject: { kind: "integration_node", id: binding.nodeId },
-    // rv-gate (fix #2) + ds-4 + gv-12: any member with a required, non-passing behavior OR
-    // design-render outcome, OR whose dedicated review rules BLOCK, forces the batch gate verdict
-    // to `failed` so the whole group land fails closed — never lands a bad-behavior, a11y-failing,
-    // or under-reviewed member.
-    gateVerdict: gateVerdictWithReviewRules(
-      gateVerdictWithDesignRenderGates(
-        gateVerdictWithBehaviorGates(
-          persisted.gateVerdict,
-          signals.map((member) => member.behaviorGate),
-        ),
-        signals.map((member) => member.designRenderGate),
-      ),
-      reviewEvaluations,
-    ),
+    // Runtime-behavior and design-render evidence are decisive only inside the exact
+    // GateProofBundleV2 verified above; re-reading a parallel surface here would make
+    // proof and effect diverge. Review rules remain a distinct land-time authority.
+    gateVerdict: gateVerdictWithReviewRules(persisted.gateVerdict, reviewEvaluations),
     findings,
     auditPosture,
     reviewVerdict: reviewVerdictFrom(reviewVerdict),

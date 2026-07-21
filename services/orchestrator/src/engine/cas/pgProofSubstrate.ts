@@ -330,12 +330,14 @@ export class PgProofSubstrate implements ProofSubstrate {
            org_id, id, project_id, bundle_digest, proof_root, bytes_digest,
            integration_node_id, member_set_hash, prepared_head_sha, jj_tree_id,
            artifact_digest, expected_main_sha, signing_key_id, root_signature,
-           nonce, issued_at, expires_at
+           nonce, issued_at, expires_at, gate_config_hash, policy_version,
+           runner_image, app_env_hash, quarantine_version
          ) VALUES (
            $1, $2, $3, $4, $5, $6,
            $7, $8, $9, $10,
            $11, $12, $13, $14,
-           $15, $16, $17
+           $15, $16, $17, $18, $19,
+           $20, $21, $22
          )
          ON CONFLICT (org_id, bundle_digest) DO NOTHING`,
         [
@@ -356,6 +358,11 @@ export class PgProofSubstrate implements ProofSubstrate {
           b.nonce,
           b.issuedAt,
           b.expiresAt,
+          b.gateConfigHash ?? null,
+          b.policyVersion ?? null,
+          b.runnerImage ?? null,
+          b.appEnvHash ?? null,
+          b.quarantineVersion ?? null,
         ],
       );
       for (const member of members) {

@@ -54,28 +54,6 @@ export class MultiMemberAuthorityInfrastructureFault extends Error {
   }
 }
 
-export function buildBatchGateProofEvidence(input: {
-  readonly nodeId: string;
-  readonly headSha: string;
-  readonly treeHash: string;
-  readonly memberSetHash: string;
-  readonly keyInput: ProofReuseKeyInput;
-  readonly passed: boolean;
-  readonly message?: string;
-}): BatchGateProofEvidenceV1 {
-  return BatchGateProofEvidenceV1.parse({
-    kind: "batch_gate.v1",
-    nodeId: input.nodeId,
-    headSha: input.headSha,
-    treeHash: input.treeHash,
-    memberSetHash: input.memberSetHash,
-    proofReuseKey: proofReuseKey(input.keyInput),
-    keyInput: input.keyInput,
-    verdict: input.passed ? "passed" : "failed",
-    ...(input.message === undefined ? {} : { message: input.message }),
-  });
-}
-
 /** Reject partial/stale JSONB instead of treating a proof label as evidence. */
 export function exactBatchGateProofEvidence(
   raw: unknown,

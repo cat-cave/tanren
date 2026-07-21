@@ -13,6 +13,8 @@
 // is conformance-pinned separately.
 
 import { describe, expect, it, vi } from "vitest";
+import { parseDigest } from "../src/engine/contracts/cas.js";
+import type { GateProofBundleV2 } from "../src/engine/contracts/gateProof.js";
 import { type IntegrationNode, memberKey } from "../src/engine/contracts/integrationNodes.js";
 import type { BatchCheckVerdict } from "../src/engine/contracts/batchMergeCoordinator.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
@@ -29,17 +31,50 @@ import {
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
 import { IntegrationProofUnitGraph } from "../src/engine/dag/integrationProofUnits.js";
 import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
-import { BatchGateProofEvidenceV1 } from "../src/engine/merge/multiMemberAuthorityEvidence.js";
 import { createInMemoryIntegrationProofUnitStore } from "./conformance/fakes/inMemoryMergeQueue.js";
+import type { GateProofBundleInput, GateProofBundleSealer } from "../src/engine/merge/gateProofBundleTypes.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
+
+class FakeGateBundles implements GateProofBundleSealer {
+  private readonly bundles = new Map<string, GateProofBundleV2>();
+
+  async seal(input: GateProofBundleInput): Promise<GateProofBundleV2> {
+    const bundle: GateProofBundleV2 = {
+      gateProofBundleId: `gate_proof_bundle:${input.nodeId}`,
+      proofBundleDigest: parseDigest(`sha256:${"d".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"e".repeat(64)}`),
+      integrationNodeId: input.nodeId,
+      proofKeyInput: input.proofKeyInput,
+      plan: {
+        required: { native_ci: true, runtime_behavior: false, design_render: false, artifact_provenance: false },
+      },
+      sections: [
+        {
+          kind: "native_ci",
+          required: true,
+          verdict: input.nativeCi.verdict,
+          unitDigests: [parseDigest(`sha256:${"f".repeat(64)}`)],
+        },
+      ],
+      gateVerdict: input.nativeCi.verdict,
+    };
+    this.bundles.set(input.nodeId, bundle);
+    return bundle;
+  }
+
+  async findExact(input: Omit<GateProofBundleInput, "nativeCi">): Promise<GateProofBundleV2 | undefined> {
+    return this.bundles.get(input.nodeId);
+  }
+}
 
 /** An in-memory node + proof store (the PgIntegrationNodeModel, behavior-equivalent). */
 class FakeNodeStore implements BatchNodeStore {
   readonly nodes = new Map<string, IntegrationNode>();
   readonly proofs = new Map<string, { nodeId: string; verdict: string; evidence?: unknown }>();
   readonly proofUnits = createInMemoryIntegrationProofUnitStore();
+  readonly gateBundles = new FakeGateBundles();
   // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
 
@@ -172,6 +207,7 @@ function deps(
   return {
     nodes: store,
     proofUnits: new IntegrationProofUnitGraph(store.proofUnits, events),
+    gateBundles: store.gateBundles,
     eventStore: events as never,
     jjWorkspaceDeps: { ssh: {} as never } as never,
     integrate: fakeIntegratePort(store, integratedBaseSha),
@@ -181,7 +217,19 @@ function deps(
         tiers: { fast: [{ name: "t", run: "x" }], slow: [{ name: "s", run: "y" }] },
         when: { fast: ["pre_merge"], slow: ["pre_merge"] },
       }) as never,
-    gate: gateSpy as never,
+    gate: async () => {
+      const result = await gateSpy();
+      return {
+        ...result,
+        nativeCi: {
+          gateConfigHash: "fake-config-hash",
+          tiers: ["fast", "slow"],
+          steps: [{ name: "t", tier: "fast", passed: result.passed }],
+          junit: { total: 1, failures: result.passed ? 0 : 1, skipped: 0 },
+          verdict: result.passed ? "passed" : "failed",
+        },
+      };
+    },
     materializeReadyNode: (input) => store.materializeReadyNode(input),
   };
 }
@@ -211,15 +259,9 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       ],
       proof: { verdict: "passed" },
     });
-    expect(authorityBinding.proof.proofReuseKey).toBe(proofReuseKey(authorityBinding.proof.keyInput));
-    expect(
-      BatchGateProofEvidenceV1.parse(store.proofs.get(authorityBinding.proof.proofReuseKey)?.evidence),
-    ).toMatchObject({
-      nodeId: authorityBinding.nodeId,
-      headSha: INTEGRATED_HEAD,
-      treeHash: "tree-deadbeef",
-      memberSetHash: authorityBinding.memberSetHash,
-      verdict: "passed",
+    expect(authorityBinding.proof).toMatchObject({
+      gateProofBundleId: `gate_proof_bundle:${authorityBinding.nodeId}`,
+      proofRoot: `sha256:${"e".repeat(64)}`,
     });
     expect(gate).toHaveBeenCalledTimes(1);
 
@@ -244,7 +286,7 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     expect(gate2).not.toHaveBeenCalled();
     // The production entrypoint's proof-unit graph narrates the skip.
     expect(events2.appended.some((e) => e.eventType === "integration.proof_unit.reused")).toBe(true);
-    expect(events2.appended.some((e) => e.eventType === "integration.proof.reused")).toBe(true);
+    expect(events2.appended.some((e) => e.eventType === "integration.proof.reused")).toBe(false);
   });
 
   it("DRIFT (a changed runnerImage) forces the gate to RUN — no stale reuse", async () => {
@@ -280,8 +322,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const first = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), failGate));
     expect(first.result).toBe("fail");
     expect(failGate).toHaveBeenCalledTimes(1);
-    const failedEvidence = BatchGateProofEvidenceV1.parse([...store.proofs.values()][0]?.evidence);
-    expect(failedEvidence).toMatchObject({ verdict: "failed", message: "boom", headSha: INTEGRATED_HEAD });
 
     // The SAME key now finds a FAILED proof → recompute (the gate RUNS again, never a
     // reuse). OBSERVABLE OUTCOME: the recompute's fresh PASS verdict flows back (a reuse

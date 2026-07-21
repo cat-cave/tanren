@@ -13,7 +13,7 @@
 // from `projects.config.maxBatchSize` (the config knob, the single source of truth).
 
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
-import { PgBatchChecker } from "./batchChecker.js";
+import { buildBatchProofSubstrate, PgBatchChecker } from "./batchChecker.js";
 // ds-6's design-delivery coordinator (pre_merge `bindDesignDelivery` seam below) is
 // re-exported off `batchCoordinator.js` so it rides an already-imported module; mq-9
 // replaced the old formBatch/`resolveMaxBatchSize` selection with
@@ -45,6 +45,8 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
   const recoverySettlement = requireRecoveryOwnedSettlementWriter(runStateWriter);
   const events = new PgMergeQueueEventEmitter(deps.pool, runStateWriter);
   const queueModel = new PgMergeQueueModel(deps.pool, events);
+  // One SP-3 substrate is passed to the effective gate and the sole land authority.
+  const proofSubstrate = buildBatchProofSubstrate(deps.pool, deps.secrets);
   return new BatchMergeCoordinator({
     queue: queueModel,
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
@@ -60,6 +62,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       runStateWriter,
+      proofSubstrate,
       // ds-6 pre_merge seam: bind the composed design system's eager render matrix to the
       // just-integrated node (injected so batchChecker stays under the runtime-import cap).
       bindDesignDelivery: (input) =>
@@ -70,6 +73,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       githubHttp: deps.githubHttp,
       secrets: deps.secrets,
       runStateWriter,
+      proofSubstrate,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     }),
     // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP); the queue

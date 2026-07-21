@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
 import type { BatchAuthorityBinding } from "../../src/engine/contracts/batchMergeCoordinator.js";
+import { parseDigest } from "../../src/engine/contracts/cas.js";
 import type { LandBindingEnvelope } from "../../src/engine/contracts/mergeAuthority.js";
 import { PgIntegrationNodeModel } from "../../src/engine/dag/integrationNodesPg.js";
 import { PgEventStore } from "../../src/engine/eventStore.js";
-import { buildBatchGateProofEvidence } from "../../src/engine/merge/multiMemberAuthorityEvidence.js";
+import { buildBatchGateProofEvidence } from "./legacyBatchGateEvidence.js";
 import { batchArtifactDigest, batchProofRoot } from "../../src/engine/merge/multiMemberAuthorityTypes.js";
 import { activeQuarantineVersion } from "../../src/engine/workflow/ciQuarantine.js";
 import { memberKey, proofReuseKey } from "./mq2BatchAuthority.js";
@@ -133,8 +134,15 @@ export async function seedMq2Tenant(input: {
     treeHash,
     members,
     memberSetHash: key,
+    gateConfigHash: keyInput.gateConfigHash,
     policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofKey, keyInput },
+    proof: {
+      verdict: "passed",
+      keyInput,
+      gateProofBundleId: `gate_proof_bundle:${nodeId}`,
+      proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),
+    },
   };
   const envelope: LandBindingEnvelope = {
     subject: { kind: "integration_node", id: nodeId },

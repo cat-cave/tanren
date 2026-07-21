@@ -15,12 +15,21 @@ import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
 export const LIFECYCLE_BASE_SHA = "b".repeat(40);
 export const LIFECYCLE_TREE_SHA = "c".repeat(40);
 
+export class LifecycleAuthorityHost extends InMemoryCodeHost {
+  public landCalls = 0;
+
+  public override async landAuthorizedIntegration(input: Parameters<InMemoryCodeHost["landAuthorizedIntegration"]>[0]) {
+    this.landCalls += 1;
+    return super.landAuthorizedIntegration(input);
+  }
+}
+
 export function lifecycleAuthorityHost(input: {
   repo: { owner: string; name: string };
   headBranch: string;
   headSha: string;
-}): InMemoryCodeHost {
-  const host = new InMemoryCodeHost();
+}): LifecycleAuthorityHost {
+  const host = new LifecycleAuthorityHost();
   host.seed(input.repo, "main", LIFECYCLE_BASE_SHA);
   void host.pushRef({ repo: input.repo, localRef: "feat", remoteBranch: input.headBranch, sha: input.headSha });
   return host;

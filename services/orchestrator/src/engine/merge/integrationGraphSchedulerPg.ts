@@ -3,7 +3,6 @@
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { memberKey } from "../contracts/integrationNodes.js";
 import type { CodeHost, CodeHostRepoRef } from "../contracts/codeHost.js";
 import type { MergeQueueEntry, MergeQueueSnapshot } from "../contracts/mergeCoordinator.js";
 import { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
@@ -98,8 +97,12 @@ export class PgIntegrationGraphSchedulerFacts implements IntegrationScheduleFact
         const confirmedHead = await host.fetchRef({ repo, remoteBranch: member.branch });
         if (confirmedHead !== member.headSha) return { kind: "stale", reason: "member_head_changed" };
       }
-      const reusable = await this.findExactProofNodes(project.org_id, snapshot.projectId, baseSha, members);
-      const resolved = members.map((member) => ({ ...member, reusableProofNode: reusable.has(member.runId) }));
+      // A legacy integration_proofs row cannot even influence scheduling: V2
+      // validation belongs to the effective gate, which either finds an exact
+      // sealed V2 bundle or runs the real native gate again. The scheduler never
+      // has the SP-3 verifier, so it must not speculate that any old projection
+      // is reusable.
+      const resolved = members.map((member) => ({ ...member, reusableProofNode: false }));
       // Persist only validated canonical semantic facts. The transaction locks every
       // source row before writing, so a stale queue snapshot rolls back without an
       // orphaned partition or a partial reclassification.
@@ -240,30 +243,6 @@ export class PgIntegrationGraphSchedulerFacts implements IntegrationScheduleFact
       });
     }
     return leases.sort((left, right) => left.partitionId.localeCompare(right.partitionId));
-  }
-
-  private async findExactProofNodes(
-    orgId: string,
-    projectId: string,
-    baseSha: string,
-    members: ReadonlyArray<ScheduleMemberFacts>,
-  ): Promise<Set<string>> {
-    const keyToRun = new Map(members.map((member) => [memberKey(baseSha, [member.headSha]), member.runId] as const));
-    return runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      const result = await client.query<{ member_key: string }>(
-        `SELECT n.member_key
-           FROM integration_nodes n
-          WHERE n.org_id = $1 AND n.project_id = $2 AND n.base_sha = $3 AND n.status = 'ready'
-            AND n.member_key = ANY($4::text[])
-            AND EXISTS (
-              SELECT 1 FROM integration_proofs p
-               WHERE p.org_id = n.org_id AND p.project_id = n.project_id AND p.node_id = n.node_id
-                 AND p.verdict = 'passed'
-            )`,
-        [orgId, projectId, baseSha, [...keyToRun.keys()]],
-      );
-      return new Set(result.rows.flatMap((row) => keyToRun.get(row.member_key) ?? []));
-    });
   }
 
   private async persistCanonicalPartitions(

@@ -1,6 +1,5 @@
-// PostgreSQL readers for MQ-2's existing proof/quarantine surfaces. These are
-// read-only: the native gate remains the sole integration-proof writer and the CI
-// insights engine remains the sole quarantine writer.
+// PostgreSQL readers for the sole decisive V2 gate-evidence surface. A legacy
+// `integration_proofs` row is intentionally never read by merge authority.
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -9,11 +8,9 @@ import type { BudgetScope, ConflictResolution, GateVerdict, MergeabilityState } 
 import { GitHubOutageError } from "../providers/githubRetry.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { activeQuarantineVersion, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
-import {
-  exactBatchGateProofEvidence,
-  MultiMemberAuthorityInfrastructureFault,
-} from "./multiMemberAuthorityEvidence.js";
+import type { GateProofBundleVerifier } from "./gateProofBundleTypes.js";
 import { budgetScopeFrom } from "./mergeAuthorityInputs.js";
+import { MultiMemberAuthorityInfrastructureFault } from "./multiMemberAuthorityEvidence.js";
 
 interface PersistedBatchRow {
   node_id: string;
@@ -25,9 +22,6 @@ interface PersistedBatchRow {
   member_key: string;
   gate_config_hash: string;
   policy_version: string;
-  proof_reuse_key: string | null;
-  proof_verdict: string | null;
-  proof_evidence: unknown;
 }
 
 export interface PersistedBatchDecisionSignals {
@@ -36,9 +30,10 @@ export interface PersistedBatchDecisionSignals {
   readonly conflicts: ConflictResolution;
 }
 
-/** Gather the proof-bound decision inputs that share one exact persisted node. */
+/** Gather the exact V2-proof-bound decision inputs for an integration node. */
 export async function loadBatchDecisionEvidence(
   pool: pg.Pool,
+  gateProofs: GateProofBundleVerifier,
   orgId: string,
   projectId: string,
   binding: BatchAuthorityBinding,
@@ -47,7 +42,7 @@ export async function loadBatchDecisionEvidence(
   readonly budget: BudgetScope;
 }> {
   const [persisted, rawBudget] = await Promise.all([
-    loadPersistedBatchDecisionSignals(pool, orgId, projectId, binding),
+    loadPersistedBatchDecisionSignals(pool, gateProofs, orgId, projectId, binding),
     new PgBudgetGate(pool).resolveBudget(projectId),
   ]);
   const budget = budgetScopeFrom({
@@ -58,43 +53,53 @@ export async function loadBatchDecisionEvidence(
   return { persisted, budget };
 }
 
-/** Read the exact node/proof facts that replace hard-coded clean authority inputs. */
+/**
+ * A node is clean/resolved only after its sealed V2 proof validates at the exact
+ * head/tree/member/config/policy coordinate. Absence, malformed fields, and a
+ * verifier error are all unknown — never a pass.
+ */
 export async function loadPersistedBatchDecisionSignals(
   pool: pg.Pool,
+  gateProofs: GateProofBundleVerifier,
   orgId: string,
   projectId: string,
   binding: BatchAuthorityBinding,
 ): Promise<PersistedBatchDecisionSignals> {
-  const row = await runWithOrgScope(pool, orgId, async (client) => {
-    const result = await client.query<PersistedBatchRow>(
-      `SELECT n.node_id, n.base_sha, n.head_sha, n.tree_hash, n.status, n.members,
-              n.member_key, n.gate_config_hash, n.policy_version,
-              p.proof_reuse_key, p.verdict AS proof_verdict, p.evidence AS proof_evidence
-         FROM integration_nodes n
-         LEFT JOIN integration_proofs p
-           ON p.org_id = n.org_id AND p.project_id = n.project_id
-          AND p.node_id = n.node_id AND p.proof_reuse_key = $4
-        WHERE n.org_id = $1 AND n.project_id = $2 AND n.member_key = $3`,
-      [orgId, projectId, binding.memberSetHash, binding.proof.proofReuseKey],
-    );
-    return result.rows[0];
-  });
-  if (row === undefined || !exactNode(row, binding)) return unknownSignals();
-  if (row.proof_verdict === "passed") {
-    return exactBatchGateProofEvidence(row.proof_evidence, binding, "passed") === undefined
-      ? unknownSignals()
-      : { gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" };
+  try {
+    const row = await runWithOrgScope(pool, orgId, async (client) => {
+      const result = await client.query<PersistedBatchRow>(
+        `SELECT node_id, base_sha, head_sha, tree_hash, status, members,
+                member_key, gate_config_hash, policy_version
+           FROM integration_nodes
+          WHERE org_id = $1 AND project_id = $2 AND member_key = $3`,
+        [orgId, projectId, binding.memberSetHash],
+      );
+      return result.rows[0];
+    });
+    if (row === undefined || !exactNode(row, binding)) return unknownSignals();
+    const exactV2 = await gateProofs.verifyExact({
+      orgId,
+      projectId,
+      nodeId: binding.nodeId,
+      baseSha: binding.baseSha,
+      headSha: binding.headSha,
+      treeHash: binding.treeHash,
+      memberSetHash: binding.memberSetHash,
+      members: binding.members,
+      gateConfigHash: binding.gateConfigHash,
+      policyVersion: binding.policyVersion,
+      proofKeyInput: binding.proof.keyInput,
+      gateProofBundleId: binding.proof.gateProofBundleId,
+      proofBundleDigest: binding.proof.proofBundleDigest,
+      proofRoot: binding.proof.proofRoot,
+    });
+    return exactV2 ? { gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" } : unknownSignals();
+  } catch {
+    return unknownSignals();
   }
-  if (
-    row.proof_verdict === "failed" &&
-    exactBatchGateProofEvidence(row.proof_evidence, binding, "failed") !== undefined
-  ) {
-    return { gateVerdict: "failed", mergeability: "clean", conflicts: "resolved" };
-  }
-  return unknownSignals();
 }
 
-/** Exact current active-set identity used by proof reuse and authority freshness. */
+/** Exact current active-set identity used by proof reuse and pre-CAS freshness. */
 export async function loadCurrentQuarantineVersion(pool: pg.Pool, orgId: string, projectId: string): Promise<string> {
   return runWithOrgScope(pool, orgId, async (client) =>
     activeQuarantineVersion(await loadActiveQuarantine(client, projectId)),
@@ -125,7 +130,7 @@ function exactNode(row: PersistedBatchRow, binding: BatchAuthorityBinding): bool
     row.tree_hash === binding.treeHash &&
     row.status === "ready" &&
     row.member_key === binding.memberSetHash &&
-    row.gate_config_hash === binding.proof.keyInput.gateConfigHash &&
+    row.gate_config_hash === binding.gateConfigHash &&
     row.policy_version === binding.policyVersion &&
     sameMembers(row.members, binding.members)
   );

@@ -1,15 +1,14 @@
 // cspell:ignore mqeval mqgrp
 import { createHash } from "node:crypto";
 import type pg from "pg";
+import { parseDigest } from "../../src/engine/contracts/cas.js";
 import type { BatchAuthorityBinding } from "../../src/engine/contracts/batchMergeCoordinator.js";
 import { memberKey, proofReuseKey } from "../../src/engine/contracts/integrationNodes.js";
 import type { MergeQueueEntry } from "../../src/engine/contracts/mergeCoordinator.js";
 import type { MergeSignalClassificationV1 } from "../../src/engine/merge/authoritySignalClassification.js";
 import { authorityDerivedId } from "../../src/engine/merge/authoritySignalIdentity.js";
-import {
-  buildBatchGateProofEvidence,
-  MultiMemberAuthorityInfrastructureFault,
-} from "../../src/engine/merge/multiMemberAuthorityEvidence.js";
+import { MultiMemberAuthorityInfrastructureFault } from "../../src/engine/merge/multiMemberAuthorityEvidence.js";
+import { buildBatchGateProofEvidence } from "./legacyBatchGateEvidence.js";
 import { activeQuarantineVersion } from "../../src/engine/workflow/ciQuarantine.js";
 import type { BatchAuthorityEvaluator } from "../../src/engine/merge/multiMemberAuthorityTypes.js";
 import {
@@ -24,7 +23,6 @@ export { memberKey, proofReuseKey };
 export { PgIntegrationNodeModel } from "../../src/engine/dag/integrationNodesPg.js";
 export {
   loadBatchDecisionEvidence,
-  loadCurrentQuarantineVersion,
   loadPersistedBatchDecisionSignals,
 } from "../../src/engine/merge/multiMemberAuthorityEvidencePg.js";
 export { PgExactBatchBindingRevalidator } from "../../src/engine/merge/multiMemberAuthorityPgAuthority.js";
@@ -381,8 +379,15 @@ export function fakeBatchAuthorityBinding(entries: ReadonlyArray<MergeQueueEntry
     treeHash: `test-tree-${memberSetHash}`,
     members,
     memberSetHash,
+    gateConfigHash: keyInput.gateConfigHash,
     policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
+    proof: {
+      verdict: "passed",
+      keyInput,
+      gateProofBundleId: `gate-proof-bundle-${memberSetHash}`,
+      proofBundleDigest: parseDigest(`sha256:${createHash("sha256").update(`bundle:${memberSetHash}`).digest("hex")}`),
+      proofRoot: parseDigest(`sha256:${createHash("sha256").update(`root:${memberSetHash}`).digest("hex")}`),
+    },
   };
 }
 
@@ -408,7 +413,7 @@ export function allowExactBatchAuthority(): BatchAuthorityEvaluator {
         version: MULTI_MEMBER_AUTHORITY_VERSION,
         nodeId: binding.nodeId,
         memberSetHash: binding.memberSetHash,
-        proofReuseKey: binding.proof.proofReuseKey,
+        proofRoot: binding.proof.proofRoot,
         members: binding.members.map((member) => ({
           ...member,
           disposition: "admit" as const,

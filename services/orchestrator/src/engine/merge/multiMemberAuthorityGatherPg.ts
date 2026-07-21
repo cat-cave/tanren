@@ -6,12 +6,14 @@ import type pg from "pg";
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { ProofSubstrate } from "../contracts/cas.js";
 import type { BatchAuthorityEvaluator, MultiMemberAuthorityEvaluation } from "./multiMemberAuthorityTypes.js";
 import { appendMergeSignalClassification } from "./authoritySignalClassification.js";
 import { evaluateMultiMemberAuthority } from "./multiMemberAuthorityEvaluator.js";
 import { buildPgExactBatchAuthority } from "./multiMemberAuthorityPgAuthority.js";
 import { buildMultiMemberCodeHost, type MultiMemberAuthorityHostDeps } from "./multiMemberAuthorityPgHost.js";
 import { landAuthorizedGroupPg } from "./multiMemberLandGroupPg.js";
+import { PgGateProofBundleVerifier } from "./gateProofBundleVerifyPg.js";
 import {
   buildMultiMemberEnvelope,
   gatherMultiMemberAuthorityState,
@@ -21,6 +23,7 @@ import {
 export interface PgMultiMemberAuthorityEvaluatorDeps extends MultiMemberAuthorityHostDeps {
   readonly pool: pg.Pool;
   readonly runStateWriter: RunStateWriter;
+  readonly proofSubstrate: ProofSubstrate;
 }
 
 /** Production MQ-2 evaluator, mandatory in the BatchMergeCoordinator assembly. */
@@ -32,7 +35,8 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
     entries: ReadonlyArray<MergeQueueEntry>;
     binding: BatchAuthorityBinding;
   }): Promise<MultiMemberAuthorityEvaluation> {
-    const gathered = await gatherMultiMemberAuthorityState(this.deps.pool, input);
+    const gateProofs = new PgGateProofBundleVerifier(this.deps.pool, this.deps.proofSubstrate);
+    const gathered = await gatherMultiMemberAuthorityState(this.deps.pool, gateProofs, input);
     const { host, repo } = await buildMultiMemberCodeHost(this.deps, gathered.project, gathered.orgId);
     const envelope = buildMultiMemberEnvelope(input.binding, repo, gathered.project.default_branch);
     const context = await loadMultiMemberLandContext(this.deps.pool, gathered.orgId, input, gathered.policyVersion);
@@ -46,6 +50,7 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
       intoMain: gathered.project.default_branch,
       context,
       runStateWriter: this.deps.runStateWriter,
+      gateProofs,
     });
     const result = await evaluateMultiMemberAuthority({
       binding: input.binding,

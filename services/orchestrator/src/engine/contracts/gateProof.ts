@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import type { Digest } from "./cas.js";
+import type { ProofReuseKeyInput } from "./integrationNodes.js";
 import type { GateVerdict } from "./mergeAuthority.js";
 
 export type GateSectionKind = "native_ci" | "runtime_behavior" | "design_render" | "artifact_provenance";
@@ -122,8 +123,13 @@ export interface GateSectionVerdict {
 
 export interface GateProofBundleV2 {
   readonly gateProofBundleId: string;
+  /** SP-3 bundle identity; the projection stores no duplicate signature or bytes. */
   readonly proofBundleDigest: Digest;
+  /** The only proof coordinate a land envelope may carry. */
+  readonly proofRoot: Digest;
   readonly integrationNodeId: string;
+  /** The full proof-reuse identity carried by the sealed SP-3 coordinate. */
+  readonly proofKeyInput: ProofReuseKeyInput;
   readonly plan: RequiredSectionPlan;
   readonly sections: readonly GateSectionVerdict[];
   readonly gateVerdict: GateVerdict;

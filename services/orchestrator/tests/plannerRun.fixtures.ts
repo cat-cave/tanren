@@ -306,6 +306,11 @@ export {
 // lifecycle integration test pulls it through this one fixtures barrel (dep-cap friendly).
 export { lifecycleAuthorityBundle } from "./rlsRunLifecycleAuthority.fixtures.js";
 export { driveLifecycleNativeQueueLand } from "./rlsRunLifecycleNativeQueueDrive.fixtures.js";
+export {
+  buildLifecycleCanonicalAuthority,
+  landLifecycleQuarantineDrift,
+  runLifecycleV2LandNegativeControls,
+} from "./rlsRunLifecycleCanonicalAuthority.fixtures.js";
 
 // The forge calls of a passing native run: PR-list + create, then the `tanren/gate`
 // verdict-PUBLISH (a COMMIT STATUS, `POST /statuses/{sha}` → 201, NOT a check-run —

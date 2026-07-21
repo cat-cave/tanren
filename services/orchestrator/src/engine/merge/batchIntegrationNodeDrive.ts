@@ -1,18 +1,5 @@
-// BATCH INTEGRATION-NODE DRIVE (tanren-owns-the-engine.md §3), Wave-3 / Slice-3. The
-// unconditional path that makes `integration_nodes` DRIVE the batch gate/CI verdict:
-//
-//   (3b) JJ-LOCAL INTEGRATION — assemble the prospective merged state LOCALLY over A1's
-//        jj workspace (no host ref), materializing the node's headSha/treeHash. The gate
-//        runs on THIS workspace (the integrated head is a local jj bookmark).
-//
-//   (3a) PROOF-UNIT REUSE — UPSERT the integration node for the prospective merged state,
-//        resolve the live identity, and evaluate the native pre-merge gate through the
-//        immutable per-unit Merkle graph. A matching unit emits
-//        `integration.proof_unit.reused` and skips the gate closure.
-//
-// This module is the ONE place the batch verdict path consults the node model, so the
-// batch-checker stays a thin caller. CORRECTNESS: the proof-unit input includes the exact
-// integrated content and live gate identity, so reuse can never let unproven code merge.
+// JJ-local integration materializes the prospective head, evaluates the native gate via
+// immutable proof units, and is the sole batch-verdict consultation of integration nodes.
 
 import { createHash, randomUUID } from "node:crypto";
 import type { BatchAuthorityBinding, BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
@@ -21,7 +8,6 @@ import type { IntegrationNode, IntegrationNodeMember, ProofReuseKeyInput } from 
 import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { EventStore } from "../eventStore.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
-import type { ProofStorePort } from "../dag/integrationProofReuse.js";
 import {
   type JjIntegrationMember,
   type JjLocalIntegrationInput,
@@ -29,10 +15,10 @@ import {
   withJjLocalIntegration,
 } from "../dag/jjLocalIntegration.js";
 import { hashGateConfig, resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
-import { decideProofReuse, type LiveProofKeyComponents } from "../dag/integrationProofReuse.js";
+import type { LiveProofKeyComponents } from "../dag/integrationProofReuse.js";
 import type { IntegrationProofUnitGraph } from "../dag/integrationProofUnits.js";
 import type { CoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
-import { buildBatchGateProofEvidence } from "./multiMemberAuthorityEvidence.js";
+import type { NativeCiGateObservation, GateProofBundleSealer } from "./gateProofBundleTypes.js";
 export { batchFragmentEvidenceWiring } from "./batchFragmentEvidenceWiring.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { FragmentEvidenceResolution } from "../templates/fragments/resolveFragmentEvidenceForBatch.js";
@@ -74,7 +60,14 @@ export type ResolveBatchGateConfig = (live: LiveJjWorkspace) => Promise<CiConfig
  * ONLY on a RECOMPUTE. It resolves its own CI config internally (as the fresh-runner gate
  * does today). Returns the verdict + whether it passed (the recorded proof).
  */
-export type GateBatchWorkspace = (live: LiveJjWorkspace) => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
+export interface GateBatchResult {
+  readonly verdict: BatchCheckVerdict;
+  readonly passed: boolean;
+  /** Present only when the real native gate ran and observed its actual evidence. */
+  readonly nativeCi?: NativeCiGateObservation;
+}
+
+export type GateBatchWorkspace = (live: LiveJjWorkspace) => Promise<GateBatchResult>;
 
 /** The production F2 evidence lookup runs immediately before proof-graph evaluation. */
 export interface BatchFragmentEvidenceRequest {
@@ -111,7 +104,7 @@ export type JjIntegratePort = typeof withJjLocalIntegration;
  * The integration-node store the drive needs after the authority materializer owns the
  * ready write: read by memberKey plus proof-store ports (find/record).
  */
-export interface BatchNodeStore extends ProofStorePort {
+export interface BatchNodeStore {
   findByMemberKey(orgId: string, key: string): Promise<IntegrationNode | undefined>;
 }
 
@@ -119,6 +112,8 @@ export interface BatchNodeDriveDeps {
   nodes: BatchNodeStore;
   /** The durable per-unit proof graph; this is the live gate's reuse authority. */
   proofUnits: IntegrationProofUnitGraph;
+  /** The sole decisive V2 merge-evidence store. */
+  gateBundles: GateProofBundleSealer;
   eventStore: EventStore;
   /** The A1 live-jj-workspace deps (allocator/ssh/secrets/vcsProvider/minter/facts). */
   jjWorkspaceDeps: LiveJjWorkspaceDeps;
@@ -313,48 +308,28 @@ async function verdictForIntegrated(
   const proofUnit = evaluation.units.find((unit) => unit.kind === "native_ci_tier" && unit.subjectId === "pre_merge");
   if (proofUnit === undefined) throw new Error("batch gate proof-unit evaluation produced no pre_merge unit");
 
-  if (proofUnit.reused) {
-    // Keep the established whole-node reuse event for existing consumers. Its decision is
-    // deliberately made AFTER the graph evaluation, so it can narrate a hit but can never
-    // bypass the per-unit reuse authority above.
-    await decideProofReuse({
-      orgId: facts.orgId,
-      node,
-      components,
-      store: deps.nodes,
-      emit: async (payload) => {
-        await deps.eventStore.append({
-          projectId: facts.projectId,
-          specId: facts.tailSpecId,
-          orgId: facts.orgId,
-          eventType: "integration.proof.reused",
-          payload: { ...payload, verdict: "passed" },
-        });
-      },
+  // A reused proof-unit means work did not run, so it cannot itself provide native
+  // section evidence. It is useful only when the same exact sealed V2 bundle exists.
+  // Otherwise rerun the real producer; a legacy proof-unit can never authorize land.
+  let gateResult = gated ?? reusedGateResult(proofUnit.verdict, integrated.localRef);
+  let bundle =
+    gateResult.nativeCi === undefined
+      ? await deps.gateBundles.findExact(gateBundleInput(facts, node, integrated, keyInput))
+      : undefined;
+  if (gateResult.passed && gateResult.nativeCi === undefined && bundle === undefined) {
+    gateResult = await deps.gate(live);
+  }
+  if (gateResult.nativeCi !== undefined) {
+    bundle = await deps.gateBundles.seal({
+      ...gateBundleInput(facts, node, integrated, keyInput),
+      nativeCi: gateResult.nativeCi,
     });
   }
-
-  const gateResult = gated ?? reusedGateResult(proofUnit.verdict, integrated.localRef);
-  // Whole-node proofs remain the merge-authority replay record. The proof unit above is
-  // what controls whether work runs; this write binds its resulting verdict to the exact
-  // authority key for later land-time validation.
-  await deps.nodes.recordProof({
-    orgId: facts.orgId,
-    projectId: facts.projectId,
-    nodeId: node.nodeId,
-    keyInput,
-    verdict: gateResult.passed ? "passed" : "failed",
-    evidence: buildBatchGateProofEvidence({
-      nodeId: node.nodeId,
-      headSha: integrated.headSha,
-      treeHash: integrated.treeHash,
-      memberSetHash: node.memberKey,
-      keyInput,
-      passed: gateResult.passed,
-      ...(gateResult.verdict.result === "fail" ? { message: gateResult.verdict.message } : {}),
-    }),
-  });
-  return passWithBinding(gateResult.verdict, node, integrated, keyInput);
+  if (!gateResult.passed) return gateResult.verdict;
+  if (bundle === undefined || bundle.gateVerdict !== "passed") {
+    return { result: "fail", message: "native gate passed but its exact V2 gate proof bundle is incomplete" };
+  }
+  return passWithBinding(gateResult.verdict, node, integrated, bundle, keyInput);
 }
 
 function reusedGateResult(
@@ -415,9 +390,10 @@ function passWithBinding(
   verdict: BatchCheckVerdict,
   node: IntegrationNode,
   integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
-  keyInput: ProofReuseKeyInput | undefined,
+  bundle: Awaited<ReturnType<GateProofBundleSealer["seal"]>>,
+  keyInput: ProofReuseKeyInput,
 ): BatchCheckVerdict {
-  if (verdict.result !== "pass" || keyInput === undefined) return verdict;
+  if (verdict.result !== "pass" || bundle.gateVerdict !== "passed") return verdict;
   const authorityBinding: BatchAuthorityBinding = {
     nodeId: node.nodeId,
     baseBranch: node.baseBranch,
@@ -426,14 +402,38 @@ function passWithBinding(
     treeHash: integrated.treeHash,
     members: node.members,
     memberSetHash: node.memberKey,
+    gateConfigHash: node.gateConfigHash,
     policyVersion: node.policyVersion,
     proof: {
       verdict: "passed",
-      proofReuseKey: proofReuseKey(keyInput),
       keyInput,
+      gateProofBundleId: bundle.gateProofBundleId,
+      proofBundleDigest: bundle.proofBundleDigest,
+      proofRoot: bundle.proofRoot,
     },
   };
   return { ...verdict, authorityBinding };
+}
+
+function gateBundleInput(
+  facts: BatchNodeDriveFacts,
+  node: IntegrationNode,
+  integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
+  keyInput: ProofReuseKeyInput,
+) {
+  return {
+    orgId: facts.orgId,
+    projectId: facts.projectId,
+    nodeId: node.nodeId,
+    baseSha: integrated.baseSha,
+    headSha: integrated.headSha,
+    treeHash: integrated.treeHash,
+    memberSetHash: node.memberKey,
+    members: node.members,
+    gateConfigHash: keyInput.gateConfigHash,
+    policyVersion: keyInput.policyVersion,
+    proofKeyInput: keyInput,
+  };
 }
 
 /** Mirror the frozen six-component guard without inventing defaults. */

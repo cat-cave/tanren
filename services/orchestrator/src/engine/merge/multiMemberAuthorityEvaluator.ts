@@ -2,6 +2,7 @@
 // SP-4 `authorizeLand`; host land remains exclusively in the existing per-member path.
 
 import { decideFromFindings } from "../contracts/auditPosture.js";
+import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import { severityRank, type Finding } from "../contracts/findings.js";
 import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { LandAuthorization, LandBindingMember } from "../contracts/mergeAuthority.js";
@@ -64,7 +65,7 @@ function common(
     version: MULTI_MEMBER_AUTHORITY_VERSION,
     nodeId: input.binding.nodeId,
     memberSetHash: input.binding.memberSetHash,
-    proofReuseKey: input.binding.proof.proofReuseKey,
+    proofRoot: input.binding.proof.proofRoot,
     members,
     reasonCodes: stableUnique(reasonCodes),
   } as const;
@@ -351,9 +352,9 @@ function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[
   }
   if (
     binding.proof.verdict !== "passed" ||
-    binding.proof.keyInput.memberKey !== binding.memberSetHash ||
-    binding.proof.keyInput.policyVersion !== binding.policyVersion ||
-    proofReuseKey(binding.proof.keyInput) !== binding.proof.proofReuseKey
+    !nonBlankString(binding.gateConfigHash) ||
+    !nonBlankString(binding.proof.gateProofBundleId) ||
+    !hasExactProofIdentity(binding)
   ) {
     errors.push("passing_proof_binding_mismatch");
   }
@@ -390,6 +391,25 @@ function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[
   return stableUnique(errors);
 }
 
+/** The V2 seal must carry every component of the frozen proofReuseKey, never a subset. */
+function hasExactProofIdentity(binding: BatchAuthorityBinding): boolean {
+  const key = binding.proof.keyInput;
+  return (
+    key.memberKey === binding.memberSetHash &&
+    key.gateConfigHash === binding.gateConfigHash &&
+    key.policyVersion === binding.policyVersion &&
+    [
+      key.memberKey,
+      key.gateConfigHash,
+      key.policyVersion,
+      key.runnerImage,
+      key.appEnvHash,
+      key.quarantineVersion,
+    ].every((value) => nonBlankString(value)) &&
+    nonBlankString(proofReuseKey(key))
+  );
+}
+
 function sameEnvelopeMembers(
   envelopeMembers: ReadonlyArray<LandBindingMember>,
   bindingMembers: EvaluateMultiMemberAuthorityInput["binding"]["members"],
@@ -406,4 +426,8 @@ function sameEnvelopeMembers(
       member.disposition === "admit"
     );
   });
+}
+
+function nonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }

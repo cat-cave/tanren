@@ -35,7 +35,7 @@ interface EvaluationBase {
   readonly version: typeof MULTI_MEMBER_AUTHORITY_VERSION;
   readonly nodeId: string;
   readonly memberSetHash: string;
-  readonly proofReuseKey: string;
+  readonly proofRoot: Digest;
   readonly members: ReadonlyArray<MultiMemberAuthorityMemberOutcome>;
   readonly reasonCodes: ReadonlyArray<string>;
   /** Present only for the four outcomes represented by the frozen W0 vocabulary. */
@@ -159,16 +159,21 @@ export type LandGroupLandOutcome =
 
 /** Artifact identity for the exact materialized head/tree, never a member branch. */
 export function batchArtifactDigest(binding: BatchAuthorityBinding): Digest {
+  return batchArtifactDigestFor(binding.headSha, binding.treeHash);
+}
+
+/** Shared artifact coordinate for the V2 seal and the land envelope. */
+export function batchArtifactDigestFor(headSha: string, treeHash: string): Digest {
   const hex = createHash("sha256")
     .update("tanren:merge-batch-artifact:v1\0")
-    .update(binding.headSha)
+    .update(headSha)
     .update("\0")
-    .update(binding.treeHash)
+    .update(treeHash)
     .digest("hex");
   return parseDigest(`sha256:${hex}`);
 }
 
-/** Until SP-7 seals a richer bundle, the full six-component proof key is its root. */
+/** The merge envelope carries the exact SP-3 root sealed in GateProofBundleV2. */
 export function batchProofRoot(binding: BatchAuthorityBinding): Digest {
-  return parseDigest(`sha256:${binding.proof.proofReuseKey}`);
+  return binding.proof.proofRoot;
 }
