@@ -18,7 +18,11 @@ import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js"
 import { mountBehaviorSurfaces } from "./routes/behaviorCoverage/mount.js";
 import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
-import { createDesignStudioRoutes } from "./routes/designStudio/reads.js";
+import {
+  createDesignEcosystemRoutes,
+  createDesignPublicRoutes,
+  createDesignStudioRoutes,
+} from "./routes/designStudio/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experiments/mount.js";
@@ -353,6 +357,11 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // route self-defaults to DEFAULT_DESIGN_ARTIFACT_ROOT); an absent byte fails
   // LOUD (503), never fake.
   app.route("/v1/orgs", createDesignStudioRoutes({ pool: scopedPool }));
+  // ds-8 cross-org bridge: one admin command dispatcher plus a deliberately
+  // metadata-only public projection. Both services use the real system scope
+  // for narrow cross-org reads and never expose artifact/download coordinates.
+  app.route("/v1/orgs", createDesignEcosystemRoutes({ pool: scopedPool }));
+  app.route("/v1", createDesignPublicRoutes({ pool: scopedPool }));
   // Credentials mount at root but every endpoint is `/orgs/:orgId/credentials/*`
   // and reads/writes the org's `config` (RLS-enabled `organizations`), so it gets
   // the org-scoping pool too.

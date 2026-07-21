@@ -39,11 +39,12 @@ function visibleOrgId(ctx: ShellContext, projectId: string): string | undefined 
 
 async function loadView(c: Context, deps: ShellDeps, orgId: string, projectId: string): Promise<DesignStudioView> {
   const client = readClient(c, deps);
-  const [systems, binding, evidence, delivery] = await Promise.all([
+  const [systems, binding, evidence, delivery, ecosystem] = await Promise.all([
     client.getCatalog(orgId),
     client.getBinding(orgId, projectId),
     client.getEvidence(orgId, projectId),
     client.getDeliveryProof(orgId, projectId),
+    client.getEcosystem(orgId),
   ]);
   // The exports shown are the bound system's latest published release's artifact.
   // No binding / no published release → an empty (not BLOCKED) exports section.
@@ -53,7 +54,7 @@ async function loadView(c: Context, deps: ShellDeps, orgId: string, projectId: s
       : (systems ?? []).find((s) => s.designSystemId === binding.designSystemId);
   const artifactId = boundSystem?.latestPublishedRelease?.canonicalArtifactId;
   const exports = artifactId === undefined ? [] : await client.getExports(orgId, artifactId);
-  return { systems, binding, evidence, exports, delivery };
+  return { systems, binding, evidence, exports, delivery, ecosystem };
 }
 
 async function render(
@@ -66,7 +67,14 @@ async function render(
   const orgId = visibleOrgId(ctx, projectId);
   const view: DesignStudioView =
     orgId === undefined
-      ? { systems: undefined, binding: undefined, evidence: undefined, exports: undefined, delivery: undefined }
+      ? {
+          systems: undefined,
+          binding: undefined,
+          evidence: undefined,
+          exports: undefined,
+          delivery: undefined,
+          ecosystem: undefined,
+        }
       : await loadView(c, deps, orgId, projectId);
   return renderShell(
     c,

@@ -590,7 +590,7 @@ compose-up: up-dev
 compose-down: down-dev
 
 wait-for-stack:
-  ./scripts/wait-for-url.sh http://localhost:3100/healthz
+  orchestrator_port="${TANREN_ORCHESTRATOR_HOST_PORT:-$((3100 + ${TANREN_PORT_OFFSET:-0}))}"; ./scripts/wait-for-url.sh "http://localhost:${orchestrator_port}/healthz"
   dashboard_port="$(docker compose -f compose.dev.yml port dashboard 3000)"; \
     dashboard_port="${dashboard_port##*:}"; \
     ./scripts/wait-for-url.sh "http://localhost:${dashboard_port}/healthz"
@@ -601,11 +601,11 @@ wait-for-stack:
 # longer exists in runtime source. The COMMAND SUBSTRATE path (the orchestrator's
 # real SshCommandSubstrate) is proven separately by `smoke-ssh-integration`.
 smoke-connectivity:
-  corepack pnpm --filter @tanren/cli tanren doctor
-  ssh -i "$TANREN_RUNTIME_DIR/tanren_runner_key" -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile="$TANREN_RUNTIME_DIR/tanren_runner_known_hosts" tanren@localhost 'echo tanren-runner-ok'
+  TANREN_PUBLIC_BASE_URL="${TANREN_PUBLIC_BASE_URL:-http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT:-$((3100 + ${TANREN_PORT_OFFSET:-0}))}}" corepack pnpm --filter @tanren/cli tanren doctor
+  runner_port="${TANREN_RUNNER_SSH_HOST_PORT:-$((2222 + ${TANREN_PORT_OFFSET:-0}))}"; ssh -i "$TANREN_RUNTIME_DIR/tanren_runner_key" -p "$runner_port" -o StrictHostKeyChecking=no -o UserKnownHostsFile="$TANREN_RUNTIME_DIR/tanren_runner_known_hosts" tanren@localhost 'echo tanren-runner-ok'
 
 smoke-ssh-integration:
-  fingerprint="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_SSH_INTEGRATION=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT=2222 TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/ssh.integration.test.ts
+  runner_port="${TANREN_RUNNER_SSH_HOST_PORT:-$((2222 + ${TANREN_PORT_OFFSET:-0}))}"; fingerprint="$(ssh-keyscan -p "$runner_port" -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_SSH_INTEGRATION=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT="$runner_port" TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/ssh.integration.test.ts
 
 live-codex-writer:
   test -n "${TANREN_CODEX_AUTH_JSON_FILE:-}"
@@ -857,7 +857,7 @@ smoke-rls-merge-bundle-scope:
 # boundary crossing + the worker-written terminal state, not a green run. See
 # ROADMAP.md.
 smoke-plane-split-worker:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+  internal_mtls_port="${TANREN_INTERNAL_MTLS_HOST_PORT:-$((3110 + ${TANREN_PORT_OFFSET:-0}))}"; postgres_port="${TANREN_POSTGRES_HOST_PORT:-$((5432 + ${TANREN_PORT_OFFSET:-0}))}"; TANREN_CLAIM_ENDPOINT_SMOKE_URL="https://localhost:${internal_mtls_port}" TANREN_APP_DATABASE_URL="${TANREN_APP_DATABASE_URL:-postgres://tanren_app:tanren_app@localhost:${postgres_port}/tanren}" DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:${postgres_port}/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
 # Plane-split P3 (real PG, enforced RLS): the control-plane run-state WRITE
 # endpoints + the writers. Proves authn-reject, that append-event / record-cost /
@@ -898,7 +898,7 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
   # PRIVATE key via the mounted compose secret file (see up-dev); only the PUBLIC
   # authorized_keys line is env.
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat "$TANREN_RUNTIME_DIR/tanren_runner_key.pub")" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
-  TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+  internal_mtls_port="${TANREN_INTERNAL_MTLS_HOST_PORT:-$((3110 + ${TANREN_PORT_OFFSET:-0}))}"; postgres_port="${TANREN_POSTGRES_HOST_PORT:-$((5432 + ${TANREN_PORT_OFFSET:-0}))}"; TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 TANREN_CLAIM_ENDPOINT_SMOKE_URL="https://localhost:${internal_mtls_port}" TANREN_APP_DATABASE_URL="${TANREN_APP_DATABASE_URL:-postgres://tanren_app:tanren_app@localhost:${postgres_port}/tanren}" DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:${postgres_port}/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
 # IN-1: fresh ephemeral database proof for all lifecycle RLS/FK boundaries and
 # for migration-chain ordering. The RLS file proves tenant isolation under the

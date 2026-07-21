@@ -9,11 +9,13 @@ import {
   DesignBindingResponseSchema,
   DesignCatalogResponseSchema,
   DesignDeliveryResponseSchema,
+  DesignEcosystemResponseSchema,
   DesignEvidenceResponseSchema,
   DesignExportsResponseSchema,
   type BindingWriteResult,
   type DesignDeliveryProof,
   type DesignEvidenceVerdict,
+  type DesignEcosystemView,
   type DesignExportFile,
   type DesignSystemCatalogEntry,
   type ProjectDesignBinding,
@@ -78,6 +80,13 @@ export class DesignStudioClient extends OrchestratorHttpClient {
     );
     if (!parsed.success || parsed.data.orgId !== orgId || parsed.data.artifactId !== artifactId) return undefined;
     return parsed.data.files;
+  }
+
+  /** ds-8 destination-owned grant/import/quarantine lineage; undefined = BLOCKED. */
+  async getEcosystem(orgId: string): Promise<DesignEcosystemView | undefined> {
+    const parsed = DesignEcosystemResponseSchema.safeParse(await this.read200(`${orgBase(orgId)}/design-ecosystem`));
+    if (!parsed.success || parsed.data.orgId !== orgId) return undefined;
+    return parsed.data;
   }
 
   /** Bind a project to reuse a same-org design system (org-admin PUT). */
