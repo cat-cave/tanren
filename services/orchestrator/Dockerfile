@@ -23,7 +23,13 @@ FROM node:24-bookworm-slim
 # `/usr/bin/podman` shim) + ca-certificates still come from apt; curl fetches the binary.
 ARG PODMAN_REMOTE_VERSION=5.8.2
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends podman-docker ca-certificates curl \
+  && apt-get install -y --no-install-recommends \
+    podman-docker \
+    ca-certificates \
+    curl \
+    python3 \
+    make \
+    g++ \
   && update-ca-certificates \
   && curl -fsSL -o /tmp/podman-remote.tgz \
        "https://github.com/containers/podman/releases/download/v${PODMAN_REMOTE_VERSION}/podman-remote-static-linux_amd64.tar.gz" \
