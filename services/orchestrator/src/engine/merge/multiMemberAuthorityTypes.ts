@@ -143,12 +143,15 @@ export interface BatchAuthorityEvaluator {
     readonly entries: ReadonlyArray<MergeQueueEntry>;
     readonly binding: BatchAuthorityBinding;
     readonly evaluation: AuthorizedSubsetEvaluation;
+    /** Must be invoked immediately before the irreversible group host CAS. */
+    readonly confirmBeforeLand: () => Promise<boolean>;
   }): Promise<LandGroupLandOutcome>;
 }
 
 /** The only outcomes of the group land handoff after an exact authorization. */
 export type LandGroupLandOutcome =
   | { readonly kind: "landed"; readonly mainSha: string }
+  | { readonly kind: "policy_held" }
   | { readonly kind: "rederive" }
   | { readonly kind: "reconcile_pending" };
 

@@ -11,6 +11,7 @@ import {
   wave5And6AndResolutionClusterVocabularySensitivityRules,
 } from "./sensitivityRules.eventVocabularyW0.js";
 import { eventVocabularyW1aIntegrationAuthorSensitivityRules } from "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js";
+import { queuePolicySensitivityRules } from "./sensitivityRules.queuePolicy.js";
 
 // Single fan-in aggregation point for the mission-complete event-vocabulary
 // sensitivity rules. Re-exports the sibling wave rules (so `sensitivityRules.ts`
@@ -31,4 +32,5 @@ export const eventVocabularySensitivityRules: SensitivityRule[] = [
   ...eventVocabularyW0SensitivityRules,
   ...eventVocabularyW1aIntegrationAuthorSensitivityRules,
   ...eagerBeamSensitivityRules,
+  ...queuePolicySensitivityRules,
 ];

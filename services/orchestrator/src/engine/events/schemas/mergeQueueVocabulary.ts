@@ -12,6 +12,7 @@ import {
   MergeQueueInfraBlockedPayload,
   MergeReGateGateReworkRoutedPayload,
 } from "./mergeQueue.js";
+import { queuePolicyEventRegistry } from "./queuePolicyVocabulary.js";
 
 export const mergeQueueEventRegistry = {
   "merge.queue.advanced": MergeQueueAdvancedPayload,
@@ -26,4 +27,5 @@ export const mergeQueueEventRegistry = {
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
   "merge.beam.planned": MergeBeamPlannedPayload,
   "merge.beam.stale": MergeBeamStalePayload,
+  ...queuePolicyEventRegistry,
 } as const;

@@ -91,4 +91,7 @@ export const MERGE_QUEUE_SCREEN_CSS = `
   font-size: 13px;
   color: var(--fg-3);
 }
+.merge-queue-screen .mq-policy-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.merge-queue-screen .mq-policy-controls form { margin: 0; }
+.merge-queue-screen .mq-policy-controls button { font: inherit; font-size: 11px; }
 `;

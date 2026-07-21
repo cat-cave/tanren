@@ -74,7 +74,8 @@ export class IntegrationGraphScheduler {
   public constructor(private readonly deps: IntegrationGraphSchedulerDeps) {}
 
   public async schedule(snapshot: MergeQueueSnapshot): Promise<IntegrationScheduleResult> {
-    const maximum = await this.deps.resolveMaximumBatchSize(snapshot.projectId);
+    const configuredMaximum = await this.deps.resolveMaximumBatchSize(snapshot.projectId);
+    const maximum = policyMaximum(snapshot.entries, configuredMaximum);
     if (!Number.isInteger(maximum) || maximum < 1) {
       throw new Error(`integration scheduler maximum batch size must be a positive integer, got ${maximum}`);
     }
@@ -172,6 +173,14 @@ export class IntegrationGraphScheduler {
   }
 }
 
+/** Route snapshots may only reduce the governed project maximum, never expand it. */
+function policyMaximum(entries: ReadonlyArray<MergeQueueEntry>, configuredMaximum: number): number {
+  const routeLimits = entries
+    .map((entry) => entry.policyBatchLimit)
+    .filter((limit): limit is number => limit !== undefined);
+  return routeLimits.length === 0 ? configuredMaximum : Math.min(configuredMaximum, ...routeLimits);
+}
+
 /** Deterministic, conservative diff classification. Unknown input is intentionally global. */
 export function classifySemanticPartition(diff: unknown): CanonicalPartition {
   const paths = changedPaths(diff);
@@ -248,6 +257,7 @@ export function snapshotIdentity(snapshot: MergeQueueSnapshot): string {
         dependsOn: [...entry.dependsOn].sort(),
         partitionId: entry.partitionId ?? null,
         scopeFingerprint: entry.scopeFingerprint ?? null,
+        policyBatchLimit: entry.policyBatchLimit ?? null,
       })),
   };
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;

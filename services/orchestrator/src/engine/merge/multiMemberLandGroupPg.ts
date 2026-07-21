@@ -30,6 +30,7 @@ export async function landAuthorizedGroupPg(
     readonly entries: ReadonlyArray<MergeQueueEntry>;
     readonly binding: BatchAuthorityBinding;
     readonly evaluation: AuthorizedSubsetEvaluation;
+    readonly confirmBeforeLand: () => Promise<boolean>;
   },
 ): Promise<LandGroupLandOutcome> {
   const gathered = await gatherMultiMemberAuthorityState(deps.pool, input);
@@ -65,6 +66,10 @@ export async function landAuthorizedGroupPg(
     runStateWriter: deps.runStateWriter,
     landStore,
   });
+  // The group policy fence is deliberately after all PG context/setup and before
+  // the one irreversible host CAS. A post-proof freeze/blackout therefore leaves
+  // the claimed queue rows held and never reaches `authority.land()`.
+  if (!(await input.confirmBeforeLand())) return { kind: "policy_held" };
   try {
     const landed = await authority.land(input.evaluation.authorization);
     return landed.kind === "landed" ? { kind: "landed", mainSha: landed.mainSha } : { kind: "reconcile_pending" };

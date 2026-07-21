@@ -101,7 +101,8 @@ export class PgMergeQueuePartitionStore {
       specId: string;
       targetBranch?: string;
       scopeFingerprint?: string;
-      mode?: "scoped" | "isolated";
+      mode?: "serial" | "scoped" | "isolated";
+      capacity?: number;
     },
   ): Promise<PartitionRow> {
     const scopeKey = input.scopeFingerprint ?? `spec:${input.specId}`;
@@ -120,7 +121,7 @@ export class PgMergeQueuePartitionStore {
         input.targetBranch ?? DEFAULT_TARGET_BRANCH,
         scopeKey,
         input.mode ?? "scoped",
-        DEFAULT_CAPACITY,
+        input.capacity ?? DEFAULT_CAPACITY,
       ],
     );
     const partition = result.rows[0];

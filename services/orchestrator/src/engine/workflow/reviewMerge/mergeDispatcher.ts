@@ -133,6 +133,7 @@ export class MergeDispatcher implements LandOps {
       specId: context.specId,
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,
+      targetBranch: context.baseBranch,
     });
     if (created) {
       await eventStore.append({

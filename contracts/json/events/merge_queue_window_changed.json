@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "created",
+        "deleted"
+      ],
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "allow",
+        "blackout"
+      ],
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "windowId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "windowId",
+    "name",
+    "kind",
+    "action"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.queue.window_changed"
+}

@@ -41,7 +41,7 @@ interface QueueRow {
   dependsOn: string[];
   priority: SpecPriority;
   orderKey: number;
-  status: "queued" | "merging" | "merged" | "dequeued";
+  status: "queued" | "merging" | "merged" | "dequeued" | "held_policy";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
   /** Last ActivityWatchdog-proven progress (ms epoch). */
@@ -52,6 +52,7 @@ interface QueueRow {
 export class InMemoryMergeQueueModel implements MergeQueueModel {
   private readonly rows = new Map<string, QueueRow>();
   private readonly mergedSpecs = new Set<string>();
+  private readonly holdOnPolicyConfirmation = new Set<string>();
   private order = 0;
   /** Injectable heartbeat timestamp for deterministic progress assertions. */
   now: () => number = () => Date.now();
@@ -128,6 +129,11 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     for (const row of this.rows.values()) {
       if (row.runId === runId) row.claimedAt = undefined;
     }
+  }
+
+  /** Model a freeze/blackout arriving after proof but before the final land fence. */
+  holdAtPolicyConfirmation(runId: string): void {
+    this.holdOnPolicyConfirmation.add(runId);
   }
 
   /** Test helper: exact queue identity/status for the in-memory atomic settler. */
@@ -222,6 +228,16 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     if (row === undefined || row.status !== "merging") return false;
     row.claimedAt = this.now();
     return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async confirmPolicyBeforeLand(queueId: string): Promise<boolean> {
+    const row = this.rows.get(queueId);
+    if (row === undefined || row.status !== "merging") return false;
+    if (!this.holdOnPolicyConfirmation.has(row.runId)) return true;
+    row.status = "held_policy";
+    row.claimedAt = undefined;
+    return false;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -362,7 +378,9 @@ export class RecordingLandGroupReconciler {
     readonly entries: ReadonlyArray<MergeQueueEntry>;
     readonly binding: BatchAuthorityBinding;
     readonly evaluation: AuthorizedSubsetEvaluation;
+    readonly confirmBeforeLand: () => Promise<boolean>;
   }): Promise<LandGroupLandOutcome> {
+    if (!(await input.confirmBeforeLand())) return { kind: "policy_held" };
     this.lands.push({
       specIds: input.entries.map((entry) => entry.specId),
       groupId: input.evaluation.groupId,

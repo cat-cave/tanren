@@ -105,6 +105,8 @@ export interface MergeAuthorityGateInput {
   designRenderGate: DesignRenderGate;
   /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
   store: AuthorityLandStore;
+  /** Native-queue claim/policy fence invoked after proof and immediately before host CAS. */
+  confirmBeforeAuthorityCas?: () => Promise<boolean>;
 }
 
 /**
@@ -146,6 +148,8 @@ export async function runAuthorityLand(input: {
   context: LiveLandContext;
   integration: "direct_merge" | "native_queue";
   auditEnvelope: AuditEnvelope;
+  /** Existing claim confirmation, composed with the QueuePolicyController final recheck. */
+  confirmBeforeAuthorityCas?: () => Promise<boolean>;
 }): Promise<MergeAuthorityDisposition> {
   const { bundle, mergeability, context } = input;
   if (mergeability.headBranch === "") {
@@ -190,6 +194,9 @@ export async function runAuthorityLand(input: {
     behaviorGate: bundle.behaviorGate,
     designRenderGate: bundle.designRenderGate,
     store,
+    ...(input.confirmBeforeAuthorityCas === undefined
+      ? {}
+      : { confirmBeforeAuthorityCas: input.confirmBeforeAuthorityCas }),
   });
 }
 
@@ -376,6 +383,15 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
   }
   if (auth.decision === "needs_attention") {
     return { kind: "needs_attention", reasons: auth.reasons.map((r) => `${r.input}: ${r.detail}`) };
+  }
+
+  // The final irreversible authority boundary. Native-queue callers compose the
+  // durable owner/epoch renewal with QueuePolicyController.apply(claim), so a
+  // freeze or blackout inserted after proof but before this point turns the row
+  // into held_policy and prevents the host CAS. The direct path has no queue
+  // claim, so it intentionally does not supply this callback.
+  if (input.confirmBeforeAuthorityCas !== undefined && !(await input.confirmBeforeAuthorityCas())) {
+    return { kind: "blocked", reasons: ["native queue claim or policy fence could not be confirmed before host CAS"] };
   }
 
   // authorized: execute the transactional land. A CAS rejection (main raced ahead)

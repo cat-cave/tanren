@@ -12,4 +12,8 @@ export const missionCompleteSeverityOverrides: Partial<Record<EventName, Severit
   "governanceFragment.authoring.failed": "fail",
   "integration.proof.invalidated": "warn",
   "merge.beam.stale": "warn",
+  "merge.policy.revised": "info",
+  "merge.queue.command_applied": "info",
+  "merge.queue.window_changed": "info",
+  "merge.queue.admission_held": "warn",
 };

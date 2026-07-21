@@ -17,9 +17,8 @@ import { issueLoopsReference } from "./schemaIssueLoopReferences.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 import { stateEnumLists } from "./stateEnums.js";
 
-// Core identity + project/spec/run tables live here so sub-schemas can reference
-// them without importing schema.ts (avoids the no-cycle import loop). schema.ts
-// re-exports this module as the single `schema.*` namespace for consumers + kit.
+// Core identity + project/spec/run tables live here so sub-schemas can reference them without importing schema.ts
+// (avoids the no-cycle import loop). schema.ts re-exports this module as the single `schema.*` namespace for consumers + kit.
 
 export function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
   const literals = sql.raw(values.map((value) => `'${value.replaceAll("'", "''")}'`).join(","));
@@ -330,6 +329,12 @@ export const mergeQueue = pgTable(
     leaseEpoch: integer("lease_epoch").notNull().default(0),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     scopeFingerprint: text("scope_fingerprint"),
+    policySnapshot: jsonb("policy_snapshot"),
+    routeSnapshot: jsonb("route_snapshot"),
+    prioritySnapshot: jsonb("priority_snapshot"),
+    targetBranch: text("target_branch"),
+    priorityOverride: text("priority_override"),
+    policyHoldReason: text("policy_hold_reason"),
     status: text("status").notNull().default("queued"),
     /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed | superseded | needs_attention). */
     dequeueReason: text("dequeue_reason"),
@@ -378,13 +383,23 @@ export const mergeQueue = pgTable(
       foreignColumns: [mergeQueuePartitions.orgId, mergeQueuePartitions.id],
       name: "merge_queue_partition_fk",
     }),
-    enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued", "parked_grant"]),
+    enumCheck("merge_queue_status_check", table.status, [
+      "queued",
+      "merging",
+      "merged",
+      "dequeued",
+      "parked_grant",
+      "held_policy",
+    ]),
     check(
       "merge_queue_dequeue_reason_check",
       sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed','superseded','needs_attention')`,
     ),
-    // in-18: a park reason is only ever carried by an integration-grant-blocked park.
     check("merge_queue_park_reason_check", sql`${table.parkReason} IS NULL OR ${table.status} = 'parked_grant'`),
+    check(
+      "merge_queue_policy_hold_reason_check",
+      sql`${table.policyHoldReason} IS NULL OR ${table.status} = 'held_policy'`,
+    ),
     check(
       "merge_queue_lease_check",
       sql`(${table.leaseOwner} IS NULL AND ${table.leaseExpiresAt} IS NULL) OR (${table.leaseOwner} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
@@ -392,28 +407,13 @@ export const mergeQueue = pgTable(
     index("merge_queue_org_id").on(table.orgId),
     index("merge_queue_org_project").on(table.orgId, table.projectId),
     index("merge_queue_org_project_status").on(table.orgId, table.projectId, table.status),
-    // The idempotency boundary: a run may have at most ONE active (queued/merging/
-    // parked_grant) entry. in-18: `parked_grant` is a non-terminal park still in the
-    // queue, so it joins this set — a re-publish of a parked run must not duplicate.
+    uniqueIndex("merge_queue_org_queue_unique").on(table.orgId, table.queueId),
     uniqueIndex("merge_queue_active_run_unique")
       .on(table.runId)
-      .where(sql`status IN ('queued', 'merging', 'parked_grant')`),
+      .where(sql`status IN ('queued', 'merging', 'parked_grant', 'held_policy')`),
   ],
 );
 
-// Merge hold ceilings (audit RC-7: in-memory hold-ceiling durability gap). The
-// two runaway-guard counters that bound a flapping merge candidate — the per-entry
-// recoverable-drive retry count and the per-project consecutive-infra-hold count —
-// used to live in process-local `Map`s. A rolling deploy / crash-loop LOST them, so
-// a flapping candidate re-earned its full attempt budget every restart and the loud
-// `needs_attention` escalation never fired (dangerous given the prior ssh2 crash-loop
-// history). This table PERSISTS them so the ceiling survives a restart.
-//
-// Keyed by (org_id, scope_id, kind): `kind = 'recoverable_drive'` keys `scope_id` on
-// the merge_queue queue_id (the per-entry retry count); `kind = 'batch_infra'` keys
-// `scope_id` on the project_id (the per-project consecutive infra-hold count). A held
-// candidate is OFF the hot path, so the extra org-scoped round-trip to read/write the
-// counter is cheap. org_id is the tenant root (RLS deny-by-default).
 export const mergeQueueHolds = pgTable(
   "merge_queue_holds",
   {

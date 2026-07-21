@@ -76,6 +76,7 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
     entries: ReadonlyArray<MergeQueueEntry>;
     binding: BatchAuthorityBinding;
     evaluation: Extract<MultiMemberAuthorityEvaluation, { kind: "authorized_subset" }>;
+    confirmBeforeLand: () => Promise<boolean>;
   }) {
     return landAuthorizedGroupPg(this.deps, input);
   }

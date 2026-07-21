@@ -26,6 +26,7 @@ import { settleFromParkOutcome } from "./parkSettle.js";
 import { settleOwnedRecoveryOrPark, type OwnedQueueSettle } from "./recoveryOwnedQueueSettlement.js";
 import { MergeClaimActivityLease } from "./mergeClaimActivityLease.js";
 import { createLogger } from "../observability/logger.js";
+import { confirmQueuePolicyBeforeLand } from "./queuePolicyLandFence.js";
 
 const log = createLogger("batch-coordinator");
 
@@ -459,7 +460,13 @@ export async function driveClaimedMerge(
       projectId,
       onWatchdogProgress: () => lease.onWatchdogProgress(),
       claimSignal: lease.signal,
-      confirmClaimBeforeLand: () => lease.confirmBeforeLand(),
+      // This callback crosses the existing claim confirmation and mq-14's
+      // active-policy/window/freeze recheck. The authority invokes it after
+      // authorization and immediately before the code-host CAS.
+      confirmClaimBeforeLand: async () => {
+        if (!(await lease.confirmBeforeLand())) return false;
+        return confirmQueuePolicyBeforeLand(deps.queue, entry.queueId);
+      },
     });
   } catch (error) {
     const hold = await holdOnRetriableDriveThrow(deps, projectId, entry, error);
