@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capabilityNodes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "desiredStateHash": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "test",
+              "preview",
+              "production"
+            ],
+            "type": "string"
+          },
+          "executorKind": {
+            "enum": [
+              "provider_operation"
+            ],
+            "type": "string"
+          },
+          "generation": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "nodeId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "priority": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirementId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "enqueued",
+              "awaiting_grant",
+              "ready",
+              "needs_attention"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "waitReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "nodeId",
+          "requirementId",
+          "environment",
+          "executorKind",
+          "desiredStateHash",
+          "status",
+          "waitReason",
+          "priority",
+          "generation",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "const": "v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "orgId",
+    "projectId",
+    "capabilityNodes"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.integrations.read.v1.CapabilityNodesResponse"
+}

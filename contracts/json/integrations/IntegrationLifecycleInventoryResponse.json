@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindings": {
+      "additionalProperties": false,
+      "properties": {
+        "drifted": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "needsAttention": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ready": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "ready",
+        "drifted",
+        "needsAttention"
+      ],
+      "type": "object"
+    },
+    "capabilityNodes": {
+      "additionalProperties": false,
+      "properties": {
+        "awaitingGrant": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "needsAttention": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ready": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "awaitingGrant",
+        "ready",
+        "needsAttention"
+      ],
+      "type": "object"
+    },
+    "deliveries": {
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "degraded": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "needsAttention": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "completed",
+        "degraded",
+        "needsAttention"
+      ],
+      "type": "object"
+    },
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "requirements": {
+      "additionalProperties": false,
+      "properties": {
+        "needsAttention": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "needsAttention"
+      ],
+      "type": "object"
+    },
+    "version": {
+      "const": "v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "orgId",
+    "projectId",
+    "requirements",
+    "capabilityNodes",
+    "bindings",
+    "deliveries"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.integrations.read.v1.IntegrationLifecycleInventoryResponse"
+}

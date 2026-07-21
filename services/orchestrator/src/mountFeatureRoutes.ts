@@ -31,7 +31,7 @@ import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
 import { createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
-import { createIntegrationRoutes } from "./routes/integrations/index.js";
+import { createIntegrationRoutes, createIntegrationReadRoutes } from "./routes/integrations/index.js";
 import { createRequirementCompilerRoutes } from "./routes/requirementCompiler/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
@@ -347,6 +347,14 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       integrationFragmentAuthorer: forgeAnswerers.integrationFragmentAuthorer,
     }),
   );
+  // in-20: the integration HTTP READ surface (lifecycle inventory, requirements,
+  // capability nodes, bindings with the in-15 appEnvHash proof, delivery-DAG
+  // status) — GET-only, versioned under `/v1/orgs`, org+project-RLS guarded.
+  // Mirrors the rv-22 read surface (`createVerificationReadRoutes`) shape. The
+  // response shapes are pinned by BOTH the byte-exact `contracts/json/integrations/**`
+  // mirror (via `engine/schemaExport/catalog.ts`) and the semantic
+  // `contracts/integration-read-compat/v1.json` floor (mirroring rv-read-compat).
+  app.route("/v1/orgs", createIntegrationReadRoutes({ pool: scopedPool }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   // in-5: the requirement-compiler CALLABLE PRODUCER. The allocating Forge adapter
   // (the SAME infra every Forge surface uses) backs the actor — production wires it

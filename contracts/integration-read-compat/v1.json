@@ -1,0 +1,703 @@
+{
+  "tanren.integrations.read.v1.CapabilityNodesResponse": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "capabilityNodes": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "desiredStateHash": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "environment": {
+              "enum": ["test", "preview", "production"],
+              "type": "string"
+            },
+            "executorKind": {
+              "enum": ["provider_operation"],
+              "type": "string"
+            },
+            "generation": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "nodeId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "priority": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "requirementId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": ["pending", "enqueued", "awaiting_grant", "ready", "needs_attention"],
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "waitReason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "nodeId",
+            "requirementId",
+            "environment",
+            "executorKind",
+            "desiredStateHash",
+            "status",
+            "waitReason",
+            "priority",
+            "generation",
+            "createdAt",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "capabilityNodes"],
+    "type": "object"
+  },
+  "tanren.integrations.read.v1.DeliveryDagStatusResponse": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "deliveryRuns": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "authorityDecisionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "bindings": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "bindingGeneration": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "bindingId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": ["bindingId", "bindingGeneration"],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "completedAt": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "deliveryRunId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "failureClassification": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mergeSha": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "retryAfter": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stages": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "completedAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failureClassification": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "latestAttempt": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "latestStatus": {
+                    "enum": ["pending", "claimed", "running", "succeeded", "retry_scheduled", "failed"],
+                    "type": "string"
+                  },
+                  "ordinal": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "stage": {
+                    "enum": [
+                      "reconcile_binding",
+                      "mint_lease",
+                      "materialize_env",
+                      "attach_runtime",
+                      "deploy",
+                      "verify_deploy",
+                      "stimulate",
+                      "observe",
+                      "record_evidence"
+                    ],
+                    "type": "string"
+                  },
+                  "startedAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "stage",
+                  "ordinal",
+                  "latestAttempt",
+                  "latestStatus",
+                  "failureClassification",
+                  "startedAt",
+                  "completedAt"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "status": {
+              "enum": ["pending", "claimed", "running", "completed", "degraded", "needs_attention"],
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "deliveryRunId",
+            "authorityDecisionId",
+            "mergeSha",
+            "status",
+            "retryAfter",
+            "failureClassification",
+            "stages",
+            "bindings",
+            "createdAt",
+            "updatedAt",
+            "completedAt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "deliveryRuns"],
+    "type": "object"
+  },
+  "tanren.integrations.read.v1.IntegrationBindingsResponse": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "bindings": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "bindingId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "connectionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "currentGeneration": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "adapterVersion": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "appEnvHash": {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "authGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "generation": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "grantGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "grantId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "outputs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "classification": {
+                            "enum": ["secret", "non_secret"],
+                            "type": "string"
+                          },
+                          "logicalKey": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "scopes": {
+                            "items": {
+                              "enum": ["build", "test", "runtime", "dev"],
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": ["logicalKey", "classification", "required", "scopes"],
+                        "type": "object"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "ownership": {
+                      "enum": ["created", "adopted", "shared"],
+                      "type": "string"
+                    },
+                    "resource": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "externalResourceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "externalResourceName": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": ["externalResourceId", "externalResourceName"],
+                      "type": "object"
+                    },
+                    "teardownPolicy": {
+                      "enum": ["delete", "retain"],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "generation",
+                    "authGeneration",
+                    "grantId",
+                    "grantGeneration",
+                    "adapterVersion",
+                    "resource",
+                    "ownership",
+                    "teardownPolicy",
+                    "appEnvHash",
+                    "outputs"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "currentGenerationNumber": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "driftState": {
+              "enum": ["unknown", "in_sync", "drifted"],
+              "type": "string"
+            },
+            "environment": {
+              "enum": ["test", "preview", "production"],
+              "type": "string"
+            },
+            "providerKind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "requirementId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": ["pending", "ready", "drifted", "needs_attention", "retired"],
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bindingId",
+            "requirementId",
+            "environment",
+            "providerKind",
+            "connectionId",
+            "currentGenerationNumber",
+            "status",
+            "driftState",
+            "createdAt",
+            "updatedAt",
+            "currentGeneration"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "bindings"],
+    "type": "object"
+  },
+  "tanren.integrations.read.v1.IntegrationLifecycleInventoryResponse": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "bindings": {
+        "additionalProperties": false,
+        "properties": {
+          "drifted": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "needsAttention": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["total", "ready", "drifted", "needsAttention"],
+        "type": "object"
+      },
+      "capabilityNodes": {
+        "additionalProperties": false,
+        "properties": {
+          "awaitingGrant": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "needsAttention": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["total", "awaitingGrant", "ready", "needsAttention"],
+        "type": "object"
+      },
+      "deliveries": {
+        "additionalProperties": false,
+        "properties": {
+          "completed": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "degraded": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "needsAttention": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["total", "completed", "degraded", "needsAttention"],
+        "type": "object"
+      },
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "requirements": {
+        "additionalProperties": false,
+        "properties": {
+          "needsAttention": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["total", "needsAttention"],
+        "type": "object"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "requirements", "capabilityNodes", "bindings", "deliveries"],
+    "type": "object"
+  },
+  "tanren.integrations.read.v1.IntegrationRequirementsResponse": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "orgId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "requirements": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "criticality": {
+              "enum": ["merge_required", "release_required", "best_effort"],
+              "type": "string"
+            },
+            "direction": {
+              "enum": ["inbound", "outbound", "bidirectional"],
+              "type": "string"
+            },
+            "plane": {
+              "enum": ["control", "product"],
+              "type": "string"
+            },
+            "policyVersion": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "requirementId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sourceDigest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "sourceKind": {
+              "enum": ["behavior_revision", "design_contract"],
+              "type": "string"
+            },
+            "sourceRevisionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": ["active", "superseded", "needs_attention"],
+              "type": "string"
+            },
+            "supersededBy": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "requirementId",
+            "capability",
+            "plane",
+            "direction",
+            "sourceKind",
+            "sourceRevisionId",
+            "sourceDigest",
+            "policyVersion",
+            "criticality",
+            "status",
+            "supersededBy",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "version": {
+        "const": "v1",
+        "type": "string"
+      }
+    },
+    "required": ["version", "orgId", "projectId", "requirements"],
+    "type": "object"
+  }
+}

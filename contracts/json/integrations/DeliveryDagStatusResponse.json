@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "deliveryRuns": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "authorityDecisionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bindings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bindingGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "bindingId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "bindingId",
+                "bindingGeneration"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deliveryRunId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "failureClassification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeSha": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "retryAfter": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stages": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "failureClassification": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "latestAttempt": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "latestStatus": {
+                  "enum": [
+                    "pending",
+                    "claimed",
+                    "running",
+                    "succeeded",
+                    "retry_scheduled",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                "ordinal": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "stage": {
+                  "enum": [
+                    "reconcile_binding",
+                    "mint_lease",
+                    "materialize_env",
+                    "attach_runtime",
+                    "deploy",
+                    "verify_deploy",
+                    "stimulate",
+                    "observe",
+                    "record_evidence"
+                  ],
+                  "type": "string"
+                },
+                "startedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "stage",
+                "ordinal",
+                "latestAttempt",
+                "latestStatus",
+                "failureClassification",
+                "startedAt",
+                "completedAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "claimed",
+              "running",
+              "completed",
+              "degraded",
+              "needs_attention"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliveryRunId",
+          "authorityDecisionId",
+          "mergeSha",
+          "status",
+          "retryAfter",
+          "failureClassification",
+          "stages",
+          "bindings",
+          "createdAt",
+          "updatedAt",
+          "completedAt"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "const": "v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "orgId",
+    "projectId",
+    "deliveryRuns"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.integrations.read.v1.DeliveryDagStatusResponse"
+}

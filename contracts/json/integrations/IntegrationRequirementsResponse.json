@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "requirements": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "criticality": {
+            "enum": [
+              "merge_required",
+              "release_required",
+              "best_effort"
+            ],
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "inbound",
+              "outbound",
+              "bidirectional"
+            ],
+            "type": "string"
+          },
+          "plane": {
+            "enum": [
+              "control",
+              "product"
+            ],
+            "type": "string"
+          },
+          "policyVersion": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "requirementId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sourceDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "sourceKind": {
+            "enum": [
+              "behavior_revision",
+              "design_contract"
+            ],
+            "type": "string"
+          },
+          "sourceRevisionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "superseded",
+              "needs_attention"
+            ],
+            "type": "string"
+          },
+          "supersededBy": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "requirementId",
+          "capability",
+          "plane",
+          "direction",
+          "sourceKind",
+          "sourceRevisionId",
+          "sourceDigest",
+          "policyVersion",
+          "criticality",
+          "status",
+          "supersededBy",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "version": {
+      "const": "v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "orgId",
+    "projectId",
+    "requirements"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.integrations.read.v1.IntegrationRequirementsResponse"
+}

@@ -21,6 +21,7 @@ import { IntegrationsManifestV1Schema } from "../integrations/manifest/schema.js
 import { stateEnumCatalog } from "../state/index.js";
 import { answererSchemaCatalog } from "../answerers/schemas/catalog.js";
 import { InsightPayload } from "../insights/types.js";
+import { integrationReadContractCatalog } from "../../routes/integrations/contract.js";
 import {
   RunDetail,
   RunListItem,
@@ -107,6 +108,21 @@ const integrationEntries: ContractSchemaDescriptor[] = [
   ),
 ];
 
+// --- Integration HTTP read surface (in-20) -----------------------------------
+// The five versioned response contracts the GET-only `/v1/orgs/.../integrations/*`
+// surface publishes (lifecycle inventory, integration requirements, capability
+// nodes, bindings with the in-15 appEnvHash proof, delivery-DAG status). These
+// mirror `routes/runtimeVerification/contract.ts` (rv-22): each is a `.strict()`
+// Zod object with a frozen `version: z.literal("v1")` tag, and the source of
+// truth lives in `routes/integrations/contract.ts`. They are registered in the
+// unified `contracts/json/integrations/**` tree so a Rust port reads them
+// alongside every other contract; the SEMANTIC compat floor under
+// `contracts/integration-read-compat/v1.json` (mirroring the rv-read-compat
+// guard) is the consumer-facing layer that allows additive growth.
+const integrationReadEntries: ContractSchemaDescriptor[] = integrationReadContractCatalog.map((d) =>
+  entry("integrations", d.name, d.schemaId, d.zod),
+);
+
 // The full catalog, sorted by generatedFile so the emitted tree and any diff is
 // stable regardless of declaration order above.
 export const contractSchemaCatalog: ReadonlyArray<ContractSchemaDescriptor> = [
@@ -116,6 +132,7 @@ export const contractSchemaCatalog: ReadonlyArray<ContractSchemaDescriptor> = [
   ...httpEntries,
   ...insightEntries,
   ...integrationEntries,
+  ...integrationReadEntries,
 ].sort((a, b) => a.generatedFile.localeCompare(b.generatedFile));
 
 // renderContractJsonSchema is the single chokepoint converting a Zod source
