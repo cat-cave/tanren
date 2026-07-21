@@ -13,7 +13,9 @@
 // controls exercise.)
 
 import type { CasByteStore } from "../../contracts/cas.js";
+import { contentDigestOf } from "../../contracts/cas.js";
 import type { EvidenceBytePayload } from "../../contracts/runtimeVerificationAdapters.js";
+import type { EventStore } from "../../eventStore.js";
 import { captureDomA11y, type DomA11yCapture } from "./domA11yAudit.js";
 import { renderComponentToStaticMarkup } from "./componentSsrRenderer.js";
 import type { RenderCaptureOutcome, RenderCaptureRef, RenderCaptureRequest } from "./renderCaptureContracts.js";
@@ -32,7 +34,10 @@ const encoder = new TextEncoder();
  * `"screenshot"`; this harness deliberately omits pixels.
  */
 export class BrowserFreeRenderCaptureHarness {
-  public constructor(private readonly cas: CasByteStore) {}
+  public constructor(
+    private readonly cas: CasByteStore,
+    private readonly events?: EventStore,
+  ) {}
 
   public async capture(request: RenderCaptureRequest): Promise<RenderCaptureOutcome> {
     const { scenario, designContractVersion } = request;
@@ -70,6 +75,23 @@ export class BrowserFreeRenderCaptureHarness {
       { kind: "dom_snapshot", evidenceKind: "dom", casRef: domRef },
       { kind: "a11y_audit", evidenceKind: "a11y_tree", casRef: a11yRef },
     ];
+    if (this.events !== undefined && request.projectId !== undefined) {
+      const renderId = contentDigestOf(
+        encoder.encode(JSON.stringify([scenario.scenarioKey, designContractVersion, domRef.digest, a11yRef.digest])),
+      );
+      await this.events.append({
+        orgId: request.orgId,
+        projectId: request.projectId,
+        eventType: "design.render.captured",
+        payload: {
+          renderId,
+          artifactDigest: a11yRef.digest,
+          scenarioKey: scenario.scenarioKey,
+          designContractVersion,
+          a11yViolationCount: capture.audit.violationCount,
+        },
+      });
+    }
     return {
       kind: "captured",
       scenarioKey: scenario.scenarioKey,

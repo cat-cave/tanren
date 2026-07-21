@@ -43,8 +43,8 @@ const VerdictOutcome = z.enum([
   "cancelled_superseded",
 ]);
 const FlakeState = z.enum(["stable", "suspected", "confirmed", "quarantined_fragment"]);
-const RenderVerdict = z.enum(["passed", "failed"]);
-const ProofVerdict = z.enum(["passed", "failed"]);
+const RenderVerdict = z.enum(["passed", "failed", "unknown"]);
+const ProofVerdict = z.enum(["passed", "failed", "unknown"]);
 const DeployEnvironment = z.enum(["preview", "staging", "production"]);
 
 // ---------------------------------------------------------------------------
@@ -174,18 +174,22 @@ export const BehaviorEffectObservedPayload = z
 
 export const DesignRenderCapturedPayload = z
   .object({
-    behaviorRevisionId: Id,
-    checkpointId: Id,
-    viewport: z.string().min(1).max(64),
-    theme: z.string().min(1).max(64),
+    renderId: Sha256Digest,
+    artifactDigest: Sha256Digest,
+    scenarioKey: Id,
+    designContractVersion: z.string().min(1).max(256),
+    a11yViolationCount: Count,
   })
   .strict();
 
 export const DesignRenderVerdictRecordedPayload = z
   .object({
-    behaviorRevisionId: Id,
-    checkpointId: Id,
-    verdict: RenderVerdict,
+    renderVerificationId: Id,
+    artifactDigest: Sha256Digest,
+    pixelOutcome: RenderVerdict,
+    semanticOutcome: RenderVerdict,
+    a11yOutcome: RenderVerdict,
+    contractClauseRefs: z.array(Sha256Digest).min(1).max(256),
   })
   .strict();
 

@@ -43,8 +43,21 @@ export const runtimeVocabularySensitivityRules: SensitivityRule[] = [
     "causeOrdinal",
     "occurrenceCount",
   ]),
-  ...publicRules("design.render.captured", ["behaviorRevisionId", "checkpointId", "viewport", "theme"]),
-  ...publicRules("design.render.verdict_recorded", ["behaviorRevisionId", "checkpointId", "verdict"]),
+  ...publicRules("design.render.captured", [
+    "renderId",
+    "artifactDigest",
+    "scenarioKey",
+    "designContractVersion",
+    "a11yViolationCount",
+  ]),
+  ...publicRules("design.render.verdict_recorded", [
+    "renderVerificationId",
+    "artifactDigest",
+    "pixelOutcome",
+    "semanticOutcome",
+    "a11yOutcome",
+    "contractClauseRefs",
+  ]),
   ...publicRules("behavior.verdict.recorded", [
     "behaviorRevisionId",
     "verdictId",

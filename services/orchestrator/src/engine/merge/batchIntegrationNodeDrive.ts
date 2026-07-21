@@ -285,6 +285,38 @@ async function verdictForIntegrated(
       ...gateBundleInput(facts, node, integrated, keyInput),
       nativeCi: gateResult.nativeCi,
     });
+    // A fresh seal is durable proof creation, distinct from the exact-bundle reuse path
+    // above. Emit only after `seal` returns its immutable coordinate; a failed native gate
+    // is still a recorded proof and must not be hidden as a successful reuse.
+    await deps.eventStore.append({
+      orgId: facts.orgId,
+      projectId: facts.projectId,
+      eventType: "integration.proof.recorded",
+      payload: {
+        nodeId: node.nodeId,
+        memberKey: node.memberKey,
+        proofReuseKey: proofReuseKey(keyInput),
+        verdict: bundle.gateVerdict,
+      },
+    });
+    const behaviorSections = bundle.sections.filter((section) => section.kind === "runtime_behavior");
+    if (behaviorSections.length > 0) {
+      const planSetHash = behaviorSections.flatMap((section) => section.unitDigests).sort()[0];
+      if (planSetHash === undefined) {
+        throw new Error("sealed runtime behavior section has no proof-unit digest");
+      }
+      await deps.eventStore.append({
+        orgId: facts.orgId,
+        projectId: facts.projectId,
+        eventType: "gate.behavior_proof.bound",
+        payload: {
+          integrationNodeId: node.nodeId,
+          gateProofBundleDigest: bundle.proofBundleDigest,
+          requiredBehaviorRevisionCount: behaviorSections.length,
+          planSetHash,
+        },
+      });
+    }
   }
   if (!gateResult.passed) return gateResult.verdict;
   if (bundle === undefined || bundle.gateVerdict !== "passed") {
