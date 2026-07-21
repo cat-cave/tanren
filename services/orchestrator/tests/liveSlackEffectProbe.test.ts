@@ -1,11 +1,12 @@
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { EffectObservation } from "../src/engine/contracts/sideEffectObserverAdapter.js";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import {
   LiveSlackEffectProbe,
+  FetchSlackHistoryTransport,
   type LiveSlackEffectBindingCoordinate,
   type SlackHistorySnapshot,
 } from "../src/engine/verification/effectObserver/liveSlackEffectProbe.js";
@@ -46,6 +47,7 @@ function input(overrides: Partial<Parameters<LiveSlackEffectProbe["effectsForPro
     observer: "slack",
     provider: "slack",
     correlationIds: [CORRELATION],
+    triggers: [{ correlationId: CORRELATION, causeOrdinal: 0 }],
     afterWatermark: "10",
     ...overrides,
   };
@@ -87,7 +89,14 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
     expect(events.appended[0]).toMatchObject({
       eventType: "behavior.effect.observed",
       runId: "run-a3",
-      payload: { behaviorRevisionId: "behavior-a3", shardId: "a3:binding-a3:3", correlationId: CORRELATION },
+      payload: {
+        behaviorRevisionId: "behavior-a3",
+        shardId: "a3:binding-a3:3",
+        correlationId: CORRELATION,
+        deliveryRunId: "delivery-a3",
+        causeOrdinal: 0,
+        occurrenceCount: 1,
+      },
     });
   });
 
@@ -137,6 +146,58 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
     expect(events.appended).toHaveLength(0);
   });
 
+  it("FAIL-CLOSED: a Slack first page without explicit has_more=false is inconclusive, never complete", async () => {
+    const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<unknown>>().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        messages: Array.from({ length: 1000 }, (_, index) => ({ ts: String(index), text: "x" })),
+      }),
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(
+        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3" }),
+      ).rejects.toThrow("did not positively confirm snapshot completeness");
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fetches every Slack page and only returns a snapshot after an explicit final page", async () => {
+    const fetch = vi
+      .fn<(url: string, init?: RequestInit) => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          has_more: true,
+          messages: [{ ts: "12", text: "new" }],
+          response_metadata: { next_cursor: "next-page" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, has_more: false, messages: [{ ts: "11", text: "old" }] }),
+      });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(
+        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3" }),
+      ).resolves.toEqual({
+        complete: true,
+        messages: [
+          { ts: "12", text: "new" },
+          { ts: "11", text: "old" },
+        ],
+      });
+      expect(fetch.mock.calls[1]?.[0]).toContain("cursor=next-page");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("captures the latest complete provider cursor before a live trigger", async () => {
     const { effectProbe } = probe({
       complete: true,
@@ -155,6 +216,6 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
         observer: "slack",
         provider: "slack",
       }),
-    ).resolves.toBe("20");
+    ).resolves.toMatchObject({ cursor: "20", bindingId: "binding-a3", bindingGeneration: 3 });
   });
 });

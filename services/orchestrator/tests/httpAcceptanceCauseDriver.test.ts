@@ -33,6 +33,7 @@ function input(overrides: Partial<CauseDriveInput> = {}): CauseDriveInput {
         device: [],
       },
       httpProbes: [{ probeId: "send-message", method: "POST", path: "/messages", body: { body: "hello" } }],
+      causes: [{ causeId: "send", surface: "api", action: "send-message" }],
     },
     httpProbes: [{ probeId: "send-message", method: "POST", path: "/messages", body: { body: "hello" } }],
     ...overrides,
@@ -43,15 +44,16 @@ function response() {
   return { status: 202, headers: { get: () => null }, text: async () => "" };
 }
 
+const WATERMARK = { cursor: "1710000000.000001", bindingId: "binding-a3", bindingGeneration: 3 };
+
 describe("HttpAcceptanceCauseDriver — A3 live trigger boundary", () => {
   it("drives the declared live action with an unforgeable correlation after its provider watermark", async () => {
     const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(response());
-    const watermarkProbe = { captureWatermark: vi.fn<() => Promise<string>>().mockResolvedValue("1710000000.000001") };
+    const watermarkProbe = { captureWatermark: vi.fn<() => Promise<typeof WATERMARK>>().mockResolvedValue(WATERMARK) };
     const driver = new HttpAcceptanceCauseDriver({
       resolveBaseUrl: { resolve: async () => ({ kind: "resolved", baseUrl: "https://release.example/" }) },
       watermarkProbe,
       fetchImpl,
-      randomId: () => "fixed-id",
     });
 
     const fired = await driver.fireCause(input());
@@ -74,7 +76,7 @@ describe("HttpAcceptanceCauseDriver — A3 live trigger boundary", () => {
     const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(response());
     const driver = new HttpAcceptanceCauseDriver({
       resolveBaseUrl: { resolve: async () => ({ kind: "resolved", baseUrl: "https://release.example/" }) },
-      watermarkProbe: { captureWatermark: async () => "1" },
+      watermarkProbe: { captureWatermark: async () => WATERMARK },
       fetchImpl,
     });
 
@@ -88,7 +90,7 @@ describe("HttpAcceptanceCauseDriver — A3 live trigger boundary", () => {
     const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(response());
     const driver = new HttpAcceptanceCauseDriver({
       resolveBaseUrl: { resolve: async () => ({ kind: "resolved", baseUrl: "https://release.example/" }) },
-      watermarkProbe: { captureWatermark: async () => "1" },
+      watermarkProbe: { captureWatermark: async () => WATERMARK },
       fetchImpl,
     });
     const escapedProbe = { probeId: "send-message", method: "POST", path: "https://evil.example/trigger" };
@@ -103,7 +105,7 @@ describe("HttpAcceptanceCauseDriver — A3 live trigger boundary", () => {
     const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue({ ...response(), status: 500 });
     const driver = new HttpAcceptanceCauseDriver({
       resolveBaseUrl: { resolve: async () => ({ kind: "resolved", baseUrl: "https://release.example/" }) },
-      watermarkProbe: { captureWatermark: async () => "1" },
+      watermarkProbe: { captureWatermark: async () => WATERMARK },
       fetchImpl,
     });
 
@@ -111,5 +113,23 @@ describe("HttpAcceptanceCauseDriver — A3 live trigger boundary", () => {
 
     expect(result).toMatchObject({ kind: "unavailable", outcome: "inconclusive_external" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses one stable correlation and idempotency key when the same cause is retried", async () => {
+    const fetchImpl = vi.fn<HttpFetch>().mockResolvedValue(response());
+    const driver = new HttpAcceptanceCauseDriver({
+      resolveBaseUrl: { resolve: async () => ({ kind: "resolved", baseUrl: "https://release.example/" }) },
+      watermarkProbe: { captureWatermark: async () => WATERMARK },
+      fetchImpl,
+    });
+
+    const first = await driver.fireCause(input());
+    const second = await driver.fireCause(input());
+
+    expect(first).toMatchObject({ correlationId: expect.any(String) });
+    expect(second).toMatchObject({ correlationId: (first as { correlationId: string }).correlationId });
+    const firstHeaders = (fetchImpl.mock.calls[0]?.[1]?.headers ?? {}) as Record<string, string>;
+    const secondHeaders = (fetchImpl.mock.calls[1]?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(secondHeaders["idempotency-key"]).toBe(firstHeaders["idempotency-key"]);
   });
 });

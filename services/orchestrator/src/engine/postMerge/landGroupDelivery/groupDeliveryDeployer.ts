@@ -1,15 +1,7 @@
 // mq-13 PRODUCTION group-delivery deployer — the honest wrapper that drives the REAL
 // DeployAdapter SP-6 lifecycle (buildArtifact / applyPreview / promote / rollback /
 // teardownPreview), the REAL ProofBackedWebDemo, and the durable release-instance store for
-// ONE completed land group. It implements the injected `GroupDeliveryDeployer` seam; the
-// fail-closed decision tree lives in `groupDeliveryCore.ts` (unit-tested with a fake). It
-// invents no adapter (buildDeployAdapter) and never bypasses MergeAuthority — it only
-// activates an ALREADY-merged group's release.
-//
-// PREVIEW SAFETY: `DirectApiDeployAdapter.verify` marks the release LIVE in production, so it
-// is NOT preview-safe. The preview step here verifies readiness via `adapter.status` polling +
-// a URL smoke check (NO markLive), preserving the invariant that NOTHING promotes until the
-// preview's proof-backed demo passes. Only the promote step verifies through the live path.
+// ONE completed land group. The fail-closed decision tree lives in `groupDeliveryCore.ts`.
 
 import type pg from "pg";
 import {
@@ -245,7 +237,13 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     const record = await readBackGroupRelease(this.releaseInstances, plan, target, release.deploymentId);
     try {
       const result = await this.proofBackedWebDemo.demo(
-        { runId: plan.tailRunId, specId: plan.tailSpecId, projectId: plan.projectId, orgId: plan.orgId },
+        {
+          runId: plan.tailRunId,
+          specId: plan.tailSpecId,
+          projectId: plan.projectId,
+          orgId: plan.orgId,
+          deliveryRunId: plan.deliveryRunId,
+        },
         record,
       );
       if (result.failed === 0 && result.passed > 0) return { ok: true, reason: "" };

@@ -279,6 +279,52 @@ describe("rv-12 A3 causal-correlation orchestration", () => {
     expect(result.passedVerdictCount).toBe(0);
   });
 
+  it("FAIL-CLOSED: two matching provider messages fail exactly_once instead of collapsing to one observation row", async () => {
+    const store = new InMemoryAcceptanceRunStore();
+    const orchestrator = new AcceptanceOrchestrator({
+      store,
+      events: new NullEventSink(),
+      causeDrivers: [causeDriver(FIRING)],
+      // The live Slack reader records one immutable duplicate observation with
+      // occurrenceCount=2. Correlation must expand that exact multiplicity.
+      effectReader: reader([
+        effect({
+          cursor: "1500",
+          triggerIdHash: ID(1),
+          providerObjectHash: ID(9),
+          occurrenceCount: 2,
+          classification: "duplicate",
+        }),
+      ]),
+    });
+
+    const result = await orchestrator.execute(request(causalPlan("exactly_once", ID(9))));
+
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
+    expect(result.passedVerdictCount).toBe(0);
+  });
+
+  it("FAIL-CLOSED: duplicate occurrences fail equals against the exact expected effect multiset", async () => {
+    const orchestrator = new AcceptanceOrchestrator({
+      store: new InMemoryAcceptanceRunStore(),
+      events: new NullEventSink(),
+      causeDrivers: [causeDriver(FIRING)],
+      effectReader: reader([
+        effect({
+          cursor: "1500",
+          triggerIdHash: ID(1),
+          providerObjectHash: ID(9),
+          occurrenceCount: 2,
+          classification: "duplicate",
+        }),
+      ]),
+    });
+
+    const result = await orchestrator.execute(request(causalPlan("equals", [ID(9)])));
+
+    expect(result.behaviors[0]?.outcome).toBe("failed_product");
+  });
+
   it("DECISIVE: a pre-existing effect (before the cause fired) is not counted", async () => {
     const store = new InMemoryAcceptanceRunStore();
     const orchestrator = new AcceptanceOrchestrator({

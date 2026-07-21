@@ -45,6 +45,8 @@ export interface GroupDeliveryPlan {
   readonly tailRunId: string;
   /** The tail member spec (the demo target's spec coordinate). */
   readonly tailSpecId: string;
+  /** The deterministic delivery outbox row for this group's authority decision. */
+  readonly deliveryRunId: string;
   /** The ordered member run ids (canonical member-key order). */
   readonly memberRunIds: readonly string[];
   /** The ordered member spec ids (canonical member-key order; parallel to memberRunIds). */

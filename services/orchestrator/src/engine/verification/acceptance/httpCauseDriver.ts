@@ -5,7 +5,7 @@
  * a different probe: `cause.action` must name exactly one compiled HTTP probe.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { AdapterUnavailableResult } from "../../contracts/runtimeVerificationAdapters.js";
 import type { HttpProbeSpec } from "./acceptancePlan.js";
 import type { AcceptanceBaseUrlResolver, HttpFetch } from "./httpDriver.js";
@@ -20,25 +20,52 @@ export interface CauseWatermarkProbe {
     readonly deliveryRunId: string;
     readonly observer: string;
     readonly provider: string;
-  }): Promise<string>;
+  }): Promise<CauseWatermark>;
+}
+
+/** The exact sealed coordinate captured with the provider's pre-trigger cursor. */
+export interface CauseWatermark {
+  readonly cursor: string;
+  readonly bindingId: string;
+  readonly bindingGeneration: number;
+}
+
+/** Stable coordinate for one A3 cause; safe to repeat after an interrupted request. */
+export interface A3CauseCoordinate {
+  readonly deliveryRunId: string;
+  readonly behaviorRevisionId: string;
+  readonly bindingId: string;
+  readonly bindingGeneration: number;
+  readonly causeOrdinal: number;
+}
+
+/** The propagated correlation is durable: retries of one cause reuse this exact digest. */
+export function a3CorrelationId(input: A3CauseCoordinate): string {
+  return digest(
+    `a3-correlation\u0000${input.deliveryRunId}\u0000${input.behaviorRevisionId}\u0000${input.bindingId}\u0000${String(input.bindingGeneration)}\u0000${String(input.causeOrdinal)}`,
+  );
+}
+
+/** The product-side idempotency key is separately namespaced but equally durable. */
+export function a3IdempotencyKey(input: A3CauseCoordinate): string {
+  return digest(
+    `a3-intent\u0000${input.deliveryRunId}\u0000${input.behaviorRevisionId}\u0000${input.bindingId}\u0000${String(input.bindingGeneration)}\u0000${String(input.causeOrdinal)}`,
+  );
 }
 
 export interface HttpAcceptanceCauseDriverDependencies {
   readonly resolveBaseUrl: AcceptanceBaseUrlResolver;
   readonly watermarkProbe: CauseWatermarkProbe;
   readonly fetchImpl?: HttpFetch;
-  readonly randomId?: () => string;
 }
 
 /** Drives an actual, declared API action and records its pre-effect provider cursor. */
 export class HttpAcceptanceCauseDriver implements AcceptanceCauseDriver {
   public readonly surface = "api" as const;
   private readonly fetchImpl: HttpFetch;
-  private readonly randomId: () => string;
 
   public constructor(private readonly deps: HttpAcceptanceCauseDriverDependencies) {
     this.fetchImpl = deps.fetchImpl ?? defaultFetch;
-    this.randomId = deps.randomId ?? randomUUID;
   }
 
   public async fireCause(input: CauseDriveInput): Promise<CauseFiring | AdapterUnavailableResult> {
@@ -70,7 +97,7 @@ export class HttpAcceptanceCauseDriver implements AcceptanceCauseDriver {
     if (hasReservedHeader(probe.headers))
       return unavailable(`probe '${probe.probeId}' predefines an A3 correlation header`);
 
-    let watermark: string;
+    let watermark: CauseWatermark;
     try {
       watermark = await this.deps.watermarkProbe.captureWatermark({
         orgId: input.orgId,
@@ -83,14 +110,25 @@ export class HttpAcceptanceCauseDriver implements AcceptanceCauseDriver {
     } catch (error) {
       return unavailable(`independent effect watermark is unavailable: ${reason(error)}`);
     }
-    if (!isNonBlankString(watermark)) return unavailable("independent effect watermark is blank or malformed");
-
-    const correlationId = digest(
-      `a3-correlation\u0000${input.deliveryRunId}\u0000${input.cause.causeId}\u0000${this.randomId()}`,
-    );
-    const idempotencyKey = digest(
-      `a3-intent\u0000${input.deliveryRunId}\u0000${input.cause.causeId}\u0000${correlationId}`,
-    );
+    if (
+      !isNonBlankString(watermark.cursor) ||
+      !isNonBlankString(watermark.bindingId) ||
+      !Number.isSafeInteger(watermark.bindingGeneration) ||
+      watermark.bindingGeneration < 1
+    ) {
+      return unavailable("independent effect watermark has an invalid sealed binding coordinate");
+    }
+    const causeOrdinal = (input.plan.causes ?? []).findIndex((cause) => cause.causeId === input.cause.causeId);
+    if (causeOrdinal < 0) return unavailable(`cause '${input.cause.causeId}' is absent from the compiled cause order`);
+    const coordinate: A3CauseCoordinate = {
+      deliveryRunId: input.deliveryRunId,
+      behaviorRevisionId: input.behaviorRevisionId,
+      bindingId: watermark.bindingId,
+      bindingGeneration: watermark.bindingGeneration,
+      causeOrdinal,
+    };
+    const correlationId = a3CorrelationId(coordinate);
+    const idempotencyKey = a3IdempotencyKey(coordinate);
     const headers: Record<string, string> = {
       ...probe.headers,
       "x-tanren-correlation-id": correlationId,
@@ -110,7 +148,7 @@ export class HttpAcceptanceCauseDriver implements AcceptanceCauseDriver {
     } catch (error) {
       return unavailable(`live cause '${input.cause.causeId}' could not reach the release: ${reason(error)}`);
     }
-    return { causeId: input.cause.causeId, correlationId, firedAtCursor: watermark };
+    return { causeId: input.cause.causeId, correlationId, firedAtCursor: watermark.cursor };
   }
 }
 

@@ -19,33 +19,23 @@ import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityI
 import { secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
 import { EffectObservationsRepository } from "../../repositories/effectObservations.js";
 import { systemActor } from "../../state/actor.js";
-import type { CauseWatermarkProbe } from "../acceptance/httpCauseDriver.js";
+import type { CauseWatermark, CauseWatermarkProbe } from "../acceptance/httpCauseDriver.js";
 import type { CausalEffectReader, CausalEffectReaderInput } from "../acceptance/causalStage.js";
 import { compareCursor } from "../acceptance/causalCorrelation.js";
+import {
+  FetchSlackHistoryTransport,
+  distinctSlackHistoryMessages,
+  type SlackHistoryMessage,
+  type SlackHistorySnapshot,
+  type SlackHistoryTransport,
+} from "./slackHistoryTransport.js";
+
+export { FetchSlackHistoryTransport, type SlackHistoryMessage, type SlackHistorySnapshot, type SlackHistoryTransport };
 
 const SLACK_OBSERVER = "slack";
 const SLACK_PROVIDER = "slack";
 const SLACK_PRODUCT_PROVIDER_KIND = "slack.product.message.v1";
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
-
-export interface SlackHistoryMessage {
-  readonly ts: string;
-  readonly text: string;
-}
-
-export interface SlackHistorySnapshot {
-  readonly messages: readonly SlackHistoryMessage[];
-  /** False only when the provider confirmed that the returned set is complete. */
-  readonly complete: boolean;
-}
-
-export interface SlackHistoryTransport {
-  history(input: {
-    readonly token: string;
-    readonly channelId: string;
-    readonly oldest?: string;
-  }): Promise<SlackHistorySnapshot>;
-}
 
 export interface LiveSlackEffectProbeOptions {
   readonly transport?: SlackHistoryTransport;
@@ -156,10 +146,14 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
     readonly deliveryRunId: string;
     readonly observer: string;
     readonly provider: string;
-  }): Promise<string> {
+  }): Promise<CauseWatermark> {
     const coordinate = await this.coordinateResolver.resolve(input);
     const snapshot = await this.readCompleteHistory(input, coordinate);
-    return latestCursor(snapshot.messages);
+    return {
+      cursor: latestCursor(snapshot.messages),
+      bindingId: coordinate.bindingId,
+      bindingGeneration: coordinate.bindingGeneration,
+    };
   }
 
   public async effectsForProvider(input: CausalEffectReaderInput): Promise<readonly EffectObservation[]> {
@@ -179,6 +173,20 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
     ) {
       throw new Error("A3 effect reader received invalid or duplicate trigger correlations");
     }
+    if (
+      !Array.isArray(input.triggers) ||
+      input.triggers.length !== input.correlationIds.length ||
+      new Set(input.triggers.map((trigger) => trigger.correlationId)).size !== input.triggers.length ||
+      input.triggers.some(
+        (trigger) =>
+          !isDigest(trigger.correlationId) ||
+          !Number.isSafeInteger(trigger.causeOrdinal) ||
+          trigger.causeOrdinal < 0 ||
+          !input.correlationIds.includes(trigger.correlationId),
+      )
+    ) {
+      throw new Error("A3 effect reader requires exact stable cause coordinates for every trigger correlation");
+    }
     const coordinate = await this.coordinateResolver.resolve({
       orgId: input.orgId,
       projectId: input.projectId,
@@ -190,7 +198,8 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
     const snapshot = await this.readCompleteHistory(input, coordinate);
     const observations = await runWithOrgScope(this.pool, input.orgId, async (client) => {
       const appended: EffectObservation[] = [];
-      for (const correlationId of input.correlationIds) {
+      for (const trigger of input.triggers) {
+        const correlationId = trigger.correlationId;
         await this.repository.lockTrigger(client, {
           orgId: input.orgId,
           projectId: input.projectId,
@@ -203,7 +212,13 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
           client,
           observationInput(input, coordinate, this.observationId(), correlationId, matches),
         );
-        await appendObservationEvent(this.eventsForClient(client), input, coordinate, observation);
+        await appendObservationEvent(
+          this.eventsForClient(client),
+          input,
+          coordinate,
+          trigger.causeOrdinal,
+          observation,
+        );
         appended.push(observation);
       }
       return appended;
@@ -330,44 +345,6 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
   }
 }
 
-class FetchSlackHistoryTransport implements SlackHistoryTransport {
-  public async history(input: {
-    readonly token: string;
-    readonly channelId: string;
-    readonly oldest?: string;
-  }): Promise<SlackHistorySnapshot> {
-    const query = new URLSearchParams({
-      channel: input.channelId,
-      limit: "1000",
-      ...(input.oldest === undefined ? {} : { oldest: input.oldest }),
-    });
-    const response = await globalThis.fetch(`https://slack.com/api/conversations.history?${query.toString()}`, {
-      headers: { authorization: `Bearer ${input.token}` },
-    });
-    if (!response.ok) throw new Error(`Slack conversations.history returned ${String(response.status)}`);
-    const parsed: unknown = await response.json();
-    const body = SlackHistoryResponse.safeParse(parsed);
-    if (!body.success || !body.data.ok) throw new Error("Slack conversations.history returned an invalid response");
-    const nextCursor = body.data.response_metadata?.next_cursor;
-    return {
-      messages: body.data.messages,
-      complete: body.data.has_more !== true && (nextCursor === undefined || nextCursor.trim() === ""),
-    };
-  }
-}
-
-const SlackHistoryResponse = z
-  .object({
-    ok: z.literal(true),
-    has_more: z.boolean().optional(),
-    // Slack adds provider metadata to both the envelope and message objects;
-    // retain only the typed fields A3 consumes, while extra fields do not alter
-    // the complete-set/correlation decision.
-    messages: z.array(z.object({ ts: z.string().min(1), text: z.string() }).passthrough()),
-    response_metadata: z.object({ next_cursor: z.string().optional() }).passthrough().optional(),
-  })
-  .passthrough();
-
 function invalidMessage(message: SlackHistoryMessage): boolean {
   return !isNonBlankString(message.ts) || !Number.isFinite(Number(message.ts)) || typeof message.text !== "string";
 }
@@ -383,7 +360,9 @@ function matchingMessages(
   correlationId: string,
   after: string,
 ): readonly SlackHistoryMessage[] {
-  return messages.filter((message) => compareCursor(message.ts, after) > 0 && message.text.includes(correlationId));
+  return distinctSlackHistoryMessages(messages).filter(
+    (message) => compareCursor(message.ts, after) > 0 && message.text.includes(correlationId),
+  );
 }
 
 function observationInput(
@@ -418,6 +397,7 @@ async function appendObservationEvent(
   events: EventStore,
   input: CausalEffectReaderInput,
   coordinate: LiveSlackEffectBindingCoordinate,
+  causeOrdinal: number,
   observation: EffectObservation,
 ): Promise<void> {
   const common = {
@@ -434,6 +414,9 @@ async function appendObservationEvent(
         shardId: `a3:${coordinate.bindingId}:${String(coordinate.bindingGeneration)}`,
         correlationId: requireDigest(observation.triggerIdHash, "observed effect correlation"),
         providerReceiptId: requireDigest(observation.providerObjectHash, "observed effect receipt"),
+        deliveryRunId: input.deliveryRunId,
+        causeOrdinal,
+        occurrenceCount: observation.occurrenceCount,
       },
     });
     return;

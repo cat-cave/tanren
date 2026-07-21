@@ -323,6 +323,7 @@ export function basePlan(): GroupDeliveryPlan {
     mainSha: MAIN,
     tailRunId: RUN,
     tailSpecId: SPEC,
+    deliveryRunId: "delivery-dec",
     memberRunIds: [RUN_A, RUN],
     memberSpecIds: [SPEC_A, SPEC],
   };

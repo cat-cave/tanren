@@ -29,6 +29,7 @@ const PLAN: GroupDeliveryPlan = {
   mainSha: "sha-main",
   tailRunId: "run-tail",
   tailSpecId: "spec-tail",
+  deliveryRunId: "delivery-decision",
   memberRunIds: ["run-a", "run-tail"],
   memberSpecIds: ["spec-a", "spec-tail"],
 };
