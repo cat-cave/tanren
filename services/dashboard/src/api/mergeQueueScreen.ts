@@ -12,10 +12,7 @@ export { MergeQueueRepairRoutesClient, type MergeQueueRepairRoutesListResponse }
 export { MergeQueueTrainClient, type MergeTrainListResponse } from "./mergeQueueTrain.js";
 // mq-13 land-group delivery timeline (merged into this screen barrel so the merge-queue
 // route imports every projection client from one module).
-export {
-  MergeQueueGroupDeliveryClient,
-  type LandGroupDeliveryListResponse,
-} from "./mergeQueueGroupDelivery.js";
+export { MergeQueueGroupDeliveryClient, type LandGroupDeliveryListResponse } from "./mergeQueueGroupDelivery.js";
 export {
   MergeQueueEvidenceContractsClient,
   type MergeQueueEvidenceContractResponse,

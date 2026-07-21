@@ -57,6 +57,7 @@ ALTER TABLE "merge_queue" ADD COLUMN "priority_snapshot" jsonb;--> statement-bre
 ALTER TABLE "merge_queue" ADD COLUMN "target_branch" text;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD COLUMN "priority_override" text;--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD COLUMN "policy_hold_reason" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "merge_queue_org_queue_unique" ON "merge_queue" USING btree ("org_id","queue_id");--> statement-breakpoint
 ALTER TABLE "merge_queue_commands" ADD CONSTRAINT "merge_queue_commands_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue_commands" ADD CONSTRAINT "merge_queue_commands_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "merge_queue_commands" ADD CONSTRAINT "merge_queue_commands_policy_fk" FOREIGN KEY ("org_id","policy_id") REFERENCES "public"."merge_queue_policies"("org_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -74,7 +75,6 @@ CREATE UNIQUE INDEX "merge_queue_policies_active_unique" ON "merge_queue_policie
 CREATE INDEX "merge_queue_policies_org_project" ON "merge_queue_policies" USING btree ("org_id","project_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "merge_queue_windows_policy_name_unique" ON "merge_queue_windows" USING btree ("org_id","policy_id","name");--> statement-breakpoint
 CREATE INDEX "merge_queue_windows_org_project" ON "merge_queue_windows" USING btree ("org_id","project_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "merge_queue_org_queue_unique" ON "merge_queue" USING btree ("org_id","queue_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "merge_queue_active_run_unique" ON "merge_queue" USING btree ("run_id") WHERE status IN ('queued', 'merging', 'parked_grant', 'held_policy');--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_policy_hold_reason_check" CHECK ("merge_queue"."policy_hold_reason" IS NULL OR "merge_queue"."status" = 'held_policy');--> statement-breakpoint
 ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_status_check" CHECK ("merge_queue"."status" IN ('queued','merging','merged','dequeued','parked_grant','held_policy'));--> statement-breakpoint
