@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ProjectLifecycle } from "./projects.js";
 import { assertProjectDerivationActivationEvidence } from "./integrationProjectAccess.js";
 import { prepareIntegrationReadiness } from "./activationReadiness.js";
+import { runActivationWithReadinessBlockEvent } from "./projectActivationReadinessEvent.js";
 import {
   completeDerivationReceipts,
   canonicalDerivationJson,
@@ -371,7 +372,7 @@ export const ProjectDerivationStore = {
   },
 
   async activate(pool: pg.Pool, operation: ProjectDerivationRow): Promise<ProjectDerivationRow> {
-    return inOrgScope(pool, operation.orgId, async (client) => {
+    return runActivationWithReadinessBlockEvent(pool, operation, async (client) => {
       const locked = await client.query<RawDerivationRow>(
         `SELECT ${SELECT_DERIVATION_COLUMNS}
            FROM project_derivations
@@ -423,7 +424,6 @@ export const ProjectDerivationStore = {
         throw error;
       }
 
-      // in-6: gate on REQUIRED integration capabilities — a node not enqueued/ready blocks.
       await prepareIntegrationReadiness(client, current.orgId, current.projectId);
 
       const activated = await client.query<{ project_id: string }>(

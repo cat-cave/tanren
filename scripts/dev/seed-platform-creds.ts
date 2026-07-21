@@ -205,8 +205,9 @@ export function resolveSeedSecrets(
 export async function seedPlatformCredentials(
   secrets: SecretStore,
   env: SecretStoreEnv = process.env,
+  readFile: (path: string, allow: readonly string[]) => Record<string, string> = parseAllowlistedEnvFile,
 ): Promise<string[]> {
-  const secretsMap = resolveSeedSecrets(env);
+  const secretsMap = resolveSeedSecrets(env, SEED_SECRET_ALLOWLIST, readFile);
   const envFilePathRaw = env[SECRET_ENV_FILE_ENV];
   const envFilePath =
     typeof envFilePathRaw === "string" && envFilePathRaw.trim() !== "" ? envFilePathRaw.trim() : undefined;

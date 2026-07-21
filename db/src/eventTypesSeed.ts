@@ -271,6 +271,7 @@ export const eventTypesSeed = [
   { name: "planner.subtasks.emitted", defaultSeverity: "info" },
   { name: "post_merge.behavior.failed", defaultSeverity: "warn" },
   { name: "post_merge.behavior.verified", defaultSeverity: "info" },
+  { name: "project.activation.readiness_blocked", defaultSeverity: "warn" },
   { name: "recovery.inspection_opened", defaultSeverity: "info" },
   { name: "recovery.replan_queued", defaultSeverity: "info" },
   { name: "recovery.revise_routed", defaultSeverity: "info" },

@@ -722,6 +722,13 @@
       "when": 1784631851960,
       "tag": "0105_classy_purifiers",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1784653325431,
+      "tag": "0106_in6_activation_readiness_event",
+      "breakpoints": true
     }
   ]
 }

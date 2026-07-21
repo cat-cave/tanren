@@ -466,6 +466,7 @@ describe("IN-7 event observability cannot become product authority", () => {
       "./sensitivityRules.eagerBeam.js",
       "./sensitivityRules.eventVocabularyW0.js",
       "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js",
+      "./sensitivityRules.projectActivationVocabulary.js",
       "./sensitivityRules.queuePolicy.js",
     ]);
     expect(eventVocabularyAggregatorSource).toContain("...eventVocabularyW0SensitivityRules");

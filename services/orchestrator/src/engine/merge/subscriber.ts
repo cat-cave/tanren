@@ -63,14 +63,14 @@ export interface MergeCoordinatorSubscriberDeps {
    * (`credential.configured` / `integration.provisioned` /
    * `integration.grant.linked`) names a project that is still `deriving`, this
    * re-evaluates its capability graph + re-attempts `activate` so the last
-   * required grant promotes it. Fire-and-forget alongside the merge-coordinator
-   * drive (they are independent concerns). Defaults to the production
-   * `attemptDerivingActivation`; a test injects a recording fake to assert the
-   * wake fired. The REAL producer is this subscriber's existing LISTEN on
+   * required grant promotes it. REQUIRED: the production factory binds
+   * `attemptDerivingActivation`, and tests inject a recording fake. It runs
+   * fire-and-forget alongside the independent merge-coordinator drive. The REAL
+   * producer is this subscriber's existing LISTEN on
    * `NOTIFICATION_CHANNEL` (the credential/grant events have real emitters) —
    * NOT a phantom listener (trap #1).
    */
-  attemptActivation?: (projectId: string) => Promise<unknown>;
+  attemptActivation: (projectId: string) => Promise<unknown>;
 }
 
 /**
@@ -126,14 +126,22 @@ export async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: st
     if (row.project_id !== null) return [row.project_id];
     if (row.org_id === null) return [];
 
-    // Include `parked_grant` so a project whose ONLY active work is grant-parked is
-    // still woken by a credential/grant arrival — otherwise its parked unit could
-    // starve (never re-admitted). Statuses are the merge_queue active set.
+    // A project-scoped event above can wake exactly one project. An org-scoped
+    // credential/grant event must wake BOTH active merge queues and deriving
+    // projects: the latter have no queue rows yet, but their last required grant
+    // may have just landed and must re-attempt the lifecycle CAS.
     const projects = await client.query<{ project_id: string }>(
-      `SELECT DISTINCT project_id
-         FROM merge_queue
-        WHERE org_id = $1
-          AND status IN ('queued', 'merging', 'parked_grant')
+      `SELECT project_id
+         FROM (
+           SELECT DISTINCT project_id
+             FROM merge_queue
+            WHERE org_id = $1
+              AND status IN ('queued', 'merging', 'parked_grant')
+           UNION
+           SELECT project_id
+             FROM projects
+            WHERE org_id = $1 AND lifecycle = 'deriving'
+         ) AS repair_projects
         ORDER BY project_id`,
       [row.org_id],
     );
@@ -363,12 +371,10 @@ export class MergeCoordinatorSubscriber {
     // (the lifecycle='deriving' CAS inside activate), so a duplicate event is
     // harmless. A failure is logged inside `attemptDerivingActivation`, never
     // thrown into the notify pump.
-    if (this.deps.attemptActivation !== undefined) {
-      for (const projectId of projectIds) {
-        void this.deps.attemptActivation(projectId).catch((error: unknown) => {
-          log.error("deriving-project activation wake failed", { projectId, eventId }, error);
-        });
-      }
+    for (const projectId of projectIds) {
+      void this.deps.attemptActivation(projectId).catch((error: unknown) => {
+        log.error("deriving-project activation wake failed", { projectId, eventId }, error);
+      });
     }
   }
 

@@ -468,6 +468,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "designSystem.proof.reused": "info",
   "designSystem.regression.bisected": "warn",
   "designSystem.binding.updated": "info",
+  "project.activation.readiness_blocked": "warn",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

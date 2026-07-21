@@ -16,7 +16,12 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/build.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
-import { startMergeCoordinatorSubscriber, attemptDerivingActivation } from "../merge/subscriber.js";
+import {
+  startMergeCoordinatorSubscriber,
+  attemptDerivingActivation,
+  type MergeCoordinatorSubscriber,
+  type MergeCoordinatorSubscriberDeps,
+} from "../merge/subscriber.js";
 import {
   startPostMergeSubscriber,
   buildDeployOnMergeWatcher,
@@ -32,7 +37,6 @@ import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { startPausedRunResumeProber, type PausedRunResumeProber } from "../usage/pausedRunResumeProber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
-import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
 import { buildSourceSyncWorker } from "./sourceSyncWorkerBuild.js";
@@ -114,6 +118,25 @@ export interface AutonomyLoops {
   stop: () => Promise<void>;
 }
 
+/** The production merge-subscriber assembly, including the mandatory activation wake. */
+export function buildMergeCoordinatorSubscriberDeps(
+  deps: AutonomyLoopsDeps,
+  notifyListener: PgNotifyListener,
+): MergeCoordinatorSubscriberDeps {
+  return {
+    pool: deps.pool,
+    notifyListener,
+    secrets: deps.secrets,
+    githubHttp: deps.githubHttp,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
+    ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+    runStateWriter: deps.runStateWriter,
+    attemptActivation: (projectId) => attemptDerivingActivation(deps.pool, projectId),
+  };
+}
+
 /**
  * Start the worker's autonomy loops. The DagWalker subscribes to the run-activity
  * bus and self-drives the DAG; the intake loops ingest issues/signals (webhook
@@ -176,29 +199,9 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // existing per-run merge path. Its own LISTEN connection so it never contends with
   // the walker's notify pump.
   const mergeNotifyListener = new PgNotifyListener(deps.pool);
-  const mergeCoordinator = await startMergeCoordinatorSubscriber({
-    pool: deps.pool,
-    notifyListener: mergeNotifyListener,
-    secrets: deps.secrets,
-    githubHttp: deps.githubHttp,
-    // The drive-path conflict resolver provisions a short-lived runner + workspace to
-    // run the REAL intent-preserving resolver (the blind-re-exec stub is gone). The
-    // allocator/ssh/identity are the SAME the intake + run executor use.
-    allocator: deps.allocator,
-    ssh: deps.ssh,
-    identitySecretRef: deps.identitySecretRef,
-    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-    // Plane-split: the coordinator's merge-stage writes (events/tasks/runs/specs),
-    // its spec-status finalize, and its conflict resolver's replan write route
-    // through the control plane when wired (else direct on deps.pool, byte-identical).
-    runStateWriter: deps.runStateWriter,
-    // in-6: the merge subscriber ALREADY listens on `NOTIFICATION_CHANNEL` for
-    // credential/grant events (the REAL producer — these events have real
-    // emitters). Fire-and-forget the deriving-project activation wake for each
-    // affected project so a grant that unblocks a required capability promotes
-    // the project `deriving → active` exactly-once.
-    attemptActivation: (projectId) => attemptDerivingActivation(deps.pool, projectId),
-  });
+  const mergeCoordinator = await startMergeCoordinatorSubscriber(
+    buildMergeCoordinatorSubscriberDeps(deps, mergeNotifyListener),
+  );
   log.info("native merge-queue coordinator subscriber started (autonomy-engine §2d)");
   // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —
   // once a run's PR merges onto default_branch it reads the post-merge CI on the base

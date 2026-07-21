@@ -50,6 +50,9 @@ export async function redriveCredentialRepair(input: {
     notifyListener: {} as never,
     coordinator: input.coordinator,
     runStateWriter: input.writer,
+    // This fixture verifies the merge repair path only; production wiring supplies
+    // attemptDerivingActivation through autonomyLoops.
+    attemptActivation: async () => {},
   });
   await (subscriber as unknown as { onEventActivity(eventId: string): Promise<void> }).onEventActivity(input.eventId);
 }

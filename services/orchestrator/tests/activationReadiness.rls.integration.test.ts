@@ -22,6 +22,9 @@ import {
 import { ProjectActivationReadinessBlockedError } from "../src/engine/repositories/activationReadiness.js";
 import { ProjectDerivationStore, projectDerivationFingerprint } from "../src/engine/repositories/projects.js";
 import { attemptDerivingActivation } from "../src/engine/repositories/projectActivationWake.js";
+import { CapabilityPrepareDriver } from "../src/engine/integrations/capabilityPrepare.js";
+import { MergeCoordinatorSubscriber, resolveCredentialRepairProjects } from "../src/engine/merge/subscriber.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
 import {
   directSanitizedInput,
   ownership,
@@ -191,7 +194,7 @@ describeDb("in-6 activation readiness gate — real PostgreSQL (RLS-enforced)", 
     expect(node.rows[0]?.status).toBe("enqueued");
   });
 
-  it("acceptance 2: a required grant ABSENT → activate BLOCKS (stays deriving); grant lands → promotes EXACTLY ONCE", async () => {
+  it("acceptance 2: a required grant ABSENT stays deriving with a durable reason; the real grant wake promotes exactly once", async () => {
     const projectId = "proj_in6_block";
     const repoUrl = "https://github.com/test/in6-block.git";
     const operation = await recordDirectDerivationReceipts(runtimePool(), projectId, repoUrl);
@@ -207,11 +210,79 @@ describeDb("in-6 activation readiness gate — real PostgreSQL (RLS-enforced)", 
     );
     expect(stillDeriving.rows[0]?.lifecycle).toBe("deriving");
 
-    // GRANT LANDS: seed the slack product grant lineage, then drive the
-    // activation wake. The wake re-evaluates + re-attempts activate.
+    // The block survives the failed activation transaction as a project-scoped,
+    // org-scoped event with the exact required capability that is unready.
+    const blocked = await ownerPool().query<{ payload: { reason: { unreadyCapabilities: unknown[] } } }>(
+      `SELECT payload FROM events
+        WHERE org_id = $1 AND project_id = $2 AND event_type = 'project.activation.readiness_blocked'`,
+      [ORG_A, projectId],
+    );
+    expect(blocked.rows).toHaveLength(1);
+    expect(blocked.rows[0]?.payload.reason.unreadyCapabilities).toEqual([
+      {
+        requirementId: "req_in6_block",
+        capability: "messaging.send",
+        criticality: "merge_required",
+        status: "awaiting_grant",
+        waitReason: "grant_absent:slack:product/test",
+      },
+    ]);
+
+    // Persist the parked node, then prove the org-scoped wake resolver includes
+    // deriving projects even though this project has no merge-queue row.
+    const prepare = new CapabilityPrepareDriver(runtimePool());
+    expect((await prepare.prepare(projectId)).awaitingGrant).toBe(1);
+    await runWithOrgScope(runtimePool(), ORG_A, async (client) => {
+      await new PgEventStore(client).append({
+        orgId: ORG_A,
+        eventType: "integration.grant.linked",
+        payload: {
+          grantId: "grant_org_wake",
+          connectionId: "conn_org_wake",
+          providerKind: "slack",
+          plane: "product",
+          environment: "test",
+        },
+      });
+    });
+    const orgWake = await ownerPool().query<{ id: string }>(
+      `SELECT id::text AS id FROM events
+        WHERE org_id = $1 AND project_id IS NULL AND event_type = 'integration.grant.linked'
+        ORDER BY id DESC LIMIT 1`,
+      [ORG_A],
+    );
+    expect(await resolveCredentialRepairProjects(ownerPool(), orgWake.rows[0]!.id)).toContain(projectId);
+
+    // GRANT LANDS: the real capability driver advances awaiting_grant→enqueued
+    // and emits the durable integration.grant.linked event that the subscriber
+    // consumes. No hand-fired project event is used for the promotion path.
     await seedMessagingGrantLineage(ownerPool(), ORG_A, projectId);
-    const outcome = await attemptDerivingActivation(runtimePool(), projectId);
-    expect(outcome.kind).toBe("activated");
+    expect(await prepare.wakeForGrant(ORG_A, projectId, "slack")).toBe(1);
+    const grantEvent = await ownerPool().query<{ id: string }>(
+      `SELECT id::text AS id FROM events
+        WHERE org_id = $1 AND project_id = $2 AND event_type = 'integration.grant.linked'
+        ORDER BY id DESC LIMIT 1`,
+      [ORG_A, projectId],
+    );
+    expect(grantEvent.rows).toHaveLength(1);
+    expect(await resolveCredentialRepairProjects(runtimePool(), grantEvent.rows[0]!.id)).toEqual([projectId]);
+    const activationOutcomes: string[] = [];
+    const subscriber = new MergeCoordinatorSubscriber({
+      pool: runtimePool(),
+      notifyListener: {} as never,
+      coordinator: { coordinate: async (id) => ({ projectId: id, holdReason: "empty", queueDepth: 0 }) },
+      runStateWriter: {} as never,
+      attemptActivation: async (id) => {
+        const outcome = await attemptDerivingActivation(runtimePool(), id);
+        activationOutcomes.push(outcome.kind);
+        return outcome;
+      },
+    });
+    await (subscriber as unknown as { onEventActivity(eventId: string): Promise<void> }).onEventActivity(
+      grantEvent.rows[0]!.id,
+    );
+    await waitFor(() => activationOutcomes.length === 1);
+    expect(activationOutcomes).toEqual(["activated"]);
 
     const nowActive = await ownerPool().query<{ lifecycle: string }>(
       "SELECT lifecycle FROM projects WHERE project_id = $1",
@@ -230,9 +301,13 @@ describeDb("in-6 activation readiness gate — real PostgreSQL (RLS-enforced)", 
     );
     expect(derivationStatus.rows[0]?.status).toBe("succeeded");
 
-    // EXACTLY-ONCE: a second wake is a no-op (project is `active`, not `deriving`).
-    const duplicate = await attemptDerivingActivation(runtimePool(), projectId);
-    expect(duplicate.kind).toBe("not_deriving");
+    // EXACTLY-ONCE: duplicate delivery of the same durable grant event sees the
+    // active lifecycle and cannot repeat the deriving→active CAS.
+    await (subscriber as unknown as { onEventActivity(eventId: string): Promise<void> }).onEventActivity(
+      grantEvent.rows[0]!.id,
+    );
+    await waitFor(() => activationOutcomes.length === 2);
+    expect(activationOutcomes).toEqual(["activated", "not_deriving"]);
   });
 
   it("acceptance 3: an OPTIONAL (best_effort) un-ready capability NEVER blocks activation", async () => {
@@ -292,6 +367,16 @@ describeDb("in-6 activation readiness gate — real PostgreSQL (RLS-enforced)", 
     return operation;
   }
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error("timed out waiting for asynchronous activation wake");
+}
 
 async function seedRequirement(
   pool: Pool,
