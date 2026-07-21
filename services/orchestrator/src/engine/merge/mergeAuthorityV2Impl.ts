@@ -36,9 +36,10 @@ export function subjectsEqual(a: LandSubject, b: LandSubject): boolean {
 /**
  * The DEFAULT land-binding revalidator (reconciliation rule 2): assert `envelope.subject`
  * deep-equals `input.subject` (the TOCTOU guard the authority MUST apply before
- * authorizing). SP-7 supplies a richer revalidator (the gate-proof binding is still valid
- * for the EXACT head) that composes this subject check; this concrete default is the
- * minimal correct re-validation the contract requires when no SP-7 revalidator is wired.
+ * authorizing and immediately before host land). SP-7 supplies a richer revalidator (the
+ * gate-proof binding is still valid for the EXACT head) that composes this subject check;
+ * this concrete default is the minimal correct re-validation the contract requires when no
+ * SP-7 revalidator is wired.
  */
 export class SubjectEqualityRevalidator implements LandBindingRevalidator {
   async revalidate(input: { subject: LandSubject; envelope: LandBindingEnvelope }): Promise<LandBindingRevalidation> {
@@ -79,9 +80,9 @@ export interface AuthorityLandStore {
 
 /**
  * The real fail-closed `MergeAuthorityV2`. Constructed with the `CodeHost` it lands
- * through, the {@link LandBindingRevalidator} it re-validates the binding with, and the
- * {@link AuthorityLandStore} that records the 4-step protocol. No hidden state: the CAS
- * base + target ride ON the {@link LandBindingEnvelope}.
+ * through, the {@link LandBindingRevalidator} it re-validates the binding with before
+ * authorization and host land, and the {@link AuthorityLandStore} that records the 4-step
+ * protocol. No hidden state: the CAS base + target ride ON the {@link LandBindingEnvelope}.
  */
 export class MergeAuthorityV2Impl implements MergeAuthorityV2 {
   constructor(
@@ -189,7 +190,8 @@ export class MergeAuthorityV2Impl implements MergeAuthorityV2 {
    * Execute the land TRANSACTIONALLY, ONLY for an `authorized` authorization (throws on
    * a non-authorized one — `land` cannot bypass the decision). The 4-step protocol:
    *   (1) persist the immutable decision + idempotent effect intent,
-   *   (2) external idempotent CAS land (`CodeHost.landAuthorizedIntegration`),
+   *   (2) revalidate the exact binding immediately before external idempotent CAS land
+   *       (`CodeHost.landAuthorizedIntegration`),
    *   (3) record the receipt + finalize the run/spec,
    *   (4) a receipt failure AFTER the land returns `merge_state_unknown` for the reconciler.
    * A `LandCasRejectedError` from step 2 (main raced ahead) propagates to the caller —
@@ -208,6 +210,18 @@ export class MergeAuthorityV2Impl implements MergeAuthorityV2 {
       return { kind: "landed", mainSha: persisted.completed.mainSha, auditId: persisted.completed.auditId };
     }
     const { effectIntentId } = persisted;
+
+    // Freshness fence between durable step 1 and host step 2: the original evaluation may
+    // now be stale (node/proof/member branch can change without moving main), so revalidate
+    // immediately before the irreversible CAS.
+    // A completed retry returned above deliberately skips this check: its CAS already ran.
+    const revalidation = await this.revalidator.revalidate({ subject: auth.subject, envelope: auth.envelope });
+    if (!revalidation.valid) {
+      return {
+        kind: "revalidation_failed",
+        reason: revalidation.reason ?? "land-time binding re-validation failed — fail closed",
+      };
+    }
 
     // Step 2: the external idempotent CAS land, keyed on the effect intent so a retry of
     // this step is a no-op once main already advanced to the authorized head.

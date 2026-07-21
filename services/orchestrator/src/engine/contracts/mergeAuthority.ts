@@ -246,22 +246,26 @@ export type EffectReconcile =
 
 /**
  * The transactional result of `land`. On success: the new `mainSha` + the recorded
- * `auditId`. On a durable-receipt failure AFTER the external land fired, the result is
- * `merge_state_unknown` (the {@link EffectReconcile}`.state_unknown` projection) —
- * NEVER a plain failure that would leave internal state inconsistent with the host.
+ * `auditId`. A stale binding found by the mandatory land-time revalidation returns
+ * `revalidation_failed` before the external CAS. On a durable-receipt failure AFTER
+ * the external land fired, the result is `merge_state_unknown` (the
+ * {@link EffectReconcile}`.state_unknown` projection) — NEVER a plain failure that
+ * would leave internal state inconsistent with the host.
  */
 export type LandOutcome =
   | { readonly kind: "landed"; readonly mainSha: string; readonly auditId: string }
+  | { readonly kind: "revalidation_failed"; readonly reason: string }
   | { readonly kind: "merge_state_unknown"; readonly reason: string; readonly reconcileToken: string };
 
 /**
  * `MergeAuthorityV2` — the SOLE land decision + the sole host-land driver. It accepts
  * the frozen {@link AuthorizeLandInput} and the {@link LandBindingEnvelope} SEPARATELY,
  * re-validates the binding (deep-equal subject) through the injected
- * {@link LandBindingRevalidator} before authorizing, and — only on `authorized` — runs
- * the 4-step land protocol through `CodeHost.landAuthorizedIntegration`. There is NO
- * `prepareIntegration`: the binding is materialized by the caller and handed in as the
- * envelope. A Wave-1 impl is validated against `mergeAuthorityConformance`.
+ * {@link LandBindingRevalidator} before authorizing and again immediately before the
+ * host CAS, and — only on `authorized` — runs the 4-step land protocol through
+ * `CodeHost.landAuthorizedIntegration`. There is NO `prepareIntegration`: the binding
+ * is materialized by the caller and handed in as the envelope. A Wave-1 impl is
+ * validated against `mergeAuthorityConformance`.
  */
 export interface MergeAuthorityV2 {
   /**
@@ -276,8 +280,10 @@ export interface MergeAuthorityV2 {
   /**
    * Execute the land TRANSACTIONALLY, ONLY for an `authorized` authorization (throws
    * on a non-authorized one). Runs the 4-step protocol: persist the decision + idempotent
-   * effect intent → external idempotent CAS land (`CodeHost.landAuthorizedIntegration`)
-   * → record the receipt → ambiguity ⇒ `merge_state_unknown`.
+   * effect intent → revalidate the exact binding again → external idempotent CAS land
+   * (`CodeHost.landAuthorizedIntegration`) → record the receipt → ambiguity ⇒
+   * `merge_state_unknown`. An already-completed idempotent retry returns `landed`
+   * before revalidating.
    */
   land(authorization: LandAuthorization): Promise<LandOutcome>;
 }

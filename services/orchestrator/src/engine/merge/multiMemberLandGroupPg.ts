@@ -72,7 +72,11 @@ export async function landAuthorizedGroupPg(
   if (!(await input.confirmBeforeLand())) return { kind: "policy_held" };
   try {
     const landed = await authority.land(input.evaluation.authorization);
-    return landed.kind === "landed" ? { kind: "landed", mainSha: landed.mainSha } : { kind: "reconcile_pending" };
+    if (landed.kind === "landed") return { kind: "landed", mainSha: landed.mainSha };
+    // The binding changed after evaluation. It must be materialized and proven again;
+    // never reinterpret this pre-CAS failure as a completed/ambiguous host land.
+    if (landed.kind === "revalidation_failed") return { kind: "rederive" };
+    return { kind: "reconcile_pending" };
   } catch (error) {
     if (error instanceof LandCasRejectedError) return { kind: "rederive" };
     throw error;
