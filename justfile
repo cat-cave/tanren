@@ -61,6 +61,15 @@ contract-schema-drift:
 dashboard-types-drift:
   corepack pnpm run check:dashboard-types-drift
 
+# in-21 drift gate for the dashboard's bundled in-20 JSON-Schema catalog
+# (services/dashboard/src/api/integrationReadSchemaCatalog.gen.ts): regenerates
+# the bundle from contracts/json/integrations/*.json and fails if the committed
+# TS module diverges. Mirrors dashboard-types-drift exactly; the source JSON is
+# itself drift-gated by contract-schema-drift, so this gate pins the dashboard's
+# bundled copy to that source.
+integration-schema-bundle-drift:
+  corepack pnpm run check:integration-schema-bundle-drift
+
 # rv-22 read-compat guard for the runtime-verification HTTP read surface. UNLIKE
 # the byte-drift guards above (which fail on any change), this is SEMANTIC: it
 # pins the exposed response shape against the committed floor
@@ -116,7 +125,7 @@ spelling:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat integration-read-compat knip spelling typecheck test compose-config
+fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -165,7 +174,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
+ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
