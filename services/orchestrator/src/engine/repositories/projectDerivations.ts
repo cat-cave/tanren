@@ -4,6 +4,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ProjectLifecycle } from "./projects.js";
 import { assertProjectDerivationActivationEvidence } from "./integrationProjectAccess.js";
+import { prepareIntegrationReadiness } from "./activationReadiness.js";
 import {
   completeDerivationReceipts,
   canonicalDerivationJson,
@@ -422,6 +423,9 @@ export const ProjectDerivationStore = {
         throw error;
       }
 
+      // in-6: gate on REQUIRED integration capabilities — a node not enqueued/ready blocks.
+      await prepareIntegrationReadiness(client, current.orgId, current.projectId);
+
       const activated = await client.query<{ project_id: string }>(
         `UPDATE projects
             SET lifecycle = 'active'
@@ -493,3 +497,4 @@ export type {
   DerivationOwnershipReceipt,
   ExpectedDerivationIdentity,
 } from "./projectDerivationReceipts.js";
+export { ProjectActivationReadinessBlockedError } from "./activationReadiness.js";

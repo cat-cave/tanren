@@ -58,6 +58,19 @@ export interface MergeCoordinatorSubscriberDeps {
    * to `Date.now`. A test overrides it to drive the debounce deterministically.
    */
   now?: () => number;
+  /**
+   * in-6: the deriving-project activation wake. When a credential/grant event
+   * (`credential.configured` / `integration.provisioned` /
+   * `integration.grant.linked`) names a project that is still `deriving`, this
+   * re-evaluates its capability graph + re-attempts `activate` so the last
+   * required grant promotes it. Fire-and-forget alongside the merge-coordinator
+   * drive (they are independent concerns). Defaults to the production
+   * `attemptDerivingActivation`; a test injects a recording fake to assert the
+   * wake fired. The REAL producer is this subscriber's existing LISTEN on
+   * `NOTIFICATION_CHANNEL` (the credential/grant events have real emitters) —
+   * NOT a phantom listener (trap #1).
+   */
+  attemptActivation?: (projectId: string) => Promise<unknown>;
 }
 
 /**
@@ -343,6 +356,20 @@ export class MergeCoordinatorSubscriber {
     if (eventId === "") return;
     const projectIds = await resolveCredentialRepairProjects(this.deps.pool, eventId);
     await Promise.all(projectIds.map((projectId) => this.schedule(projectId)));
+    // in-6: fire-and-forget the deriving-project activation wake for every
+    // affected project. Independent of the merge-coordinator drive above — a
+    // deriving project has no merge-queue rows, so `schedule` is a no-op for
+    // it; the activation wake is what unblocks it. The wake is idempotent
+    // (the lifecycle='deriving' CAS inside activate), so a duplicate event is
+    // harmless. A failure is logged inside `attemptDerivingActivation`, never
+    // thrown into the notify pump.
+    if (this.deps.attemptActivation !== undefined) {
+      for (const projectId of projectIds) {
+        void this.deps.attemptActivation(projectId).catch((error: unknown) => {
+          log.error("deriving-project activation wake failed", { projectId, eventId }, error);
+        });
+      }
+    }
   }
 
   /** Coordinate a project, coalescing concurrent requests (latest state, once). */
@@ -419,7 +446,9 @@ export class MergeCoordinatorSubscriber {
   }
 }
 
-/** Build + start the MergeCoordinator subscriber from the worker boot. */
+/**
+ * Build + start the MergeCoordinator subscriber from the worker boot.
+ */
 export async function startMergeCoordinatorSubscriber(
   deps: MergeCoordinatorSubscriberDeps,
 ): Promise<MergeCoordinatorSubscriber> {
@@ -427,3 +456,10 @@ export async function startMergeCoordinatorSubscriber(
   await subscriber.start();
   return subscriber;
 }
+
+// in-6: re-export the deriving-project activation wake so `autonomyLoops.ts`
+// can wire it into this subscriber's `attemptActivation` dep WITHOUT a separate
+// import (keeping its import cap at 12). The activation wake is this module's
+// natural companion — it fires alongside the merge-coordinator drive on the
+// SAME credential/grant events this subscriber already listens for.
+export { attemptDerivingActivation } from "../repositories/projectActivationWake.js";

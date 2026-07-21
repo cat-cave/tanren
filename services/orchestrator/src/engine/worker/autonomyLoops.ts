@@ -16,7 +16,7 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator, buildResolutionDagWalker } from "../dag/build.js";
 import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
-import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
+import { startMergeCoordinatorSubscriber, attemptDerivingActivation } from "../merge/subscriber.js";
 import {
   startPostMergeSubscriber,
   buildDeployOnMergeWatcher,
@@ -192,6 +192,12 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // its spec-status finalize, and its conflict resolver's replan write route
     // through the control plane when wired (else direct on deps.pool, byte-identical).
     runStateWriter: deps.runStateWriter,
+    // in-6: the merge subscriber ALREADY listens on `NOTIFICATION_CHANNEL` for
+    // credential/grant events (the REAL producer — these events have real
+    // emitters). Fire-and-forget the deriving-project activation wake for each
+    // affected project so a grant that unblocks a required capability promotes
+    // the project `deriving → active` exactly-once.
+    attemptActivation: (projectId) => attemptDerivingActivation(deps.pool, projectId),
   });
   log.info("native merge-queue coordinator subscriber started (autonomy-engine §2d)");
   // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —

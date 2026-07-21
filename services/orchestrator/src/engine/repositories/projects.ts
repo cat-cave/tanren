@@ -274,6 +274,7 @@ export {
   ProjectDerivationConflictError,
   ProjectDerivationRow,
   ProjectDerivationStore,
+  ProjectActivationReadinessBlockedError,
   buildDerivationOwnership,
   explicitRepositoryMarker,
   projectDerivationFingerprint,
