@@ -39,6 +39,13 @@ export const proofBundlesReference = pgTable("proof_bundles", {
   id: text("id").notNull(),
 });
 
+/** Reference-only proof-bundle member identity for SP-7's thin section projection. */
+export const proofBundleUnitsReference = pgTable("proof_bundle_units", {
+  orgId: text("org_id").notNull(),
+  bundleId: text("bundle_id").notNull(),
+  proofUnitDigest: text("proof_unit_digest").notNull(),
+});
+
 export const proofUnitsReference = pgTable("proof_units", {
   orgId: text("org_id").notNull(),
   projectId: text("project_id").notNull(),

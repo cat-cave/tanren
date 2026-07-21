@@ -3,7 +3,6 @@
 import type pg from "pg";
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { CodeHost, CodeHostRepoRef } from "../contracts/codeHost.js";
-import { proofReuseKey } from "../contracts/integrationNodes.js";
 import type {
   LandBindingEnvelope,
   LandBindingRevalidation,
@@ -16,11 +15,11 @@ import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { buildAuthorityLandStore, type LandFinalizeContext } from "./mergeAuthorityLandFinalizer.js";
 import { MergeAuthorityV2Impl, subjectsEqual, type AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
 import {
-  loadCurrentQuarantineVersion,
   loadPersistedBatchDecisionSignals,
   rethrowTypedCodeHostInfrastructure,
   type PersistedBatchDecisionSignals,
 } from "./multiMemberAuthorityEvidencePg.js";
+import type { GateProofBundleVerifier } from "./gateProofBundleTypes.js";
 
 export function buildPgExactBatchAuthority(input: {
   readonly pool: pg.Pool;
@@ -32,6 +31,7 @@ export function buildPgExactBatchAuthority(input: {
   readonly intoMain: string;
   readonly context: LandFinalizeContext;
   readonly runStateWriter: RunStateWriter;
+  readonly gateProofs: GateProofBundleVerifier;
   readonly landStore?: AuthorityLandStore;
 }): MergeAuthorityV2 {
   return new MergeAuthorityV2Impl(
@@ -44,9 +44,30 @@ export function buildPgExactBatchAuthority(input: {
       repo: input.repo,
       intoMain: input.intoMain,
       nodes: new PgIntegrationNodeModel(input.pool),
-      readQuarantineVersion: () => loadCurrentQuarantineVersion(input.pool, input.orgId, input.context.projectId),
       readDecisionSignals: () =>
-        loadPersistedBatchDecisionSignals(input.pool, input.orgId, input.context.projectId, input.binding),
+        loadPersistedBatchDecisionSignals(
+          input.pool,
+          input.gateProofs,
+          input.orgId,
+          input.context.projectId,
+          input.binding,
+        ),
+      verifyGateProof: () =>
+        input.gateProofs.verifyExact({
+          orgId: input.orgId,
+          projectId: input.context.projectId,
+          nodeId: input.binding.nodeId,
+          baseSha: input.binding.baseSha,
+          headSha: input.binding.headSha,
+          treeHash: input.binding.treeHash,
+          memberSetHash: input.binding.memberSetHash,
+          members: input.binding.members,
+          gateConfigHash: input.binding.gateConfigHash,
+          policyVersion: input.binding.policyVersion,
+          gateProofBundleId: input.binding.proof.gateProofBundleId,
+          proofBundleDigest: input.binding.proof.proofBundleDigest,
+          proofRoot: input.binding.proof.proofRoot,
+        }),
     }),
     input.landStore ?? buildAuthorityLandStore(input.pool, input.context, input.runStateWriter),
   );
@@ -60,8 +81,9 @@ export interface PgExactBatchBindingRevalidatorDeps {
   readonly repo: CodeHostRepoRef;
   readonly intoMain: string;
   readonly nodes: PgIntegrationNodeModel;
-  readonly readQuarantineVersion: () => Promise<string>;
   readonly readDecisionSignals: () => Promise<PersistedBatchDecisionSignals>;
+  /** Invoked immediately before the host CAS alongside every other freshness read. */
+  readonly verifyGateProof: () => Promise<boolean>;
 }
 
 /** Immediate exact DB + host freshness read used by the real SP-4 implementation. */
@@ -73,10 +95,9 @@ export class PgExactBatchBindingRevalidator implements LandBindingRevalidator {
       return invalid("authority received a different subject/envelope object");
     }
     const { binding } = this.deps;
-    const [node, proof, quarantineVersion, decisionSignals] = await Promise.all([
+    const [node, exactGateProof, decisionSignals] = await Promise.all([
       this.deps.nodes.findByMemberKey(this.deps.orgId, binding.memberSetHash),
-      this.deps.nodes.findProof(this.deps.orgId, binding.proof.proofReuseKey),
-      this.deps.readQuarantineVersion(),
+      this.deps.verifyGateProof(),
       this.deps.readDecisionSignals(),
     ]);
     if (
@@ -87,26 +108,20 @@ export class PgExactBatchBindingRevalidator implements LandBindingRevalidator {
       node.treeHash !== binding.treeHash ||
       node.baseSha !== binding.baseSha ||
       node.policyVersion !== binding.policyVersion ||
-      node.gateConfigHash !== binding.proof.keyInput.gateConfigHash ||
+      node.gateConfigHash !== binding.gateConfigHash ||
       !sameMembers(node.members, binding.members)
     ) {
       return invalid("persisted integration node no longer matches the evaluated binding");
     }
-    if (
-      proof === undefined ||
-      proof.nodeId !== binding.nodeId ||
-      proof.verdict !== "passed" ||
-      proofReuseKey(binding.proof.keyInput) !== binding.proof.proofReuseKey
-    ) {
-      return invalid("exact passing integration proof is absent or stale");
+    if (!exactGateProof) {
+      return invalid("exact sealed V2 gate proof bundle is absent, incomplete, or stale");
     }
     if (
-      quarantineVersion !== binding.proof.keyInput.quarantineVersion ||
       decisionSignals.gateVerdict !== "passed" ||
       decisionSignals.mergeability !== "clean" ||
       decisionSignals.conflicts !== "resolved"
     ) {
-      return invalid("proof evidence or active quarantine changed after evaluation");
+      return invalid("V2 proof evidence no longer authorizes this integration node");
     }
     let currentMain: string | undefined;
     let memberHeads: ReadonlyArray<string | undefined>;

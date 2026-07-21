@@ -122,7 +122,10 @@ export interface GateSectionVerdict {
 
 export interface GateProofBundleV2 {
   readonly gateProofBundleId: string;
+  /** SP-3 bundle identity; the projection stores no duplicate signature or bytes. */
   readonly proofBundleDigest: Digest;
+  /** The only proof coordinate a land envelope may carry. */
+  readonly proofRoot: Digest;
   readonly integrationNodeId: string;
   readonly plan: RequiredSectionPlan;
   readonly sections: readonly GateSectionVerdict[];

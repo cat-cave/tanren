@@ -1,7 +1,8 @@
 // cspell:ignore unpartitioned
 import { describe, expect, it, vi } from "vitest";
 import type pg from "pg";
-import { memberKey, proofReuseKey } from "../src/engine/contracts/integrationNodes.js";
+import { parseDigest } from "../src/engine/contracts/cas.js";
+import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import type { BatchAuthorityBinding } from "../src/engine/contracts/batchMergeCoordinator.js";
 import type { LandAuthorization, LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
 import { applyFinalizeLand } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
@@ -196,14 +197,6 @@ function authorization(): { binding: BatchAuthorityBinding; authorization: LandA
     "main-before",
     members.map((member) => member.headSha),
   );
-  const keyInput = {
-    memberKey: memberSetHash,
-    gateConfigHash: "gate-v1",
-    policyVersion: "policy-v1",
-    runnerImage: "runner@sha256:exact",
-    appEnvHash: "env-v1",
-    quarantineVersion: "quarantine-v1",
-  };
   const binding: BatchAuthorityBinding = {
     nodeId: "node-exact",
     baseBranch: "main",
@@ -212,8 +205,14 @@ function authorization(): { binding: BatchAuthorityBinding; authorization: LandA
     treeHash: "integration-tree",
     members,
     memberSetHash,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", keyInput, proofReuseKey: proofReuseKey(keyInput) },
+    gateConfigHash: "gate-v1",
+    policyVersion: "policy-v1",
+    proof: {
+      verdict: "passed",
+      gateProofBundleId: "gate-proof-bundle-node-exact",
+      proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),
+    },
   };
   const envelope: LandBindingEnvelope = {
     subject: { kind: "integration_node", id: binding.nodeId },

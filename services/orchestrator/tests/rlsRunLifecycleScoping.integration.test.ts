@@ -8,8 +8,7 @@
 // Nothing drove a real ORG-SCOPED run through the REAL allocator + the lifecycle
 // loop end-to-end on the enforced role — so the runner-allocation INSERT (which
 // runs OUTSIDE an open connection scope, under only the worker's lightweight
-// per-job org-id) was never covered. Live validation hit it: `new row violates
-// row-level security policy for table "runners"`. This test reproduces that exact
+// per-job org-id) was never covered. Live validation hit `new row violates row-level security policy for table "runners"`.
 // shape and asserts the whole lifecycle's writes land.
 //
 // MECHANISM. It seeds a credential-COMPLETE run (so context hydration succeeds),
@@ -33,7 +32,7 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, setSystemPool } from "@tanren/db";
+import { migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
@@ -45,6 +44,7 @@ import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
   lifecycleAuthorityBundle,
+  buildLifecycleCanonicalAuthority,
   driveLifecycleNativeQueueLand,
   accounting,
   approvingReview,
@@ -261,6 +261,30 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     const target = ssh.commands[0]?.target;
     if (entry === undefined || target === undefined)
       throw new Error("lifecycle native-queue drive has no queued entry or runner target");
+    const deletedBundle = await buildLifecycleCanonicalAuthority({
+      pool: appPool,
+      orgId: ORG,
+      entry,
+      repo: LIFECYCLE_REPO,
+      headBranch: "tanren/lifecycle",
+      headSha: FAKE_HEAD_SHA,
+      ssh,
+      target,
+    });
+    await runWithOrgScope(appPool, ORG, async (client) => {
+      await client.query("DELETE FROM gate_proof_bundle_sections WHERE org_id = $1 AND gate_proof_bundle_id = $2", [
+        ORG,
+        deletedBundle.binding.proof.gateProofBundleId,
+      ]);
+      await client.query("DELETE FROM gate_proof_bundles WHERE org_id = $1 AND id = $2", [
+        ORG,
+        deletedBundle.binding.proof.gateProofBundleId,
+      ]);
+    });
+    await expect(deletedBundle.authority.land(deletedBundle.evaluation.authorization)).resolves.toMatchObject({
+      kind: "revalidation_failed",
+    });
+    expect(deletedBundle.host.landCalls).toBe(0);
     await driveLifecycleNativeQueueLand({
       pool: appPool,
       orgId: ORG,
@@ -442,7 +466,6 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
     [PLAN_TASK, RUN, ORG],
   );
 }
-
 async function seedForeignCredentialRun(owner: Pool): Promise<void> {
   const config = {
     version: 1,

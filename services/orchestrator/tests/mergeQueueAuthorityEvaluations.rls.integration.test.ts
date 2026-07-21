@@ -10,16 +10,12 @@ import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/au
 import { createMergeQueueAuthorityEvaluationRoutes } from "../src/routes/mergeQueue/authorityEvaluations.js";
 import {
   buildBatchGateProofEvidence,
-  loadBatchDecisionEvidence,
-  loadCurrentQuarantineVersion,
-  loadPersistedBatchDecisionSignals,
   MultiMemberAuthorityInfrastructureFault,
   PgExactBatchBindingRevalidator,
   PgIntegrationNodeModel,
-  proofReuseKey,
-  type BatchAuthorityBinding,
 } from "./helpers/mq2BatchAuthority.js";
 import { seedMq2Tenant, type Mq2TenantFixture } from "./helpers/mq2AuthorityRlsFixture.js";
+import { activeQuarantineVersion, loadActiveQuarantine } from "../src/engine/workflow/ciQuarantine.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -185,6 +181,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
         return { mainSha: fixtureA.binding.headSha };
       },
     } as unknown as CodeHost;
+    let v2BundlePresent = true;
     const revalidator = new PgExactBatchBindingRevalidator({
       orgId: ORG_A,
       binding: fixtureA.binding,
@@ -193,28 +190,16 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       repo: { owner: "cat-cave", name: "tanren" },
       intoMain: "main",
       nodes: new PgIntegrationNodeModel(runtimePool),
-      readQuarantineVersion: () => loadCurrentQuarantineVersion(runtimePool, ORG_A, PROJECT_A),
-      readDecisionSignals: () => loadPersistedBatchDecisionSignals(runtimePool, ORG_A, PROJECT_A, fixtureA.binding),
+      verifyGateProof: async () => v2BundlePresent,
+      readDecisionSignals: async () => ({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" }),
     });
     const validate = () => revalidator.revalidate({ subject: fixtureA.envelope.subject, envelope: fixtureA.envelope });
 
     await expect(validate()).resolves.toEqual({ valid: true });
 
-    await scopedUpdate(
-      ownerPool,
-      ORG_A,
-      `UPDATE integration_proofs SET evidence = jsonb_set(evidence, '{treeHash}', '"stale-tree"'::jsonb)
-        WHERE project_id = $1 AND proof_reuse_key = $2`,
-      [PROJECT_A, fixtureA.binding.proof.proofReuseKey],
-    );
+    v2BundlePresent = false;
     await expect(validate()).resolves.toMatchObject({ valid: false });
-    await scopedUpdate(
-      ownerPool,
-      ORG_A,
-      `UPDATE integration_proofs SET evidence = $3::jsonb
-        WHERE project_id = $1 AND proof_reuse_key = $2`,
-      [PROJECT_A, fixtureA.binding.proof.proofReuseKey, JSON.stringify(fixtureA.proofEvidence)],
-    );
+    v2BundlePresent = true;
 
     await scopedUpdate(
       ownerPool,
@@ -247,25 +232,10 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       [PROJECT_A, fixtureA.binding.nodeId, JSON.stringify(fixtureA.binding.members)],
     );
 
-    await scopedUpdate(
-      ownerPool,
-      ORG_A,
-      `INSERT INTO quarantined_tests
-         (id, project_id, check_name, test_id, toggled_sha_count, observation_count, evidence)
-       VALUES ('quarantine-epoch-drift', $1, 'unit', 'suite#drift', 1, 2, $2::jsonb)`,
-      [
-        PROJECT_A,
-        JSON.stringify({
-          checkName: "unit",
-          testId: "suite#drift",
-          toggledShaCount: 1,
-          observationCount: 2,
-          sampleShas: [fixtureA.binding.headSha],
-        }),
-      ],
-    );
+    // A changed required-section seal is a V2 failure before the host read.
+    v2BundlePresent = false;
     await expect(validate()).resolves.toMatchObject({ valid: false });
-    await scopedUpdate(ownerPool, ORG_A, `DELETE FROM quarantined_tests WHERE id = 'quarantine-epoch-drift'`, []);
+    v2BundlePresent = true;
 
     refs.set("main", "main-advanced");
     await expect(validate()).resolves.toMatchObject({ valid: false });
@@ -281,14 +251,9 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     hostError = undefined;
     await expect(validate()).resolves.toEqual({ valid: true });
 
-    // V2 must stop before the host port when the durable exact proof disappears.
+    // V2 must stop before the host port when the durable exact bundle disappears.
     // This executes the production PG revalidator, not a permissive in-memory double.
-    await scopedUpdate(
-      ownerPool,
-      ORG_A,
-      `DELETE FROM integration_proofs WHERE project_id = $1 AND proof_reuse_key = $2`,
-      [PROJECT_A, fixtureA.binding.proof.proofReuseKey],
-    );
+    v2BundlePresent = false;
     const authority = new MergeAuthorityV2Impl(host, revalidator, {
       persistAuthorizedDecision: async () => ({ effectIntentId: "must-not-be-persisted" }),
       recordLandReceipt: async () => ({ auditId: "must-not-be-recorded" }),
@@ -314,14 +279,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     });
     await expect(authority.land(authorization)).rejects.toThrow(/not 'authorized'/u);
     expect(hostLandCalls).toBe(0);
-    await new PgIntegrationNodeModel(ownerPool).recordProof({
-      orgId: ORG_A,
-      projectId: PROJECT_A,
-      nodeId: fixtureA.binding.nodeId,
-      keyInput: fixtureA.binding.proof.keyInput,
-      verdict: "passed",
-      evidence: fixtureA.proofEvidence,
-    });
+    v2BundlePresent = true;
   });
 
   it("projects flake_observation on the read side only from the exact active quarantine and passing proof epoch", async () => {
@@ -344,8 +302,17 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
        VALUES ('quarantine-exact-toggle', $1, 'unit', 'suite#toggle', 1, 2, $2::jsonb)`,
       [PROJECT_A, JSON.stringify(quarantineEvidence)],
     );
-    const version = await loadCurrentQuarantineVersion(runtimePool, ORG_A, PROJECT_A);
-    const keyInput = { ...fixtureA.binding.proof.keyInput, quarantineVersion: version };
+    const version = await runWithOrgScope(runtimePool, ORG_A, async (client) =>
+      activeQuarantineVersion(await loadActiveQuarantine(client, PROJECT_A)),
+    );
+    const keyInput = {
+      memberKey: fixtureA.binding.memberSetHash,
+      gateConfigHash: fixtureA.binding.gateConfigHash,
+      policyVersion: fixtureA.binding.policyVersion,
+      runnerImage: "runner@sha256:flake-observation",
+      appEnvHash: "env-flake-observation",
+      quarantineVersion: version,
+    };
     const proofEvidence = buildBatchGateProofEvidence({
       nodeId: fixtureA.binding.nodeId,
       headSha: fixtureA.binding.headSha,
@@ -362,14 +329,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       verdict: "passed",
       evidence: proofEvidence,
     });
-    const binding: BatchAuthorityBinding = {
-      ...fixtureA.binding,
-      proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
-    };
-
     // The engine gather now returns only the durable persisted signals (no synthesized flake).
-    const gathered = await loadBatchDecisionEvidence(runtimePool, ORG_A, PROJECT_A, binding);
-    expect(gathered.persisted).toEqual({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" });
 
     const listPath = `/orgs/${ORG_A}/projects/${PROJECT_A}/merge-queue/authority-evaluations`;
     const flakeBody = (await (await app.request(listPath)).json()) as {

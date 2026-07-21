@@ -7,7 +7,8 @@
 // subset — the batch member does not land.
 
 import { describe, expect, it } from "vitest";
-import { memberKey, proofReuseKey, type ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
+import { parseDigest } from "../src/engine/contracts/cas.js";
+import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import type { CodeHost } from "../src/engine/contracts/codeHost.js";
 import type { AuthorizeLandInput, LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
 import type { BatchAuthorityBinding } from "../src/engine/contracts/batchMergeCoordinator.js";
@@ -23,15 +24,6 @@ import {
 import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
 import { batchArtifactDigest, batchProofRoot } from "../src/engine/merge/multiMemberAuthorityTypes.js";
 
-const KEY_INPUT: ProofReuseKeyInput = {
-  memberKey: "",
-  gateConfigHash: "gate-7",
-  policyVersion: "policy-9",
-  runnerImage: "runner@sha256:exact",
-  appEnvHash: "env-2",
-  quarantineVersion: "quarantine-4",
-};
-
 function binding(): BatchAuthorityBinding {
   const members = [
     { specId: "A", runId: "run-a", branch: "tanren/a", headSha: "head-a" },
@@ -41,7 +33,6 @@ function binding(): BatchAuthorityBinding {
     "main-before",
     members.map((member) => member.headSha),
   );
-  const keyInput = { ...KEY_INPUT, memberKey: memberSetHash };
   return {
     nodeId: "inode-batch-42",
     baseBranch: "main",
@@ -50,8 +41,14 @@ function binding(): BatchAuthorityBinding {
     treeHash: "batch-tree",
     members,
     memberSetHash,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
+    gateConfigHash: "gate-7",
+    policyVersion: "policy-9",
+    proof: {
+      verdict: "passed",
+      gateProofBundleId: "gate_proof_bundle:inode-batch-42",
+      proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),
+    },
   };
 }
 

@@ -8,7 +8,8 @@
 // batch member does NOT land. It also proves the P2 dismiss-on-base-shift enforcement.
 
 import { describe, expect, it } from "vitest";
-import { memberKey, proofReuseKey, type ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
+import { parseDigest } from "../src/engine/contracts/cas.js";
+import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import type { CodeHost } from "../src/engine/contracts/codeHost.js";
 import type { AuthorizeLandInput, LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
 import type { BatchAuthorityBinding } from "../src/engine/contracts/batchMergeCoordinator.js";
@@ -34,15 +35,6 @@ import { batchArtifactDigest, batchProofRoot } from "../src/engine/merge/multiMe
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 const OLD_HEAD = "c".repeat(40);
-
-const KEY_INPUT: ProofReuseKeyInput = {
-  memberKey: "",
-  gateConfigHash: "gate-7",
-  policyVersion: "policy-9",
-  runnerImage: "runner@sha256:exact",
-  appEnvHash: "env-2",
-  quarantineVersion: "quarantine-4",
-};
 
 // A standard-tier-shaped review policy: a dedicated `tanren-reviewer` principal, a complete
 // forge receipt, and `branch_head` freshness with `dismiss_on_base_shift` (exercises the P2 fix).
@@ -86,7 +78,6 @@ function binding(): BatchAuthorityBinding {
     "main-before",
     members.map((member) => member.headSha),
   );
-  const keyInput = { ...KEY_INPUT, memberKey: memberSetHash };
   return {
     nodeId: "inode-batch-77",
     baseBranch: "main",
@@ -95,8 +86,14 @@ function binding(): BatchAuthorityBinding {
     treeHash: "batch-tree",
     members,
     memberSetHash,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
+    gateConfigHash: "gate-7",
+    policyVersion: "policy-9",
+    proof: {
+      verdict: "passed",
+      gateProofBundleId: "gate_proof_bundle:inode-batch-77",
+      proofBundleDigest: parseDigest(`sha256:${"c".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"d".repeat(64)}`),
+    },
   };
 }
 

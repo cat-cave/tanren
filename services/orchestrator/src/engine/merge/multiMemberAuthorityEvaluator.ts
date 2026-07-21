@@ -3,7 +3,7 @@
 
 import { decideFromFindings } from "../contracts/auditPosture.js";
 import { severityRank, type Finding } from "../contracts/findings.js";
-import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
+import { memberKey } from "../contracts/integrationNodes.js";
 import type { LandAuthorization, LandBindingMember } from "../contracts/mergeAuthority.js";
 import {
   classifyMergeSignal,
@@ -64,7 +64,7 @@ function common(
     version: MULTI_MEMBER_AUTHORITY_VERSION,
     nodeId: input.binding.nodeId,
     memberSetHash: input.binding.memberSetHash,
-    proofReuseKey: input.binding.proof.proofReuseKey,
+    proofRoot: input.binding.proof.proofRoot,
     members,
     reasonCodes: stableUnique(reasonCodes),
   } as const;
@@ -351,9 +351,8 @@ function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[
   }
   if (
     binding.proof.verdict !== "passed" ||
-    binding.proof.keyInput.memberKey !== binding.memberSetHash ||
-    binding.proof.keyInput.policyVersion !== binding.policyVersion ||
-    proofReuseKey(binding.proof.keyInput) !== binding.proof.proofReuseKey
+    !nonBlankString(binding.gateConfigHash) ||
+    !nonBlankString(binding.proof.gateProofBundleId)
   ) {
     errors.push("passing_proof_binding_mismatch");
   }
@@ -406,4 +405,8 @@ function sameEnvelopeMembers(
       member.disposition === "admit"
     );
   });
+}
+
+function nonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }

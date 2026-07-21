@@ -9,7 +9,6 @@
 // `seedWorkspaceLocalIgnore` + `ensureWorkspaceDepsInstalled` (the install the brownfield
 // re-gate needs), and `runGateForWhen` over the `pre_merge` tiers (the verdict).
 
-import type { BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
 import { bootstrapCommand, type CiConfigV1 } from "../ci/index.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../config/shared.js";
@@ -29,7 +28,10 @@ import {
   resolveGateConfig,
   runGateForWhen,
 } from "../workflow/gate/index.js";
+import { hashGateConfig } from "../dag/integrationProofKey.js";
 import type { ResolveBatchGateConfig, GateBatchWorkspace } from "./batchIntegrationNodeDrive.js";
+import type { NativeCiGateObservation } from "./gateProofBundleTypes.js";
+export { buildBatchGateProofSealer, type BatchProofSubstrate } from "./batchGateProofProduction.js";
 
 export interface BatchNodeGateClosureDeps {
   ssh: CommandSubstrate;
@@ -81,7 +83,7 @@ export function batchNodeResolveConfig(deps: BatchNodeGateClosureDeps): ResolveB
  * infra-error hold — never a false verdict).
  */
 export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspace {
-  return async (live: LiveJjWorkspace): Promise<{ verdict: BatchCheckVerdict; passed: boolean }> => {
+  return async (live: LiveJjWorkspace) => {
     // Resolve + CLASSIFY the repo gate config FIRST, before any seed/install work. An
     // INVALID `.tanren/ci.yml` (built-repo data) is a fail-closed gate FAIL verdict —
     // NOT a throw-to-infra-hold (which would hot-loop the retry timer on a permanent
@@ -145,7 +147,11 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       ...(deps.appEnv === undefined ? {} : { appEnv: deps.appEnv }),
     });
     if (outcome.passed) {
-      return { verdict: { result: "pass", integrationBranch: deps.integrationRef }, passed: true };
+      return {
+        verdict: { result: "pass", integrationBranch: deps.integrationRef },
+        passed: true,
+        nativeCi: nativeCiObservation(config, outcome),
+      };
     }
     return {
       verdict: {
@@ -153,6 +159,39 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
         message: `batch gate failed on ${deps.integrationRef}: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`,
       },
       passed: false,
+      nativeCi: nativeCiObservation(config, outcome),
     };
+  };
+}
+
+/**
+ * The native section is composed directly from the real `runGateForWhen` result. It
+ * records the executed tiers, every step outcome, and the already-parsed JUnit totals;
+ * an empty tier/step set is intentionally retained for the V2 composer to classify as
+ * unknown rather than silently treating a vacuous gate as evidence.
+ */
+function nativeCiObservation(
+  config: CiConfigV1,
+  outcome: Awaited<ReturnType<typeof runGateForWhen>>,
+): NativeCiGateObservation {
+  const reports = outcome.results.flatMap((tier) => [...(tier.parsedJunitReports?.values() ?? [])]);
+  return {
+    gateConfigHash: hashGateConfig(config),
+    tiers: outcome.results.map((tier) => tier.tier),
+    steps: outcome.results.flatMap((tier) =>
+      tier.steps.map((step) => ({ name: step.name, tier: tier.tier, passed: step.passed })),
+    ),
+    junit: {
+      total: reports.reduce((total, report) => total + report.results.length, 0),
+      failures: reports.reduce(
+        (total, report) => total + report.results.filter((result) => result.outcome === "failed").length,
+        0,
+      ),
+      skipped: reports.reduce(
+        (total, report) => total + report.results.filter((result) => result.outcome === "skipped").length,
+        0,
+      ),
+    },
+    verdict: outcome.passed ? "passed" : "failed",
   };
 }

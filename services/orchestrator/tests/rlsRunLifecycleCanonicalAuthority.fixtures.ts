@@ -2,6 +2,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
 import { serviceAuditActor } from "../src/engine/events/schemas/audit.js";
 import { PgLandGroupStore } from "../src/engine/merge/landGroupStore.js";
+import { PgGateProofBundleVerifier } from "../src/engine/merge/gateProofBundleVerifyPg.js";
 import { buildPgExactBatchAuthority } from "../src/engine/merge/multiMemberAuthorityPgAuthority.js";
 import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
@@ -13,17 +14,18 @@ type CanonicalNodeInput = Parameters<typeof materializeLifecycleCanonicalNode>[0
 
 /** Build and authorize the actual one-member V2/group authority over a persisted node. */
 export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput) {
-  const { binding, envelope } = await materializeLifecycleCanonicalNode(input);
+  const { binding, envelope, proofSubstrate } = await materializeLifecycleCanonicalNode(input);
   const taskId = await mergeTaskId(input.pool, input.orgId, input.entry.runId);
   // The production in-process coordinator gives its direct writer this proxy so
   // queue event appends acquire a short RLS scope for every database operation.
   const writer = new DirectRunStateWriter(orgScopingPool(input.pool));
+  const host = lifecycleAuthorityHost({ repo: input.repo, headBranch: input.headBranch, headSha: input.headSha });
   const authority = buildPgExactBatchAuthority({
     pool: input.pool,
     orgId: input.orgId,
     binding,
     envelope,
-    host: lifecycleAuthorityHost({ repo: input.repo, headBranch: input.headBranch, headSha: input.headSha }),
+    host,
     repo: input.repo,
     intoMain: "main",
     context: {
@@ -38,6 +40,7 @@ export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput
       auditEnvelope: { policyVersion: 1, initiatingActor: serviceAuditActor },
     },
     runStateWriter: writer,
+    gateProofs: new PgGateProofBundleVerifier(input.pool, proofSubstrate),
     landStore: new PgLandGroupStore({
       pool: input.pool,
       orgId: input.orgId,
@@ -78,7 +81,7 @@ export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput
   if (evaluation.kind !== "authorized_subset") {
     throw new Error(`canonical lifecycle node was not authorized: ${evaluation.kind}`);
   }
-  return { authority, binding, evaluation, writer };
+  return { authority, binding, evaluation, writer, host };
 }
 
 async function mergeTaskId(pool: Pool, orgId: string, runId: string): Promise<string> {

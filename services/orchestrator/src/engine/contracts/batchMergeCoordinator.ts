@@ -27,7 +27,8 @@
 import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
 import { compareEntries, type MergeQueueEntry, type MergeQueueSnapshot } from "./mergeCoordinator.js";
 import type { GateReworkRouteResult } from "./conflictResolution.js";
-import type { IntegrationNodeMember, ProofReuseKeyInput } from "./integrationNodes.js";
+import type { Digest } from "./cas.js";
+import type { IntegrationNodeMember } from "./integrationNodes.js";
 
 // Re-export the config default so call sites that already import the batch contract
 // (the coordinator) get the knob from one place; the schema default lives in
@@ -278,11 +279,15 @@ export interface BatchAuthorityBinding {
   readonly members: ReadonlyArray<IntegrationNodeMember>;
   /** Frozen integration-node member key; SP-4 names the same value memberSetHash. */
   readonly memberSetHash: string;
+  /** The gate-config coordinate sealed into the decisive V2 proof bundle. */
+  readonly gateConfigHash: string;
   readonly policyVersion: string;
   readonly proof: {
     readonly verdict: "passed";
-    readonly proofReuseKey: string;
-    readonly keyInput: ProofReuseKeyInput;
+    readonly gateProofBundleId: string;
+    readonly proofBundleDigest: Digest;
+    /** SP-3 Merkle root. This is the merge-envelope proof root. */
+    readonly proofRoot: Digest;
   };
 }
 

@@ -5,6 +5,7 @@ import type pg from "pg";
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { ProofSubstrate } from "../contracts/cas.js";
 import { LandCasRejectedError } from "../providers/githubCodeHost.js";
 import { PgLandGroupStore } from "./landGroupStore.js";
 import { buildPgExactBatchAuthority } from "./multiMemberAuthorityPgAuthority.js";
@@ -12,10 +13,12 @@ import { buildMultiMemberCodeHost, type MultiMemberAuthorityHostDeps } from "./m
 import { gatherMultiMemberAuthorityState, loadMultiMemberLandContext } from "./multiMemberAuthorityPgState.js";
 import { loadMultiMemberLandGroupContexts } from "./multiMemberLandGroupContextPg.js";
 import type { AuthorizedSubsetEvaluation, LandGroupLandOutcome } from "./multiMemberAuthorityTypes.js";
+import { PgGateProofBundleVerifier } from "./gateProofBundleVerifyPg.js";
 
 export interface PgLandGroupAuthorityDeps extends MultiMemberAuthorityHostDeps {
   readonly pool: pg.Pool;
   readonly runStateWriter: RunStateWriter;
+  readonly proofSubstrate: ProofSubstrate;
 }
 
 /**
@@ -33,7 +36,8 @@ export async function landAuthorizedGroupPg(
     readonly confirmBeforeLand: () => Promise<boolean>;
   },
 ): Promise<LandGroupLandOutcome> {
-  const gathered = await gatherMultiMemberAuthorityState(deps.pool, input);
+  const gateProofs = new PgGateProofBundleVerifier(deps.pool, deps.proofSubstrate);
+  const gathered = await gatherMultiMemberAuthorityState(deps.pool, gateProofs, input);
   const { host, repo } = await buildMultiMemberCodeHost(deps, gathered.project, gathered.orgId);
   const [context, members] = await Promise.all([
     loadMultiMemberLandContext(deps.pool, gathered.orgId, input, gathered.policyVersion),
@@ -64,6 +68,7 @@ export async function landAuthorizedGroupPg(
     intoMain: gathered.project.default_branch,
     context,
     runStateWriter: deps.runStateWriter,
+    gateProofs,
     landStore,
   });
   // The group policy fence is deliberately after all PG context/setup and before

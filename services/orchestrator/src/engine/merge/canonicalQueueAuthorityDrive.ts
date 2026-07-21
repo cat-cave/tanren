@@ -5,7 +5,7 @@
 
 // cspell:ignore rederive
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
-import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
+import { memberKey } from "../contracts/integrationNodes.js";
 import type { AuthorizeLandInput, LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import {
@@ -57,9 +57,8 @@ function hasExactCanonicalBinding(input: CanonicalQueueAuthorityLandInput): bool
         binding.members.map((member) => member.headSha),
       ) &&
     binding.proof.verdict === "passed" &&
-    binding.proof.keyInput.memberKey === binding.memberSetHash &&
-    binding.proof.keyInput.policyVersion === binding.policyVersion &&
-    binding.proof.proofReuseKey === proofReuseKey(binding.proof.keyInput) &&
+    nonBlankString(binding.gateConfigHash) &&
+    nonBlankString(binding.proof.gateProofBundleId) &&
     envelope.headSha === binding.headSha &&
     envelope.expectedMainSha === binding.baseSha &&
     envelope.memberSetHash === binding.memberSetHash &&
@@ -107,4 +106,8 @@ function exactMembers(
       );
     })
   );
+}
+
+function nonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }

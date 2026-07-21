@@ -8,7 +8,7 @@ import type {
   MergeAuthorityV2,
 } from "../src/engine/contracts/mergeAuthority.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
-import { memberKey, proofReuseKey } from "../src/engine/contracts/integrationNodes.js";
+import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import { CanonicalQueueAuthorityDrive } from "../src/engine/merge/canonicalQueueAuthorityDrive.js";
 import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
 import { rethrowTypedCodeHostInfrastructure } from "../src/engine/merge/multiMemberAuthorityEvidencePg.js";
@@ -37,14 +37,6 @@ function exactFixture(): {
   const member = { specId: "spec-a", runId: "run-a", branch: "tanren/spec-a", headSha: "head-a" };
   const baseSha = "main-a";
   const memberSetHash = memberKey(baseSha, [member.headSha]);
-  const keyInput = {
-    memberKey: memberSetHash,
-    gateConfigHash: "gate-a",
-    policyVersion: "policy-a",
-    runnerImage: "runner@sha256:a",
-    appEnvHash: "env-a",
-    quarantineVersion: "quarantine-a",
-  };
   const binding: BatchAuthorityBinding = {
     nodeId: "node-a",
     baseBranch: "main",
@@ -53,8 +45,14 @@ function exactFixture(): {
     treeHash: "tree-a",
     members: [member],
     memberSetHash,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
+    gateConfigHash: "gate-a",
+    policyVersion: "policy-a",
+    proof: {
+      verdict: "passed",
+      gateProofBundleId: "gate_proof_bundle:node-a",
+      proofBundleDigest: parseDigest(`sha256:${"c".repeat(64)}`),
+      proofRoot: parseDigest(`sha256:${"d".repeat(64)}`),
+    },
   };
   const envelope: LandBindingEnvelope = {
     subject: { kind: "integration_node", id: binding.nodeId },
@@ -87,7 +85,7 @@ function exactFixture(): {
     version: MULTI_MEMBER_AUTHORITY_VERSION,
     nodeId: binding.nodeId,
     memberSetHash: binding.memberSetHash,
-    proofReuseKey: binding.proof.proofReuseKey,
+    proofRoot: binding.proof.proofRoot,
     members: [{ ...member, disposition: "admit", findingIds: [], reasonCodes: [] }],
     reasonCodes: [],
     authorizedMemberIds: [member.specId],
@@ -326,11 +324,15 @@ describe("CanonicalQueueAuthorityDrive", () => {
         : [],
     );
     await expect(
-      gatherMultiMemberAuthorityState(missingOwner as never, {
-        projectId: fixture.entry.projectId,
-        entries: [fixture.entry],
-        binding: fixture.binding,
-      }),
+      gatherMultiMemberAuthorityState(
+        missingOwner as never,
+        { verifyExact: async () => false },
+        {
+          projectId: fixture.entry.projectId,
+          entries: [fixture.entry],
+          binding: fixture.binding,
+        },
+      ),
     ).rejects.toThrow("has no owning org");
 
     const owner = scopedPool((sql) =>
@@ -347,11 +349,15 @@ describe("CanonicalQueueAuthorityDrive", () => {
         : [],
     );
     await expect(
-      gatherMultiMemberAuthorityState(owner as never, {
-        projectId: fixture.entry.projectId,
-        entries: [{ ...fixture.entry, orgId: "other-org" }],
-        binding: fixture.binding,
-      }),
+      gatherMultiMemberAuthorityState(
+        owner as never,
+        { verifyExact: async () => false },
+        {
+          projectId: fixture.entry.projectId,
+          entries: [{ ...fixture.entry, orgId: "other-org" }],
+          binding: fixture.binding,
+        },
+      ),
     ).rejects.toThrow("batch crosses its project/org boundary");
   });
 

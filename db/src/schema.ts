@@ -29,12 +29,15 @@ import {
   users,
 } from "./schemaCore.js";
 import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
+import { gateProofBundles, gateProofBundleSections } from "./schemaGateProofBundles.js";
 import { events } from "./schemaEvents.js";
 import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
 export {
   enumCheck,
   integrationNodes,
   integrationProofs,
+  gateProofBundles,
+  gateProofBundleSections,
   mergeQueue,
   mergeQueueHolds,
   mergeQueuePartitions,
@@ -348,8 +351,7 @@ export const apiTokens = pgTable(
   (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)],
 );
 
-// P2A-0018 product entities: personas, behaviors, milestones, spec links,
-// directed spec dependency edges. See docs/architecture/product-entities.md.
+// P2A-0018 product entities: personas, behaviors, milestones, spec links, and directed spec dependency edges.
 export const personas = pgTable(
   "personas",
   {
@@ -439,8 +441,6 @@ export const specBehaviors = pgTable(
     index("spec_behaviors_behavior_id").on(table.behaviorId),
   ],
 );
-// Modeled as a join table for additive m:n evolution; the unique index on
-// spec_id enforces the current one-milestone-per-spec rule.
 export const specMilestones = pgTable(
   "spec_milestones",
   {
