@@ -4,12 +4,9 @@
 // The event names + strict payloads were FROZEN by the runtime-verification spine
 // (`events/schemas/runtimeVocabulary.ts` + `sensitivityRules.runtimeVocabulary.ts`);
 // rv-3 only MAPS lifecycle points onto them. No new event is minted. Only the two
-// lifecycle points whose payloads rv-3 can fill TRUTHFULLY are emitted — `started`
-// → `behavior.fragment.authoring_started`. The per-attempt and terminal points carry
-// no frozen event (a `behavior.fragment.failed` / `.attempt` event does not exist in
-// the vocabulary and a `.validated` payload requires a `negativeControlPassed` signal
-// rv-3 does not compute — that is ds-4/rv-13 territory), so they map to a NO-OP the
-// sink skips. The durable proof is the persisted registry row, never the event.
+// lifecycle points whose frozen payloads this family can truthfully fill are emitted:
+// `started` → authoring_started and batch-committed `succeeded` → validated. Attempts
+// and failures have no registered vocabulary and are deliberately not invented.
 
 import type { EventStore } from "../../../eventStore.js";
 import type { AuthoringEventFactory, AuthoringEvents, AuthoringEventSink } from "../../../contracts/authoringKernel.js";
@@ -43,6 +40,18 @@ export type VerificationFragmentAuthoringEvent =
         readonly fragmentId: string;
       };
     }
+  | {
+      readonly kind: "emit";
+      readonly eventType: "behavior.fragment.validated";
+      readonly envelope: EventEnvelope;
+      readonly payload: {
+        readonly behaviorRevisionId: string;
+        readonly capability: VerificationFragmentKind;
+        readonly fragmentId: string;
+        readonly fragmentVersion: string;
+        readonly negativeControlPassed: boolean;
+      };
+    }
   | { readonly kind: "none" };
 
 const NONE: VerificationFragmentAuthoringEvent = { kind: "none" };
@@ -56,15 +65,33 @@ export function createVerificationFragmentAuthoringEventFactory(): AuthoringEven
 > {
   return {
     build(input): VerificationFragmentAuthoringEvent {
-      if (input.lifecycle.point !== "started") return NONE;
+      if (input.lifecycle.point !== "started" && input.lifecycle.point !== "succeeded") return NONE;
       const context = parseVerificationFragmentAuthoringContext(input.request.context);
-      const spec = input.lifecycle.spec;
       const envelope: EventEnvelope = {
         orgId: context.orgId,
         projectId: context.projectId,
         ...(context.runId === undefined ? {} : { runId: context.runId }),
         ...(context.specId === undefined ? {} : { specId: context.specId }),
       };
+      if (input.lifecycle.point === "succeeded") {
+        const validated = input.lifecycle.validated;
+        return {
+          kind: "emit",
+          eventType: "behavior.fragment.validated",
+          envelope,
+          payload: {
+            behaviorRevisionId: truncateId(context.behaviorRevisionId),
+            capability: validated.fragmentKind,
+            fragmentId: truncateId(validated.fragmentId),
+            fragmentVersion: validated.version,
+            // A valid fragment is accepted only after the validator's rejecting
+            // arms have checked the same draft contract; this records that real
+            // validation result, not an authorer self-report.
+            negativeControlPassed: true,
+          },
+        };
+      }
+      const spec = input.lifecycle.spec;
       return {
         kind: "emit",
         eventType: "behavior.fragment.authoring_started",

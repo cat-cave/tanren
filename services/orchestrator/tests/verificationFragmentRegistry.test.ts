@@ -10,6 +10,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthoringAuthorer, AuthoringEvents } from "../src/engine/contracts/authoringKernel.js";
 import type { CapabilityFragmentRef } from "../src/engine/contracts/runtimeVerificationPlan.js";
+import type { AppendEventInput } from "../src/engine/eventStore.js";
+import type { EventName } from "../src/engine/events/index.js";
 import type {
   BindPlanInput,
   CreateVerificationFragmentInput,
@@ -29,6 +31,7 @@ import {
   type VerificationFragmentDraftV1,
   type VerificationFragmentSpecV1,
 } from "../src/engine/verification/acceptance/index.js";
+import type { AcceptanceEventSink } from "../src/engine/verification/acceptance/eventSink.js";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
@@ -109,6 +112,18 @@ function authoring(
   return { deps: { authorer, store, events: noopEvents } };
 }
 
+function recordedEvents(): { readonly sink: AcceptanceEventSink; readonly events: AppendEventInput[] } {
+  const events: AppendEventInput[] = [];
+  return {
+    events,
+    sink: {
+      async append<N extends EventName>(event: AppendEventInput<N>): Promise<void> {
+        events.push(event);
+      },
+    },
+  };
+}
+
 describe("rv-3 verification-fragment registry + F2 authoring", () => {
   it("resolves a REGISTERED fragment and binds it into the plan (no authoring)", async () => {
     const store = new InMemoryStore();
@@ -174,6 +189,49 @@ describe("rv-3 verification-fragment registry + F2 authoring", () => {
     });
     expect(plan.capabilityFragments).toBeUndefined();
     expect(store.bindCalls).toHaveLength(0);
+  });
+
+  it("emits respec.requested and never compiled for a needs-respec compile", async () => {
+    const store = new InMemoryStore();
+    const recorded = recordedEvents();
+    await expect(
+      compileAndBindAcceptancePlan({
+        revision: {
+          ...REVISION,
+          acceptance: {
+            ...ACCEPTANCE,
+            capabilities: [],
+            assertions: [{ assertionId: "a1", subject: "p1.status", comparisonOperator: "eventually", expected: 200 }],
+          },
+        },
+        orgId: "org1",
+        projectId: "proj1",
+        store,
+        events: recorded.sink,
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(recorded.events.map((event) => event.eventType)).toEqual([
+      "behavior.contract.compilation_started",
+      "behavior.respec.requested",
+    ]);
+  });
+
+  it("emits contract.rejected and never compiled for an invalid stored spec", async () => {
+    const store = new InMemoryStore();
+    const recorded = recordedEvents();
+    await expect(
+      compileAndBindAcceptancePlan({
+        revision: { ...REVISION, acceptance: {} },
+        orgId: "org1",
+        projectId: "proj1",
+        store,
+        events: recorded.sink,
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(recorded.events.map((event) => event.eventType)).toEqual([
+      "behavior.contract.compilation_started",
+      "behavior.contract.rejected",
+    ]);
   });
 });
 

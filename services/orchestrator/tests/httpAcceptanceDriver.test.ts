@@ -65,7 +65,10 @@ class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
 }
 
 class RecordingEventSink implements AcceptanceEventSink {
-  public append<N extends EventName>(_input: AppendEventInput<N>): Promise<void> {
+  public readonly events: AppendEventInput[] = [];
+
+  public append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    this.events.push(input);
     return Promise.resolve();
   }
 }
@@ -113,13 +116,14 @@ function request(plans: readonly AcceptancePlan[]) {
 
 async function runWith(baseUrl: string, p: AcceptancePlan) {
   const store = new InMemoryAcceptanceRunStore();
+  const events = new RecordingEventSink();
   const orchestrator = new AcceptanceOrchestrator({
     store,
-    events: new RecordingEventSink(),
+    events,
     drivers: [new HttpAcceptanceSurfaceDriver({ surface: "api", resolveBaseUrl: fixedResolver(baseUrl) })],
   });
   const result = await orchestrator.execute(request([p]));
-  return { store, behavior: result.behaviors[0]! };
+  return { store, events, behavior: result.behaviors[0]! };
 }
 
 describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication", () => {
@@ -170,7 +174,7 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
   });
 
   it("DECISIVE: a correct real response yields passed on real observed values", async () => {
-    const { behavior } = await runWith(
+    const { behavior, events } = await runWith(
       baseUrl,
       plan("/health", [
         { assertionId: "a1", subject: "p1.status", comparisonOperator: "equals", expected: 200 },
@@ -181,6 +185,9 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.outcome).toBe("passed");
     expect(behavior.executedAssertionCount).toBe(3);
     expect(behavior.passedAssertionCount).toBe(3);
+    expect(events.events.filter((event) => event.eventType === "behavior.action.observed")).toMatchObject([
+      { payload: { behaviorRevisionId: "br_http_rv6", actionId: "p1", surface: "api" } },
+    ]);
   });
 
   it("DECISIVE: a wrong response (500) fails the status assertion — failed_product, never passed", async () => {

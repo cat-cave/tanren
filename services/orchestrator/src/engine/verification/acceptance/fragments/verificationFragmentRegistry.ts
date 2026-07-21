@@ -33,6 +33,7 @@ import type {
   PlanFragmentBinding,
 } from "../../../repositories/verificationFragmentStore.js";
 import type { AcceptancePlan } from "../orchestrator.js";
+import type { AcceptanceEventSink } from "../eventSink.js";
 import {
   AcceptancePlanNotExecutableError,
   toAcceptancePlan,
@@ -193,6 +194,7 @@ export async function resolvePlanCapabilities(input: {
   readonly behaviorRevisionId: string;
   readonly capabilities: readonly VerificationCapabilityCitation[];
   readonly store: VerificationFragmentStore;
+  readonly events?: AcceptanceEventSink;
   readonly authoring?: PlanCapabilityAuthoring;
 }): Promise<ReadonlyMap<string, CapabilityFragmentRef>> {
   const resolved = new Map<string, CapabilityFragmentRef>();
@@ -211,6 +213,20 @@ export async function resolvePlanCapabilities(input: {
     else resolved.set(capabilityMapKey(spec.fragmentKind, spec.capabilityKey), ref);
   }
   if (missing.length === 0) return resolved;
+
+  // These are durable facts about the exact missing capability set, before any
+  // authoring can change it. An append failure aborts resolution: observability
+  // must not report an authored fragment without its missing predecessor.
+  if (input.events !== undefined) {
+    for (const spec of missing) {
+      await input.events.append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "behavior.fragment.missing",
+        payload: { behaviorRevisionId: input.behaviorRevisionId, capability: spec.fragmentKind },
+      });
+    }
+  }
 
   // Missing capabilities — fail-closed if no authoring seam, else F2-author them.
   if (input.authoring === undefined) {
@@ -252,10 +268,38 @@ export async function compileAndBindAcceptancePlan(input: {
   readonly orgId: string;
   readonly projectId: string;
   readonly store: VerificationFragmentStore;
+  /** Required by the live Pg loader; direct pure-path tests may omit it. */
+  readonly events?: AcceptanceEventSink;
   readonly authoring?: PlanCapabilityAuthoring;
 }): Promise<AcceptancePlan> {
   const { revision } = input;
-  const spec = parseAcceptanceSpec(revision.id, revision.acceptance);
+  if (input.events !== undefined) {
+    await input.events.append({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      eventType: "behavior.contract.compilation_started",
+      payload: { behaviorRevisionId: revision.id, behaviorRevisionHash: revision.behaviorRevisionHash },
+    });
+  }
+
+  let spec: ReturnType<typeof parseAcceptanceSpec>;
+  try {
+    spec = parseAcceptanceSpec(revision.id, revision.acceptance);
+  } catch (error) {
+    if (input.events !== undefined) {
+      await input.events.append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "behavior.contract.rejected",
+        payload: {
+          behaviorRevisionId: revision.id,
+          behaviorRevisionHash: revision.behaviorRevisionHash,
+          reason: eventReason(error),
+        },
+      });
+    }
+    throw error;
+  }
 
   const resolvedFragments = await resolvePlanCapabilities({
     orgId: input.orgId,
@@ -263,6 +307,7 @@ export async function compileAndBindAcceptancePlan(input: {
     behaviorRevisionId: revision.id,
     capabilities: spec.capabilities,
     store: input.store,
+    ...(input.events === undefined ? {} : { events: input.events }),
     ...(input.authoring === undefined ? {} : { authoring: input.authoring }),
   });
 
@@ -274,6 +319,15 @@ export async function compileAndBindAcceptancePlan(input: {
     resolvedFragments,
   });
   if (result.kind === "needs_respec") {
+    if (input.events !== undefined) {
+      const reason = eventReason(result.reasons.join("; "));
+      await input.events.append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "behavior.respec.requested",
+        payload: { behaviorRevisionId: revision.id, reason },
+      });
+    }
     throw new AcceptancePlanNotExecutableError(revision.id, `needs re-spec: ${result.reasons.join("; ")}`);
   }
   if (result.kind === "missing_fragments") {
@@ -281,6 +335,19 @@ export async function compileAndBindAcceptancePlan(input: {
     // real unresolved capability — never a silently-empty plan.
     const missing = result.obligations.map((obligation) => obligation.capability).join(", ");
     throw new AcceptancePlanNotExecutableError(revision.id, `missing fragments: ${missing}`);
+  }
+
+  if (result.plan.assertions.length === 0) {
+    const reason = "compiled plan has no assertions";
+    if (input.events !== undefined) {
+      await input.events.append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "behavior.contract.rejected",
+        payload: { behaviorRevisionId: revision.id, behaviorRevisionHash: revision.behaviorRevisionHash, reason },
+      });
+    }
+    throw new AcceptancePlanNotExecutableError(revision.id, reason);
   }
 
   // Bind the resolved fragments into the plan durably (idempotent upsert).
@@ -307,5 +374,26 @@ export async function compileAndBindAcceptancePlan(input: {
     });
   }
 
+  if (input.events !== undefined) {
+    await input.events.append({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      eventType: "behavior.contract.compiled",
+      payload: {
+        behaviorRevisionId: revision.id,
+        behaviorRevisionHash: revision.behaviorRevisionHash,
+        planHash: result.planHash,
+        assertionCount: result.plan.assertions.length,
+        surfaceKinds: [...result.plan.requiredSurfaces],
+      },
+    });
+  }
+
   return toAcceptancePlan(result.plan, spec);
+}
+
+function eventReason(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const trimmed = raw.trim();
+  return (trimmed.length === 0 ? "unclassified compilation failure" : trimmed).slice(0, 200);
 }
