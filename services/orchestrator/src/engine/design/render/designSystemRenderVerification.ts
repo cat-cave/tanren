@@ -1,6 +1,6 @@
 // ds-4 sub-node #3 — the PRODUCTION render-verification pass over a composed web
 // design system. This is what makes the ds-4 chain FIRE in a real run: after
-// `composeProjectWebDesignSystem` publishes the system, this renders the catalog's
+// `composeProjectTargetDesignSystems` publishes the system, this renders the catalog's
 // components browser-free (sub-node #1 harness) and judges their a11y audit against
 // the project's `accessibilityPosture` (sub-node #2 oracle), then aggregates one
 // run-level design-render outcome (designRenderVerdict.ts) the native gate binds.

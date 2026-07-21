@@ -74,7 +74,9 @@ export function gateVerdictWithDesignRenderGates(
   persistedGateVerdict: GateVerdict,
   designRenderGates: readonly DesignRenderGate[],
 ): GateVerdict {
-  const designBlocks = designRenderGates.some((gate) => gate.kind === "failed" || gate.kind === "inconclusive");
+  const designBlocks = designRenderGates.some(
+    (gate) => gate.kind === "failed" || gate.kind === "inconclusive_infrastructure",
+  );
   return designBlocks ? "failed" : persistedGateVerdict;
 }
 

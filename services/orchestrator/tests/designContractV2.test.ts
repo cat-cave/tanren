@@ -130,7 +130,13 @@ describe("DesignContractV2", () => {
   it("withDerivedDesiredSurfaces — the composer's V2 carries real surfaces + the web target profile", () => {
     const composed = withDerivedDesiredSurfaces(migrateDesignContractV1ToV2(v1));
     expect(composed.desiredSurfaces.map((s) => s.key)).toEqual(["tokens"]);
-    expect(composed.targetProfiles).toEqual([{ target: "web-react", capabilities: [], required: true }]);
+    expect(composed.targetProfiles).toEqual([
+      {
+        target: "web-react",
+        capabilities: ["css-variables", "tailwind", "shadcn", "radix", "catalog", "storybook", "exports", "dtcg"],
+        required: true,
+      },
+    ]);
     // Re-parses clean (round-trips through the strict schema).
     expect(() => parseDesignContractV2(composed)).not.toThrow();
   });

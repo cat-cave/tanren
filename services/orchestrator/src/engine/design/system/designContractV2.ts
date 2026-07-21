@@ -190,12 +190,20 @@ export function normalizeDesignContractV2(parsed: DesignContractV2): DesignContr
 }
 
 /**
- * Migrate a persisted `DesignContractV1` LOSSLESSLY to V2. Every V1 field is
- * preserved; the V2-only fields default to their empty-but-valid state. Accepts
- * either a typed V1 or an unknown blob (re-parsed through V1 first, so a
- * malformed V1 throws its own V1 error before reaching here).
+ * Migrate a persisted design contract to V2. FORWARD-COMPATIBLE: accepts BOTH
+ * a V1 strict blob (every V1 field preserved; V2-only fields default to empty)
+ * AND a full-V2 capture blob (the future persistence shape a design agent emits
+ * once it authors `desiredSurfaces` / `targetProfiles` / `accessibilityPosture`
+ * natively). A V2 input passes through unchanged; a V1 input is migrated
+ * losslessly. A malformed shape throws its own typed error before reaching the
+ * V2 builder — fail-closed.
  */
 export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
+  // Try V2 strict first — a full-V2 capture persists V2 natively (forward-compat).
+  // V2 strict REQUIRES `version: 2`; a V1 (version: 1) fails this branch.
+  const v2Result = DesignContractV2.safeParse(value);
+  if (v2Result.success) return normalizeDesignContractV2(v2Result.data);
+  // V1 strict parse + lossless migration. A malformed V1 throws its own V1 error.
   const v1 = normalizeDesignContract(value);
   return normalizeDesignContractV2({
     version: DESIGN_CONTRACT_V2_VERSION,
@@ -223,7 +231,14 @@ export function migrateDesignContractV1ToV2(value: unknown): DesignContractV2 {
 
 // The default web target profile the ds-2 `WebDesignTargetAdapter` composes against
 // (the sole registered adapter). `required: true` — a real run needs the web system.
-const WEB_TARGET_PROFILE: DesignTargetProfileIntent = { target: "web-react", capabilities: [], required: true };
+// This is contract intent for a V1 migration, not an adapter-default fallback at
+// conformance time. It gives the default required target a non-vacuous set that
+// a receipt must check exactly; an explicitly authored V2 profile is preserved.
+const WEB_TARGET_PROFILE: DesignTargetProfileIntent = {
+  target: "web-react",
+  capabilities: ["css-variables", "tailwind", "shadcn", "radix", "catalog", "storybook", "exports", "dtcg"],
+  required: true,
+};
 
 /**
  * Derive the `desiredSurfaces` a project's design must cover FROM the contract's own

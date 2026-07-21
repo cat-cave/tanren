@@ -31,7 +31,6 @@ import {
 import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
 import { events } from "./schemaEvents.js";
 import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
-
 export {
   enumCheck,
   integrationNodes,
@@ -497,3 +496,4 @@ export { regressionBisections } from "./schemaRegressionBisections.js";
 export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";
 export { mergeTrainArtifacts } from "./schemaMergeTrainArtifacts.js";
 export { landGroupDeliveryLoops } from "./schemaLandGroupDeliveryLoops.js";
+export { designAdapterConformanceRuns } from "./schemaDesignAdapterConformance.js";

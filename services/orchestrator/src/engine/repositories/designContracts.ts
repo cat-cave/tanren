@@ -34,7 +34,9 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
-import { type DesignContractV1, designContractToJson, parseDesignContract } from "../design/designContract.js";
+import { type DesignContractV1, designContractToJson, normalizeDesignContract } from "../design/designContract.js";
+import { DesignContractV1 as DesignContractV1Schema } from "../design/designContract.js";
+import { parseDesignContractV2 } from "../design/system/designContractV2.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -95,6 +97,11 @@ export interface DesignContractRecord {
   // filtering/observability without parsing the jsonb).
   domain: string;
   contract: DesignContractV1;
+  /** The raw persisted jsonb, for forward-compatible V2 readers (the composer's
+   * V2 derivation reads `targetProfiles` / `desiredSurfaces` / `accessibilityPosture`
+   * natively when a full-V2 capture persists them). V1 strict strips them; the
+   * raw blob preserves them. */
+  rawContract: unknown;
 }
 
 /** The fields a caller supplies; `id`/`version`/timestamps are derived/managed. */
@@ -118,7 +125,20 @@ function mapRow(row: DesignContractRow): DesignContractRecord {
   // Parse the persisted jsonb back through the schema — a malformed or
   // legacy-shaped row fails LOUDLY here rather than handing a half-typed contract
   // to a downstream consumer (injection/oracle). No silent degrade.
-  const contract = parseDesignContract(row.contract);
+  //
+  // FORWARD-COMPAT: try V1 strict first (the documented persistence shape); on
+  // failure, accept a full-V2 capture blob by downgrading its V2-only fields
+  // out of the V1 view (the V2 fields remain in `rawContract` for the V2
+  // readers — the composer's V2 derivation). Both shapes must validate; a
+  // malformed blob still throws.
+  let contract: DesignContractV1;
+  const v1Parse = DesignContractV1Schema.safeParse(row.contract);
+  if (v1Parse.success) {
+    contract = normalizeDesignContract(v1Parse.data);
+  } else {
+    // A full-V2 capture persisted the V2 shape. Validate + downgrade to V1.
+    contract = v1ContractFromV2Capture(row.contract);
+  }
   return {
     id: row.id,
     orgId: row.org_id,
@@ -126,7 +146,26 @@ function mapRow(row: DesignContractRow): DesignContractRecord {
     version: typeof row.version === "string" ? Number.parseInt(row.version, 10) : row.version,
     domain: row.domain,
     contract,
+    rawContract: row.contract,
   };
+}
+
+/** Downgrade a full-V2 capture to a V1 view (the V2-only fields are preserved in
+ * the caller's `rawContract`). Throws if the blob is neither a V1 nor a valid V2. */
+function v1ContractFromV2Capture(value: unknown): DesignContractV1 {
+  const v2 = parseDesignContractV2(value);
+  return normalizeDesignContract({
+    version: 1,
+    domain: v2.domain,
+    identity: v2.identity,
+    intent: v2.intent,
+    principles: v2.principles,
+    constraints: v2.constraints,
+    personaRefs: v2.personaRefs,
+    behaviorRefs: v2.behaviorRefs,
+    dimensions: v2.dimensions,
+    accessibilityPosture: v2.accessibilityPosture,
+  });
 }
 
 /**
