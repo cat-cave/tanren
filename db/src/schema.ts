@@ -94,7 +94,6 @@ export const tasks = pgTable(
     check("tasks_run_or_issue_loop_check", sql`(${table.runId} IS NOT NULL) <> (${table.issueLoopId} IS NOT NULL)`),
   ],
 );
-
 export const costRecords = pgTable(
   "cost_records",
   {
@@ -470,6 +469,7 @@ export * from "./schemaIntegrationConnections.js";
 export * from "./schemaIntegrationRequirements.js";
 export * from "./schemaIntegrationBindings.js";
 export * from "./schemaIntegrationOperations.js";
+export * from "./schemaIntegrationEvidence.js";
 export * from "./schemaIntegrationEnvironment.js";
 export * from "./schemaIntegrationSelection.js";
 export * from "./schemaProjectDerivations.js";

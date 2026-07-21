@@ -28,6 +28,8 @@ import type { DeployTriggerGate } from "../deployTriggerGate.js";
 import type { RunMergeWatcher } from "../subscriber.js";
 import type { DeliverySignals, DemoReach, DeployReach } from "./deliverySignals.js";
 import type { DeliveryBindingSetSealer } from "./deliveryBindingSet.js";
+import type { IntegrationRuntimeAttachmentRecorder } from "./integrationRuntimeAttachment.js";
+import type { IntegrationEvidenceAttestationResult } from "./integrationEvidenceAttester.js";
 import {
   appendDeliveryCompleted,
   appendDemoStimulusStarted,
@@ -54,6 +56,16 @@ export interface DeliveryStageDeps {
   readonly saga: ReconcileSagaLike;
   /** Seals the exact release-required binding generation set for A3. */
   readonly bindingSetSealer: DeliveryBindingSetSealer;
+  /** Records every sealed generation against the authorized merge SHA before deployment. */
+  readonly runtimeAttachmentRecorder: IntegrationRuntimeAttachmentRecorder;
+  /** Seals the already-confirmed in-19 observation into its DSSE evidence bundle. */
+  readonly integrationEvidenceAttester: {
+    attest(input: {
+      readonly lineage: DeliveryLineage;
+      readonly deliveryRunId: string;
+      readonly deploymentId: string;
+    }): Promise<IntegrationEvidenceAttestationResult>;
+  };
   /** The evidence writer + signer for the record_evidence gate. */
   readonly evidence: RecordEvidenceDeps;
   /**
@@ -152,6 +164,14 @@ export class DeliveryStages {
     }
     const sealed = await this.deps.bindingSetSealer.seal({ lineage, deliveryRunId, token });
     if (sealed.kind === "unavailable") return degraded("release_binding_set_unconfirmed", sealed.detail);
+    try {
+      await this.deps.runtimeAttachmentRecorder.record({ lineage, deliveryRunId, token });
+    } catch (error) {
+      return degraded(
+        "integration_runtime_attachment_unconfirmed",
+        `sealed integration generation attachment was not durably recorded: ${errorMessage(error)}`,
+      );
+    }
     return confirmed;
   }
 
@@ -324,6 +344,16 @@ export class DeliveryStages {
         `${String(a3.confirmed)}/${String(a3.required)} release-required product integration effect(s) have exact independent A3 evidence`,
       );
     }
+    if (a3.required > 0) {
+      const deploymentId = await this.deps.signals.verifiedDeploymentId(lineage);
+      if (deploymentId === undefined) {
+        return degraded("integration_evidence_unavailable", "A3 evidence has no verified deployment coordinate");
+      }
+      const attestation = await this.deps.integrationEvidenceAttester.attest({ lineage, deliveryRunId, deploymentId });
+      if (attestation.kind === "blocked") {
+        return degraded(`integration_evidence_${attestation.classification}`, attestation.detail);
+      }
+    }
     const deployReach = await this.deps.signals.deployReach(lineage, memo.deployRunnerThrew);
     const demoReach = await this.deps.signals.demoReach(lineage, deployReach);
     const observedEffect = observedEffectFor(deployReach, demoReach);
@@ -384,4 +414,8 @@ export function observedEffectFor(deployReach: DeployReach, demoReach: DemoReach
   if (demoReach === "observed") return "demo_observed";
   if (deployReach === "verified") return "deploy_verified";
   return "none";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

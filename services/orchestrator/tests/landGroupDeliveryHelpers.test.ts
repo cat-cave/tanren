@@ -104,6 +104,7 @@ describe("groupDeployVerifiedPayload — the LIVE-production deploy.verified sha
     expect(payload.provider).toBe("deploy.vercel");
     expect(payload.appId).toBe("app-1");
     expect(payload.deploymentId).toBe("dep-prod");
+    expect(payload.sourceRef).toBe("sha-main");
     expect(payload.url).toBe("https://app.example.com");
     expect(payload.state).toBe("live");
     expect(payload.smokeStatus).toBe(200);

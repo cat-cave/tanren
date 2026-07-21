@@ -62,7 +62,9 @@ function setup(input: { sealed: boolean; required: number; confirmed: number }) 
   const gate = new ProductionGroupDeliveryA3Gate({
     store,
     bindingSetSealer,
+    runtimeAttachmentRecorder: { record: async () => {} },
     signals,
+    integrationEvidenceAttester: { attest: async () => ({ kind: "sealed", count: 1 }) },
     evidence: {
       eventStore: {
         // eslint-disable-next-line @typescript-eslint/require-await

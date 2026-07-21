@@ -79,6 +79,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(verified!.ambientOrgId).toBe(ORG_ID);
     const vPayload = verified!.payload as Record<string, unknown>;
     expect(vPayload["provider"]).toBe("deploy.vercel");
+    expect(vPayload["sourceRef"]).toBe(MERGE_SHA);
     expect(vPayload["state"]).toBe("READY");
     expect(vPayload["smokeStatus"]).toBe(200);
     expect(vPayload["url"]).toMatch(/^https:\/\//u);

@@ -20,6 +20,7 @@ import {
   integrationsDelivery,
   integrationsLifecycle,
   integrationsRequirements,
+  integrationsVerifyEvidence,
 } from "./integrations/index.js";
 import { milestonesCreate, milestonesGet, milestonesList } from "./milestones/index.js";
 import { orgsConfigSet, orgsGet, orgsList } from "./orgs/index.js";
@@ -66,6 +67,7 @@ const HANDLERS: Record<string, (rest: string[]) => Promise<void>> = {
   "integrations capability-nodes": integrationsCapabilityNodes,
   "integrations bindings": integrationsBindings,
   "integrations delivery": integrationsDelivery,
+  "integrations verify-evidence": integrationsVerifyEvidence,
   "proof verify": proofVerify,
 };
 

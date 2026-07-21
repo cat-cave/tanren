@@ -347,6 +347,20 @@ export const integrationValidationProofs = pgTable(
     verdict: text("verdict").notNull(),
     evidenceDigest: text("evidence_digest").notNull(),
     signature: text("signature").notNull(),
+    /**
+     * In-22 attestation rows always provide this digest; legacy validation-proof
+     * rows predate it and must remain representable on this shared table.
+     */
+    channelTemplateDigest: text("channel_template_digest"),
+    /** In-22's fail-closed controls, omitted only by pre-attestation legacy rows. */
+    negativeControlChecklist: jsonb("negative_control_checklist"),
+    /** The shared PgProofSubstrate bundle that carries the Ed25519 signature. */
+    bundleId: text("bundle_id"),
+    bundleDigest: text("bundle_digest"),
+    bundleBytesDigest: text("bundle_bytes_digest"),
+    signingKeyId: text("signing_key_id"),
+    /** The portable `integration-evidence.v1.dsse.json` envelope. */
+    dsseBundle: jsonb("dsse_bundle"),
     freshUntil: timestamp("fresh_until", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -431,6 +445,15 @@ export const integrationValidationProofs = pgTable(
     check("integration_validation_proofs_binding_generation_check", sql`${table.bindingGeneration} >= 1`),
     check("integration_validation_proofs_trigger_digest_check", sql`${table.triggerDigest} ~ ${digestPattern}`),
     check("integration_validation_proofs_evidence_digest_check", sql`${table.evidenceDigest} ~ ${digestPattern}`),
+    check(
+      "integration_validation_proofs_channel_template_digest_check",
+      sql`${table.channelTemplateDigest} ~ ${digestPattern}`,
+    ),
+    check("integration_validation_proofs_bundle_digest_check", sql`${table.bundleDigest} ~ ${digestPattern}`),
+    check(
+      "integration_validation_proofs_bundle_bytes_digest_check",
+      sql`${table.bundleBytesDigest} ~ ${digestPattern}`,
+    ),
     check("integration_validation_proofs_verdict_check", sql`${table.verdict} IN ('passed','failed','degraded')`),
     integrationOrgIsolationPolicy(table.orgId),
   ],

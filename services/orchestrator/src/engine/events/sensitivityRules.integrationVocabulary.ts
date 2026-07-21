@@ -65,6 +65,8 @@ export const integrationVocabularySensitivityRules: SensitivityRule[] = [
     "bindingId",
     "environment",
     "generation",
+    "deliveryRunId",
+    "deploySha",
     "deploymentId",
     "keys",
     "keys[]",

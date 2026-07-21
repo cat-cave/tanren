@@ -234,6 +234,22 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
   });
+  // The sole production ed25519 substrate is shared by every post-merge proof
+  // consumer, including in-22's integration-evidence DSSE producer.
+  const casByteStore: CasByteStore = new PgCasByteStore(deps.pool);
+  const proofSubstrate = new PgProofSubstrate(deps.pool, deps.secrets, { casByteStore });
+  try {
+    const signingKey = await resolveSigningKey(deps.secrets, PROOF_SIGNING_KEY_REF);
+    log.info("proof substrate constructed; ed25519 signing key resolved — bundle sealing is LIVE", {
+      signingKeyId: signingKey.signingKeyId,
+      signingKeyRef: PROOF_SIGNING_KEY_REF,
+    });
+  } catch (error) {
+    log.error("proof substrate constructed but signing key is NOT provisioned — seal/verify will fail loud", {
+      signingKeyRef: PROOF_SIGNING_KEY_REF,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
   // in-17 durable post-merge DELIVERY DAG: consumes the in-16 `delivery_runs` outbox and
   // drives reconcile → lease → materialize → attach → deploy → verify → stimulate → observe
   // → record-evidence, resuming from the last durable stage. The deploy/demo watchers above
@@ -244,33 +260,9 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     deployWatcher,
     demoWatcher,
+    proofSubstrate,
     runStateWriter: deps.runStateWriter,
   });
-  // SP-3 × mq-15 CONNECT-UP: construct the sole production `ProofSubstrate`
-  // (`PgProofSubstrate`) over the shared pool + secret store, over a SINGLE shared
-  // `PgCasByteStore` (so the substrate's own proof/bundle bytes and the watcher's
-  // sealed-artifact bytes land in the same CAS). This is the REAL substrate the
-  // merge-train artifact watcher (below) and future gate-proof consumers seal/verify
-  // with — no external injection, no dormant optional. Probe the signing key ONCE so
-  // the operator sees an observable line: sealing is LIVE, or PENDING key provisioning
-  // (still constructed + wired — any seal/verify then fails LOUD, never a silent no-op).
-  const casByteStore: CasByteStore = new PgCasByteStore(deps.pool);
-  const proofSubstrate = new PgProofSubstrate(deps.pool, deps.secrets, { casByteStore });
-  try {
-    const signingKey = await resolveSigningKey(deps.secrets, PROOF_SIGNING_KEY_REF);
-    log.info("proof substrate constructed; ed25519 signing key resolved — bundle sealing is LIVE", {
-      signingKeyId: signingKey.signingKeyId,
-      signingKeyRef: PROOF_SIGNING_KEY_REF,
-    });
-  } catch (error) {
-    // Observable, LOUD dormancy — NOT a silent "no substrate". The substrate is still
-    // constructed and injected into the watcher; any seal/verify fails loud with the
-    // same typed error until the platform signing key is provisioned.
-    log.error("proof substrate constructed but signing key is NOT provisioned — seal/verify will fail loud", {
-      signingKeyRef: PROOF_SIGNING_KEY_REF,
-      reason: error instanceof Error ? error.message : String(error),
-    });
-  }
   // mq-15 merge-train artifact watcher: a sealed-delivery PROJECTION driven AFTER the
   // delivery DAG driver (in-17). It invents NO signer — sealing/verification are DELEGATED
   // to the sole production `PgProofSubstrate` constructed just above (its seal path is now
@@ -296,6 +288,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const landGroupDeliveryLoop = buildLandGroupDeliveryLoop({
     pool: deps.pool,
     secrets: deps.secrets,
+    proofSubstrate,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   const postMerge = await startPostMergeSubscriber({
