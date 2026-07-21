@@ -9,8 +9,11 @@ import { createMergeQueueAuthorityEvaluationRoutes } from "../src/routes/mergeQu
 import {
   decisionEvaluationId,
   EvaluationProjectionPool,
+  buildBatchGateProofEvidence,
+  memberKey,
   MQ2_ROUTE_PROJECT,
   nodeGroupId,
+  proofReuseKey,
   quarantineVersion,
   validBatchNode,
   validBatchProof,
@@ -74,6 +77,40 @@ function detailEndpoint(evaluationId: string): string {
   return `/orgs/${ORG}/projects/${PROJECT}/merge-queue/authority-evaluations/${evaluationId}`;
 }
 
+function validSingleMemberDecision() {
+  const original = validDecision();
+  const [member] = original.members;
+  if (member === undefined) throw new Error("test fixture requires a member");
+  const key = memberKey(original.base_sha, [member.headSha]);
+  const keyInput = {
+    memberKey: key,
+    gateConfigHash: original.gate_config_hash,
+    policyVersion: original.node_policy_version,
+    runnerImage: "runner@sha256:decision",
+    appEnvHash: "env-decision",
+    quarantineVersion: quarantineVersion([]),
+  };
+  const proofKey = proofReuseKey(keyInput);
+  const nodeId = "inode_single";
+  return validDecision({
+    decision_id: "decision-inode-single-sha-batch",
+    node_id: nodeId,
+    members: [member],
+    member_key: key,
+    decision_member_set_hash: key,
+    proof_reuse_key: proofKey,
+    proof_root: `sha256:${proofKey}`,
+    proof_evidence: buildBatchGateProofEvidence({
+      nodeId,
+      headSha: original.node_head_sha,
+      treeHash: original.tree_hash,
+      memberSetHash: key,
+      keyInput,
+      passed: true,
+    }),
+  });
+}
+
 describe("mq-2 authority-evaluation HTTP projection", () => {
   it("projects an exact persisted node + passing proof + matching decision as all-admit", async () => {
     const decision = validDecision();
@@ -104,6 +141,23 @@ describe("mq-2 authority-evaluation HTTP projection", () => {
     const detail = await buildApp(pool.asPgPool()).request(detailEndpoint(decisionEvaluationId(decision)));
     expect(detail.status).toBe(200);
     expect((await detail.json()) as object).toMatchObject({ evaluation: { kind: "authorized_subset" } });
+  });
+
+  it("projects one durable exact member only when its node and proof binding match", async () => {
+    const decision = validSingleMemberDecision();
+    const response = await buildApp(new EvaluationProjectionPool(ORG, [], [decision]).asPgPool()).request(listEndpoint());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      evaluations: [
+        {
+          kind: "authorized_subset",
+          nodeId: "inode_single",
+          eligibleMemberIds: ["A"],
+          members: [{ ordinal: 0, specId: "A", runId: "run-a", disposition: "admit" }],
+        },
+      ],
+    });
   });
 
   it("never projects green when any exact decision binding component is stale", async () => {

@@ -418,6 +418,18 @@ export function allowExactBatchAuthority(): BatchAuthorityEvaluator {
         reasonCodes: [],
         authorizedMemberIds: entries.map((entry) => entry.specId),
         eligibleMemberIds: entries.map((entry) => entry.specId),
+        decisionInput: {
+          subject: envelope.subject,
+          gateVerdict: "passed",
+          findings: [],
+          auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+          reviewVerdict: "approved",
+          mergeability: "clean",
+          budget: { kind: "not_required" },
+          demo: "not_required",
+          hitlSignoff: "not_required",
+          conflicts: "resolved",
+        },
         authorization: {
           decision: "authorized",
           subject: envelope.subject,

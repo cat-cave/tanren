@@ -46,6 +46,8 @@ export interface AuthorizedSubsetEvaluation extends EvaluationBase {
   readonly kind: "authorized_subset";
   readonly authorizedMemberIds: ReadonlyArray<string>;
   readonly eligibleMemberIds: ReadonlyArray<string>;
+  /** Frozen input that produced `authorization`; the canonical land drive re-binds it. */
+  readonly decisionInput: AuthorizeLandInput;
   readonly authorization: LandAuthorization;
 }
 

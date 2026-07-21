@@ -85,7 +85,7 @@ export {
  * surface distinguishes it from a real external_reviewer opt-in.
  */
 export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedIntegration {
-  if (mode === "direct_merge" || mode === "native_queue" || mode === "external_reviewer") {
+  if (mode === "native_queue" || mode === "external_reviewer") {
     return mode;
   }
   // not_configured — a repo that hasn't opted into any merge integration. Never

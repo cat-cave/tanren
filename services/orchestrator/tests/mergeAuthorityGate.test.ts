@@ -1,13 +1,12 @@
 // Unit coverage for the §5 cutover boundary (no DB): the FAIL-CLOSED input mapping
-// (`mergeAuthorityInputs`) and the live land gate (`authorizeAndLand`) — including the
-// clean land via `CodeHost.landAuthorizedRef` (the ff-only CAS) and the CAS-rejection
-// → `cas_rejected` (a benign race) mapping. The truth table itself is the frozen
-// conformance suite; this pins the LIVE-PATH translation + the host CAS land wiring.
+// (`mergeAuthorityInputs`) and the legacy per-run gate (`authorizeAndLand`). The
+// per-run route preserves its fail-closed guards but may never synthesize a V2
+// integration-node/proof binding or reach host CAS; canonical queue land is covered
+// by the exact-node authority suites.
 
 import { describe, expect, it } from "vitest";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
-import { LandCasRejectedError } from "../src/engine/providers/githubCodeHost.js";
 import {
   budgetScopeFrom,
   demoFrom,
@@ -16,12 +15,12 @@ import {
   mergeabilityFrom,
   reviewVerdictFrom,
 } from "../src/engine/merge/mergeAuthorityInputs.js";
-import type { AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import type { BehaviorLandGate } from "../src/engine/merge/behaviorLandGate.js";
 import type { DesignRenderGate } from "../src/engine/merge/designRenderLandGate.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 import { noRequiredReviewGate } from "../src/engine/governance/reviewRules.js";
+import { migrateProjectConfig } from "../src/engine/config/projectConfig.js";
 
 const REPO = { owner: "o", name: "r" };
 const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
@@ -61,10 +60,13 @@ describe("mergeAuthorityInputs — every uncertain signal maps to its blocking e
   });
 });
 
-const STORE: AuthorityLandStore = {
-  persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
-  recordLandReceipt: async () => ({ auditId: "a1" }),
-};
+describe("merge integration configuration", () => {
+  it("rejects the removed direct_merge automatic mode instead of falling back", () => {
+    expect(() => migrateProjectConfig({ version: 1, mergeIntegration: "direct_merge" })).toThrow(
+      /native_queue|external_reviewer|not_configured/u,
+    );
+  });
+});
 
 function gateInput(host: InMemoryCodeHost) {
   return {
@@ -88,7 +90,6 @@ function gateInput(host: InMemoryCodeHost) {
     // ds-4: no composed design system / advisory posture by default — the design_render
     // section is not-applicable and NEVER blocks. Design tests below override this.
     designRenderGate: { kind: "not_applicable" as const },
-    store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
       findings: [],
@@ -103,15 +104,14 @@ function gateInput(host: InMemoryCodeHost) {
   };
 }
 
-describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", () => {
-  it("a fully-clear authorization lands the PR head onto main via the ff-only CAS", async () => {
+describe("authorizeAndLand — synthetic per-run land is closed fail-closed", () => {
+  it("a fully-clear legacy attempt is blocked and never advances main", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     const disposition = await authorizeAndLand(gateInput(host));
-    expect(disposition.kind).toBe("merged");
-    // main advanced to the authorized PR head via the CAS push (NOT a host merge API).
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition).toMatchObject({ kind: "blocked", reasons: [expect.stringContaining("canonical queue authority")] });
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("FINAL CLAIM FENCE: a freeze arriving after authorization but before CAS blocks host land", async () => {
@@ -134,27 +134,22 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("a CAS rejection (main raced ahead between read and land) → cas_rejected (benign race)", async () => {
-    // A host whose ref reads succeed (so prepare resolves the target) but whose
-    // landAuthorizedRef throws the typed CAS rejection — main raced ahead between the
-    // gate's base read and the land. The gate maps it to cas_rejected (a benign race).
+  it("an unpersisted legacy attempt never calls a host CAS implementation", async () => {
+    let hostLandCalls = 0;
     const racingHost = {
       ...new InMemoryCodeHost(),
       fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
       landAuthorizedIntegration: async () => {
-        // The TYPED rejection the GitHub impl throws — the gate classifies it by
-        // `instanceof LandCasRejectedError` (§3.2), not a brittle message regex.
-        throw new LandCasRejectedError("main", "sha-main", "sha-main-moved");
+        hostLandCalls += 1;
+        throw new Error("host land must be unreachable without a persisted node/proof");
       },
     } as unknown as InMemoryCodeHost;
     const disposition = await authorizeAndLand(gateInput(racingHost));
-    expect(disposition.kind).toBe("cas_rejected");
+    expect(disposition.kind).toBe("blocked");
+    expect(hostLandCalls).toBe(0);
   });
 
-  it("§3.2 TYPED CAS: a non-CAS land error whose message contains 'cascade'/'case' is NOT mis-classified as cas_rejected", async () => {
-    // The old classification was a message regex `/...|CAS|.../iu` that matched ANY
-    // "case"/"cascade"/"showcase" substring — mis-mapping a genuine fault into a benign
-    // retry. The typed `instanceof LandCasRejectedError` check makes the message irrelevant.
+  it("a host-land error cannot be surfaced from the closed synthetic route", async () => {
     const failingHost = {
       ...new InMemoryCodeHost(),
       fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
@@ -162,8 +157,7 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
         throw new Error("transient gateway failure in the deploy cascade (showcase env)");
       },
     } as unknown as InMemoryCodeHost;
-    // A real fault must PROPAGATE (it is not a benign CAS race), not become `cas_rejected`.
-    await expect(authorizeAndLand(gateInput(failingHost))).rejects.toThrow(/cascade|showcase/u);
+    await expect(authorizeAndLand(gateInput(failingHost))).resolves.toMatchObject({ kind: "blocked" });
   });
 
   it("an uncertain input (gate unknown) → blocked, no land target, main untouched", async () => {
@@ -194,14 +188,14 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("TOCTOU LOCK: gate PASSED for the CURRENT head (sha unchanged) → lands (commit-binding satisfied)", async () => {
+  it("TOCTOU LOCK: gate PASSED for the CURRENT head clears the guard but cannot revive the removed route", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     // gatedHeadSha === the landed head (sha-feat) — the binding is satisfied.
     const disposition = await authorizeAndLand(gateInput(host));
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("TOCTOU LOCK (gv-2 former bug): review.approved with forge headSha A, head advanced to B → BLOCKED", async () => {
@@ -223,7 +217,7 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("TOCTOU LOCK (gv-2 positive): review forge receipt headSha equals landing head → lands", async () => {
+  it("TOCTOU LOCK (gv-2 positive): an exact review receipt clears the guard but cannot revive the removed route", async () => {
     const head = "c".repeat(40);
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
@@ -233,8 +227,8 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     input.reviewedHeadSha = head;
     input.requiresExactReviewReceipt = true;
     const disposition = await authorizeAndLand(input);
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe(head);
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("simulated policy blocks an approved event with no complete forge receipt", async () => {
@@ -294,17 +288,16 @@ describe("authorizeAndLand — the rv-gate runtime BEHAVIOR verdict gates the RE
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("REQUIRED + PASSING behavior (+ CI passing) → authorized; main advances to the PR head", async () => {
+  it("REQUIRED + PASSING behavior (+ CI passing) still cannot create a synthetic authority binding", async () => {
     const { host, disposition } = await landWithBehavior({ kind: "passed", passedBlockingCount: 2 });
-    expect(disposition.kind).toBe("merged");
-    // The land actually happened only because the behavior verdict was a decisive pass.
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("NO behavior requirement (not_applicable) → authorized on CI alone (non-behavior runs still merge)", async () => {
+  it("NO behavior requirement (not_applicable) leaves the closed route blocked", async () => {
     const { host, disposition } = await landWithBehavior({ kind: "not_applicable" });
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 });
 
@@ -343,15 +336,15 @@ describe("authorizeAndLand — the ds-4 DESIGN-RENDER verdict gates the REAL lan
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("REQUIRED + PASSING design render (+ CI passing) → authorized; main advances to the PR head", async () => {
+  it("REQUIRED + PASSING design render (+ CI passing) still cannot create a synthetic authority binding", async () => {
     const { host, disposition } = await landWithDesignRender({ kind: "passed", passedCheckpointCount: 4 });
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
-  it("NO design requirement (not_applicable) → authorized on CI alone (no-design-system runs still merge)", async () => {
+  it("NO design requirement (not_applicable) leaves the closed route blocked", async () => {
     const { host, disposition } = await landWithDesignRender({ kind: "not_applicable" });
-    expect(disposition.kind).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 });

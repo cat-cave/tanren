@@ -26,7 +26,8 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     // First mergeability read (ensureUpToDate) is `dirty` → the conflict path; the
-    // resolution clears it so the next read (driveLand) is `clean` and the authority lands.
+    // resolution clears it so the next read (driveLand) is `clean`; the retired
+    // single-PR route then holds until the canonical queue node/proof path drives it.
     const probe = scriptedProbe("clean");
     const events = recordingEventStore();
     const landed: string[] = [];
@@ -43,11 +44,11 @@ describe("apex-stall #1: a merge-time conflict engages the resolver ONCE, never 
     // The resolver was engaged EXACTLY ONCE (not 90×, not 0) — the structural fix for the
     // apex stall (the conflict is resolved, not retried blindly against a 409).
     expect(resolver.calls()).toBe(1);
-    // The land went through the authority CAS (main advanced to the authorized head) — there
-    // is no host PR-merge endpoint (the 409-loop's former target) left to poll.
-    expect(result.outcome).toBe("merged");
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
-    expect(landed).toEqual(["sha-feat"]);
+    // The legacy dispatcher does not recreate a synthetic binding after resolving.
+    // It holds for the canonical node/proof path and never falls through to any host merge.
+    expect(result.outcome).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+    expect(landed).toEqual([]);
     // A merge-time conflict surfaced exactly one conflict route, not a storm of retries.
     expect(events.events.filter((e) => e === "merge.conflict")).toHaveLength(0);
   });

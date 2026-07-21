@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { CodeHost } from "../src/engine/contracts/codeHost.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { MergeAuthorityV2Impl, type AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createMergeQueueAuthorityEvaluationRoutes } from "../src/routes/mergeQueue/authorityEvaluations.js";
 import { activeQuarantineVersion } from "../src/engine/workflow/ciQuarantine.js";
@@ -166,6 +167,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       ...fixtureA.binding.members.map((member) => [member.branch, member.headSha] as const),
     ]);
     let hostError: Error | undefined;
+    let hostLandCalls = 0;
     const host = {
       async fetchRef(input: { remoteBranch: string }) {
         if (hostError !== undefined) {
@@ -177,6 +179,10 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
           throw new Error(hostError.message, { cause: hostError });
         }
         return refs.get(input.remoteBranch);
+      },
+      async landAuthorizedIntegration() {
+        hostLandCalls += 1;
+        return { mainSha: fixtureA.binding.headSha };
       },
     } as unknown as CodeHost;
     const revalidator = new PgExactBatchBindingRevalidator({
@@ -274,6 +280,49 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     await expect(validate()).rejects.toThrow("credential configuration invalid");
     hostError = undefined;
     await expect(validate()).resolves.toEqual({ valid: true });
+
+    // V2 must stop before the host port when the durable exact proof disappears.
+    // This executes the production PG revalidator, not a permissive in-memory double.
+    await scopedUpdate(
+      ownerPool,
+      ORG_A,
+      `DELETE FROM integration_proofs WHERE project_id = $1 AND proof_reuse_key = $2`,
+      [PROJECT_A, fixtureA.binding.proof.proofReuseKey],
+    );
+    const authority = new MergeAuthorityV2Impl(
+      host,
+      revalidator,
+      {
+        persistAuthorizedDecision: async () => ({ effectIntentId: "must-not-be-persisted" }),
+        recordLandReceipt: async () => ({ auditId: "must-not-be-recorded" }),
+      } as AuthorityLandStore,
+    );
+    const authorization = await authority.authorizeLand(
+      {
+        subject: fixtureA.envelope.subject,
+        gateVerdict: "passed",
+        findings: [],
+        auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+        reviewVerdict: "approved",
+        mergeability: "clean",
+        budget: { kind: "not_required" },
+        demo: "not_required",
+        hitlSignoff: "not_required",
+        conflicts: "resolved",
+      },
+      fixtureA.envelope,
+    );
+    expect(authorization).toMatchObject({ decision: "blocked", reasons: [expect.objectContaining({ input: "binding" })] });
+    await expect(authority.land(authorization)).rejects.toThrow(/not 'authorized'/u);
+    expect(hostLandCalls).toBe(0);
+    await new PgIntegrationNodeModel(ownerPool).recordProof({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      nodeId: fixtureA.binding.nodeId,
+      keyInput: fixtureA.binding.proof.keyInput,
+      verdict: "passed",
+      evidence: fixtureA.proofEvidence,
+    });
   });
 
   it("projects flake_observation on the read side only from the exact active quarantine and passing proof epoch", async () => {
