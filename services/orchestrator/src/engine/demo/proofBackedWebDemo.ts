@@ -60,6 +60,7 @@ import {
   type RecordAttemptedVerdictResult,
   type RecordAttemptInput,
   type StoredAcceptanceVerdict,
+  withoutLiveEffectAssertions,
 } from "../verification/acceptance/index.js";
 import { LiveSlackEffectProbe } from "../verification/effectObserver/liveSlackEffectProbe.js";
 import { PgCasByteStore } from "../cas/pgCasByteStore.js";
@@ -178,10 +179,14 @@ export class ProofBackedWebDemo {
     if (release.behaviorRevisionIds.length === 0) {
       throw new ProofBackedDemoNoBehaviorsError(target.runId, release.releaseInstanceId);
     }
-    const plans = await this.deps.planLoader.loadPlans({
+    const loadedPlans = await this.deps.planLoader.loadPlans({
       orgId: target.orgId,
       behaviorRevisionIds: release.behaviorRevisionIds,
     });
+    const plans =
+      target.skipLiveEffectAssertions === true
+        ? loadedPlans.map((plan) => withoutLiveEffectAssertions(plan)).filter((plan) => plan.assertions.length > 0)
+        : loadedPlans;
     // Resolve the deploy-created verification environment for THIS live release so the
     // acceptance run persists its verdict against a real env (fail-closed if none/mismatch).
     const environmentId = await this.deps.resolveEnvironment.resolveForLiveRelease(release);

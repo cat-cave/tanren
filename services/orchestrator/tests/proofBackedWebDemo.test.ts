@@ -96,6 +96,26 @@ function healthPlan(): AcceptancePlan {
   });
 }
 
+/** A production A3 behavior with an ordinary preview-safe health assertion. */
+function healthPlanWithLiveEffect(): AcceptancePlan {
+  const base = healthPlan();
+  return {
+    ...base,
+    assertions: [
+      ...base.assertions,
+      {
+        assertionId: "a-effect",
+        subject: "slack.messages",
+        comparisonOperator: "equals",
+        expected: 1,
+        correlation: { causeId: "send-health", observer: "slack", provider: "slack", requireCorrelationId: true },
+      },
+    ],
+    causes: [{ causeId: "send-health", surface: "api", action: "send-health" }],
+    httpProbes: [...(base.httpProbes ?? []), { probeId: "send-health", method: "POST", path: "/health" }],
+  };
+}
+
 const planLoader = (plans: readonly AcceptancePlan[]): AcceptancePlanLoader => ({
   // eslint-disable-next-line @typescript-eslint/require-await
   async loadPlans() {
@@ -181,6 +201,21 @@ describe("ProofBackedWebDemo — the demo verdict is the real behavior verdict",
     expect(evidence.every((a) => a.ambientOrgId === ORG)).toBe(true);
     const summary = events.appends.find((a) => a.eventType === "demo.completed");
     expect(summary!.payload).toMatchObject({ behaviorCount: 1, passed: 1, failed: 0 });
+  });
+
+  it("a preview proof skips production-bound A3 but still drives its ordinary assertions", async () => {
+    const events = new RecordingEventStore();
+    const fetchImpl = scriptedFetch({ ok: true });
+    const demo = buildDemo(events, [healthPlanWithLiveEffect()], fetchImpl);
+
+    const result = await demo.demo({ ...TARGET, skipLiveEffectAssertions: true }, release([BR]));
+
+    expect(result).toMatchObject({ passed: 1, failed: 0 });
+    expect(fetchImpl.hits).toContain("/health");
+    expect(events.appends.find((event) => event.eventType === "demo.completed")?.payload).toMatchObject({
+      behaviorCount: 1,
+      passed: 1,
+    });
   });
 
   it("an UNREACHABLE product (base url unresolved) → inconclusive, never a fabricated pass (fails loud)", async () => {

@@ -53,6 +53,8 @@ export interface DemoTarget {
   orgId: string;
   /** The sealed in-17 binding set when this is a delivery-DAG live exercise. */
   deliveryRunId?: string;
+  /** Preview proof must not drive production-bound A3 effects; production keeps the full plan. */
+  skipLiveEffectAssertions?: boolean;
 }
 
 /** The dependencies the demo engine runs over (the event sink + the surface-exercise probes). */

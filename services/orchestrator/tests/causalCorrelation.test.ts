@@ -169,7 +169,7 @@ describe("rv-12 causal-correlation core", () => {
     const correlated = correlateEffects({
       cause: { causeId: "c1", firedAtCursor: "1000" },
       siblingFiredCursors: [],
-      effects: [effect({ cursor: "1500", classification: "missing" })],
+      effects: [effect({ cursor: "1500", classification: "missing", occurrenceCount: 0 })],
       requireCorrelationId: false,
     });
     expect(correlated).toHaveLength(0);

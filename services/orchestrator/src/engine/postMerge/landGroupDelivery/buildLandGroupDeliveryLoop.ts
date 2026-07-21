@@ -8,7 +8,12 @@ import type pg from "pg";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { fetchDeployTransport, type SecretStore } from "../deployOnMergeDeployDeps.js";
+import { contentAddressedEvidenceSigner } from "../delivery/deliveryEvidence.js";
+import { PgDeliveryBindingSetSealer } from "../delivery/deliveryBindingSet.js";
+import { DeliveryRunStore } from "../delivery/deliveryRunStore.js";
+import { PgDeliverySignals } from "../delivery/deliverySignals.js";
 import { LandGroupDeliveryLoop } from "./landGroupDeliveryLoop.js";
+import { groupDeliveryCompletionEvidenceReader, ProductionGroupDeliveryA3Gate } from "./groupDeliveryA3Gate.js";
 import { ProductionGroupDeliveryDeployer } from "./groupDeliveryDeployer.js";
 import { PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
 import { ConservativeGroupCausalReplay, RepairRoutingGroupAttribution } from "./groupRegressionAttribution.js";
@@ -33,9 +38,16 @@ export function buildLandGroupDeliveryLoop(deps: BuildLandGroupDeliveryLoopDeps)
     eventStore,
     intentStore: store,
   });
+  const a3Gate = new ProductionGroupDeliveryA3Gate({
+    store: new DeliveryRunStore(deps.pool),
+    bindingSetSealer: new PgDeliveryBindingSetSealer(deps.pool),
+    signals: new PgDeliverySignals(deps.pool),
+    evidence: { eventStore, signer: contentAddressedEvidenceSigner },
+    completionEvidenceExists: groupDeliveryCompletionEvidenceReader(deps.pool),
+  });
   const attribution = new RepairRoutingGroupAttribution(new ConservativeGroupCausalReplay(), {
     pool: deps.pool,
     events: eventStore,
   });
-  return new LandGroupDeliveryLoop({ pool: deps.pool, deployer, attribution, store });
+  return new LandGroupDeliveryLoop({ pool: deps.pool, deployer, a3Gate, attribution, store });
 }

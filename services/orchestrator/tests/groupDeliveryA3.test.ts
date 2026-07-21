@@ -58,7 +58,7 @@ function deployer(proofBackedWebDemo: ProofBackedWebDemo): ProductionGroupDelive
 }
 
 describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
-  it("threads the grouped land's delivery run into the live demo, where A3 can fire and gate", async () => {
+  it("reserves A3 for the sealed production demo, never the preview proof", async () => {
     const targets: unknown[] = [];
     const proofBackedWebDemo = {
       demo: async (target: unknown) => {
@@ -67,7 +67,18 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       },
     } as ProofBackedWebDemo;
 
-    const outcome = await deployer(proofBackedWebDemo).demo({
+    const groupDeployer = deployer(proofBackedWebDemo);
+    await groupDeployer.demo({
+      plan: PLAN,
+      target: TARGET,
+      release: {
+        releaseInstanceId: RELEASE.releaseInstanceId,
+        deploymentId: RELEASE.deploymentId,
+        artifactDigest: RELEASE.artifactDigest,
+      },
+      environment: "preview",
+    });
+    const outcome = await groupDeployer.demo({
       plan: PLAN,
       target: TARGET,
       release: {
@@ -78,7 +89,9 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       environment: "production",
     });
 
-    expect(targets[0]).toMatchObject({ deliveryRunId: PLAN.deliveryRunId, runId: PLAN.tailRunId });
+    expect(targets[0]).toMatchObject({ skipLiveEffectAssertions: true, runId: PLAN.tailRunId });
+    expect(targets[0]).not.toHaveProperty("deliveryRunId");
+    expect(targets[1]).toMatchObject({ deliveryRunId: PLAN.deliveryRunId, runId: PLAN.tailRunId });
     expect(outcome).toMatchObject({ ok: false });
   });
 });

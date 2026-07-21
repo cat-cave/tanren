@@ -15,6 +15,7 @@
 import type pg from "pg";
 import { createLogger } from "../../observability/logger.js";
 import type { RunMergeWatcher } from "../subscriber.js";
+import type { GroupDeliveryA3Gate } from "./groupDeliveryA3Gate.js";
 import {
   LandGroupDeliveryClaimLostError,
   runGroupDelivery,
@@ -32,6 +33,8 @@ const log = createLogger("land-group-delivery");
 export interface LandGroupDeliveryLoopDeps {
   readonly pool: pg.Pool;
   readonly deployer: GroupDeliveryDeployer;
+  /** Required shared-coordinate seal + A3 completion gate for grouped production delivery. */
+  readonly a3Gate: GroupDeliveryA3Gate;
   readonly attribution: GroupRegressionAttribution;
   /** Injectable durable store (defaults to the Pg store over `pool`). */
   readonly store?: PgLandGroupDeliveryStore;
@@ -131,6 +134,7 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
     try {
       const outcome = await runGroupDelivery({
         deployer: this.deps.deployer,
+        a3Gate: this.deps.a3Gate,
         attribution: this.deps.attribution,
         plan,
         target,

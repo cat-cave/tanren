@@ -5,6 +5,7 @@ export * from "./attemptLifecycle.js";
 export * from "./eventSink.js";
 export * from "./causalCorrelation.js";
 export * from "./causalStage.js";
+export { withoutLiveEffectAssertions } from "./acceptancePlan.js";
 export * from "./designRenderStage.js";
 export * from "./renderCaptureStore.js";
 export * from "./renderCaptureStage.js";

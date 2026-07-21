@@ -83,6 +83,46 @@ export class DeliveryRunStore {
   }
 
   /**
+   * Claim one known delivery coordinate. Grouped lands share one authority decision and
+   * therefore one delivery outbox row, while their member runs intentionally skip the
+   * normal per-run driver. The group loop must claim this exact row rather than performing
+   * the broad merge-SHA lookup above: a project may have more than one delivery coordinate
+   * for a SHA, and A3 evidence is bound to the delivery id, not merely the commit.
+   */
+  async claimExact(input: {
+    orgId: string;
+    projectId: string;
+    deliveryRunId: string;
+    mergeSha: string;
+  }): Promise<ClaimedDeliveryRun | undefined> {
+    const token = randomUUID();
+    return runWithOrgScope(this.pool, input.orgId, async (client) => {
+      const result = await client.query<{
+        id: string;
+        project_id: string;
+        merge_sha: string;
+        authority_decision_id: string;
+      }>(
+        `UPDATE delivery_runs
+            SET status = 'running', claim_owner = $5, claim_expires_at = 'infinity', updated_at = now()
+          WHERE org_id = $1 AND project_id = $2 AND id = $3 AND merge_sha = $4 AND status <> 'completed'
+        RETURNING id, project_id, merge_sha, authority_decision_id`,
+        [input.orgId, input.projectId, input.deliveryRunId, input.mergeSha, token],
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? undefined
+        : {
+            id: row.id,
+            projectId: row.project_id,
+            mergeSha: row.merge_sha,
+            authorityDecisionId: row.authority_decision_id,
+            token,
+          };
+    });
+  }
+
+  /**
    * Sign-of-life RENEWAL + fence check (progress-based, no timer): re-assert this drive
    * still holds the claim. Returns `false` when the token was superseded (a newer claim
    * took over) or the run left `running` — the driver ABORTS and records nothing terminal,

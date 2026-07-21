@@ -21,6 +21,7 @@
 // event. This module never touches a pool.
 
 import type { LandGroupDeliveryDisposition, LandGroupDeliveryState } from "../../contracts/landGroupDeliveryReceipt.js";
+import type { GroupDeliveryA3Gate } from "./groupDeliveryA3Gate.js";
 
 /**
  * Thrown by the loop's liveness heartbeat when the owner's claim was TAKEN OVER (this owner
@@ -269,6 +270,8 @@ export interface GroupDeliveryOutcome {
  */
 export async function runGroupDelivery(deps: {
   readonly deployer: GroupDeliveryDeployer;
+  /** Required: a grouped land must never bypass binding seal + exact A3 evidence. */
+  readonly a3Gate: GroupDeliveryA3Gate;
   readonly attribution: GroupRegressionAttribution;
   readonly plan: GroupDeliveryPlan;
   readonly target: ResolvedGroupDeployTarget;
@@ -281,7 +284,7 @@ export async function runGroupDelivery(deps: {
    */
   readonly heartbeat?: () => Promise<void>;
 }): Promise<GroupDeliveryOutcome> {
-  const { deployer, attribution, plan, target, token } = deps;
+  const { deployer, a3Gate, attribution, plan, target, token } = deps;
   const beat = deps.heartbeat ?? (async (): Promise<void> => undefined);
 
   // 1. Build ONE artifact for the whole completed group (single call ⇒ exactly one artifact).
@@ -336,6 +339,7 @@ export async function runGroupDelivery(deps: {
 
     return await driveFromVerifiedPreview({
       deployer,
+      a3Gate,
       attribution,
       plan,
       target,
@@ -359,6 +363,7 @@ export async function runGroupDelivery(deps: {
  */
 async function driveFromVerifiedPreview(deps: {
   readonly deployer: GroupDeliveryDeployer;
+  readonly a3Gate: GroupDeliveryA3Gate;
   readonly attribution: GroupRegressionAttribution;
   readonly plan: GroupDeliveryPlan;
   readonly target: ResolvedGroupDeployTarget;
@@ -367,7 +372,7 @@ async function driveFromVerifiedPreview(deps: {
   readonly beat: () => Promise<void>;
   readonly token: string;
 }): Promise<GroupDeliveryOutcome> {
-  const { deployer, attribution, plan, target, artifact, preview, beat, token } = deps;
+  const { deployer, a3Gate, attribution, plan, target, artifact, preview, beat, token } = deps;
   const previewFailed = (): GroupDeliveryOutcome => ({
     state: "preview_failed",
     disposition: "none",
@@ -408,9 +413,19 @@ async function driveFromVerifiedPreview(deps: {
   }
   const production = promoteOutcome.production;
 
-  // 6. PROOF-BACKED production demo (the group's `demo.completed` on the tail run).
+  // 6. Seal the shared delivery coordinate before the production A3 trigger; absent/ambiguous bindings block completion.
   await beat();
-  const productionDemo = await deployer.demo({ plan, target, release: production.release, environment: "production" });
+  const a3Sealed = await a3Gate.seal(plan);
+  let productionDemo: GroupDemoOutcome =
+    a3Sealed.kind === "confirmed"
+      ? await deployer.demo({ plan, target, release: production.release, environment: "production" })
+      : { ok: false, reason: a3Sealed.reason };
+  if (productionDemo.ok) {
+    // The production demo has fired and independently observed its effects. Count only
+    // exact, single-occurrence A3 evidence at the sealed coordinate before final success.
+    const a3Completed = await a3Gate.complete({ plan, deploymentId: production.release.deploymentId });
+    if (a3Completed.kind === "blocked") productionDemo = { ok: false, reason: a3Completed.reason };
+  }
   if (productionDemo.ok) {
     return {
       state: "completed",

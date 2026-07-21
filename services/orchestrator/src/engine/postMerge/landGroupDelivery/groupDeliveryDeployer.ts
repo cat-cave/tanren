@@ -242,7 +242,9 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
           specId: plan.tailSpecId,
           projectId: plan.projectId,
           orgId: plan.orgId,
-          deliveryRunId: plan.deliveryRunId,
+          ...(input.environment === "production"
+            ? { deliveryRunId: plan.deliveryRunId }
+            : { skipLiveEffectAssertions: true }),
         },
         record,
       );
