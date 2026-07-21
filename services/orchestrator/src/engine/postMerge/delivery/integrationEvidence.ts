@@ -24,7 +24,8 @@ export type SealedIntegrationCoordinate = {
   readonly behaviorRevisionId: string;
   readonly grantId: string;
   readonly grantGeneration: number;
-  readonly channelTemplateDigest: string;
+  /** Nullable at the attester boundary; a missing value is rejected before sealing. */
+  readonly channelTemplateDigest: string | null;
   readonly observer: string;
   readonly provider: string;
 };

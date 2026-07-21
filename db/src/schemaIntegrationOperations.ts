@@ -347,17 +347,20 @@ export const integrationValidationProofs = pgTable(
     verdict: text("verdict").notNull(),
     evidenceDigest: text("evidence_digest").notNull(),
     signature: text("signature").notNull(),
-    /** Digest of the exact channel + optional template coordinate, never the channel body. */
-    channelTemplateDigest: text("channel_template_digest").notNull(),
-    /** Every fail-closed negative control evaluated before this proof could seal. */
-    negativeControlChecklist: jsonb("negative_control_checklist").notNull(),
-    /** The shared PgProofSubstrate bundle that carries the ed25519 signature. */
-    bundleId: text("bundle_id").notNull(),
-    bundleDigest: text("bundle_digest").notNull(),
-    bundleBytesDigest: text("bundle_bytes_digest").notNull(),
-    signingKeyId: text("signing_key_id").notNull(),
+    /**
+     * In-22 attestation rows always provide this digest; legacy validation-proof
+     * rows predate it and must remain representable on this shared table.
+     */
+    channelTemplateDigest: text("channel_template_digest"),
+    /** In-22's fail-closed controls, omitted only by pre-attestation legacy rows. */
+    negativeControlChecklist: jsonb("negative_control_checklist"),
+    /** The shared PgProofSubstrate bundle that carries the Ed25519 signature. */
+    bundleId: text("bundle_id"),
+    bundleDigest: text("bundle_digest"),
+    bundleBytesDigest: text("bundle_bytes_digest"),
+    signingKeyId: text("signing_key_id"),
     /** The portable `integration-evidence.v1.dsse.json` envelope. */
-    dsseBundle: jsonb("dsse_bundle").notNull(),
+    dsseBundle: jsonb("dsse_bundle"),
     freshUntil: timestamp("fresh_until", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -27,13 +27,13 @@ CREATE TABLE "integration_runtime_attachments" (
 );
 --> statement-breakpoint
 ALTER TABLE "integration_runtime_attachments" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "channel_template_digest" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "negative_control_checklist" jsonb NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_id" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_digest" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_bytes_digest" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "signing_key_id" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD COLUMN "dsse_bundle" jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "channel_template_digest" text;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "negative_control_checklist" jsonb;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_id" text;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_digest" text;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "bundle_bytes_digest" text;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "signing_key_id" text;--> statement-breakpoint
+ALTER TABLE "integration_validation_proofs" ADD COLUMN "dsse_bundle" jsonb;--> statement-breakpoint
 ALTER TABLE "integration_evidence_failures" ADD CONSTRAINT "integration_evidence_failures_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "integration_evidence_failures" ADD CONSTRAINT "integration_evidence_failures_delivery_binding_fk" FOREIGN KEY ("org_id","project_id","delivery_run_id","binding_id","binding_generation") REFERENCES "public"."delivery_run_bindings"("org_id","project_id","delivery_run_id","binding_id","binding_generation") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "integration_runtime_attachments" ADD CONSTRAINT "integration_runtime_attachments_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

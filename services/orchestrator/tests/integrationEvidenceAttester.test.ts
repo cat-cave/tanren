@@ -23,6 +23,7 @@ function evidenceInput(
     attachmentAt?: Date;
     verifiedAt?: Date;
     correlationId?: string;
+    channelTemplateDigest?: string | null;
   } = {},
 ) {
   const causeOrdinal = 0;
@@ -43,7 +44,8 @@ function evidenceInput(
       behaviorRevisionId: "behavior-evidence",
       grantId: "grant-evidence",
       grantGeneration: 3,
-      channelTemplateDigest: `sha256:${"b".repeat(64)}`,
+      channelTemplateDigest:
+        overrides.channelTemplateDigest === undefined ? `sha256:${"b".repeat(64)}` : overrides.channelTemplateDigest,
       observer: "slack",
       provider: "slack",
     },
@@ -135,6 +137,13 @@ describe("integration evidence byte-for-byte assembler", () => {
     expect(deriveNegativeControlChecklist(fixture).correlationMatchesIndependentObservation).toBe(false);
     const attempted = await attestFixture(fixture);
     expect(attempted.result).toMatchObject({ kind: "blocked", classification: "correlation_join_mismatch" });
+    expect(attempted.proofIngestCalls).toBe(0);
+    expect(attempted.proofWrites).toHaveLength(0);
+  });
+
+  it("DECISIVE: a missing channel/template digest seals nothing", async () => {
+    const attempted = await attestFixture(evidenceInput({ channelTemplateDigest: null }));
+    expect(attempted.result).toMatchObject({ kind: "blocked", classification: "evidence_unavailable" });
     expect(attempted.proofIngestCalls).toBe(0);
     expect(attempted.proofWrites).toHaveLength(0);
   });

@@ -18259,43 +18259,43 @@
           "name": "channel_template_digest",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "negative_control_checklist": {
           "name": "negative_control_checklist",
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "bundle_id": {
           "name": "bundle_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "bundle_digest": {
           "name": "bundle_digest",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "bundle_bytes_digest": {
           "name": "bundle_bytes_digest",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "signing_key_id": {
           "name": "signing_key_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "dsse_bundle": {
           "name": "dsse_bundle",
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "fresh_until": {
           "name": "fresh_until",

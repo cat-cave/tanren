@@ -30,12 +30,16 @@ export interface IntegrationEvidenceDsseSigner extends ProofSubstrate {
 }
 
 export type ReadyEvidence = {
-  readonly coordinate: SealedIntegrationCoordinate;
+  readonly coordinate: AttestableIntegrationCoordinate;
   readonly verdict: BehaviorVerdictEvidence;
   readonly observation: IndependentObservation;
   readonly attachment: RuntimeAttachment;
   readonly grant: GrantEvidence;
   readonly checklist: NegativeControlChecklist;
+};
+
+type AttestableIntegrationCoordinate = SealedIntegrationCoordinate & {
+  readonly channelTemplateDigest: string;
 };
 
 /** Every sealed check is derived from immutable correlation evidence, never asserted. */
@@ -251,6 +255,9 @@ export function assembleIntegrationEvidence(input: {
   readonly grant: GrantEvidence | undefined;
 }): IntegrationEvidenceJoinResult {
   const { coordinate, grant } = input;
+  if (!isSha256Digest(coordinate.channelTemplateDigest)) {
+    return blocked("evidence_unavailable", "sealed channel/template digest is absent or malformed");
+  }
   const checklist = deriveNegativeControlChecklist(input);
   if (!checklist.authorizedMergeShaMatchesDeployment) {
     return blocked("correlation_join_mismatch", "verified deployed artifact does not equal the authorized merge SHA");
@@ -288,7 +295,14 @@ export function assembleIntegrationEvidence(input: {
   if (attachment === undefined || deployment === undefined || verdict === undefined || observation === undefined) {
     return blocked("evidence_unavailable", "validated correlation evidence disappeared before sealing");
   }
-  return { kind: "ready", evidence: { coordinate, verdict, observation, attachment, grant, checklist } };
+  const attestableCoordinate: AttestableIntegrationCoordinate = {
+    ...coordinate,
+    channelTemplateDigest: coordinate.channelTemplateDigest,
+  };
+  return {
+    kind: "ready",
+    evidence: { coordinate: attestableCoordinate, verdict, observation, attachment, grant, checklist },
+  };
 }
 
 /** Compute, never assert, the control values embedded in a DSSE attestation. */
@@ -429,6 +443,10 @@ function proofId(input: EvidenceCoordinate, evidence: ReadyEvidence): string {
 
 function only<T>(values: readonly T[]): T | undefined {
   return values.length === 1 ? values[0] : undefined;
+}
+
+function isSha256Digest(value: string | null): value is string {
+  return value !== null && /^sha256:[0-9a-f]{64}$/u.test(value);
 }
 
 function blocked(
