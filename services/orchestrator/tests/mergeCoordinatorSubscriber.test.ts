@@ -1,7 +1,5 @@
-// Unit tests for the MergeCoordinatorSubscriber NOTIFY-storm debounce (Bug B — the
-// no-CI hot-loop fix), over a fake pool + fake PgNotifyListener + a recording
-// coordinator (no Postgres). The live no-CI repo hit a hot loop: a batch stuck
-// `pending` was re-integrated on EVERY unrelated `tanren_run` NOTIFY (~2/sec).
+// Unit tests for the MergeCoordinatorSubscriber NOTIFY-storm debounce over a
+// fake pool + listener + recording coordinator (no Postgres).
 // `merge_retry` backoff has the same risk: unrelated run activity can burn retry
 // attempts before the backoff timer expires. The fix: a timed hold opens a
 // per-project NOTIFY-suppression window — the armed `retryAfterMs` timer is the
@@ -118,13 +116,16 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 const PROJECT = "project_q";
+type SubscriberDeps = ConstructorParameters<typeof MergeCoordinatorSubscriber>[0];
+const testSubscriber = (deps: Omit<SubscriberDeps, "attemptActivation">) =>
+  new MergeCoordinatorSubscriber({ ...deps, attemptActivation: async () => {} });
 
 describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", () => {
   it("startup discovery coordinates projects with queued or recoverable dequeued work", async () => {
     const pool = fakePool(PROJECT, [PROJECT]);
     const listener = new FakeNotifyListener();
     const coordinator = new RecordingCoordinator(() => ({ projectId: PROJECT, holdReason: "empty", queueDepth: 0 }));
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -151,7 +152,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     );
     const listener = new FakeNotifyListener();
     const coordinator = new RecordingCoordinator(() => ({ projectId: PROJECT, holdReason: "empty", queueDepth: 0 }));
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -181,7 +182,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       queueDepth: 1,
     }));
     let now = 1_000_000;
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -215,7 +216,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       queueDepth: 1,
     }));
     let now = 1_000_000;
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -253,7 +254,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       queueDepth: 0,
     }));
     let now = 1_000_000;
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -292,7 +293,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
           : { projectId: PROJECT, mergedSpecId: "spec_retry", queueDepth: 1 };
       });
       let now = 1_000_000;
-      sub = new MergeCoordinatorSubscriber({
+      sub = testSubscriber({
         pool,
         notifyListener: listener as never,
         coordinator,
@@ -338,7 +339,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
           return { projectId, mergedSpecId: "spec_retry", queueDepth: 1 };
         },
       };
-      sub = new MergeCoordinatorSubscriber({
+      sub = testSubscriber({
         pool,
         notifyListener: listener as never,
         coordinator,
@@ -391,7 +392,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
         return { projectId, mergedSpecId: "spec_clean", queueDepth: 1 };
       },
     };
-    const sub = new MergeCoordinatorSubscriber({
+    const sub = testSubscriber({
       pool,
       notifyListener: listener as never,
       coordinator,
@@ -438,7 +439,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
             }
           : { projectId: PROJECT, mergedSpecId: "spec_resumed", queueDepth: 1 };
       });
-      sub = new MergeCoordinatorSubscriber({
+      sub = testSubscriber({
         pool,
         notifyListener: listener as never,
         coordinator,
@@ -473,7 +474,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
         }
         return { projectId, mergedSpecId: "spec_after_exception", queueDepth: 1 };
       });
-      sub = new MergeCoordinatorSubscriber({
+      sub = testSubscriber({
         pool,
         notifyListener: listener as never,
         coordinator,

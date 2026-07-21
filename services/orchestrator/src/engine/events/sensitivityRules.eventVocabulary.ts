@@ -11,6 +11,7 @@ import {
   wave5And6AndResolutionClusterVocabularySensitivityRules,
 } from "./sensitivityRules.eventVocabularyW0.js";
 import { eventVocabularyW1aIntegrationAuthorSensitivityRules } from "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js";
+import { projectActivationVocabularySensitivityRules } from "./sensitivityRules.projectActivationVocabulary.js";
 import { queuePolicySensitivityRules } from "./sensitivityRules.queuePolicy.js";
 
 // Single fan-in aggregation point for the mission-complete event-vocabulary
@@ -32,5 +33,6 @@ export const eventVocabularySensitivityRules: SensitivityRule[] = [
   ...eventVocabularyW0SensitivityRules,
   ...eventVocabularyW1aIntegrationAuthorSensitivityRules,
   ...eagerBeamSensitivityRules,
+  ...projectActivationVocabularySensitivityRules,
   ...queuePolicySensitivityRules,
 ];

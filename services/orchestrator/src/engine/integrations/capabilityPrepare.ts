@@ -44,8 +44,9 @@ export interface CapabilityPrepareSummary {
 // The evaluable subset — nodes whose status the prepare pass may still move.
 // `needs_attention` is INCLUDED so a DEP-caused failure re-evaluates when its parent
 // recovers (finding-2); a genuine terminal failure (no dep edges) stays put, guarded
-// inside evaluateAndApply.
-const MUTABLE_STATUSES = ["pending", "awaiting_grant", "needs_attention"] as const;
+// inside evaluateAndApply. Exported so the in-6 activation gate (`activate`)
+// reuses the SAME mutable set when it evaluates the capability graph.
+export const MUTABLE_STATUSES = ["pending", "awaiting_grant", "needs_attention"] as const;
 
 interface RequirementRow {
   id: string;

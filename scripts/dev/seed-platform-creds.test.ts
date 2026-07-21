@@ -49,14 +49,14 @@ describe("seedPlatformCredentials", () => {
 
   it("FAILS LOUD (typed MissingSeedSecretError) when no source yields a key — no silent skip", async () => {
     const store = new InMemorySecretStore();
-    // No local fallback file on disk in the test cwd → parseAllowlistedEnvFile
-    // returns {} for the fallback; no exported env; no TANREN_SECRET_ENV_FILE.
-    await expect(seedPlatformCredentials(store, {})).rejects.toThrow(MissingSeedSecretError);
+    // The injected reader keeps this no-source proof independent of an operator's
+    // local fallback file in the checkout.
+    await expect(seedPlatformCredentials(store, {}, () => ({}))).rejects.toThrow(MissingSeedSecretError);
   });
 
   it("FAILS LOUD when the key env var is blank/whitespace, and writes nothing", async () => {
     const store = new InMemorySecretStore();
-    await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " })).rejects.toThrow(
+    await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " }, () => ({}))).rejects.toThrow(
       MissingSeedSecretError,
     );
     // Fail-before-write: a blank value must not leave a half-seeded platform ref.

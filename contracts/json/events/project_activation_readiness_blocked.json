@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "additionalProperties": false,
+      "properties": {
+        "materializationGaps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capability": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "criticality": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "requirementId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "requirementId",
+              "capability",
+              "criticality"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "unreadyCapabilities": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capability": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "criticality": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "requirementId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "waitReason": {
+                "anyOf": [
+                  {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "requirementId",
+              "capability",
+              "criticality",
+              "status",
+              "waitReason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "required": [
+        "unreadyCapabilities",
+        "materializationGaps"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.project.activation.readiness_blocked"
+}
