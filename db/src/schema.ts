@@ -159,7 +159,6 @@ export const costRecords = pgTable(
     ),
   ],
 );
-
 export const runners = pgTable(
   "runners",
   {
