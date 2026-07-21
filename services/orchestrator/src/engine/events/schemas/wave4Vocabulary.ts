@@ -103,6 +103,27 @@ export const wave4EventRegistry = {
       contentHash: Sha256,
     })
     .strict(),
+  "merge.land_group.delivery.completed": z
+    .object({
+      projectId: z.string(),
+      landGroupId: z.string(),
+      mainSha: z.string(),
+      artifactDigest: Sha256,
+      productionReleaseInstanceId: z.string(),
+      memberCount: z.number().int().nonnegative(),
+      receiptId: z.string(),
+    })
+    .strict(),
+  "merge.land_group.delivery.failed": z
+    .object({
+      projectId: z.string(),
+      landGroupId: z.string(),
+      mainSha: z.string(),
+      state: z.enum(["preview_failed", "rolled_back", "needs_attention"]),
+      disposition: z.enum(["none", "repair_routed", "needs_attention"]),
+      reason: z.string(),
+    })
+    .strict(),
   "governance.tier.created": z
     .object({
       projectId: z.string(),

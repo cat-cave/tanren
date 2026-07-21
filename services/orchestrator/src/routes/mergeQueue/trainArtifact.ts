@@ -21,6 +21,9 @@ import {
 import { filterVerifiedSummaries, PgMergeTrainArtifactStore } from "../../engine/postMerge/mergeTrainArtifactStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
+// mq-13's land-group delivery route rides this same module so the routes mount imports both
+// land-group merge-queue projections from ONE symbol source (the max-dependencies cap).
+export { createLandGroupDeliveryRoutes } from "./landGroupDelivery.js";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;

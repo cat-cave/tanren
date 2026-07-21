@@ -20,8 +20,10 @@ import { mqDuration, mqInt, mqPercent, mqTokens } from "./format.js";
 import { MultiMemberAuthorityPanel } from "./MultiMemberAuthorityPanel.js";
 import { RepairRouteLineagePanel } from "./RepairRouteLineagePanel.js";
 import { MergeTrainPanel } from "./MergeTrainPanel.js";
+import { GroupDeliveryTimelinePanel } from "./GroupDeliveryTimelinePanel.js";
 import type { MergeQueueRepairRoutesListResponse } from "../../api/mergeQueueRepairRoutes.js";
 import type { MergeTrainListResponse } from "../../api/mergeQueueTrain.js";
+import type { LandGroupDeliveryListResponse } from "../../api/mergeQueueGroupDelivery.js";
 import type { MergeQueueEvidenceContractResponse } from "../../api/mergeQueueEvidenceContracts.js";
 import type { MergeQueueEagerBeamsResponse } from "../../api/mergeQueueEagerBeams.js";
 import { EagerBeamPanel } from "./EagerBeamPanel.js";
@@ -43,6 +45,8 @@ export interface MergeQueueBodyProps {
   repairRoutes: MergeQueueRepairRoutesListResponse | undefined;
   /** mq-15 durable sealed merge-train projection (undefined when read failed / no project). */
   mergeTrain: MergeTrainListResponse | undefined;
+  /** mq-13 durable land-group delivery projection (undefined when read failed / no project). */
+  groupDelivery: LandGroupDeliveryListResponse | undefined;
   /** mq-12 frozen F2 evidence for the latest visible merge-train node. */
   evidenceContract: MergeQueueEvidenceContractResponse | undefined;
   /** mq-8 advisory eager integration builds (undefined on a failed read). */
@@ -182,6 +186,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
     authorityEvaluations,
     repairRoutes,
     mergeTrain,
+    groupDelivery,
     evidenceContract,
     eagerBeams,
     semanticSchedule,
@@ -221,6 +226,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
           ) : (
             <>
               <MergeTrainPanel projection={mergeTrain} orgId={orgId} projectId={projectId} />
+              <GroupDeliveryTimelinePanel projection={groupDelivery} orgId={orgId} projectId={projectId} />
               <EvidenceContractPanel projection={evidenceContract} />
               <EagerBeamPanel projection={eagerBeams} />
               <SemanticSchedulePanel projection={semanticSchedule} />

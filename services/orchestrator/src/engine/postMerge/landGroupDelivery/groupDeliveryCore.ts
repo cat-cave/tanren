@@ -1,0 +1,483 @@
+// mq-13 PURE, DB-free group-delivery orchestrator — the fail-closed decision tree the
+// LandGroupDeliveryLoop drives over injected collaborators. Every trap class is an
+// EXPLICIT branch here, so each negative control is unit-testable with fakes and NO
+// database:
+//
+//   • Build ONE artifact per completed group (exactly one — build is the first, single call).
+//   • NO promotion until the group's preview verification AND proof-backed demo pass —
+//     a failed preview tears the preview down and returns `preview_failed`, never promotes.
+//     (The gravest prohibited fail-open: promoting a failed preview / separate members as
+//      if the whole group were verified.)
+//   • On a failing PRODUCTION proof: call the adapter's REAL `rollback` to the persisted
+//     prior-good release. A rollback that does NOT genuinely succeed (throws) NEVER claims
+//     `rolled_back` — it degrades to `needs_attention`. A NO-prior-good regression ends
+//     `needs_attention`, NEVER a pretended rollback.
+//   • Attribution to one member calls mq-10's repair router ONLY when causal replay
+//     localizes the regression to EXACTLY one member run; an ambiguous / inconclusive
+//     replay ends `needs_attention` with NO fabricated repair target.
+//
+// The loop shell (`landGroupDeliveryLoop.ts`) resolves the completed group + deploy target,
+// claims the durable row, calls `runGroupDelivery`, and persists the terminal receipt +
+// event. This module never touches a pool.
+
+import type { LandGroupDeliveryDisposition, LandGroupDeliveryState } from "../../contracts/landGroupDeliveryReceipt.js";
+
+/**
+ * Thrown by the loop's liveness heartbeat when the owner's claim was TAKEN OVER (this owner
+ * went stale/dead) — the owner must abort WITHOUT finalizing. Lives here (not the store) so the
+ * fail-closed orchestrator can catch it to tear a leaked preview down before aborting (Finding B).
+ */
+export class LandGroupDeliveryClaimLostError extends Error {
+  public override readonly name = "LandGroupDeliveryClaimLostError";
+  public constructor(landGroupId: string) {
+    super(`land-group delivery claim for '${landGroupId}' was taken over by another worker`);
+  }
+}
+
+/** The resolved plan for one completed land group's delivery (NON-SECRET identities). */
+export interface GroupDeliveryPlan {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly landGroupId: string;
+  /** The completed land group's main SHA (from `merge.land_group.completed`). */
+  readonly mainSha: string;
+  /** The tail member run that carries the completed event — the demo/event emission target. */
+  readonly tailRunId: string;
+  /** The tail member spec (the demo target's spec coordinate). */
+  readonly tailSpecId: string;
+  /** The ordered member run ids (canonical member-key order). */
+  readonly memberRunIds: readonly string[];
+  /** The ordered member spec ids (canonical member-key order; parallel to memberRunIds). */
+  readonly memberSpecIds: readonly string[];
+}
+
+/** The resolved deploy target (provider + app + source ref) the group delivers onto. */
+export interface ResolvedGroupDeployTarget {
+  readonly provider: string;
+  readonly appId: string;
+  /** The repo slug (`owner/name`) the merged source is fetched from. */
+  readonly repoSlug: string;
+  readonly policyVersion: number;
+}
+
+/** The built group artifact identity (the canonical SP-3 digest minted once). */
+export interface GroupArtifact {
+  readonly artifactDigest: string;
+  readonly deploymentId: string;
+}
+
+/** A persisted release handle the loop tracks by its release-instance id + provider deployment. */
+export interface GroupReleaseHandle {
+  readonly releaseInstanceId: string;
+  readonly deploymentId: string;
+  readonly artifactDigest: string;
+}
+
+/** The preview release + its provider preview handle (for teardown). */
+export interface GroupPreview {
+  readonly release: GroupReleaseHandle;
+  readonly previewDeploymentId: string;
+}
+
+/** The promoted production release. */
+export interface GroupProduction {
+  readonly release: GroupReleaseHandle;
+}
+
+/** A proof-backed demo outcome, folded to a fail-closed pass/fail (a load/observe throw ⇒ NOT ok). */
+export interface GroupDemoOutcome {
+  /** PASS only when the proof-backed demo ran AND every behavior passed (failed === 0). */
+  readonly ok: boolean;
+  /** A non-secret reason when the demo did not pass (for the durable disposition). */
+  readonly reason: string;
+}
+
+/** The prior-good release traffic rolls back to. */
+export interface PriorGoodRelease {
+  readonly releaseInstanceId: string;
+  readonly artifactDigest: string;
+}
+
+/**
+ * The outcome of an intent-marked external step (Finding A). `applied`/`promoted` carry the
+ * durable result; `ambiguous` means the step's intent marker was present WITHOUT a durable
+ * completion — the external effect MAY have fired, so the loop DEGRADES to `needs_attention` and
+ * NEVER re-fires (in-17's hard invariant: never re-run a maybe-committed external effect).
+ */
+export type GroupPreviewOutcome =
+  | { readonly kind: "applied"; readonly preview: GroupPreview }
+  | { readonly kind: "ambiguous" };
+export type GroupPromoteOutcome =
+  | { readonly kind: "promoted"; readonly production: GroupProduction }
+  | { readonly kind: "ambiguous" };
+
+/**
+ * The DEGRADE outcome for an ambiguous external step (intent present, completion absent — the
+ * effect MAY have fired). needs_attention, NEVER a re-fire (Finding A).
+ */
+function ambiguousDegrade(artifactDigest: string, previewReleaseInstanceId: string | null): GroupDeliveryOutcome {
+  return {
+    state: "needs_attention",
+    disposition: "needs_attention",
+    artifactDigest,
+    previewReleaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  };
+}
+
+/**
+ * The injected deployer port — the REAL DeployAdapter SP-6 lifecycle + ProofBackedWebDemo +
+ * release-instance persistence behind a testable seam. The production impl (see
+ * `groupDeliveryDeployer.ts`) wires the real adapter/grant/demo; a fake drives every branch.
+ * A method that CANNOT confirm its external effect THROWS — the orchestrator's rollback
+ * branch is the only place a throw is caught (a rollback that did not genuinely succeed must
+ * NOT claim `rolled_back`); every other throw propagates to the loop shell (→ needs_attention).
+ */
+export interface GroupDeliveryDeployer {
+  /**
+   * RECOVERY (Finding A): if the group has a committed LIVE production release with no
+   * `deploy.verified`, emit it idempotently. Driven on EVERY wake BEFORE the claim so a live group
+   * stranded by a transient throw (which finalized `needs_attention`) always converges to having
+   * its mq-15/ds-6 evidence. A clean no-op unless the group is live-without-`deploy.verified`.
+   */
+  recoverDeployVerified(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<void>;
+  /** BUILD exactly ONE artifact from the group main SHA; mint its canonical SP-3 digest. */
+  buildArtifact(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<GroupArtifact>;
+  /**
+   * Apply a PREVIEW of the built artifact + persist the preview release (does NOT verify —
+   * verification is the separate {@link verifyPreview} step so a verify failure can be caught
+   * and torn down without leaking the preview).
+   */
+  applyPreview(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    artifact: GroupArtifact;
+    /**
+     * The claim fence token — the intent marker + fenced write are keyed on it. REQUIRED (this
+     * round's Finding B): the irreversible-effect path must be intent-fenced, so a mis-composition
+     * is a COMPILE error, not just a runtime throw.
+     */
+    token: string;
+    /** Immediate fence-recheck before the external deploy. */
+    heartbeat?: () => Promise<void>;
+  }): Promise<GroupPreviewOutcome>;
+  /**
+   * VERIFY the applied preview is live (poll-to-ready + URL smoke). Throws LOUD when the
+   * preview never becomes reachable — the caller tears the preview down and records
+   * `preview_failed` (no leaked preview, no needs_attention for an ordinary preview failure).
+   */
+  verifyPreview(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    preview: GroupPreview;
+    /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
+    heartbeat?: () => Promise<void>;
+  }): Promise<void>;
+  /** Run the PROOF-BACKED demo against a release; a load/observe failure folds to `ok:false`. */
+  demo(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    release: GroupReleaseHandle;
+    environment: "preview" | "production";
+  }): Promise<GroupDemoOutcome>;
+  /** TEAR DOWN a preview env (idempotent) — the fail-closed cleanup after a failed preview. */
+  teardownPreview(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    previewDeploymentId: string;
+  }): Promise<void>;
+  /**
+   * PROMOTE the verified preview artifact to production, verify it live, persist the live release.
+   * Applies the INTENT-MARKER-BEFORE-EFFECT protocol (Finding A): a committed live release ⇒
+   * `promoted` (no-op, `deploy.verified` ensured); an intent marker present WITHOUT a committed
+   * live release ⇒ `ambiguous` (the external promote MAY have fired — the loop degrades, never
+   * re-fires); otherwise it fenced-writes the intent, fires the external promote, and returns
+   * `promoted`.
+   */
+  promote(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    artifact: GroupArtifact;
+    preview: GroupPreview;
+    /** The claim fence token — the intent marker + fenced write are keyed on it. REQUIRED (Finding B). */
+    token: string;
+    /** A per-poll liveness sign-of-life (renews the claim so an unbounded verify is not taken over). */
+    heartbeat?: () => Promise<void>;
+  }): Promise<GroupPromoteOutcome>;
+  /** The current LIVE production release (prior-good) EXCLUDING the just-promoted one, or undefined. */
+  currentPriorGood(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    exceptReleaseInstanceId: string;
+  }): Promise<PriorGoodRelease | undefined>;
+  /** The REAL traffic rollback to the prior-good release — throws if it does not genuinely succeed. */
+  rollback(input: {
+    plan: GroupDeliveryPlan;
+    target: ResolvedGroupDeployTarget;
+    priorGood: PriorGoodRelease;
+    brokenProduction: GroupProduction;
+  }): Promise<void>;
+}
+
+/** The causal-replay + repair-routing seam (rv-16b bisector → mq-10 router). */
+export type GroupAttributionResult =
+  | {
+      readonly kind: "attributed";
+      readonly runId: string;
+      readonly specId: string;
+      readonly findingIds: readonly string[];
+      readonly reasonCodes: readonly string[];
+      readonly evaluationId: string;
+    }
+  | { readonly kind: "unattributed"; readonly reason: string };
+
+export interface GroupRegressionAttribution {
+  /** Causal-replay the production regression; localize to EXACTLY one member run, or unattributed. */
+  attribute(input: {
+    plan: GroupDeliveryPlan;
+    production: GroupProduction;
+    priorGood: PriorGoodRelease;
+  }): Promise<GroupAttributionResult>;
+  /** Route the attributed member to mq-10's repair router (called ONLY on an `attributed` result). */
+  route(input: {
+    plan: GroupDeliveryPlan;
+    attributed: Extract<GroupAttributionResult, { kind: "attributed" }>;
+  }): Promise<void>;
+}
+
+/** The terminal outcome of a group delivery — persisted as the receipt + emitted as the event. */
+export interface GroupDeliveryOutcome {
+  readonly state: Exclude<LandGroupDeliveryState, "in_progress">;
+  readonly disposition: LandGroupDeliveryDisposition;
+  readonly artifactDigest: string | null;
+  readonly previewReleaseInstanceId: string | null;
+  readonly productionReleaseInstanceId: string | null;
+  readonly rollbackReleaseInstanceId: string | null;
+  readonly attributedRunId: string | null;
+}
+
+/**
+ * Drive the fail-closed group-delivery decision tree. Pure orchestration over the injected
+ * deployer + attribution collaborators — every branch is a unit-testable trap-class control.
+ * An unexpected throw from a NON-rollback stage propagates to the loop shell (→ needs_attention);
+ * a rollback that does not genuinely succeed is caught HERE and degrades to `needs_attention`
+ * (never a pretended rollback).
+ */
+export async function runGroupDelivery(deps: {
+  readonly deployer: GroupDeliveryDeployer;
+  readonly attribution: GroupRegressionAttribution;
+  readonly plan: GroupDeliveryPlan;
+  readonly target: ResolvedGroupDeployTarget;
+  /** The claim fence token — threaded (REQUIRED, Finding B) to the intent-marked external steps. */
+  readonly token: string;
+  /**
+   * A progress sign-of-life the loop calls between phases to RENEW its liveness lease (Finding
+   * 5); it THROWS if the claim was taken over (a stale owner) so this drive aborts before
+   * finalizing alongside the new owner. Optional (unit tests pass none — a no-op heartbeat).
+   */
+  readonly heartbeat?: () => Promise<void>;
+}): Promise<GroupDeliveryOutcome> {
+  const { deployer, attribution, plan, target, token } = deps;
+  const beat = deps.heartbeat ?? (async (): Promise<void> => undefined);
+
+  // 1. Build ONE artifact for the whole completed group (single call ⇒ exactly one artifact).
+  await beat();
+  const artifact = await deployer.buildArtifact({ plan, target });
+
+  // 2. Apply a preview of the built artifact (intent-marked; persists the preview release). An
+  //    AMBIGUOUS outcome (preview intent present without a persisted preview — the external deploy
+  //    MAY have fired for a dead owner) ⇒ DEGRADE (never re-apply a second preview).
+  await beat();
+  const previewOutcome = await deployer.applyPreview({
+    plan,
+    target,
+    artifact,
+    token,
+    heartbeat: beat,
+  });
+  if (previewOutcome.kind === "ambiguous") return ambiguousDegrade(artifact.artifactDigest, null);
+  const preview = previewOutcome.preview;
+  const previewFailed = (): GroupDeliveryOutcome => ({
+    state: "preview_failed",
+    disposition: "none",
+    artifactDigest: artifact.artifactDigest,
+    previewReleaseInstanceId: preview.release.releaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  });
+
+  // From here on a preview EXISTS: any abort must tear it down so it never leaks. A CLAIM LOSS
+  // (Finding B) — the owner was taken over mid-drive — tears the preview down before re-throwing
+  // so the new owner is not left with a stranded preview env; every other abort/return handles
+  // its own teardown inline. Ordinary infra throws (build/promote/rollback provider errors)
+  // propagate to the loop shell (→ needs_attention).
+  try {
+    // 3. VERIFY the preview is live. A verify FAILURE ⇒ tear the preview DOWN + `preview_failed`
+    //    (Finding 4: an applied-but-unverifiable preview must never leak nor degrade to
+    //    needs_attention — it is an ordinary preview failure, cleaned up and recorded). A CLAIM
+    //    LOSS during verify propagates to the outer teardown-and-abort.
+    await beat();
+    let previewVerified = false;
+    try {
+      await deployer.verifyPreview({ plan, target, preview, heartbeat: beat });
+      previewVerified = true;
+    } catch (error) {
+      if (error instanceof LandGroupDeliveryClaimLostError) throw error;
+    }
+    if (!previewVerified) {
+      await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+      return previewFailed();
+    }
+
+    return await driveFromVerifiedPreview({
+      deployer,
+      attribution,
+      plan,
+      target,
+      artifact,
+      preview,
+      beat,
+      token,
+    });
+  } catch (error) {
+    if (error instanceof LandGroupDeliveryClaimLostError) {
+      await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Steps 4–7 (preview demo → promote → production demo → rollback/repair) — extracted so the
+ * `runGroupDelivery` wrapper stays readable while its outer try tears the preview down on a claim
+ * loss (Finding B). Every branch is a unit-testable trap-class control.
+ */
+async function driveFromVerifiedPreview(deps: {
+  readonly deployer: GroupDeliveryDeployer;
+  readonly attribution: GroupRegressionAttribution;
+  readonly plan: GroupDeliveryPlan;
+  readonly target: ResolvedGroupDeployTarget;
+  readonly artifact: GroupArtifact;
+  readonly preview: GroupPreview;
+  readonly beat: () => Promise<void>;
+  readonly token: string;
+}): Promise<GroupDeliveryOutcome> {
+  const { deployer, attribution, plan, target, artifact, preview, beat, token } = deps;
+  const previewFailed = (): GroupDeliveryOutcome => ({
+    state: "preview_failed",
+    disposition: "none",
+    artifactDigest: artifact.artifactDigest,
+    previewReleaseInstanceId: preview.release.releaseInstanceId,
+    productionReleaseInstanceId: null,
+    rollbackReleaseInstanceId: null,
+    attributedRunId: null,
+  });
+
+  // 4. PROOF-BACKED preview demo. A failed preview proof ⇒ NO promote + tear the preview down
+  //    (the gravest fail-open — promoting a failed preview as if the group were verified — is
+  //    prohibited here).
+  await beat();
+  const previewDemo = await deployer.demo({ plan, target, release: preview.release, environment: "preview" });
+  if (!previewDemo.ok) {
+    await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+    return previewFailed();
+  }
+
+  // 5. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production (INTENT-MARKED,
+  //    Finding A). An AMBIGUOUS promote (intent present without a committed live release — the
+  //    external promote MAY have fired for a dead owner) ⇒ DEGRADE to needs_attention, NEVER
+  //    re-fire (a double production deploy is unacceptable; a conservative degrade is not). The
+  //    promote step durably emits the GROUP's `deploy.verified` on the tail run (idempotently) so
+  //    mq-15 seals + ds-6 joins from the group's evidence.
+  await beat();
+  const promoteOutcome = await deployer.promote({
+    plan,
+    target,
+    artifact,
+    preview,
+    token,
+    heartbeat: beat,
+  });
+  if (promoteOutcome.kind === "ambiguous") {
+    return ambiguousDegrade(artifact.artifactDigest, preview.release.releaseInstanceId);
+  }
+  const production = promoteOutcome.production;
+
+  // 6. PROOF-BACKED production demo (the group's `demo.completed` on the tail run).
+  await beat();
+  const productionDemo = await deployer.demo({ plan, target, release: production.release, environment: "production" });
+  if (productionDemo.ok) {
+    return {
+      state: "completed",
+      disposition: "none",
+      artifactDigest: artifact.artifactDigest,
+      previewReleaseInstanceId: preview.release.releaseInstanceId,
+      productionReleaseInstanceId: production.release.releaseInstanceId,
+      rollbackReleaseInstanceId: null,
+      attributedRunId: null,
+    };
+  }
+
+  // 6. PRODUCTION REGRESSION. Resolve the persisted prior-good release to roll traffic back to.
+  const priorGood = await deployer.currentPriorGood({
+    plan,
+    target,
+    exceptReleaseInstanceId: production.release.releaseInstanceId,
+  });
+  if (priorGood === undefined) {
+    // NO prior-good release ⇒ needs_attention, NEVER a pretended rollback success.
+    return {
+      state: "needs_attention",
+      disposition: "needs_attention",
+      artifactDigest: artifact.artifactDigest,
+      previewReleaseInstanceId: preview.release.releaseInstanceId,
+      productionReleaseInstanceId: production.release.releaseInstanceId,
+      rollbackReleaseInstanceId: null,
+      attributedRunId: null,
+    };
+  }
+
+  // The REAL adapter rollback to the persisted prior-good lineage. A rollback that does not
+  // genuinely succeed (throws) NEVER claims `rolled_back` — it degrades to `needs_attention`.
+  try {
+    await deployer.rollback({ plan, target, priorGood, brokenProduction: production });
+  } catch {
+    return {
+      state: "needs_attention",
+      disposition: "needs_attention",
+      artifactDigest: artifact.artifactDigest,
+      previewReleaseInstanceId: preview.release.releaseInstanceId,
+      productionReleaseInstanceId: production.release.releaseInstanceId,
+      rollbackReleaseInstanceId: null,
+      attributedRunId: null,
+    };
+  }
+
+  // 7. Rollback succeeded. Causal-replay the regression; route repair ONLY on a single-member
+  //    attribution (else needs_attention — NO fabricated repair target).
+  const attributed = await attribution.attribute({ plan, production, priorGood });
+  if (attributed.kind === "attributed") {
+    await attribution.route({ plan, attributed });
+    return {
+      state: "rolled_back",
+      disposition: "repair_routed",
+      artifactDigest: artifact.artifactDigest,
+      previewReleaseInstanceId: preview.release.releaseInstanceId,
+      productionReleaseInstanceId: production.release.releaseInstanceId,
+      rollbackReleaseInstanceId: priorGood.releaseInstanceId,
+      attributedRunId: attributed.runId,
+    };
+  }
+  return {
+    state: "rolled_back",
+    disposition: "needs_attention",
+    artifactDigest: artifact.artifactDigest,
+    previewReleaseInstanceId: preview.release.releaseInstanceId,
+    productionReleaseInstanceId: production.release.releaseInstanceId,
+    rollbackReleaseInstanceId: priorGood.releaseInstanceId,
+    attributedRunId: null,
+  };
+}

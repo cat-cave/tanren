@@ -5,6 +5,9 @@ import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import { PgIntegrationAuthority } from "../integrations/integrationAuthorityImpl.js";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { systemActor } from "../state/actor.js";
+// Re-exported so mq-13's group-delivery deployer imports the deploy grant helpers AND the audit
+// envelope from ONE module (the max-dependencies cap).
+export { deployAuditEnvelope } from "./deployOnMergeReads.js";
 
 interface DeployAuthorityTarget {
   provider: string;

@@ -24,6 +24,7 @@ import {
   buildDeliveryDagDriver,
   buildMergeTrainArtifactWatcher,
   buildDesignAwareDeliveryCoordinator,
+  buildLandGroupDeliveryLoop,
   type CasByteStore,
 } from "../postMerge/subscriber.js";
 import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
@@ -278,11 +279,22 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // production artifact/deploy + proof-backed behavior verdict to the pre-merge design matrix
   // (A4 ≡ demo) ONLY on an exact artifact + scenario-set match; a blocked join records nothing.
   const designDeliveryCoordinator = buildDesignAwareDeliveryCoordinator(deps.pool, deps.runStateWriter);
+  // mq-13 GROUP-level delivery loop: driven FIRST in the post-merge chain. For a completed land
+  // group's tail run it deploys/previews/verifies/demos/promotes the WHOLE group ONCE (emitting
+  // the group's `deploy.verified` / `demo.completed` so mq-15 seals + ds-6 joins from the group's
+  // evidence), then rolls back / routes repair on a production regression. Group members' per-run
+  // in-17 delivery is membership-guarded off, so a group deploys ONCE, not once per member.
+  const landGroupDeliveryLoop = buildLandGroupDeliveryLoop({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
+    landGroupDeliveryLoop,
     deliveryDriver,
     mergeTrainArtifactWatcher,
     designDeliveryCoordinator,
