@@ -153,7 +153,12 @@ function RevisionLineage(props: { data: GovernanceStudioData; projectId: string;
   );
 }
 
-function Tiers(props: { data: GovernanceStudioData; projectId: string; csrfToken: string | undefined }) {
+function Tiers(props: {
+  data: GovernanceStudioData;
+  activeReceipt: ActiveReceipt;
+  projectId: string;
+  csrfToken: string | undefined;
+}) {
   return (
     <section class="panel" data-governance-tiers>
       <div class="panel-head">
@@ -180,6 +185,7 @@ function Tiers(props: { data: GovernanceStudioData; projectId: string; csrfToken
                 <TierRow
                   tier={tier}
                   bindings={props.data.bindings}
+                  activeReceipt={props.activeReceipt}
                   projectId={props.projectId}
                   csrfToken={props.csrfToken}
                 />
@@ -195,11 +201,19 @@ function Tiers(props: { data: GovernanceStudioData; projectId: string; csrfToken
 function TierRow(props: {
   tier: GovernanceTier;
   bindings: readonly PolicyBinding[];
+  activeReceipt: ActiveReceipt;
   projectId: string;
   csrfToken: string | undefined;
 }) {
   const binding = props.bindings.find((candidate) => candidate.tierId === props.tier.id);
-  const state = binding?.isActive === true ? "active" : binding === undefined ? "unbound" : "superseded";
+  const state =
+    binding?.isActive === true
+      ? props.activeReceipt.kind === "verified"
+        ? "active"
+        : "active-unverified"
+      : binding === undefined
+        ? "unbound"
+        : "superseded";
   return (
     <tr data-governance-tier={props.tier.id}>
       <td>
@@ -420,7 +434,12 @@ export function GovernanceStudioBody(props: GovernanceStudioBodyProps) {
                 />
               </div>
               <RevisionLineage data={props.studio} projectId={props.project.projectId} csrfToken={props.csrfToken} />
-              <Tiers data={props.studio} projectId={props.project.projectId} csrfToken={props.csrfToken} />
+              <Tiers
+                data={props.studio}
+                activeReceipt={props.activeReceipt}
+                projectId={props.project.projectId}
+                csrfToken={props.csrfToken}
+              />
               <AuthorForm data={props.studio} projectId={props.project.projectId} csrfToken={props.csrfToken} />
             </>
           )}

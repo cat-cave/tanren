@@ -330,10 +330,17 @@ export function mountGovernanceStudioScreen(app: Hono, deps: ShellDeps): void {
       });
     const confirmed = await readClient(c, deps).readProject(scope.orgId, projectId);
     const receipts = confirmed.ok ? await receiptFor(c, deps, scope.orgId, projectId, confirmed.data) : undefined;
+    const revisionReceipt = confirmed.ok
+      ? await readClient(c, deps).getReceipt(scope.orgId, projectId, "activation", result.value.id)
+      : undefined;
     const matched =
-      receipts?.activeReceipt.kind === "verified" &&
-      receipts.activeReceipt.snapshot.policyRevisionId === result.value.id &&
-      receipts.activeReceipt.snapshot.effectivePolicyHash === result.value.policyHash;
+      confirmed.ok &&
+      confirmed.data.revisions.some(
+        (revision) => revision.id === result.value.id && revision.policyHash === result.value.policyHash,
+      ) &&
+      revisionReceipt?.kind === "found" &&
+      revisionReceipt.snapshot.policyRevisionId === result.value.id &&
+      revisionReceipt.snapshot.effectivePolicyHash === result.value.policyHash;
     return renderStudio(c, deps, {
       requestedId: projectId,
       loaded: confirmed,
@@ -341,7 +348,7 @@ export function mountGovernanceStudioScreen(app: Hono, deps: ShellDeps): void {
       flash: matched
         ? {
             kind: "ok",
-            message: `Lifecycle activation was confirmed by governance authority through the durable activation receipt for revision ${revisionId}. Binding activation is a separate command.`,
+            message: `Lifecycle activation was confirmed by governance authority through the revision activation receipt for ${revisionId}. Binding activation is a separate command.`,
           }
         : {
             kind: "unknown",
