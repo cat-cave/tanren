@@ -2,8 +2,8 @@
 // intent-preserving resolver as the (production-default) `resolveConflict` hook.
 // Here a fake resolver stands in for the real one (the resolver's own behavior
 // is unit-tested in conflictResolver.test.ts); these assert the DISPATCHER's
-// contract: a resolved=true conflict re-gates the resolved tree then re-enters the
-// authority land (which lands the now-clean tree), while the noop fixture
+// contract: a resolved=true conflict re-gates the resolved tree then reaches the
+// canonical-proof hold, while the noop fixture
 // (tests-only) resolves nothing.
 
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,6 @@ import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
-  AUTHORITY_HEAD_SHA,
   ReviewMergePool,
   authorityBundle,
   authorityHost,
@@ -22,8 +21,8 @@ import {
 } from "./reviewMerge.fixtures.js";
 
 describe("P2b merge-stage conflict resolution", () => {
-  it("resolver resolves the conflict → resolved-tree re-gate → authority lands the clean tree", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("resolver resolves the conflict → resolved-tree re-gate → canonical proof still gates land", async () => {
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     // The branch is `dirty` on the freshness read (surfacing the conflict); once the
     // intent-preserving resolver returns resolved=true, the dispatcher runs a FRESH
@@ -39,6 +38,7 @@ describe("P2b merge-stage conflict resolution", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -54,13 +54,13 @@ describe("P2b merge-stage conflict resolution", () => {
       resolveConflict: async () => ({ resolved: true }),
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
-    expect(types).toContain("merge.completed");
+    expect(types).toContain("merge.blocked");
+    expect(types).not.toContain("merge.completed");
     expect(types).not.toContain("merge.conflict");
-    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("done");
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
   it("the noop test fixture resolves nothing (tests-only; not a production default)", async () => {

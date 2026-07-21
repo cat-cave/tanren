@@ -1,31 +1,25 @@
 // cspell:ignore mqeval mqgrp
-import { createHash } from "node:crypto";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { CodeHost } from "../src/engine/contracts/codeHost.js";
-import { PgEventStore } from "../src/engine/eventStore.js";
 import { MergeAuthorityV2Impl, type AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createMergeQueueAuthorityEvaluationRoutes } from "../src/routes/mergeQueue/authorityEvaluations.js";
-import { activeQuarantineVersion } from "../src/engine/workflow/ciQuarantine.js";
 import {
-  batchArtifactDigest,
-  batchProofRoot,
   buildBatchGateProofEvidence,
   loadBatchDecisionEvidence,
   loadCurrentQuarantineVersion,
   loadPersistedBatchDecisionSignals,
-  memberKey,
   MultiMemberAuthorityInfrastructureFault,
   PgExactBatchBindingRevalidator,
   PgIntegrationNodeModel,
   proofReuseKey,
   type BatchAuthorityBinding,
-  type LandBindingEnvelope,
 } from "./helpers/mq2BatchAuthority.js";
+import { seedMq2Tenant, type Mq2TenantFixture } from "./helpers/mq2AuthorityRlsFixture.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -44,12 +38,6 @@ const actorA: ActorContext = {
   scopes: ["org:member"],
   source: "session",
 };
-
-interface TenantFixture {
-  readonly binding: BatchAuthorityBinding;
-  readonly envelope: LandBindingEnvelope;
-  readonly proofEvidence: unknown;
-}
 
 function dbName(): string {
   return `tanren_mq2_rls_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -93,7 +81,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
   let ownerPool: Pool;
   let runtimePool: Pool;
   let app: Hono<ActorContextEnv>;
-  let fixtureA: TenantFixture;
+  let fixtureA: Mq2TenantFixture;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -102,8 +90,20 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
     await migrate(ownerPool);
     runtimePool = new Pool({ connectionString: runtimeUrl(ADMIN_URL, database) });
-    fixtureA = await seedTenant(ownerPool, ORG_A, PROJECT_A, "A");
-    await seedTenant(ownerPool, ORG_B, PROJECT_B, "B");
+    fixtureA = await seedMq2Tenant({
+      owner: ownerPool,
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      label: "A",
+      evaluationId: W0_EVALUATION,
+    });
+    await seedMq2Tenant({
+      owner: ownerPool,
+      orgId: ORG_B,
+      projectId: PROJECT_B,
+      label: "B",
+      evaluationId: W0_EVALUATION,
+    });
     app = buildApp(runtimePool);
   }, 60_000);
 
@@ -289,14 +289,10 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       `DELETE FROM integration_proofs WHERE project_id = $1 AND proof_reuse_key = $2`,
       [PROJECT_A, fixtureA.binding.proof.proofReuseKey],
     );
-    const authority = new MergeAuthorityV2Impl(
-      host,
-      revalidator,
-      {
-        persistAuthorizedDecision: async () => ({ effectIntentId: "must-not-be-persisted" }),
-        recordLandReceipt: async () => ({ auditId: "must-not-be-recorded" }),
-      } as AuthorityLandStore,
-    );
+    const authority = new MergeAuthorityV2Impl(host, revalidator, {
+      persistAuthorizedDecision: async () => ({ effectIntentId: "must-not-be-persisted" }),
+      recordLandReceipt: async () => ({ auditId: "must-not-be-recorded" }),
+    } as AuthorityLandStore);
     const authorization = await authority.authorizeLand(
       {
         subject: fixtureA.envelope.subject,
@@ -312,7 +308,10 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       },
       fixtureA.envelope,
     );
-    expect(authorization).toMatchObject({ decision: "blocked", reasons: [expect.objectContaining({ input: "binding" })] });
+    expect(authorization).toMatchObject({
+      decision: "blocked",
+      reasons: [expect.objectContaining({ input: "binding" })],
+    });
     await expect(authority.land(authorization)).rejects.toThrow(/not 'authorized'/u);
     expect(hostLandCalls).toBe(0);
     await new PgIntegrationNodeModel(ownerPool).recordProof({
@@ -396,145 +395,8 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
   });
 });
 
-async function seedTenant(owner: Pool, orgId: string, projectId: string, label: string): Promise<TenantFixture> {
-  await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
-    [orgId],
-  );
-  await owner.query(
-    `INSERT INTO projects (project_id, name, repo_url, org_id)
-     VALUES ($1, $1, $2, $3)`,
-    [projectId, `https://example.com/${projectId}.git`, orgId],
-  );
-  await runWithOrgScope(owner, orgId, async (client) => {
-    await new PgEventStore(client).append({
-      projectId,
-      orgId,
-      eventType: "merge.signal.classified",
-      payload: {
-        missionNodeId: "mq-1",
-        evaluationId: W0_EVALUATION,
-        groupId: `mqgrp_${"b".repeat(64)}`,
-        memberIds: [label],
-        findingIds: [`finding-${label}`],
-        signalVersion: "merge_signal.v1",
-        classification: "deterministic_policy",
-        reasonCode: "audit_policy",
-        retryability: "non_retryable",
-        wakeKey: null,
-        disposition: "member_repair",
-      },
-    });
-  });
-
-  const members = [
-    { specId: `${label}1`, runId: `run-${label}1`, branch: `feature/${label}1`, headSha: `sha-${label}1` },
-    { specId: `${label}2`, runId: `run-${label}2`, branch: `feature/${label}2`, headSha: `sha-${label}2` },
-  ];
-  const baseSha = `base-${label}`;
-  const headSha = `batch-${label}`;
-  const treeHash = `tree-${label}`;
-  const key = memberKey(
-    baseSha,
-    members.map((member) => member.headSha),
-  );
-  const keyInput = {
-    memberKey: key,
-    gateConfigHash: "gate-v1",
-    policyVersion: "policy-v1",
-    runnerImage: "runner@sha256:abc",
-    appEnvHash: "env-v1",
-    quarantineVersion: activeQuarantineVersion({ checkNames: new Set(), testIds: [] }),
-  };
-  const nodes = new PgIntegrationNodeModel(owner);
-  const nodeId = await nodes.upsertNode({
-    projectId,
-    orgId,
-    baseBranch: "main",
-    baseSha,
-    ref: `tanren-local-${label}`,
-    purpose: "merge_batch",
-    members,
-    gateConfigHash: keyInput.gateConfigHash,
-    policyVersion: keyInput.policyVersion,
-    headSha,
-    treeHash,
-    status: "ready",
-  });
-  const proofEvidence = buildBatchGateProofEvidence({
-    nodeId,
-    headSha,
-    treeHash,
-    memberSetHash: key,
-    keyInput,
-    passed: true,
-  });
-  const proofKey = await nodes.recordProof({
-    orgId,
-    projectId,
-    nodeId,
-    keyInput,
-    verdict: "passed",
-    evidence: proofEvidence,
-  });
-  expect(proofKey).toBe(proofReuseKey(keyInput));
-  await runWithOrgScope(owner, orgId, (client) =>
-    client.query(
-      `INSERT INTO authority_decisions
-         (org_id, project_id, id, integration_node_id, subject_kind, head_sha, expected_main_sha,
-          artifact_digest, proof_root, member_set_hash, policy_version, decision)
-       VALUES ($1,$2,$3,$4,'integration_node',$5,$6,$7,$8,$9,$10,'authorized')`,
-      [
-        orgId,
-        projectId,
-        `decision-${label}`,
-        nodeId,
-        headSha,
-        baseSha,
-        artifactDigest(headSha, treeHash),
-        `sha256:${proofKey}`,
-        key,
-        keyInput.policyVersion,
-      ],
-    ),
-  );
-  const binding: BatchAuthorityBinding = {
-    nodeId,
-    baseBranch: "main",
-    baseSha,
-    headSha,
-    treeHash,
-    members,
-    memberSetHash: key,
-    policyVersion: keyInput.policyVersion,
-    proof: { verdict: "passed", proofReuseKey: proofKey, keyInput },
-  };
-  const envelope: LandBindingEnvelope = {
-    subject: { kind: "integration_node", id: nodeId },
-    members: members.map((member) => ({ ...member, disposition: "admit" })),
-    headSha,
-    expectedMainSha: baseSha,
-    artifactDigest: batchArtifactDigest(binding),
-    proofRoot: batchProofRoot(binding),
-    memberSetHash: key,
-    policyVersion: keyInput.policyVersion,
-    target: { repo: { owner: "cat-cave", name: "tanren" }, intoMain: "main" },
-  };
-  return { binding, envelope, proofEvidence };
-}
-
 async function scopedUpdate(pool: Pool, orgId: string, sql: string, values: ReadonlyArray<unknown>): Promise<void> {
   await runWithOrgScope(pool, orgId, async (client) => {
     await client.query(sql, [...values]);
   });
-}
-
-function artifactDigest(headSha: string, treeHash: string): string {
-  return `sha256:${createHash("sha256")
-    .update("tanren:merge-batch-artifact:v1\0")
-    .update(headSha)
-    .update("\0")
-    .update(treeHash)
-    .digest("hex")}`;
 }

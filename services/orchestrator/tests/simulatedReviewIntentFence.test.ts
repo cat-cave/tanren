@@ -147,8 +147,8 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
       });
     }
 
-    const poolA = new ReviewMergePool("direct_merge", "open", "simulated");
-    const poolB = new ReviewMergePool("direct_merge", "open", "simulated");
+    const poolA = new ReviewMergePool("native_queue", "open", "simulated");
+    const poolB = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(poolA);
     seedReviewTask(poolB);
     const eventsA = new FakeEventStore();
@@ -197,8 +197,8 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     expect(w1.state).toBe("approved");
 
     // Composition: both workers publish only the durable winner (no opposite POST).
-    const poolA = new ReviewMergePool("direct_merge", "open", "simulated");
-    const poolB = new ReviewMergePool("direct_merge", "open", "simulated");
+    const poolA = new ReviewMergePool("native_queue", "open", "simulated");
+    const poolB = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(poolA);
     seedReviewTask(poolB);
     const eventsA = new FakeEventStore();
@@ -249,7 +249,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     const intentRepository = new InMemorySimulatedReviewIntentRepository();
     const publishFence = new InMemorySimulatedReviewPublishFence();
     const probe = sharedConvergentProbe(forge);
-    const pool1 = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool1 = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool1);
     const events1 = new FakeEventStore();
     const seen1 = { calls: 0, prompts: [] as string[] };
@@ -274,7 +274,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     expect(seen1.calls).toBe(1);
 
     // Crash-after-POST / before terminal: intent + forge review exist; redrive.
-    const pool2 = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool2 = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool2);
     const events2 = new FakeEventStore();
     const seen2 = { calls: 0, prompts: [] as string[] };
@@ -312,7 +312,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     intentRepository.seed("run_1", seeded);
 
     const forge: SharedForge = { posts: [], listed: 0, reviews: [] };
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool);
     const events = new FakeEventStore();
     const seen = { calls: 0, prompts: [] as string[] };
@@ -347,7 +347,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
       marker: "tanren-simulated-review:v1:changes_requested",
     });
     const forge: SharedForge = { posts: [], listed: 0, reviews: [] };
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool);
     const events = new FakeEventStore();
     const seen = { calls: 0, prompts: [] as string[] };
@@ -435,7 +435,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     };
     const intentRepository = new InMemorySimulatedReviewIntentRepository();
     const publishFence = new InMemorySimulatedReviewPublishFence();
-    const pool1 = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool1 = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool1);
     const events1 = new FakeEventStore();
     const seen1 = { calls: 0, prompts: [] as string[] };
@@ -458,7 +458,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     const existing = await intentRepository.lookup("org_1", "run_1", HEAD);
     expect(existing?.state).toBe("approved");
 
-    const pool2 = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool2 = new ReviewMergePool("native_queue", "open", "simulated");
     seedReviewTask(pool2);
     const events2 = new FakeEventStore();
     const seen2 = { calls: 0, prompts: [] as string[] };

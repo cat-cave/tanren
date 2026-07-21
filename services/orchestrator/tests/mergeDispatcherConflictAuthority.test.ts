@@ -27,7 +27,7 @@ import {
 
 /**
  * The §5 land path with the default (`resolved:true`) conflict resolver — the
- * authority-gated `direct_merge` dispatcher every test below the lazy-thunk cases
+ * authority-gated `native_queue` dispatcher every test below the lazy-thunk cases
  * uses. Wraps the shared `buildDispatcher` (tests/fixtures) with the parent file's
  * positional signature so the existing call sites read unchanged.
  */
@@ -76,7 +76,7 @@ function dispatcherLazy(
     context: context(),
     eventStore: events as never,
     taskId: "task_1",
-    integration: "direct_merge",
+    integration: "native_queue",
     pr: { repo: REPO, pullNumber: 1 },
     probe,
   };
@@ -225,7 +225,7 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
       context: context(),
       eventStore: events as never,
       taskId: "task_1",
-      integration: "direct_merge",
+      integration: "native_queue",
       pr: { repo: REPO, pullNumber: 1 },
       probe: cleanProbe,
     };

@@ -3,6 +3,7 @@
 // before this is reached. This class accepts only that frozen exact binding and
 // delegates the irreversible group CAS to the existing Pg land implementation.
 
+// cspell:ignore rederive
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { AuthorizeLandInput, LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
@@ -46,11 +47,15 @@ function hasExactCanonicalBinding(input: CanonicalQueueAuthorityLandInput): bool
   const { authorization, decisionInput } = evaluation;
   const envelope = authorization.envelope;
   return (
-    entries.length >= 1 &&
+    entries.length > 0 &&
     authorization.decision === "authorized" &&
     sameSubject(decisionInput, authorization.subject, envelope, binding) &&
     exactMembers(entries, binding, envelope) &&
-    binding.memberSetHash === memberKey(binding.baseSha, binding.members.map((member) => member.headSha)) &&
+    binding.memberSetHash ===
+      memberKey(
+        binding.baseSha,
+        binding.members.map((member) => member.headSha),
+      ) &&
     binding.proof.verdict === "passed" &&
     binding.proof.keyInput.memberKey === binding.memberSetHash &&
     binding.proof.keyInput.policyVersion === binding.policyVersion &&

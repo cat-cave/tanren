@@ -124,7 +124,7 @@ describe("computeReviewStall", () => {
       payload: {
         prNumber: 12,
         prUrl: "https://github.com/x/y/pull/12",
-        integration: "direct_merge",
+        integration: "native_queue",
       },
       ts: hoursAgo(1),
     });

@@ -145,7 +145,9 @@ describe("mq-2 authority-evaluation HTTP projection", () => {
 
   it("projects one durable exact member only when its node and proof binding match", async () => {
     const decision = validSingleMemberDecision();
-    const response = await buildApp(new EvaluationProjectionPool(ORG, [], [decision]).asPgPool()).request(listEndpoint());
+    const response = await buildApp(new EvaluationProjectionPool(ORG, [], [decision]).asPgPool()).request(
+      listEndpoint(),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({

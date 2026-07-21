@@ -1,6 +1,6 @@
 // Covers GitHubReviewMergeService.markReadyForReview. The bug this guards
 // against: a REST `PATCH /pulls/{n} { draft: false }` does NOT un-draft a PR
-// (GitHub silently ignores it), so a draft PR would stay draft and `direct_merge`
+// (GitHub silently ignores it), so a draft PR would stay draft and `native_queue`
 // would be refused. The flip MUST go through the GraphQL
 // `markPullRequestReadyForReview` mutation (which needs the PR's node id).
 

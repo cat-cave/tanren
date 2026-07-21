@@ -183,7 +183,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   it("active governance policy selects the dedicated simulated reviewer and persists its actor", async () => {
     // Config says human, but the immutable active governance policy owns the
     // review DAG and must select simulated review before any land is attempted.
-    const pool = new ReviewMergePool("direct_merge", "open", "human");
+    const pool = new ReviewMergePool("native_queue", "open", "human");
     pool.activePolicyDocument = SIMULATED_REVIEW_POLICY;
     const events = new FakeEventStore();
     const captured = {
@@ -244,7 +244,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("positive: REQUEST_CHANGES on exact head persists forge receipt with review.changes_requested", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
     const seen = { prompts: [] as string[] };
@@ -292,7 +292,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("former-bug negative: failed publication cannot emit review.approved", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
     const seen = { prompts: [] as string[] };
@@ -324,7 +324,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("former-bug negative: head-mismatched receipt cannot emit review.approved", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
     const seen = { prompts: [] as string[] };
@@ -353,7 +353,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("former-bug negative: state-mismatched receipt cannot emit review.approved", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
     const seen = { prompts: [] as string[] };
@@ -383,7 +383,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("throws when the simulated policy is set without a reviewer + context", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
 
@@ -401,7 +401,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
   });
 
   it("throws when the probe cannot pin a publisher — no internal-only authority", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
     const seen = { prompts: [] as string[] };
     const probe: ReviewProbe = {

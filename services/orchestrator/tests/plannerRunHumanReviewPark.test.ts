@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   accounting,
   completeCheck,
-  directMergeConfig,
+  nativeQueueConfig,
   fakeProbe,
   healthyWindow,
   noopMerge,
@@ -30,7 +30,7 @@ import {
 
 describe("runPlannerLoopWorkflow — Codex H3 #11 human-review durable park", () => {
   it("PARKS the run on a PENDING human review and RELEASES the worker (no more in-process polling loop)", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     let fetchCalls = 0;
     const pendingReview = {
       markReady: async () => {},

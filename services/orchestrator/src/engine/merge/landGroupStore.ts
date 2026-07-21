@@ -289,7 +289,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
   }
 
   private assertMembers(auth: LandAuthorization): void {
-    if (this.input.members.length < 1 || this.input.members.length !== auth.envelope.members.length) {
+    if (this.input.members.length === 0 || this.input.members.length !== auth.envelope.members.length) {
       throw new Error("land group must bind every authorized member");
     }
     if (

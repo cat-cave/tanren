@@ -11,7 +11,7 @@ import {
   accounting,
   approvingReview,
   buildPlan,
-  directMergeConfig,
+  nativeQueueConfig,
   exhaustedWindow,
   incompleteCheck,
   fakeProbe,
@@ -35,7 +35,7 @@ import {
 
 describe("runPlannerLoopWorkflow", () => {
   it("drives the loop, publishes a PR, passes the native merge gate, and records a passing run", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const github = passingGitHub();
 
     const result = await runPlannerLoopScoped({
@@ -52,7 +52,7 @@ describe("runPlannerLoopWorkflow", () => {
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
-      // direct_merge lands via the unconditional MergeAuthority (seed the in-memory host).
+      // Native queue first pass queues; canonical coordinator owns eventual land.
       mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
     });
 
@@ -76,7 +76,7 @@ describe("runPlannerLoopWorkflow", () => {
   });
 
   it("re-iterates the writer on a checker incompleteness and still completes (medium-tier loop shape)", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     // SPEC-LOOP REDESIGN: a checker incompleteness loops back to the WRITER (not the planner). The first
     // subtask's checker reports incomplete once, then complete; the writer re-iterates IN-TASK (no re-plan).
     const adapters = {
@@ -106,7 +106,7 @@ describe("runPlannerLoopWorkflow", () => {
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
       reviewProbe: approvingReview(),
       mergeProbe: noopMerge(),
-      // direct_merge lands via the unconditional MergeAuthority (seed the in-memory host).
+      // Native queue first pass queues; canonical coordinator owns eventual land.
       mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
     });
 

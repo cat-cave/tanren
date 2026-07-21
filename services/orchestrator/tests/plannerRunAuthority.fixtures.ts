@@ -1,9 +1,7 @@
-// The authority-land oracle for the planner-loop integration tests (replacing the
-// deleted host-merge `probe.merge()`). The planner tests' run resolves to repo
-// `cat-cave/tanren-fixture-medium`, PR head branch `tanren/run_1`. A `direct_merge` land
-// test seeds this host + passes the matching `plannerAuthorityBundle` as `mergeAuthority`,
-// then asserts the land via the advanced ref (`result.merge?.outcome === "merged"` + the
-// spec `merged`). Split out of plannerRun.fixtures.ts to keep that file under the cap.
+// Pre-canonical authority inputs for planner-loop tests. The run resolves to repo
+// `cat-cave/tanren-fixture-medium`, PR head branch `tanren/run_1`; native-queue first
+// passes retain these green signals while queuing, but cannot synthesize a host land.
+// Split out of plannerRun.fixtures.ts to keep that file under the cap.
 
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
@@ -24,10 +22,8 @@ export function plannerAuthorityHost(): InMemoryCodeHost {
   return host;
 }
 
-// Build the bundle the planner-loop land authorizes against. Every fail-closed input
-// clears (approved review, passing gate bound to the landed head, no findings, no budget
-// ceiling, demo + HITL not required) so a clean tree lands; the durable `merge.completed`
-// is the LandFinalizer's job (no DB here), so the land oracle is the advanced ref.
+// Build the green preconditions the legacy planner input supplies. They are insufficient
+// to land without a persisted queue node/proof; canonical coordinator tests own that CAS.
 export function plannerAuthorityBundle(host: InMemoryCodeHost): MergeAuthorityBundle {
   return {
     codeHost: host,

@@ -26,7 +26,7 @@ import {
   accounting,
   approvingReview,
   completeCheck,
-  directMergeConfig,
+  nativeQueueConfig,
   fakeProbe,
   healthyWindow,
   loopStageAdapters,
@@ -71,7 +71,7 @@ const OUT_OF_SCOPE_TRIAGE: TriageAnswer = {
 
 describe("apex v79/v80 loop closure — triage → materializeTriageNewSpecs seam", () => {
   it("invokes the materializer with the routed newSpecs when the loop passes with routed specs", async () => {
-    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     const materializedCalls: Array<{
       parentSpecId: string;
       projectId: string;

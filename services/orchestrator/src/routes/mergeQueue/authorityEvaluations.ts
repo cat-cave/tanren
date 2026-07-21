@@ -271,7 +271,7 @@ function decodeMembers(value: unknown): IntegrationNodeMember[] {
 }
 
 function exactAuthorizedDecision(row: DecisionRow, members: ReadonlyArray<IntegrationNodeMember>): boolean {
-  if (members.length < 1 || row.node_head_sha === null || row.tree_hash === null) return false;
+  if (members.length === 0 || row.node_head_sha === null || row.tree_hash === null) return false;
   const identities = members.map((member) => `${member.specId}\0${member.runId}`);
   return (
     new Set(identities).size === identities.length &&

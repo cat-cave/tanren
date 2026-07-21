@@ -110,7 +110,10 @@ describe("authorizeAndLand — synthetic per-run land is closed fail-closed", ()
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     const disposition = await authorizeAndLand(gateInput(host));
-    expect(disposition).toMatchObject({ kind: "blocked", reasons: [expect.stringContaining("canonical queue authority")] });
+    expect(disposition).toMatchObject({
+      kind: "blocked",
+      reasons: [expect.stringContaining("canonical queue authority")],
+    });
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 

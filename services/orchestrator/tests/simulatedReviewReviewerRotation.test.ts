@@ -50,7 +50,7 @@ const context: ReviewMergeRunContext = {
   prUrl: "https://github.com/o/r/pull/1",
   baseBranch: "main",
   headBranch: "feat",
-  mergeIntegration: "direct_merge",
+  mergeIntegration: "native_queue",
   governancePosture: "open",
   policyVersion: 1,
   policyIdentity: "policy-sha256:test-rotation",
@@ -261,7 +261,7 @@ describe("gv-2 attempt-scoped simulated-reviewer pin", () => {
         throw new Error("publish fence must not be entered after reviewer rotation");
       },
     };
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     pool.tasks.push({ task_id: TASK_ID, run_id: "run_1", kind: "review", status: "running" });
     const events = new FakeEventStore();
 
@@ -362,7 +362,7 @@ describe("gv-2 attempt-scoped simulated-reviewer pin", () => {
         return work();
       },
     };
-    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const pool = new ReviewMergePool("native_queue", "open", "simulated");
     const events = new FakeEventStore();
 
     await expect(

@@ -338,7 +338,7 @@ function sameFinding(left: Finding, right: Finding): boolean {
 function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[] {
   const { binding, decisionInput, envelope, entries } = input;
   const errors: string[] = [];
-  if (binding.nodeId.trim() === "" || binding.members.length < 1) errors.push("invalid_canonical_queue_node");
+  if (binding.nodeId.trim() === "" || binding.members.length === 0) errors.push("invalid_canonical_queue_node");
   if (binding.headSha.trim() === "" || binding.treeHash.trim() === "") errors.push("missing_materialized_head");
   if (
     binding.memberSetHash !==

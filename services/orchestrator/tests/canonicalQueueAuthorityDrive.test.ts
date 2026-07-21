@@ -1,10 +1,26 @@
+// cspell:ignore rederive
 import { describe, expect, it, vi } from "vitest";
 import { parseDigest } from "../src/engine/contracts/cas.js";
 import type { BatchAuthorityBinding } from "../src/engine/contracts/batchMergeCoordinator.js";
-import type { AuthorizeLandInput, LandBindingEnvelope } from "../src/engine/contracts/mergeAuthority.js";
+import type {
+  AuthorizeLandInput,
+  LandBindingEnvelope,
+  MergeAuthorityV2,
+} from "../src/engine/contracts/mergeAuthority.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 import { memberKey, proofReuseKey } from "../src/engine/contracts/integrationNodes.js";
 import { CanonicalQueueAuthorityDrive } from "../src/engine/merge/canonicalQueueAuthorityDrive.js";
+import { evaluateMultiMemberAuthority } from "../src/engine/merge/multiMemberAuthorityEvaluator.js";
+import { rethrowTypedCodeHostInfrastructure } from "../src/engine/merge/multiMemberAuthorityEvidencePg.js";
+import {
+  buildMultiMemberEnvelope,
+  gatherMultiMemberAuthorityState,
+  gateVerdictWithBehaviorGates,
+  gateVerdictWithDesignRenderGates,
+  gateVerdictWithReviewRules,
+  loadMultiMemberLandContext,
+} from "../src/engine/merge/multiMemberAuthorityPgState.js";
+import { solveSafeSubset } from "../src/engine/merge/safeSubsetSolver.js";
 import {
   batchArtifactDigest,
   batchProofRoot,
@@ -97,8 +113,35 @@ function exactFixture(): {
   };
 }
 
-function evaluator(landAuthorizedGroup: NonNullable<BatchAuthorityEvaluator["landAuthorizedGroup"]>): BatchAuthorityEvaluator {
-  return { evaluate: vi.fn(), landAuthorizedGroup };
+function evaluator(
+  landAuthorizedGroup: NonNullable<BatchAuthorityEvaluator["landAuthorizedGroup"]>,
+): BatchAuthorityEvaluator {
+  return { evaluate: vi.fn<BatchAuthorityEvaluator["evaluate"]>(), landAuthorizedGroup };
+}
+
+function authorizedSubset(ids: ReadonlyArray<string>): object {
+  return {
+    kind: "authorized_subset",
+    members: ids.map((specId) => ({ specId, disposition: "admit" })),
+    authorizedMemberIds: ids,
+    eligibleMemberIds: ids,
+  };
+}
+
+class ScopedReadClient {
+  constructor(private readonly rowsFor: (sql: string) => ReadonlyArray<object>) {}
+
+  async query<Row extends object>(sql: string): Promise<{ rows: Row[]; rowCount: number }> {
+    const rows = this.rowsFor(sql) as Row[];
+    return { rows, rowCount: rows.length };
+  }
+
+  release(): void {}
+}
+
+function scopedPool(rowsFor: ConstructorParameters<typeof ScopedReadClient>[0]) {
+  const client = new ScopedReadClient(rowsFor);
+  return { connect: async () => client };
 }
 
 describe("CanonicalQueueAuthorityDrive", () => {
@@ -171,5 +214,185 @@ describe("CanonicalQueueAuthorityDrive", () => {
       ).resolves.toEqual({ kind: "rederive" });
     }
     expect(landAuthorizedGroup).not.toHaveBeenCalled();
+  });
+
+  it("fails malformed canonical node/proof inputs before authority evaluation", async () => {
+    const fixture = exactFixture();
+    const authorizeLand = vi.fn<MergeAuthorityV2["authorizeLand"]>();
+    const result = await evaluateMultiMemberAuthority({
+      binding: {
+        ...fixture.binding,
+        nodeId: "",
+        headSha: "",
+        treeHash: "",
+        proof: { ...fixture.binding.proof, verdict: "failed" },
+      },
+      entries: [fixture.entry],
+      decisionInput: fixture.evaluation.decisionInput,
+      envelope: fixture.evaluation.authorization.envelope,
+      memberFindings: [],
+      authority: { authorizeLand },
+    } as never);
+
+    expect(result.kind).toBe("unknown_fail_closed");
+    expect(result.reasonCodes).toEqual(
+      expect.arrayContaining([
+        "invalid_canonical_queue_node",
+        "missing_materialized_head",
+        "passing_proof_binding_mismatch",
+      ]),
+    );
+    expect(authorizeLand).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct blame, interaction evidence, and no-blame observations out of authorization", () => {
+    const members = [
+      { specId: "a", dependsOn: [], weight: 2 },
+      { specId: "b", dependsOn: ["a"], weight: 1 },
+    ];
+    const direct = solveSafeSubset({
+      members,
+      evaluation: {
+        kind: "member_failure",
+        members: [
+          { specId: "a", disposition: "exclude" },
+          { specId: "b", disposition: "hold" },
+        ],
+        failedMemberIds: ["a"],
+        eligibleMemberIds: [],
+      } as never,
+    });
+    expect(direct).toMatchObject({
+      proposedMemberIds: [],
+      excludedMemberIds: ["a"],
+      heldMemberIds: ["b"],
+      status: "candidate_requires_authorization",
+    });
+
+    const flake = solveSafeSubset({
+      members,
+      evaluation: { kind: "flake_observation", members: [], eligibleMemberIds: [] } as never,
+    });
+    expect(flake).toMatchObject({ proposedMemberIds: ["a", "b"], status: "deferred_no_constraint" });
+
+    const interaction = solveSafeSubset({
+      members,
+      evaluation: { kind: "interaction_failure", members: [], eligibleMemberIds: ["a", "b"] } as never,
+      probe: (ids) =>
+        ids.length === 2
+          ? ({ kind: "interaction_failure", members: [], eligibleMemberIds: ids } as never)
+          : (authorizedSubset(ids) as never),
+    });
+    expect(interaction).toMatchObject({ proposedMemberIds: ["a"], status: "maximal_safe", provenByExactProbe: true });
+    expect(interaction.interactionSets).toEqual([["a", "b"]]);
+
+    const capped = solveSafeSubset({
+      members,
+      evaluation: authorizedSubset(["a", "b"]) as never,
+      probe: (ids) => authorizedSubset(ids) as never,
+      maxSubsetCandidates: 0,
+    });
+    expect(capped).toMatchObject({ proposedMemberIds: [], status: "unresolved" });
+  });
+
+  it("folds each canonical member's durable gates into the group authority input", () => {
+    const fixture = exactFixture();
+    expect(buildMultiMemberEnvelope(fixture.binding, { owner: "org", name: "repo" }, "main")).toMatchObject({
+      headSha: fixture.binding.headSha,
+      expectedMainSha: fixture.binding.baseSha,
+    });
+    expect(gateVerdictWithBehaviorGates("passed", [{ kind: "inconclusive", reason: "missing behavior proof" }])).toBe(
+      "failed",
+    );
+    expect(
+      gateVerdictWithDesignRenderGates("passed", [{ kind: "failed", failingScenarioKey: "home", failingRuleIds: [] }]),
+    ).toBe("failed");
+    expect(gateVerdictWithReviewRules("passed", [{ kind: "blocked", reason: "missing approval" }])).toBe("failed");
+  });
+
+  it("refuses an absent owner or cross-org member before reading canonical authority signals", async () => {
+    const fixture = exactFixture();
+    const missingOwner = scopedPool((sql) =>
+      sql.includes("FROM projects")
+        ? [
+            {
+              org_id: null,
+              repo_url: "https://example.test/org/repo",
+              default_branch: "main",
+              project_config: {},
+              org_config: {},
+            },
+          ]
+        : [],
+    );
+    await expect(
+      gatherMultiMemberAuthorityState(missingOwner as never, {
+        projectId: fixture.entry.projectId,
+        entries: [fixture.entry],
+        binding: fixture.binding,
+      }),
+    ).rejects.toThrow("has no owning org");
+
+    const owner = scopedPool((sql) =>
+      sql.includes("FROM projects")
+        ? [
+            {
+              org_id: fixture.entry.orgId,
+              repo_url: "https://example.test/org/repo",
+              default_branch: "main",
+              project_config: {},
+              org_config: {},
+            },
+          ]
+        : [],
+    );
+    await expect(
+      gatherMultiMemberAuthorityState(owner as never, {
+        projectId: fixture.entry.projectId,
+        entries: [{ ...fixture.entry, orgId: "other-org" }],
+        binding: fixture.binding,
+      }),
+    ).rejects.toThrow("batch crosses its project/org boundary");
+  });
+
+  it("loads a native-queue land context only for a nonempty batch with a durable tail task", async () => {
+    const fixture = exactFixture();
+    const withTask = scopedPool((sql) => (sql.includes("FROM tasks") ? [{ task_id: "task-merge" }] : []));
+    await expect(
+      loadMultiMemberLandContext(
+        withTask as never,
+        fixture.entry.orgId,
+        { projectId: fixture.entry.projectId, entries: [fixture.entry] },
+        1,
+      ),
+    ).resolves.toMatchObject({ taskId: "task-merge", integration: "native_queue" });
+
+    await expect(
+      loadMultiMemberLandContext(
+        withTask as never,
+        fixture.entry.orgId,
+        { projectId: fixture.entry.projectId, entries: [] },
+        1,
+      ),
+    ).rejects.toThrow("cannot bind a land store to an empty batch");
+
+    const withoutTask = scopedPool(() => []);
+    await expect(
+      loadMultiMemberLandContext(
+        withoutTask as never,
+        fixture.entry.orgId,
+        { projectId: fixture.entry.projectId, entries: [fixture.entry] },
+        1,
+      ),
+    ).rejects.toThrow("has no durable merge task");
+  });
+
+  it("preserves ordinary evidence faults and promotes retriable host faults to typed infrastructure", () => {
+    const fixture = exactFixture();
+    const ordinary = new Error("malformed evidence fixture");
+    expect(() => rethrowTypedCodeHostInfrastructure(ordinary, fixture.binding)).toThrow(ordinary);
+
+    const retriable = Object.assign(new Error("host unavailable"), { retriable: true });
+    expect(() => rethrowTypedCodeHostInfrastructure(retriable, fixture.binding)).toThrow("code_host_unavailable");
   });
 });

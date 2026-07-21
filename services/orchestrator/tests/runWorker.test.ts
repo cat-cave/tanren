@@ -36,7 +36,7 @@ function fakeListener(): { listener: PgNotifyListener; fire: () => void } {
 }
 
 describe("run worker (dequeue→execute seam)", () => {
-  it("claims the queued plan job, runs the workflow, completes the job, and lands a terminal run", async () => {
+  it("claims the plan job, completes the workflow, and hands the ready run to the native queue", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
     await enqueuePlanJob(jobQueue, run);
@@ -45,9 +45,11 @@ describe("run worker (dequeue→execute seam)", () => {
     const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, github));
 
     expect(result).toMatchObject({ kind: "completed", runId: run.runId, outcome: "passed" });
-    // Real terminal state on the run + the spec (workflow finalization).
+    // The worker completes after the first native-queue pass; only the coordinator may land the spec.
     expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
-    expect(pool.specStatus).toBe("merged");
+    expect(pool.specStatus).toBe("in_flight");
+    expect(pool.eventTypes).toContain("merge.scheduled");
+    expect(pool.eventTypes).toContain("merge.queued");
     // The job reached a terminal queue state (not left running).
     expect(await jobQueue.claim("plan")).toBeUndefined();
   });

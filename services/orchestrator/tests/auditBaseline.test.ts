@@ -91,7 +91,7 @@ describe("audit-evidence baseline — the shared envelope", () => {
       EventRegistry["merge.completed"].parse({
         prUrl: "https://github.com/acme/widget/pull/7",
         prNumber: 7,
-        integration: "direct_merge",
+        integration: "native_queue",
       }),
     ).not.toThrow();
   });

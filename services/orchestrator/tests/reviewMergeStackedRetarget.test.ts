@@ -18,7 +18,6 @@ import {
 import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
-  AUTHORITY_HEAD_SHA,
   ReviewMergePool,
   authorityBundle,
   authorityHost,
@@ -84,7 +83,7 @@ describe("resolveStackRetarget (pure walk target)", () => {
 
 describe("stacked-PR retarget walk (merge stage)", () => {
   it("walks the base ONE step to the next ancestor while the merge stays HELD; drops the merged head", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     pool.specDependsOn = ["spec_a", "spec_b"];
     // immediate-below ancestor a merged; b still unmerged.
     pool.mergedAncestors = ["spec_a"];
@@ -97,6 +96,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -121,8 +121,8 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(true);
   });
 
-  it("DIAMOND/3-ancestor: walks to default_branch + merges once the stack empties", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("DIAMOND/3-ancestor: walks to default_branch and holds for canonical proof once the stack empties", async () => {
+    const pool = new ReviewMergePool("native_queue");
     pool.specDependsOn = ["spec_a", "spec_b", "spec_c"];
     // all landed → hold clears.
     pool.mergedAncestors = ["spec_a", "spec_b", "spec_c"];
@@ -145,6 +145,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -156,20 +157,20 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
-    expect(result.outcome).toBe("merged");
-    // Stack emptied → retarget to default_branch (main) before the land.
+    expect(result.outcome).toBe("blocked");
+    // Stack emptied → retarget to default_branch (main) before the canonical hold.
     expect(probe.retargetedBases).toEqual(["main"]);
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(landed).toEqual([]);
     // The whole stack was dropped.
     expect(pool.ancestorStackWrites).toEqual([{ runId: "run_1", stack: [] }]);
     const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
     expect(retargeted?.payload).toMatchObject({ fromBase: "tanren/run_c", toBase: "main" });
-    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(true);
+    expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
     expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(false);
   });
 
   it("steady state (live base already the walk target, no drop): no retarget, no write", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     pool.specDependsOn = ["spec_a", "spec_b"];
     // nothing merged yet.
     pool.mergedAncestors = [];
@@ -183,6 +184,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -201,11 +203,11 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     expect(events.events.some((e) => e.eventType === "merge.retargeted")).toBe(false);
   });
 
-  it("gv-4 depth-6: transitive merged ancestors retarget to default_branch even when depends_on is direct-only", async () => {
+  it("gv-4 depth-6: transitive merged ancestors retarget to default_branch before the canonical proof hold", async () => {
     // Defect shape: depth-6 chain; specs.depends_on lists only the immediate parent.
     // All six stack members are genuinely merged. Pre-gv-4 code would pass only
     // [spec_f] into the merged query → remaining stack kept a–e → toBase = e, not main.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     // direct-only — must be ignored for membership
     pool.specDependsOn = ["spec_f"];
     pool.mergedAncestors = ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e", "spec_f"];
@@ -221,6 +223,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -232,16 +235,16 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       mergeAuthority: authorityBundle(host, landed, { events }),
     });
 
-    expect(result.outcome).toBe("merged");
+    expect(result.outcome).toBe("blocked");
     expect(probe.retargetedBases).toEqual(["main"]);
     expect(pool.ancestorStackWrites).toEqual([{ runId: "run_1", stack: [] }]);
     const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
     expect(retargeted?.payload).toMatchObject({ fromBase: "tanren/run_f", toBase: "main" });
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(landed).toEqual([]);
   });
 
   it("gv-4 depth-6 partial: drops five transitive merged ancestors; holds on unmerged tip", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     // direct-only; f unmerged
     pool.specDependsOn = ["spec_f"];
     pool.mergedAncestors = ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e"];
@@ -254,6 +257,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -281,7 +285,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     // a MERGED ancestor. The held event must record the post-walk remaining tip (the
     // next still-unmerged ancestor) via the SAME sole resolver the walk uses — never the
     // stale merged immediate. Only spec_f (the immediate) is merged here; a–e still hold.
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     // direct-only depends_on is irrelevant under gv-4 (membership is the full vector).
     pool.specDependsOn = ["spec_f"];
     // Only the immediate (spec_f) is merged; a–e still hold.
@@ -296,6 +300,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -343,7 +348,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       member("spec_left", "tanren/run_left"),
       member("spec_right", "tanren/run_right"),
     ];
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     // no transitive shared in depends_on
     pool.specDependsOn = ["spec_left", "spec_right"];
     pool.mergedAncestors = ["spec_shared", "spec_left"];
@@ -361,6 +366,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const landed: string[] = [];
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),

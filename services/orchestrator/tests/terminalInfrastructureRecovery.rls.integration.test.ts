@@ -17,6 +17,7 @@ import {
   settleCompletedPark,
   throwAmbiguousMerge,
 } from "./fixtures/terminalInfrastructureRecovery.js";
+import { fakeBatchAuthorityBinding } from "./helpers/mq2BatchAuthority.js";
 import { createWriteEndpointHarness, enabled, fetchInto } from "./planeSplitP3RemoteWritesHarness.js";
 
 const describeDb = enabled ? describe : describe.skip;
@@ -120,7 +121,7 @@ describeDb("terminal infrastructure ownership — real PG and enforced RLS", () 
     await seedCandidate(ownerPool(), otherTenant);
     let credentialReady = false;
     const checker: CoordinatorDeps["checker"] = {
-      async checkBatch() {
+      async checkBatch({ entries }) {
         if (!credentialReady) {
           return {
             result: "infra-error",
@@ -129,7 +130,11 @@ describeDb("terminal infrastructure ownership — real PG and enforced RLS", () 
             kind: "missing_required_credential",
           };
         }
-        return { result: "pass", integrationBranch: "tanren/batch/repaired" };
+        return {
+          result: "pass",
+          integrationBranch: "tanren/batch/repaired",
+          authorityBinding: fakeBatchAuthorityBinding(entries),
+        };
       },
     };
     const runner: CoordinatorDeps["runner"] = {
@@ -214,8 +219,12 @@ describeDb("terminal infrastructure ownership — real PG and enforced RLS", () 
     };
     const writer = new HttpRunStateWriter("https://control.internal", lossy);
     const checker: CoordinatorDeps["checker"] = {
-      async checkBatch() {
-        return { result: "pass", integrationBranch: "tanren/batch/ambiguous" };
+      async checkBatch({ entries }) {
+        return {
+          result: "pass",
+          integrationBranch: "tanren/batch/ambiguous",
+          authorityBinding: fakeBatchAuthorityBinding(entries),
+        };
       },
     };
     const runner: CoordinatorDeps["runner"] = {

@@ -15,7 +15,6 @@ import {
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
 import {
-  AUTHORITY_HEAD_SHA,
   AUTHORITY_MAIN_SHA,
   AUTHORITY_REPO,
   FIXTURE_TANREN_LOGIN,
@@ -58,7 +57,6 @@ describe("review verdict reduction", () => {
 
 describe("merge integration selection", () => {
   it("maps configured modes and treats not_configured as a hand-off", () => {
-    expect(dispatchedIntegrationFor("direct_merge")).toBe("direct_merge");
     expect(dispatchedIntegrationFor("native_queue")).toBe("native_queue");
     expect(dispatchedIntegrationFor("external_reviewer")).toBe("external_reviewer");
     expect(dispatchedIntegrationFor("not_configured")).toBe("external_reviewer");
@@ -67,7 +65,7 @@ describe("merge integration selection", () => {
 
 describe("review polling stage", () => {
   it("marks ready, emits review.requested + review.approved on approval", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = approvingReviewProbe();
 
@@ -92,7 +90,7 @@ describe("review polling stage", () => {
   });
 
   it("reviewPolicy: auto short-circuits to approved without polling GitHub, emits review.auto_approved", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open", "auto");
+    const pool = new ReviewMergePool("native_queue", "open", "auto");
     const events = new FakeEventStore();
     let markedReady = false;
     let fetched = false;
@@ -129,7 +127,7 @@ describe("review polling stage", () => {
   });
 
   it("reviewPolicy: human (default) still polls GitHub for a verdict", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     let fetched = false;
     const probe: ReviewProbe = {
@@ -158,7 +156,7 @@ describe("review polling stage", () => {
   });
 
   it("emits review.changes_requested carrying the reviewer feedback as steering", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe: ReviewProbe = {
       markReady: async () => {},
@@ -183,7 +181,6 @@ describe("review polling stage", () => {
     const changes = events.events.find((e) => e.eventType === "review.changes_requested");
     expect(changes?.payload).toMatchObject({ reviewer: "carol", message: "fix the edge case" });
 
-    // The reviewer feedback becomes a planner-steering rejection.
     const rejection = reviewerRejection(result, "tanren/run_1");
     expect(rejection.producer).toBe("reviewer");
     expect(rejection.rejectionReason).toContain("fix the edge case");
@@ -192,14 +189,14 @@ describe("review polling stage", () => {
 });
 
 describe("merge dispatch stage", () => {
-  it("direct_merge → MergeAuthority land → merge.completed", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+  it("native_queue drive without a persisted node/proof blocks before host land", async () => {
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
-    // The land is the unconditional `MergeAuthority` + CodeHost ff-only CAS (no host PR-merge).
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -211,16 +208,14 @@ describe("merge dispatch stage", () => {
       mergeAuthority: authorityBundle(host, landed),
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    // The authorized commit advanced `main` via the CAS, once (the LandFinalizer's write;
-    // the land oracle is the advanced ref + the `merged` outcome + the finished task).
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
-    expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_HEAD_SHA);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_MAIN_SHA);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.queued");
-    expect(types).toContain("task.completed");
-    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("done");
+    expect(types).toContain("merge.blocked");
+    expect(types).not.toContain("merge.completed");
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
   it("external_reviewer → hand-off, no land", async () => {
@@ -230,6 +225,7 @@ describe("merge dispatch stage", () => {
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -251,7 +247,7 @@ describe("merge dispatch stage", () => {
   });
 
   it("merge conflict → merge.conflict + recoverable (running) task, resolver hook invoked", async () => {
-    const pool = new ReviewMergePool("direct_merge");
+    const pool = new ReviewMergePool("native_queue");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({
       mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
@@ -260,6 +256,7 @@ describe("merge dispatch stage", () => {
     let hookCalls = 0;
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -286,8 +283,6 @@ describe("merge dispatch stage", () => {
 });
 
 describe("external-change detection", () => {
-  // MERGE-SAFETY (self-identity): identity = default bot login + the login resolved from
-  // the active credential (apex PAT user `tanren-bot-user`). No bogus `app/<appId>` entry.
   const identity = tanrenIdentity(["tanren[bot]", "tanren-bot-user"]);
 
   it("flags a non-Tanren login as an external change", () => {
@@ -343,33 +338,30 @@ describe("posture decision", () => {
   it("lenient mirrors strict for external coexistence (the gate-advisory relaxation is in-loop only)", () => {
     const decision = decidePosture("lenient", external);
     expect(decision.kind).toBe("block");
-    // The reason reflects the actual posture, not a hardcoded 'strict'.
     expect(decision.reason).toContain("lenient posture");
     expect(decidePosture("lenient", internal).kind).toBe("proceed");
   });
 });
 
 describe("governance posture gate at the merge decision", () => {
-  // External: a Tanren commit + a genuine external push (`mallory`) — blocks.
   const externalProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, "mallory"] }),
   };
-  // Internal: a Tanren-only PR attributed to the active credential — proceeds.
   const internalProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN] }),
   };
-  // Unattributed: a `.invalid`/unregistered email → `""` login → `<unknown>` external → blocks loudly.
   const unattributedProbe: ContributorProbe = {
     listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, ""] }),
   };
 
   it("strict + external change → merge.blocked (operator_approval), no land, task left running", async () => {
-    const pool = new ReviewMergePool("direct_merge", "strict");
+    const pool = new ReviewMergePool("native_queue", "strict");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -383,7 +375,6 @@ describe("governance posture gate at the merge decision", () => {
     });
 
     expect(result.outcome).toBe("blocked");
-    // the posture gate blocks BEFORE the land — nothing was authorized.
     expect(landed).toEqual([]);
     const blocked = events.events.find((e) => e.eventType === "merge.blocked");
     expect(blocked?.payload).toMatchObject({
@@ -395,12 +386,13 @@ describe("governance posture gate at the merge decision", () => {
   });
 
   it("audit_only + external change → merge.blocked (audit_only), no land", async () => {
-    const pool = new ReviewMergePool("direct_merge", "audit_only");
+    const pool = new ReviewMergePool("native_queue", "audit_only");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -421,13 +413,14 @@ describe("governance posture gate at the merge decision", () => {
     });
   });
 
-  it("strict + Tanren-only change → proceeds to a real authority land", async () => {
-    const pool = new ReviewMergePool("direct_merge", "strict");
+  it("strict + Tanren-only change clears posture but cannot synthesize a per-run land", async () => {
+    const pool = new ReviewMergePool("native_queue", "strict");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -440,18 +433,21 @@ describe("governance posture gate at the merge decision", () => {
       contributorProbe: internalProbe,
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
-    expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
+      integration: "native_queue",
+    });
   });
 
   it("strict + unattributed external commit ('') → merge.blocked (<unknown>), loud, no land", async () => {
-    const pool = new ReviewMergePool("direct_merge", "strict");
+    const pool = new ReviewMergePool("native_queue", "strict");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -464,8 +460,6 @@ describe("governance posture gate at the merge decision", () => {
       contributorProbe: unattributedProbe,
     });
 
-    // The resolved Tanren login does NOT rescue an unattributed (empty) commit — it
-    // keys `<unknown>` → external → blocked. We fix the INPUT, not the safety rule.
     expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
@@ -475,13 +469,14 @@ describe("governance posture gate at the merge decision", () => {
     });
   });
 
-  it("open + external change → proceeds (coexists), authority lands", async () => {
-    const pool = new ReviewMergePool("direct_merge", "open");
+  it("open + external change clears posture but cannot synthesize a per-run land", async () => {
+    const pool = new ReviewMergePool("native_queue", "open");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe();
     const { host, landed } = authorityLand();
 
     const result = await mergeForRun({
+      queueDrive: true,
       pool: pool.asPgPool(),
       eventStore: events,
       runStateWriter: fakeMergeWriter(pool, events),
@@ -494,7 +489,7 @@ describe("governance posture gate at the merge decision", () => {
       contributorProbe: externalProbe,
     });
 
-    expect(result.outcome).toBe("merged");
-    expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
   });
 });

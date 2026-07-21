@@ -384,7 +384,7 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
   // secrets needed) and this fixture proves the successful direct-merge lifecycle.
   const config = {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: {
       defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },
@@ -416,7 +416,7 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
 async function seedForeignCredentialRun(owner: Pool): Promise<void> {
   const config = {
     version: 1,
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     credentials: {
       defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },

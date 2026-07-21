@@ -267,7 +267,7 @@ describe("BenchmarkRunner — runCellTrials", () => {
 describe("defaultProvisionTrial", () => {
   it("provisions benchmark frozen governance and merge config through the internal proof path", async () => {
     const cell = fakeCell(1);
-    cell.frozenConfig = frozen("premium", { governance: "open", mergeIntegration: "direct_merge" });
+    cell.frozenConfig = frozen("premium", { governance: "open", mergeIntegration: "native_queue" });
     cell.cell.frozenConfig = cell.frozenConfig;
 
     const result = await defaultProvisionTrial({} as never, provisionWorkflow)({ orgId: ORG, cell, trialIndex: 0 });
@@ -276,7 +276,7 @@ describe("defaultProvisionTrial", () => {
     expect(workflowCalls.createProject).toHaveLength(1);
     expect(workflowCalls.createProject[0]!.input.config).toMatchObject({
       governancePosture: "open",
-      mergeIntegration: "direct_merge",
+      mergeIntegration: "native_queue",
     });
     expect(() => assertProjectCreateConfigAllowed(workflowCalls.createProject[0]!.input.config)).toThrow(
       "autonomous project config",

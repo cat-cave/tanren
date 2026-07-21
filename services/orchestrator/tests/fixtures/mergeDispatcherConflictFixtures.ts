@@ -153,7 +153,7 @@ export function context(): ReviewMergeRunContext {
     prUrl: "https://github.com/o/r/pull/1",
     baseBranch: "main",
     headBranch: "feat",
-    mergeIntegration: "direct_merge",
+    mergeIntegration: "native_queue",
     governancePosture: "open",
     policyVersion: 1,
     policyIdentity: "policy-sha256:test-conflict",
@@ -197,7 +197,7 @@ export function buildDispatcher(args: {
   probe: MergeProbe;
   events: ReturnType<typeof recordingEventStore>;
   bundle: MergeAuthorityBundle;
-  integration?: "direct_merge" | "native_queue";
+  integration?: "native_queue" | "native_queue";
   reGateStatus?: ReGateStatus;
   resolveConflict?: () => Promise<{ resolved: boolean }>;
 }): MergeDispatcher {
@@ -223,7 +223,7 @@ export function buildDispatcher(args: {
     context: context(),
     eventStore: args.events as never,
     taskId: "task_1",
-    integration: args.integration ?? "direct_merge",
+    integration: args.integration ?? "native_queue",
     pr: { repo: REPO, pullNumber: 1 },
     probe: args.probe,
   };

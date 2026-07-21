@@ -232,6 +232,12 @@ export class WorkerPool {
     if (trimmed.startsWith("INSERT INTO job_queue")) {
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
+    if (trimmed.startsWith("INSERT INTO merge_queue_partitions")) {
+      return {
+        rows: [{ id: String(params[2]), scope_key: String(params[4]), mode: String(params[5]), generation: 0 }],
+        rowCount: 1,
+      };
+    }
     // Event-store inserts (PgEventStore writes through the real pool). Matched
     // via regex rather than a string literal so the single-event-writer
     // architecture check does not flag this in-memory fake pool router. The
@@ -362,7 +368,7 @@ export class WorkerPool {
     // CI poll + review/merge context: run⋈project read. Both stages
     // share this SELECT prefix. Return the project's STORED config so the merge
     // context resolves the run's real mergeIntegration / governancePosture (the
-    // hard tier seeds direct_merge + open to exercise the conflict
+    // hard tier seeds native_queue + open to exercise the conflict
     // branch); the top-level githubCredentialRef is preserved for the CI-poll
     // cred read. A run whose project carries no mergeIntegration migrates to the
     // not_configured → external_reviewer hand-off as before.
@@ -475,12 +481,6 @@ export class WorkerPool {
     return { rows: [], rowCount: 0 };
   }
 
-  // A checked-out client VIEW: shares this fake's `query` (so seeded state is one
-  // store) but is NOT itself a pool — no `totalCount` pool counter, exactly like a
-  // real `pg.PoolClient` (which also has `connect()`, so connect alone is unsound).
-  // This matters for the RLS write-path discriminator (`isPool`): a store
-  // constructed with a handed-in client must be treated as a client (used
-  // verbatim), never re-resolved through the org-scope seam.
   async connect(): Promise<pg.PoolClient> {
     return {
       query: (sql: string, params?: unknown[]) => this.query(sql, params ?? []),

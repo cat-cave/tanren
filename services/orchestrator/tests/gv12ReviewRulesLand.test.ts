@@ -111,14 +111,17 @@ describe("gv-12 core review rules → live MergeAuthority", () => {
     });
   });
 
-  it("the dedicated reviewer actor with an exact forge receipt is the only positive path", async () => {
+  it("the dedicated reviewer actor with an exact forge receipt clears review rules but cannot bypass queue proof", async () => {
     const { host, disposition } = await land(
       simulatedReviewGate({
         kind: "observed",
         approvals: [{ reviewer: "reviewer-bot", principal: DEDICATED_REVIEWER_PRINCIPAL, forgeReviewHeadSha: HEAD }],
       }),
     );
-    expect(disposition).toMatchObject({ kind: "merged", mainSha: HEAD });
-    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe(HEAD);
+    expect(disposition).toMatchObject({
+      kind: "blocked",
+      reasons: [expect.stringContaining("canonical queue authority is required")],
+    });
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("main-sha");
   });
 });
