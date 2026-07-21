@@ -147,6 +147,11 @@ SCREEN_MOUNTS.push(mountIntegrationEventsScreen);
 import { mountDesignStudioScreens } from "../routes/designStudio/index.js";
 SCREEN_MOUNTS.push(mountDesignStudioScreens);
 
+// gv-15 Governance Studio — policy revision lineage, active tier binding, and
+// exact effective-policy receipts through the canonical governance authority.
+import { mountGovernanceStudioScreen } from "../routes/governance/studio.js";
+SCREEN_MOUNTS.push(mountGovernanceStudioScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

@@ -19,6 +19,7 @@ const RevisionRowSchema = z
     parent_revision_id: z.string().min(1).nullable(),
     created_by: z.string().min(1),
     created_at: z.string(),
+    status: z.enum(["inactive", "active"]),
   })
   .strict();
 
@@ -33,6 +34,8 @@ export interface PolicyRevision {
   readonly parentRevisionId: string | undefined;
   readonly createdBy: string;
   readonly createdAt: string;
+  /** Derived from the durable governance.policy.activated lifecycle fact. */
+  readonly status: "inactive" | "active";
 }
 
 export interface CreatePolicyRevisionInput {
@@ -97,8 +100,22 @@ function decodeRevision(input: unknown): PolicyRevision {
     parentRevisionId: row.parent_revision_id ?? undefined,
     createdBy: row.created_by,
     createdAt: row.created_at,
+    status: row.status,
   };
 }
+
+/**
+ * Revisions are append-only, so lifecycle status is the authoritative event
+ * projection rather than an in-place revision mutation.
+ */
+const revisionColumns = `r.id, r.project_id, r.revision_number, r.schema_version, r.source_document, r.compiled_ast,
+       r.policy_hash, r.parent_revision_id, r.created_by, r.created_at::text,
+       CASE WHEN EXISTS (
+         SELECT 1 FROM events e
+          WHERE e.org_id = r.org_id AND e.project_id = r.project_id
+            AND e.event_type = 'governance.policy.activated'
+            AND e.payload->>'revisionId' = r.id
+       ) THEN 'active' ELSE 'inactive' END AS status`;
 
 async function lockRevisionSequence(client: QueryClient, projectId: string): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`governance-policy:${projectId}`]);
@@ -217,7 +234,7 @@ export async function createPolicyRevision(
         policy_hash, parent_revision_id, created_by)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)
      RETURNING id, project_id, revision_number, schema_version, source_document, compiled_ast,
-               policy_hash, parent_revision_id, created_by, created_at::text`,
+               policy_hash, parent_revision_id, created_by, created_at::text, 'inactive'::text AS status`,
     [
       input.orgId,
       id,
@@ -246,11 +263,10 @@ export async function getPolicyRevision(
 ): Promise<PolicyRevision> {
   const numericRevision = Number.parseInt(revision, 10);
   const result = await client.query(
-    `SELECT id, project_id, revision_number, schema_version, source_document, compiled_ast,
-            policy_hash, parent_revision_id, created_by, created_at::text
-       FROM governance_policy_revisions
-      WHERE org_id = $1 AND project_id = $2
-        AND (id = $3 OR revision_number = $4)
+    `SELECT ${revisionColumns}
+       FROM governance_policy_revisions r
+      WHERE r.org_id = $1 AND r.project_id = $2
+        AND (r.id = $3 OR r.revision_number = $4)
       LIMIT 1`,
     [orgId, projectId, revision, Number.isInteger(numericRevision) ? numericRevision : -1],
   );
@@ -265,11 +281,10 @@ export async function listPolicyRevisions(
   projectId: string,
 ): Promise<PolicyRevision[]> {
   const result = await client.query(
-    `SELECT id, project_id, revision_number, schema_version, source_document, compiled_ast,
-            policy_hash, parent_revision_id, created_by, created_at::text
-       FROM governance_policy_revisions
-      WHERE org_id = $1 AND project_id = $2
-      ORDER BY revision_number, id`,
+    `SELECT ${revisionColumns}
+       FROM governance_policy_revisions r
+      WHERE r.org_id = $1 AND r.project_id = $2
+      ORDER BY r.revision_number, r.id`,
     [orgId, projectId],
   );
   return result.rows.map(decodeRevision);
@@ -282,11 +297,10 @@ export async function findPolicyRevisionByHash(
   policyHashValue: string,
 ): Promise<PolicyRevision | undefined> {
   const result = await client.query(
-    `SELECT id, project_id, revision_number, schema_version, source_document, compiled_ast,
-            policy_hash, parent_revision_id, created_by, created_at::text
-       FROM governance_policy_revisions
-      WHERE org_id = $1 AND project_id = $2 AND policy_hash = $3
-      ORDER BY revision_number DESC
+    `SELECT ${revisionColumns}
+       FROM governance_policy_revisions r
+      WHERE r.org_id = $1 AND r.project_id = $2 AND r.policy_hash = $3
+      ORDER BY r.revision_number DESC
       LIMIT 1`,
     [orgId, projectId, policyHashValue],
   );
@@ -323,5 +337,5 @@ export async function activatePolicyRevision(
 ): Promise<PolicyRevision> {
   await compilePolicyRevision(client, orgId, revision);
   await appendActivatedEvent(client, revision, orgId);
-  return revision;
+  return { ...revision, status: "active" };
 }
