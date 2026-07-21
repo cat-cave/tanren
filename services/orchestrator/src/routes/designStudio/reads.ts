@@ -23,12 +23,16 @@ import {
   ArtifactDigestMismatchError,
   ArtifactNotFoundError,
   DEFAULT_DESIGN_ARTIFACT_ROOT,
+  DesignAdapterConformanceStore,
+  DesignBindingTargetError,
+  DesignStudioStore,
   FilesystemArtifactStore,
   type ArtifactStore,
-} from "../../engine/design/system/artifactStore.js";
-import { DesignBindingTargetError, DesignStudioStore } from "../../engine/design/system/designStudioStore.js";
-import { readLatestDesignRenderVerdictForProject } from "../../engine/design/render/designRenderVerdictStore.js";
-import type { DesignRenderVerdictRow } from "../../engine/design/render/designRenderVerdictStore.js";
+} from "../../engine/design/system/index.js";
+import {
+  readLatestDesignRenderVerdictForProject,
+  type DesignRenderVerdictRow,
+} from "../../engine/design/render/designRenderVerdictStore.js";
 import {
   gatherDesignDeliveryEvidence,
   resolveLatestProjectDelivery,
@@ -39,6 +43,7 @@ import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/t
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 import { DS_STUDIO_SURFACE_VERSION, PutDesignBindingBodySchema } from "./contract.js";
+import { mountDesignAdapterConformanceRoutes } from "./conformance.js";
 
 export type DesignStudioReadStore = Pick<
   DesignStudioStore,
@@ -51,6 +56,8 @@ export interface DesignStudioRoutesOptions {
    * local design-artifact root the greenfield composer writes to. */
   readonly artifactStore?: ArtifactStore;
   readonly store?: DesignStudioReadStore;
+  /** The ds-7 conformance store. Defaults to a new `DesignAdapterConformanceStore`. */
+  readonly conformanceStore?: DesignAdapterConformanceStore;
 }
 
 type RouteContext = Context<ActorContextEnv>;
@@ -119,6 +126,7 @@ export function createDesignStudioRoutes(options: DesignStudioRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const store = options.store ?? new DesignStudioStore(options.pool);
   const artifactStore = options.artifactStore ?? new FilesystemArtifactStore(DEFAULT_DESIGN_ARTIFACT_ROOT);
+  const conformanceStore = options.conformanceStore ?? new DesignAdapterConformanceStore(options.pool);
 
   // Studio / reuse catalog: every reusable design-system family in the org.
   app.get("/:orgId/design-systems", async (c) => {
@@ -253,6 +261,14 @@ export function createDesignStudioRoutes(options: DesignStudioRoutesOptions) {
         "x-artifact-digest": file.digest,
       },
     });
+  });
+
+  // ds-7 — adapter conformance panel + per-target GET (delegated to its own
+  // module so reads.ts stays under the module-dependency cap).
+  mountDesignAdapterConformanceRoutes(app, {
+    conformanceStore,
+    authorizeProject: (c) => authorizeProject(c, options.pool),
+    requireParam,
   });
 
   return app;

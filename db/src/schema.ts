@@ -497,3 +497,4 @@ export { regressionBisections } from "./schemaRegressionBisections.js";
 export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";
 export { mergeTrainArtifacts } from "./schemaMergeTrainArtifacts.js";
 export { landGroupDeliveryLoops } from "./schemaLandGroupDeliveryLoops.js";
+export { designAdapterConformanceRuns } from "./schemaDesignAdapterConformance.js";

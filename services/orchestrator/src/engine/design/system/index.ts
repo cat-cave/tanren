@@ -25,7 +25,24 @@ export * from "./webCatalog.js";
 export * from "./webExports.js";
 export * from "./webTokens.js";
 export * from "./webWriterContext.js";
-export * from "./composeProjectWebDesignSystem.js";
+export * from "./composeProjectTargetDesignSystems.js";
+// ds-7 — multi-target framework reach: the frozen conformance receipt, the
+// per-target framework adapter core + concrete adapters (Bevy/SwiftUI/Compose/
+// Flutter/RN/generic-web/document-media), the production adapter set, the
+// framework artifact persistence + conformance-run store, and the helpers that
+// keep the multi-target composer under the 500-line cap.
+export * from "./adapterConformanceReceipt.js";
+export * from "./adapterConformanceStore.js";
+export * from "./frameworkAdapterCore.js";
+export * from "./bevyAdapter.js";
+export * from "./swiftUiAdapter.js";
+export * from "./jetpackComposeAdapter.js";
+export * from "./flutterAdapter.js";
+export * from "./reactNativeAdapter.js";
+export * from "./genericWebAdapter.js";
+export * from "./documentMediaAdapter.js";
+export * from "./designTargetRegistry.js";
+export * from "./frameworkArtifactPersistence.js";
 // ds-3 (F2D) — the design-fragment authoring loop (selector → author → check →
 // atomic persist / retract) on the shared SP-2 kernel. Reachable from the design
 // public surface so the composition/curation trigger (see the ds-3 blocker note)

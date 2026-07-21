@@ -31,9 +31,10 @@ export {
 } from "./deriveProductGraph.js";
 export { ProjectDerivationConflictError } from "../../repositories/projects.js";
 
-/** The ds-composer seam signature: compose+publish the project's web design system
- * (idempotent, fail-closed). Threaded into the derive so it runs once the HEAD design
- * contract exists. Production wires `composeProjectWebDesignSystem`. */
+/** The ds-composer seam signature: compose+publish the project's design system
+ * (multi-target, idempotent, fail-closed). Threaded into the derive so it runs
+ * once the HEAD design contract exists. Production wires
+ * `composeProjectTargetDesignSystems`. */
 export type ComposeDesignSystemCallback = (input: { orgId: string; projectId: string }) => Promise<void>;
 
 export interface DeriveInput {

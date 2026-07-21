@@ -163,6 +163,7 @@
       "files": [
         "services/orchestrator/src/main.ts",
         "services/orchestrator/src/mountFeatureRoutes.ts",
+        "services/orchestrator/src/engine/design/system/composeProjectTargetDesignSystems.ts",
         "services/dashboard/src/app/screens.ts"
       ],
       "rules": {

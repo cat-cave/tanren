@@ -1,6 +1,6 @@
 // ds-composer — the RE-AUDIT proof that ds-3's F2D loop is no longer a DEAD path.
 //
-// Drives the REAL production producer (`composeProjectWebDesignSystem`) end-to-end
+// Drives the REAL production producer (`composeProjectTargetDesignSystems`) end-to-end
 // over Postgres: a project whose HEAD design contract declares a dimension (so
 // `withDerivedDesiredSurfaces` yields a real `desiredSurface`) with NO matching
 // fragment in the org registry → the producer SELECTS the missing fragment → ds-3
@@ -24,7 +24,7 @@ import type { EventStore } from "../src/engine/eventStore.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { parseDesignContract } from "../src/engine/design/designContract.js";
 import { FilesystemArtifactStore } from "../src/engine/design/system/artifactStore.js";
-import { composeProjectWebDesignSystem } from "../src/engine/design/system/composeProjectWebDesignSystem.js";
+import { composeProjectTargetDesignSystems } from "../src/engine/design/system/composeProjectTargetDesignSystems.js";
 import { resolveProjectWebDesignSystem } from "../src/engine/design/system/designSystemStore.js";
 import type { DesignFragmentDraftV1 } from "../src/engine/design/system/authoring/index.js";
 import { DesignContractStore } from "../src/engine/repositories/designContracts.js";
@@ -164,7 +164,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
 
   it("composes: F2D authors the missing fragment, the release publishes, and the reader resolves it", async () => {
     const events = new CapturingEventStore();
-    const result = await composeProjectWebDesignSystem(
+    const result = await composeProjectTargetDesignSystems(
       {
         pool: runtimePool,
         artifactStore: new FilesystemArtifactStore(artifactRoot),
@@ -202,7 +202,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
       ),
     );
     expect(release.rows[0]?.state).toBe("published");
-    expect(release.rows[0]?.canonical_artifact_id).toBe(result!.artifactId);
+    expect(release.rows[0]?.canonical_artifact_id).toBe(result!.canonicalArtifactId);
 
     // ds-4 sub-node #3 — the producer PERSISTED a run-level design-render verdict for the
     // composed release (the gate-binding data). This project's V1 contract carries posture
@@ -226,7 +226,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(resolved).toBeDefined();
     expect(resolved?.designSystemId).toBe(result!.designSystemId);
     expect(resolved?.releaseId).toBe(result!.releaseId);
-    expect(resolved?.artifactId).toBe(result!.artifactId);
+    expect(resolved?.artifactId).toBe(result!.canonicalArtifactId);
   });
 
   it("ENFORCES a project whose persisted contract declares wcag-aa (persist→read→migrate→gate, NOT not_applicable)", async () => {
@@ -274,7 +274,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
       notes: "public consumer surface — AA baseline",
     });
 
-    const result = await composeProjectWebDesignSystem(
+    const result = await composeProjectTargetDesignSystems(
       {
         pool: runtimePool,
         artifactStore: new FilesystemArtifactStore(artifactRoot),
@@ -331,7 +331,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     );
 
     await expect(
-      composeProjectWebDesignSystem(
+      composeProjectTargetDesignSystems(
         {
           pool: runtimePool,
           artifactStore: new FilesystemArtifactStore(artifactRoot),
@@ -406,7 +406,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
       ).rows[0]!.n;
 
     // First compose — publishes and records exactly one verdict, keyed to the current contract.
-    const first = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    const first = await composeProjectTargetDesignSystems(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
     expect(first?.alreadyPublished).toBe(false);
     expect(await countVerdicts()).toBe("1");
 
@@ -421,7 +421,7 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     );
 
     // Re-compose — still already-published, but the STALE verdict forces a RE-VERIFY (fresh row).
-    const second = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    const second = await composeProjectTargetDesignSystems(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
     expect(second?.alreadyPublished).toBe(true);
     expect(await countVerdicts()).toBe("2");
     const latest = await runWithOrgScope(runtimePool, ORG_ID, (client) =>
@@ -437,14 +437,14 @@ describeDb("ds-composer — F2D fires and a web design release is published + re
     expect(latest.rows[0]?.contract_digest).not.toBe("sha256:stale");
 
     // Third compose — the latest verdict now matches the current contract → honored, NO re-render.
-    const third = await composeProjectWebDesignSystem(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
+    const third = await composeProjectTargetDesignSystems(deps, { orgId: ORG_ID, projectId: REVERIFY_PROJECT });
     expect(third?.alreadyPublished).toBe(true);
     expect(await countVerdicts()).toBe("2");
   });
 
   it("is idempotent — a second compose short-circuits on the published lineage (no re-author)", async () => {
     const events = new CapturingEventStore();
-    const result = await composeProjectWebDesignSystem(
+    const result = await composeProjectTargetDesignSystems(
       {
         pool: runtimePool,
         artifactStore: new FilesystemArtifactStore(artifactRoot),

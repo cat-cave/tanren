@@ -1,6 +1,6 @@
 // ds-4 sub-node #3 — the compose-time seam that RUNS the render verification over a just-
 // published web design system and persists ONE run-level verdict. Split out of
-// `composeProjectWebDesignSystem` so that producer stays within the module-dependency cap
+// `composeProjectTargetDesignSystems` so that producer stays within the module-dependency cap
 // and the render-verification wiring lives beside the harness/oracle it drives.
 
 import { runWithOrgScope } from "@tanren/db";
