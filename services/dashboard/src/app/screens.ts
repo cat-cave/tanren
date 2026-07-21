@@ -152,6 +152,16 @@ SCREEN_MOUNTS.push(mountDesignStudioScreens);
 import { mountGovernanceStudioScreen } from "../routes/governance/studio.js";
 SCREEN_MOUNTS.push(mountGovernanceStudioScreen);
 
+// in-21 Integration Control Center — the project-scoped integration lifecycle
+// surface (`/projects/:projectId/integration-control`): capability nodes,
+// integration bindings + the in-15 appEnvHash proof, delivery-DAG status, and
+// the in-20 JSON-Schema catalog download. Backed by in-20's GET-only read
+// surface; cross-org reads return ZERO rows through the orchestrator's RLS.
+// Directly callable at its project-scoped URL; no new nav row is required
+// (lights up the existing `integrations` nav).
+import { mountIntegrationControlScreen } from "../routes/integrationControl/index.js";
+SCREEN_MOUNTS.push(mountIntegrationControlScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

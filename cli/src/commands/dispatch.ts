@@ -14,6 +14,13 @@ import {
   experimentsReport,
   experimentsRun,
 } from "./experiments/index.js";
+import {
+  integrationsBindings,
+  integrationsCapabilityNodes,
+  integrationsDelivery,
+  integrationsLifecycle,
+  integrationsRequirements,
+} from "./integrations/index.js";
 import { milestonesCreate, milestonesGet, milestonesList } from "./milestones/index.js";
 import { orgsConfigSet, orgsGet, orgsList } from "./orgs/index.js";
 import { personasCreate, personasGet, personasList } from "./personas/index.js";
@@ -54,6 +61,11 @@ const HANDLERS: Record<string, (rest: string[]) => Promise<void>> = {
   "experiments compare": experimentsCompare,
   "cells create": cellsCreate,
   "cells list": cellsList,
+  "integrations lifecycle": integrationsLifecycle,
+  "integrations requirements": integrationsRequirements,
+  "integrations capability-nodes": integrationsCapabilityNodes,
+  "integrations bindings": integrationsBindings,
+  "integrations delivery": integrationsDelivery,
   "proof verify": proofVerify,
 };
 
