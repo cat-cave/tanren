@@ -55,12 +55,7 @@ interface PublicRow {
   state: string;
 }
 
-interface GrantRow {
-  id: string;
-  publication_id: string;
-  allowed_release_digest: string;
-  capability: string;
-}
+type GrantRow = { id: string; publication_id: string; allowed_release_digest: string; capability: string };
 
 interface ExpectedGrantCoordinate {
   readonly grantId: string;
@@ -80,7 +75,7 @@ export class DesignEcosystemService {
       case "publish":
         return { kind: "publication", publication: await this.publish(input.orgId, command) };
       case "revoke_publication":
-        return { kind: "publication", publication: await this.revoke(command.publicationId) };
+        return { kind: "publication", publication: await this.revoke(input.orgId, command.publicationId) };
       case "create_share":
         await this.createShare(input.orgId, command);
         return { kind: "share_created", shareId: command.shareId, publicationId: command.publicationId };
@@ -119,7 +114,7 @@ export class DesignEcosystemService {
     orgId: string,
     command: Extract<DesignEcosystemCommand, { type: "publish" }>,
   ): Promise<DesignPublicationV1> {
-    const source = await runWithOrgScope(this.pool, orgId, async (client) => {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<{ contract_digest: string; manifest_digest: string }>(
         `SELECT release.contract_digest, artifact.digest AS manifest_digest
            FROM design_system_releases release
@@ -128,19 +123,17 @@ export class DesignEcosystemService {
           WHERE release.org_id = $1 AND release.id = $2 AND release.state = 'published'`,
         [orgId, command.releaseId],
       );
-      const row = result.rows[0];
-      if (row === undefined) throw new DesignEcosystemError("not_found", "published source release unavailable");
-      return row;
-    });
-    return runWithSystemScope(this.pool, async (client) => {
+      const source = result.rows[0];
+      if (source === undefined) throw new DesignEcosystemError("not_found", "published source release unavailable");
       await client.query(
         `INSERT INTO published_design_system_releases
-           (publication_id, public_slug, source_release_digest, manifest_digest,
+           (publication_id, source_org_id, public_slug, source_release_digest, manifest_digest,
             safe_preview_digest, license, attribution, state, revoked_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'published', NULL, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'published', NULL, now())
          ON CONFLICT (publication_id) DO NOTHING`,
         [
           command.publicationId,
+          orgId,
           command.publicSlug,
           source.contract_digest,
           source.manifest_digest,
@@ -149,15 +142,17 @@ export class DesignEcosystemService {
           JSON.stringify(command.attribution),
         ],
       );
-      const result = await client.query<PublicRow>(
+      const publicationResult = await client.query<PublicRow>(
         `SELECT publication_id, public_slug, source_release_digest, manifest_digest,
                 safe_preview_digest, license, attribution, state
-           FROM published_design_system_releases WHERE publication_id = $1`,
-        [command.publicationId],
+           FROM published_design_system_releases
+          WHERE publication_id = $1 AND source_org_id = $2`,
+        [command.publicationId, orgId],
       );
-      const row = result.rows[0];
-      if (row === undefined) throw new DesignEcosystemError("blocked", "publication was not readable after write");
-      const publication = publicRow(row);
+      const publicationRow = publicationResult.rows[0];
+      if (publicationRow === undefined)
+        throw new DesignEcosystemError("not_found", "publication is not owned by this organization");
+      const publication = publicRow(publicationRow);
       const requested = DesignPublicationV1Schema.parse({
         version: 1,
         schemaVersion: "design_publication.v1",
@@ -177,15 +172,15 @@ export class DesignEcosystemService {
     });
   }
 
-  private async revoke(publicationId: string): Promise<DesignPublicationV1> {
-    return runWithSystemScope(this.pool, async (client) => {
+  private async revoke(orgId: string, publicationId: string): Promise<DesignPublicationV1> {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<PublicRow>(
         `UPDATE published_design_system_releases
             SET state = 'revoked', revoked_at = now(), updated_at = now()
-          WHERE publication_id = $1 AND state = 'published' AND revoked_at IS NULL
+          WHERE publication_id = $1 AND source_org_id = $2 AND state = 'published' AND revoked_at IS NULL
         RETURNING publication_id, public_slug, source_release_digest, manifest_digest,
                   safe_preview_digest, license, attribution, state`,
-        [publicationId],
+        [publicationId, orgId],
       );
       const row = result.rows[0];
       if (row === undefined) throw new DesignEcosystemError("not_found", "published publication unavailable");
@@ -197,11 +192,15 @@ export class DesignEcosystemService {
     orgId: string,
     command: Extract<DesignEcosystemCommand, { type: "create_share" }>,
   ): Promise<void> {
-    const publication = await this.readPublic(command.publicationId);
-    if (publication.releaseDigest !== command.releaseDigest) {
-      throw new DesignEcosystemError("not_found", "publication digest unavailable");
-    }
     await runWithOrgScope(this.pool, orgId, async (client) => {
+      const publication = await client.query<{ source_release_digest: string }>(
+        `SELECT source_release_digest FROM published_design_system_releases
+          WHERE publication_id = $1 AND source_org_id = $2 AND state = 'published' AND revoked_at IS NULL`,
+        [command.publicationId, orgId],
+      );
+      if (publication.rows[0]?.source_release_digest !== command.releaseDigest) {
+        throw new DesignEcosystemError("not_found", "publication is not owned by the sharing organization");
+      }
       const source = await client.query<{ id: string }>(
         `SELECT id FROM design_system_releases
           WHERE org_id = $1 AND id = $2 AND contract_digest = $3 AND state = 'published'`,
@@ -289,6 +288,7 @@ export class DesignEcosystemService {
             AND share.expires_at > now()
             AND share.redemption_count < share.redemption_limit
             AND publication.publication_id = share.publication_id
+            AND publication.source_org_id = share.org_id
             AND publication.source_release_digest = share.source_release_digest
             AND publication.state = 'published'
             AND publication.revoked_at IS NULL

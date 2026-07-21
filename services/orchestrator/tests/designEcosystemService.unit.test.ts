@@ -38,6 +38,7 @@ function fakePool(
         ? { rows: [{ permission: "fork", publication_id: "pub_a", source_release_digest: DIGEST }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
     }
+    if (sql.includes("UPDATE published_design_system_releases")) return { rows: [], rowCount: 0 };
     if (sql.includes("INSERT INTO design_system_grants")) {
       return {
         rows: [{ id: "grant_a", publication_id: "pub_a", allowed_release_digest: DIGEST, capability: "fork" }],
@@ -138,6 +139,21 @@ describe("DesignEcosystemService fail-closed controls", () => {
       }),
     ).rejects.toMatchObject({ code: "not_found" } satisfies Partial<DesignEcosystemError>);
     expect(query.mock.calls.some(([sql]) => sql.includes("INSERT INTO design_share_links"))).toBe(false);
+  });
+
+  it("fails closed when a foreign organization tries to revoke a publication", async () => {
+    const { pool, query } = fakePool();
+    await expect(
+      new DesignEcosystemService(pool).execute({
+        orgId: "org_b",
+        actorId: "admin_b",
+        idempotencyKey: "foreign-revoke",
+        command: { type: "revoke_publication", publicationId: "pub_a" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" } satisfies Partial<DesignEcosystemError>);
+    const call = query.mock.calls.find(([sql]) => sql.includes("UPDATE published_design_system_releases"));
+    expect(call?.[0]).toContain("source_org_id = $2");
+    expect(call?.[1]).toEqual(["pub_a", "org_b"]);
   });
 
   it("records a lossy Figma snapshot as rejected and emits no candidate/fork success event", async () => {

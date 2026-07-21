@@ -24187,6 +24187,12 @@
           "primaryKey": true,
           "notNull": true
         },
+        "source_org_id": {
+          "name": "source_org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "public_slug": {
           "name": "public_slug",
           "type": "text",
@@ -24268,7 +24274,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "published_design_system_releases_source_org_id_organizations_id_fk": {
+          "name": "published_design_system_releases_source_org_id_organizations_id_fk",
+          "tableFrom": "published_design_system_releases",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "source_org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {
@@ -24280,6 +24300,34 @@
             "public"
           ],
           "using": "\"published_design_system_releases\".\"state\" = 'published' AND \"published_design_system_releases\".\"revoked_at\" IS NULL"
+        },
+        "published_design_system_releases_source_org_insert": {
+          "name": "published_design_system_releases_source_org_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "\"published_design_system_releases\".\"source_org_id\" = current_setting('app.current_org_id', true)"
+        },
+        "published_design_system_releases_source_org_update": {
+          "name": "published_design_system_releases_source_org_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": [
+            "public"
+          ],
+          "using": "\"published_design_system_releases\".\"source_org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"published_design_system_releases\".\"source_org_id\" = current_setting('app.current_org_id', true)"
+        },
+        "published_design_system_releases_source_org_delete": {
+          "name": "published_design_system_releases_source_org_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": [
+            "public"
+          ],
+          "using": "\"published_design_system_releases\".\"source_org_id\" = current_setting('app.current_org_id', true)"
         }
       },
       "checkConstraints": {

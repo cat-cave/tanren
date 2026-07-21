@@ -29,14 +29,17 @@ function ecosystemOrgIsolationPolicy(orgId: AnyPgColumn) {
 }
 
 /**
- * Sanitized, system-owned release projection. It deliberately has no source org,
- * release id, artifact id, object key, or any FK into a private source table.
- * The sole app-role access is a positive published-and-not-revoked SELECT.
+ * Sanitized, system-owned release projection. `source_org_id` is mutation
+ * authority only and never appears in the sanitized public service response;
+ * it otherwise has no private release/artifact/object-store coordinate.
  */
 export const publishedDesignSystemReleases = pgTable(
   "published_design_system_releases",
   {
     publicationId: text("publication_id").primaryKey(),
+    sourceOrgId: text("source_org_id")
+      .notNull()
+      .references(() => organizations.id),
     publicSlug: text("public_slug").notNull(),
     sourceReleaseDigest: text("source_release_digest").notNull(),
     manifestDigest: text("manifest_digest").notNull(),
@@ -68,6 +71,19 @@ export const publishedDesignSystemReleases = pgTable(
     pgPolicy("published_design_system_releases_public_read", {
       for: "select",
       using: sql`${table.state} = 'published' AND ${table.revokedAt} IS NULL`,
+    }),
+    pgPolicy("published_design_system_releases_source_org_insert", {
+      for: "insert",
+      withCheck: sql`${table.sourceOrgId} = current_setting('app.current_org_id', true)`,
+    }),
+    pgPolicy("published_design_system_releases_source_org_update", {
+      for: "update",
+      using: sql`${table.sourceOrgId} = current_setting('app.current_org_id', true)`,
+      withCheck: sql`${table.sourceOrgId} = current_setting('app.current_org_id', true)`,
+    }),
+    pgPolicy("published_design_system_releases_source_org_delete", {
+      for: "delete",
+      using: sql`${table.sourceOrgId} = current_setting('app.current_org_id', true)`,
     }),
   ],
 ).enableRLS();

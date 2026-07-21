@@ -1,7 +1,7 @@
 // ds-8 — destination Studio projection. Only sanitized publication lineage is
 // joined; no source release/artifact/object-store coordinate is ever returned.
 
-import { runWithSystemScope } from "@tanren/db";
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { ExternalDesignImportReceiptV1Schema, type ExternalDesignImportReceiptV1 } from "./designEcosystemContracts.js";
 import { DesignEcosystemError } from "./designEcosystemService.js";
@@ -28,9 +28,9 @@ export interface DesignEcosystemStudioView {
 export class DesignEcosystemReadStore {
   constructor(private readonly pool: pg.Pool) {}
 
-  /** System scope is narrow and explicit; all three statements constrain destination org. */
+  /** Destination-owned Studio rows must be read in their tenant RLS scope. */
   async listStudio(orgId: string): Promise<DesignEcosystemStudioView> {
-    return runWithSystemScope(this.pool, async (client) => {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
       const grants = await client.query<{
         id: string;
         capability: string;
@@ -39,11 +39,11 @@ export class DesignEcosystemReadStore {
         state: string | null;
         revoked_at: Date | string | null;
       }>(
-        `SELECT grant.id, grant.capability, grant.expires_at, publication.public_slug,
+        `SELECT design_grant.id, design_grant.capability, design_grant.expires_at, publication.public_slug,
                 publication.state, publication.revoked_at
-           FROM design_system_grants grant
-           LEFT JOIN published_design_system_releases publication ON publication.publication_id = grant.publication_id
-          WHERE grant.org_id = $1 ORDER BY grant.created_at DESC, grant.id ASC`,
+           FROM design_system_grants design_grant
+           LEFT JOIN published_design_system_releases publication ON publication.publication_id = design_grant.publication_id
+          WHERE design_grant.org_id = $1 ORDER BY design_grant.created_at DESC, design_grant.id ASC`,
         [orgId],
       );
       const imports = await client.query<{

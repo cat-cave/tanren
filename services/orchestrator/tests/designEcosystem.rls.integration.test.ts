@@ -2,11 +2,16 @@
 // redeem a live share before it owns any grant, and can never bind org A's row.
 
 import { createHash } from "node:crypto";
+import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
+import type { ActorContext } from "../src/auth/schemas.js";
 import { DesignEcosystemService } from "../src/engine/design/system/designEcosystemService.js";
+import { InMemorySecretStore } from "../src/engine/contracts/index.js";
 import { DesignBindingTargetError, DesignStudioStore } from "../src/engine/design/system/designStudioStore.js";
+import { mountFeatureRoutes } from "../src/mountFeatureRoutes.js";
+import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -21,6 +26,13 @@ const PUBLICATION = "publication_ds8";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const MANIFEST = `sha256:${"b".repeat(64)}`;
 const TOKEN = "cross-org-share-token-with-enough-entropy-12345";
+const ORG_B_ADMIN: ActorContext = {
+  userId: "admin_b",
+  orgId: ORG_B,
+  projectId: null,
+  scopes: ["org:admin"],
+  source: "local_dev",
+};
 
 function databaseName(): string {
   return `tanren_ds8_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -38,11 +50,30 @@ function hash(token: string): string {
   return `sha256:${createHash("sha256").update(token, "utf8").digest("hex")}`;
 }
 
+function mountedEcosystemApp(pool: Pool): Hono<ActorContextEnv> {
+  const app = new Hono<ActorContextEnv>();
+  app.use("*", createAuthMiddleware({ store: {} as never, localDevActor: ORG_B_ADMIN }));
+  mountFeatureRoutes(app, {
+    pool,
+    secrets: new InMemorySecretStore(),
+    githubHttp: {} as never,
+    githubAppMinter: {} as never,
+    credentialRegistry: {} as never,
+    configGateGithub: {} as never,
+    vaultHealthCheck: async () => ({ ok: true, status: 200 }),
+    allocator: {} as never,
+    ssh: {} as never,
+    identitySecretRef: "identity/ds8-test",
+  });
+  return app;
+}
+
 describeDb("ds-8 ecosystem RLS cross-org isolation", () => {
   const database = databaseName();
   let owner: Pool;
   let runtime: Pool;
   let service: DesignEcosystemService;
+  let app: Hono<ActorContextEnv>;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -77,9 +108,9 @@ describeDb("ds-8 ecosystem RLS cross-org isolation", () => {
     });
     await owner.query(
       `INSERT INTO published_design_system_releases
-         (publication_id,public_slug,source_release_digest,manifest_digest,safe_preview_digest,license,attribution,state)
-       VALUES ($1,'public-console',$2,$3,$4,'MIT','{"notice":"example"}'::jsonb,'published')`,
-      [PUBLICATION, DIGEST, MANIFEST, MANIFEST],
+         (publication_id,source_org_id,public_slug,source_release_digest,manifest_digest,safe_preview_digest,license,attribution,state)
+       VALUES ($1,$2,'public-console',$3,$4,$5,'MIT','{"notice":"example"}'::jsonb,'published')`,
+      [PUBLICATION, ORG_A, DIGEST, MANIFEST, MANIFEST],
     );
     await runWithOrgScope(runtime, ORG_A, (client) =>
       client.query(
@@ -92,6 +123,7 @@ describeDb("ds-8 ecosystem RLS cross-org isolation", () => {
       ),
     );
     service = new DesignEcosystemService(runtime);
+    app = mountedEcosystemApp(runtime);
   }, 60_000);
 
   afterAll(async () => {
@@ -129,6 +161,47 @@ describeDb("ds-8 ecosystem RLS cross-org isolation", () => {
         boundBy: "attacker",
       }),
     ).rejects.toBeInstanceOf(DesignBindingTargetError);
+  });
+
+  it("NEGATIVE — mounted route blocks a foreign revoke and RLS hides org A Studio rows", async () => {
+    await runWithOrgScope(runtime, ORG_A, async (client) => {
+      await client.query(
+        `INSERT INTO design_system_grants
+           (org_id,id,idempotency_key,publication_id,allowed_release_digest,capability,expires_at,revoked_at,import_policy)
+         VALUES ($1,'grant_a','grant-a-key',$2,$3,'fork','2030-01-01T00:00:00.000Z',NULL,'{}'::jsonb)`,
+        [ORG_A, PUBLICATION, DIGEST],
+      );
+      await client.query(
+        `INSERT INTO design_imports
+           (org_id,id,publication_id,source_release_digest,design_system_id,release_id,attribution,sync_policy,last_seen_upstream)
+         VALUES ($1,'import_a',$2,$3,$4,$5,'{}'::jsonb,'immutable_fork','upstream-a')`,
+        [ORG_A, PUBLICATION, DIGEST, SYSTEM, RELEASE],
+      );
+      await client.query(
+        `INSERT INTO design_external_imports
+           (org_id,id,source,locator,external_revision,snapshot_digest,receipt_digest,receipt,disposition)
+         VALUES ($1,'external_a','figma','figma://file/a','rev-a',$2,$2,'{}'::jsonb,'candidate')`,
+        [ORG_A, DIGEST],
+      );
+    });
+    const beforeEvents = await owner.query(`SELECT id FROM events WHERE org_id = $1`, [ORG_A]);
+    const revoked = await app.request(`/v1/orgs/${ORG_B}/design-ecosystem/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "foreign-revoke" },
+      body: JSON.stringify({ type: "revoke_publication", publicationId: PUBLICATION }),
+    });
+    expect(revoked.status).toBe(404);
+    expect(await revoked.json()).toEqual({ error: "not_found" });
+    const publication = await owner.query<{ state: string; revoked_at: Date | null }>(
+      `SELECT state, revoked_at FROM published_design_system_releases WHERE publication_id = $1`,
+      [PUBLICATION],
+    );
+    expect(publication.rows).toEqual([{ state: "published", revoked_at: null }]);
+    expect(await owner.query(`SELECT id FROM events WHERE org_id = $1`, [ORG_A])).toEqual(beforeEvents);
+
+    const studio = await app.request(`/v1/orgs/${ORG_B}/design-ecosystem`);
+    expect(studio.status).toBe(200);
+    expect(await studio.json()).toMatchObject({ grants: [], imports: [], externalImports: [] });
   });
 
   it("POSITIVE — the public GET remains sanitized; redeem atomically creates only a destination grant", async () => {

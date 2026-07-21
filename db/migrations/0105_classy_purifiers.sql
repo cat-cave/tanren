@@ -79,6 +79,7 @@ CREATE TABLE "design_system_grants" (
 ALTER TABLE "design_system_grants" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE TABLE "published_design_system_releases" (
 	"publication_id" text PRIMARY KEY NOT NULL,
+	"source_org_id" text NOT NULL,
 	"public_slug" text NOT NULL,
 	"source_release_digest" text NOT NULL,
 	"manifest_digest" text NOT NULL,
@@ -110,6 +111,7 @@ ALTER TABLE "design_share_links" ADD CONSTRAINT "design_share_links_publication_
 ALTER TABLE "design_share_links" ADD CONSTRAINT "design_share_links_source_release_fk" FOREIGN KEY ("org_id","source_release_id") REFERENCES "public"."design_system_releases"("org_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "design_system_grants" ADD CONSTRAINT "design_system_grants_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "design_system_grants" ADD CONSTRAINT "design_system_grants_publication_fk" FOREIGN KEY ("publication_id") REFERENCES "public"."published_design_system_releases"("publication_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "published_design_system_releases" ADD CONSTRAINT "published_design_system_releases_source_org_id_organizations_id_fk" FOREIGN KEY ("source_org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "design_external_imports_org_id" ON "design_external_imports" USING btree ("org_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "design_external_imports_org_source_locator_revision_unique" ON "design_external_imports" USING btree ("org_id","source","locator","external_revision");--> statement-breakpoint
 CREATE INDEX "design_imports_org_id" ON "design_imports" USING btree ("org_id");--> statement-breakpoint
@@ -126,6 +128,9 @@ CREATE POLICY "rls_org_isolation" ON "design_imports" AS PERMISSIVE FOR ALL TO p
 CREATE POLICY "rls_org_isolation" ON "design_share_links" AS PERMISSIVE FOR ALL TO public USING ("design_share_links"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("design_share_links"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "design_system_grants" AS PERMISSIVE FOR ALL TO public USING ("design_system_grants"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("design_system_grants"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 CREATE POLICY "published_design_system_releases_public_read" ON "published_design_system_releases" AS PERMISSIVE FOR SELECT TO public USING ("published_design_system_releases"."state" = 'published' AND "published_design_system_releases"."revoked_at" IS NULL);--> statement-breakpoint
+CREATE POLICY "published_design_system_releases_source_org_insert" ON "published_design_system_releases" AS PERMISSIVE FOR INSERT TO public WITH CHECK ("published_design_system_releases"."source_org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
+CREATE POLICY "published_design_system_releases_source_org_update" ON "published_design_system_releases" AS PERMISSIVE FOR UPDATE TO public USING ("published_design_system_releases"."source_org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("published_design_system_releases"."source_org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
+CREATE POLICY "published_design_system_releases_source_org_delete" ON "published_design_system_releases" AS PERMISSIVE FOR DELETE TO public USING ("published_design_system_releases"."source_org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 ALTER TABLE "published_design_system_releases" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "design_share_links" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "design_system_grants" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
