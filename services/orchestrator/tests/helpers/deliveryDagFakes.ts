@@ -33,6 +33,13 @@ export class RecordingEventStore implements EventStore {
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
     this.appended.push(input);
   }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async appendPriorIfAbsent<N extends EventName>(
+    input: AppendEventInput<N> & { idempotencyKey: string },
+  ): Promise<boolean> {
+    this.appended.push(input);
+    return true;
+  }
 }
 
 /** A fully-configurable fake signal port (every value defaults to the no-op path). */
@@ -83,6 +90,8 @@ export function stagesDeps(overrides: Partial<DeliveryStageDeps> = {}): {
     demoRunner: fakeRunner(),
     saga: { driveForOrg: async () => ({ stateUnknown: 0, needsAttention: 0 }) },
     bindingSetSealer: { seal: async () => ({ kind: "sealed", count: 0 }) },
+    runtimeAttachmentRecorder: { record: async () => {} },
+    integrationEvidenceAttester: { attest: async () => ({ kind: "sealed", count: 0 }) },
     evidence: { eventStore: events, signer: contentAddressedEvidenceSigner },
     demoGate: fakeGate(),
     ...overrides,

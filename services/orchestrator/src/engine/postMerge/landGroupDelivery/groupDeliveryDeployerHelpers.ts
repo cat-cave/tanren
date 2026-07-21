@@ -47,6 +47,7 @@ export function groupDeployVerifiedPayload(
     provider: target.provider,
     appId: target.appId,
     deploymentId: verified.deploymentId,
+    sourceRef: plan.mainSha,
     url: verified.url,
     state: verified.state,
     smokeStatus: verified.smokeStatus,

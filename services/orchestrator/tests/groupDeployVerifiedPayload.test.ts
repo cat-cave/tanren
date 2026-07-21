@@ -48,6 +48,7 @@ describe("groupDeployVerifiedPayload — the group's deploy.verified shape (Find
     expect(payload.appId).toBe("app-1");
     // the promoted (live) deployment mq-15 binds release_instances on
     expect(payload.deploymentId).toBe("dep-prod");
+    expect(payload.sourceRef).toBe("sha-main");
     expect(payload.url).toBe("https://app-1.example.com");
     expect(payload.state).toBe("READY");
     expect(payload.smokeStatus).toBe(200);

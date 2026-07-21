@@ -92,6 +92,12 @@ export interface PgProofSubstrateOptions {
   readonly signingKeyRef?: string;
 }
 
+export type DsseEnvelopeSignature = {
+  readonly keyId: string;
+  readonly signature: string;
+  readonly publicKeyPem: string;
+};
+
 export class PgProofSubstrate implements ProofSubstrate {
   private readonly casByteStore: CasByteStore;
   private readonly signingKeyRef: string;
@@ -168,6 +174,25 @@ export class PgProofSubstrate implements ProofSubstrate {
     });
     const rootSignature = new Uint8Array(ed25519Sign(null, message, key.privateKey));
     return { signingKeyId: key.signingKeyId, rootSignature };
+  }
+
+  /**
+   * Sign a DSSE pre-authenticated payload with the SAME platform ed25519 key
+   * used for proof bundles. This deliberately adds no parallel signer; the
+   * portable integration-evidence envelope merely exposes the existing key's
+   * public half so an offline CLI can recompute its signature.
+   */
+  public async signDsse(input: {
+    readonly payloadType: string;
+    readonly payload: Uint8Array;
+  }): Promise<DsseEnvelopeSignature> {
+    const key = await resolveSigningKey(this.secrets, this.signingKeyRef);
+    const message = dssePreAuthEncoding(input.payloadType, input.payload);
+    return {
+      keyId: key.signingKeyId,
+      signature: Buffer.from(ed25519Sign(null, message, key.privateKey)).toString("base64url"),
+      publicKeyPem: key.publicKey.export({ type: "spki", format: "pem" }),
+    };
   }
 
   public async constructBundle(input: {
@@ -382,6 +407,19 @@ export class PgProofSubstrate implements ProofSubstrate {
       members: bundle.members,
     };
   }
+}
+
+/** DSSE v1 pre-authenticated encoding, exported for the standalone verifier contract. */
+export function dssePreAuthEncoding(payloadType: string, payload: Uint8Array): Uint8Array {
+  const type = new TextEncoder().encode(payloadType);
+  const prefix = new TextEncoder().encode(`DSSEv1 ${String(type.byteLength)} `);
+  const middle = new TextEncoder().encode(` ${String(payload.byteLength)} `);
+  const message = new Uint8Array(prefix.byteLength + type.byteLength + middle.byteLength + payload.byteLength);
+  message.set(prefix, 0);
+  message.set(type, prefix.byteLength);
+  message.set(middle, prefix.byteLength + type.byteLength);
+  message.set(payload, prefix.byteLength + type.byteLength + middle.byteLength);
+  return message;
 }
 
 function errorMessage(error: unknown): string {

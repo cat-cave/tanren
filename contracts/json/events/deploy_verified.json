@@ -69,6 +69,9 @@
       "minimum": -9007199254740991,
       "type": "integer"
     },
+    "sourceRef": {
+      "type": "string"
+    },
     "state": {
       "type": "string"
     },

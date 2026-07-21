@@ -240,6 +240,33 @@ describe("record_evidence stage (the fail-closed completion gate)", () => {
     expect(ev?.eventType).toBe("delivery.completed");
     expect(ev?.payload).toMatchObject({ deliveryRunId: "d-2", observedEffect: "demo_observed", deploymentId: "dep-9" });
   });
+  it("DECISIVE: a byte-mismatch refusal emits no completed attestation", async () => {
+    let attestations = 0;
+    const { deps, events } = stagesDeps({
+      signals: fakeSignals({
+        releaseRequiredA3Count: async () => ({ required: 1, confirmed: 1 }),
+        deployReach: async () => "verified",
+        demoReach: async () => "observed",
+        verifiedDeploymentId: async () => "dep-9",
+      }),
+      integrationEvidenceAttester: {
+        attest: async () => {
+          attestations += 1;
+          return { kind: "blocked", classification: "correlation_join_mismatch", detail: "deploy SHA differs" };
+        },
+      },
+    });
+    const out = await new DeliveryStages(deps).run(
+      "record_evidence",
+      lineage,
+      "d-byte-mismatch",
+      newDriveMemo(),
+      "claim-1",
+    );
+    expect(out).toMatchObject({ kind: "degraded", classification: "integration_evidence_correlation_join_mismatch" });
+    expect(attestations).toBe(1);
+    expect(events.appended).toHaveLength(0);
+  });
   it("does not double-emit on resume when the attestation already exists", async () => {
     const { deps, events } = stagesDeps({ signals: fakeSignals({ deliveryCompletedExists: async () => true }) });
     expect(

@@ -6,6 +6,7 @@ import type pg from "pg";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { VaultTokenMinter } from "../../contracts/vaultTokenMinter.js";
+import type { IntegrationEvidenceDsseSigner } from "./integrationEvidenceAttester.js";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import { PgEventStore } from "../../eventStore.js";
 import { ReconciliationSagaDriver } from "../../integrations/reconciliationSaga.js";
@@ -15,6 +16,9 @@ import { DeliveryDagDriver } from "./deliveryDagDriver.js";
 import { contentAddressedEvidenceSigner } from "./deliveryEvidence.js";
 import { PgDeliverySignals } from "./deliverySignals.js";
 import { PgDeliveryBindingSetSealer } from "./deliveryBindingSet.js";
+import { PgIntegrationRuntimeAttachmentRecorder } from "./integrationRuntimeAttachment.js";
+import { IntegrationEvidenceAttester } from "./integrationEvidenceAttester.js";
+import { PgIntegrationEvidenceReaders } from "./integrationEvidence.js";
 
 export function buildDeliveryDagDriver(deps: {
   pool: pg.Pool;
@@ -23,6 +27,8 @@ export function buildDeliveryDagDriver(deps: {
   deployWatcher: RunMergeWatcher;
   /** The idempotent demo-on-deploy watcher — the delivery DAG's demo-cluster effect runner. */
   demoWatcher: RunMergeWatcher;
+  /** The shared production ed25519 substrate; integration evidence must not invent a signer. */
+  proofSubstrate: IntegrationEvidenceDsseSigner;
   runStateWriter?: RunStateWriter;
   /** Optional activation-scoped Vault lease minter; absent ⇒ mint_lease no-ops unless product secrets exist. */
   minter?: VaultTokenMinter;
@@ -40,6 +46,12 @@ export function buildDeliveryDagDriver(deps: {
     saga,
     bindingSetSealer: new PgDeliveryBindingSetSealer(deps.pool),
     evidence: { eventStore, signer: contentAddressedEvidenceSigner },
+    runtimeAttachmentRecorder: new PgIntegrationRuntimeAttachmentRecorder(deps.pool, eventStore),
+    integrationEvidenceAttester: new IntegrationEvidenceAttester(
+      deps.pool,
+      new PgIntegrationEvidenceReaders(deps.pool),
+      deps.proofSubstrate,
+    ),
     // A DISTINCT advisory-lock namespace from the deploy trigger gate so the demo effect
     // and the deploy trigger never contend on one lock.
     demoGate: new PgDeployTriggerGate(deps.pool, "delivery.demo"),

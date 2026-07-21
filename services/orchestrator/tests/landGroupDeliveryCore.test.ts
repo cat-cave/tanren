@@ -195,12 +195,12 @@ describe("runGroupDelivery — fail-closed group delivery", () => {
     expect(outcome.state).toBe("completed");
   });
 
-  it("A3 negative control: an unsealed member binding blocks completion before the production trigger", async () => {
+  it("A3 negative control: an unsealed member binding blocks promotion before the production trigger", async () => {
     const deployer = new FakeDeployer();
     const outcome = await drive(deployer, UNATTRIBUTED, new FakeA3Gate({ seal: "blocked" }));
     expect(deployer.calls).not.toContain("demo:production");
-    expect(outcome.state).toBe("needs_attention");
-    expect(outcome.productionReleaseInstanceId).toBe("rel-prod");
+    expect(outcome.state).toBe("preview_failed");
+    expect(outcome.productionReleaseInstanceId).toBeNull();
   });
 
   it("A3 negative control: an unobserved member effect blocks completion after the production trigger", async () => {

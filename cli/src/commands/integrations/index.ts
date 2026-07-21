@@ -4,8 +4,10 @@
 // consumes; RLS on the orchestrator side confines every read to the caller's
 // org, so a cross-org invocation returns 403 (no data leaks).
 
+import { readFile } from "node:fs/promises";
 import { request } from "../../httpClient.js";
-import { jsonOutput, parseArgs, required } from "../args.js";
+import { jsonOutput, optional, parseArgs, required } from "../args.js";
+import { verifyIntegrationEvidenceDocument } from "./verifyEvidence.js";
 
 /** Common path prefix for the in-20 surface. */
 function scopePath(orgId: string, projectId: string): string {
@@ -55,4 +57,32 @@ export async function integrationsDelivery(argv: string[]): Promise<void> {
   const projectId = required(args, "project-id");
   const result = await request(`${scopePath(orgId, projectId)}/delivery`);
   jsonOutput(args, result);
+}
+
+/** `tanren integrations verify-evidence <integration-evidence.v1.dsse.json>` */
+export async function integrationsVerifyEvidence(argv: string[]): Promise<void> {
+  const args = parseArgs(argv);
+  const path = optional(args, "bundle") ?? args._[0];
+  if (path === undefined)
+    throw new Error("usage: tanren integrations verify-evidence <bundle.json> (or --bundle <path>)");
+  let document: unknown;
+  try {
+    document = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    console.log(
+      JSON.stringify(
+        {
+          valid: false,
+          structuralError: `evidence bundle is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const result = verifyIntegrationEvidenceDocument(document);
+  console.log(JSON.stringify({ bundle: path, ...result }, null, 2));
+  if (!result.valid) process.exitCode = 1;
 }

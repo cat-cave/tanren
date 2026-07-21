@@ -76,6 +76,11 @@ export const DeployVerifiedPayload = z
     appId: z.string(),
     /** The provider's deployment handle the verify polled (Vercel deployment id / Fly machine id). */
     deploymentId: z.string(),
+    /**
+     * Authorized merge SHA for a group-production deployment. Per-run deployments bind this
+     * coordinate in their preceding `deploy.triggered` event instead.
+     */
+    sourceRef: z.string().optional(),
     /** The resolved live URL the deployment is reachable at (concrete, no placeholder). */
     url: z.string(),
     /** The provider's final READY state (e.g. "READY" | "started"). */

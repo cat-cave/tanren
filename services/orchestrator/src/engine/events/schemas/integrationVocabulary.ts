@@ -212,7 +212,12 @@ export const IntegrationRuntimeAttachedPayload = z
     bindingId: Id,
     environment: Environment,
     generation: Generation,
-    deploymentId: Id,
+    /** The exact delivery outbox coordinate that sealed this generation. */
+    deliveryRunId: Id,
+    /** The authorized merged commit the later deployment must release. */
+    deploySha: z.string().regex(/^[0-9a-fA-F]{40}$/u),
+    /** Legacy deployments may have emitted a provider handle after attachment. */
+    deploymentId: Id.optional(),
     keys: z.array(KeyName).max(256),
   })
   .strict();

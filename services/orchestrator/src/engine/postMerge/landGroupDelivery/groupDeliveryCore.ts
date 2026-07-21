@@ -392,8 +392,13 @@ async function driveFromVerifiedPreview(deps: {
     await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
     return previewFailed();
   }
-
-  // 5. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production (INTENT-MARKED,
+  // 5. Seal and attach the production generation before deploying it.
+  await beat();
+  if ((await a3Gate.seal(plan)).kind === "blocked") {
+    await deployer.teardownPreview({ plan, target, previewDeploymentId: preview.previewDeploymentId });
+    return previewFailed();
+  }
+  // 6. Preview verified AND proof-backed demo passed ⇒ PROMOTE to production (INTENT-MARKED,
   //    Finding A). An AMBIGUOUS promote (intent present without a committed live release — the
   //    external promote MAY have fired for a dead owner) ⇒ DEGRADE to needs_attention, NEVER
   //    re-fire (a double production deploy is unacceptable; a conservative degrade is not). The
@@ -412,14 +417,8 @@ async function driveFromVerifiedPreview(deps: {
     return ambiguousDegrade(artifact.artifactDigest, preview.release.releaseInstanceId);
   }
   const production = promoteOutcome.production;
-
-  // 6. Seal the shared delivery coordinate before the production A3 trigger; absent/ambiguous bindings block completion.
-  await beat();
-  const a3Sealed = await a3Gate.seal(plan);
-  let productionDemo: GroupDemoOutcome =
-    a3Sealed.kind === "confirmed"
-      ? await deployer.demo({ plan, target, release: production.release, environment: "production" })
-      : { ok: false, reason: a3Sealed.reason };
+  // 7. The production demo now exercises the canonical in-19 A3 path.
+  let productionDemo = await deployer.demo({ plan, target, release: production.release, environment: "production" });
   if (productionDemo.ok) {
     // The production demo has fired and independently observed its effects. Count only
     // exact, single-occurrence A3 evidence at the sealed coordinate before final success.

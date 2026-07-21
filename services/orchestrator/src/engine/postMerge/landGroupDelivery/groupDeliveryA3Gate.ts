@@ -13,6 +13,8 @@ import { appendDeliveryCompleted, recordDeliveryDegraded } from "../delivery/del
 import type { DeliveryBindingSetSealer } from "../delivery/deliveryBindingSet.js";
 import type { ClaimedDeliveryRun } from "../delivery/deliveryRunStore.js";
 import type { DeliverySignals } from "../delivery/deliverySignals.js";
+import type { IntegrationEvidenceAttestationResult } from "../delivery/integrationEvidenceAttester.js";
+import type { IntegrationRuntimeAttachmentRecorder } from "../delivery/integrationRuntimeAttachment.js";
 import type { DeliveryLineage } from "../delivery/stageModel.js";
 import type { GroupDeliveryPlan } from "./groupDeliveryCore.js";
 
@@ -47,7 +49,15 @@ export interface GroupDeliveryA3CoordinateStore {
 export interface ProductionGroupDeliveryA3GateDeps {
   readonly store: GroupDeliveryA3CoordinateStore;
   readonly bindingSetSealer: DeliveryBindingSetSealer;
+  readonly runtimeAttachmentRecorder: IntegrationRuntimeAttachmentRecorder;
   readonly signals: DeliverySignals;
+  readonly integrationEvidenceAttester: {
+    attest(input: {
+      readonly lineage: DeliveryLineage;
+      readonly deliveryRunId: string;
+      readonly deploymentId: string;
+    }): Promise<IntegrationEvidenceAttestationResult>;
+  };
   readonly evidence: RecordEvidenceDeps;
   /** Exact-coordinate check prevents a crash between append and status completion from double-emitting. */
   readonly completionEvidenceExists: (lineage: DeliveryLineage, deliveryRunId: string) => Promise<boolean>;
@@ -90,6 +100,16 @@ export class ProductionGroupDeliveryA3Gate implements GroupDeliveryA3Gate {
         `${String(a3.confirmed)}/${String(a3.required)} release-required product integration effect(s) have exact independent A3 evidence`,
       );
     }
+    if (a3.required > 0) {
+      const attestation = await this.deps.integrationEvidenceAttester.attest({
+        lineage,
+        deliveryRunId: input.plan.deliveryRunId,
+        deploymentId: input.deploymentId,
+      });
+      if (attestation.kind === "blocked") {
+        return this.degrade(lineage, claimed, `integration_evidence_${attestation.classification}`, attestation.detail);
+      }
+    }
 
     if (!(await this.deps.completionEvidenceExists(lineage, input.plan.deliveryRunId))) {
       await appendDeliveryCompleted(this.deps.evidence, {
@@ -130,9 +150,24 @@ export class ProductionGroupDeliveryA3Gate implements GroupDeliveryA3Gate {
       deliveryRunId: plan.deliveryRunId,
       token: claimed.token,
     });
-    return sealed.kind === "sealed"
-      ? { kind: "confirmed" }
-      : this.degrade(lineage, claimed, "release_binding_set_unconfirmed", sealed.detail);
+    if (sealed.kind === "unavailable") {
+      return this.degrade(lineage, claimed, "release_binding_set_unconfirmed", sealed.detail);
+    }
+    try {
+      await this.deps.runtimeAttachmentRecorder.record({
+        lineage,
+        deliveryRunId: plan.deliveryRunId,
+        token: claimed.token,
+      });
+      return { kind: "confirmed" };
+    } catch (error) {
+      return this.degrade(
+        lineage,
+        claimed,
+        "integration_runtime_attachment_unconfirmed",
+        `sealed integration generation attachment was not durably recorded: ${errorMessage(error)}`,
+      );
+    }
   }
 
   private async degrade(
@@ -182,4 +217,8 @@ function lineageFor(plan: GroupDeliveryPlan): DeliveryLineage {
 
 function blocked(reason: string): GroupDeliveryA3GateResult {
   return { kind: "blocked", reason };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

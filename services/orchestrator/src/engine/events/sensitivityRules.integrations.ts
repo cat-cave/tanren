@@ -39,6 +39,7 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.verified", path: "provider", tag: "public" },
   { eventName: "deploy.verified", path: "appId", tag: "public" },
   { eventName: "deploy.verified", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.verified", path: "sourceRef", tag: "public" },
   { eventName: "deploy.verified", path: "url", tag: "public" },
   { eventName: "deploy.verified", path: "state", tag: "public" },
   { eventName: "deploy.verified", path: "smokeStatus", tag: "public" },
