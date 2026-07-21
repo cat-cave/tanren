@@ -1,6 +1,6 @@
 {
-  "id": "f4df5f7c-56b8-4489-bb1b-1fabb8ba2c4d",
-  "prevId": "abe8466d-f034-427b-95b8-f017ed50379b",
+  "id": "ed75dd4a-3b3f-49b3-bf8c-3fe640e14c08",
+  "prevId": "a254c411-96cf-472b-bacd-6bd5d815fad1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6806,6 +6806,42 @@
           "primaryKey": false,
           "notNull": false
         },
+        "policy_snapshot": {
+          "name": "policy_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "route_snapshot": {
+          "name": "route_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "priority_snapshot": {
+          "name": "priority_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_branch": {
+          "name": "target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "priority_override": {
+          "name": "priority_override",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "policy_hold_reason": {
+          "name": "policy_hold_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -6927,6 +6963,27 @@
           "method": "btree",
           "with": {}
         },
+        "merge_queue_org_queue_unique": {
+          "name": "merge_queue_org_queue_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "queue_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "merge_queue_active_run_unique": {
           "name": "merge_queue_active_run_unique",
           "columns": [
@@ -6938,7 +6995,7 @@
             }
           ],
           "isUnique": true,
-          "where": "status IN ('queued', 'merging', 'parked_grant')",
+          "where": "status IN ('queued', 'merging', 'parked_grant', 'held_policy')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -7070,7 +7127,7 @@
       "checkConstraints": {
         "merge_queue_status_check": {
           "name": "merge_queue_status_check",
-          "value": "\"merge_queue\".\"status\" IN ('queued','merging','merged','dequeued','parked_grant')"
+          "value": "\"merge_queue\".\"status\" IN ('queued','merging','merged','dequeued','parked_grant','held_policy')"
         },
         "merge_queue_dequeue_reason_check": {
           "name": "merge_queue_dequeue_reason_check",
@@ -7080,12 +7137,240 @@
           "name": "merge_queue_park_reason_check",
           "value": "\"merge_queue\".\"park_reason\" IS NULL OR \"merge_queue\".\"status\" = 'parked_grant'"
         },
+        "merge_queue_policy_hold_reason_check": {
+          "name": "merge_queue_policy_hold_reason_check",
+          "value": "\"merge_queue\".\"policy_hold_reason\" IS NULL OR \"merge_queue\".\"status\" = 'held_policy'"
+        },
         "merge_queue_lease_check": {
           "name": "merge_queue_lease_check",
           "value": "(\"merge_queue\".\"lease_owner\" IS NULL AND \"merge_queue\".\"lease_expires_at\" IS NULL) OR (\"merge_queue\".\"lease_owner\" IS NOT NULL AND \"merge_queue\".\"lease_expires_at\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
+    },
+    "public.merge_queue_commands": {
+      "name": "merge_queue_commands",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_id": {
+          "name": "policy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "command": {
+          "name": "command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_target_branch": {
+          "name": "scope_target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_queue_id": {
+          "name": "scope_queue_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "result": {
+          "name": "result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "merge_queue_commands_idempotency_unique": {
+          "name": "merge_queue_commands_idempotency_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "merge_queue_commands_org_project_created": {
+          "name": "merge_queue_commands_org_project_created",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "merge_queue_commands_org_id_organizations_id_fk": {
+          "name": "merge_queue_commands_org_id_organizations_id_fk",
+          "tableFrom": "merge_queue_commands",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_commands_project_fk": {
+          "name": "merge_queue_commands_project_fk",
+          "tableFrom": "merge_queue_commands",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_commands_policy_fk": {
+          "name": "merge_queue_commands_policy_fk",
+          "tableFrom": "merge_queue_commands",
+          "tableTo": "merge_queue_policies",
+          "columnsFrom": [
+            "org_id",
+            "policy_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_commands_queue_fk": {
+          "name": "merge_queue_commands_queue_fk",
+          "tableFrom": "merge_queue_commands",
+          "tableTo": "merge_queue",
+          "columnsFrom": [
+            "org_id",
+            "scope_queue_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "queue_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "merge_queue_commands_org_id_id_pk": {
+          "name": "merge_queue_commands_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"merge_queue_commands\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"merge_queue_commands\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "merge_queue_commands_command_check": {
+          "name": "merge_queue_commands_command_check",
+          "value": "\"merge_queue_commands\".\"command\" IN ('queue','requeue','dequeue','refresh','boost','clear-boost','pause','resume','freeze','unfreeze','drain')"
+        }
+      },
+      "isRLSEnabled": true
     },
     "public.merge_queue_holds": {
       "name": "merge_queue_holds",
@@ -7380,6 +7665,417 @@
         "merge_queue_partitions_mode_check": {
           "name": "merge_queue_partitions_mode_check",
           "value": "\"merge_queue_partitions\".\"mode\" IN ('serial','scoped','isolated')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.merge_queue_policies": {
+      "name": "merge_queue_policies",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_branch": {
+          "name": "target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "compiled_hash": {
+          "name": "compiled_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "supersedes": {
+          "name": "supersedes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "merge_queue_policies_org_version_unique": {
+          "name": "merge_queue_policies_org_version_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "merge_queue_policies_active_unique": {
+          "name": "merge_queue_policies_active_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"merge_queue_policies\".\"active\" = true",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "merge_queue_policies_org_project": {
+          "name": "merge_queue_policies_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "merge_queue_policies_org_id_organizations_id_fk": {
+          "name": "merge_queue_policies_org_id_organizations_id_fk",
+          "tableFrom": "merge_queue_policies",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_policies_project_fk": {
+          "name": "merge_queue_policies_project_fk",
+          "tableFrom": "merge_queue_policies",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_policies_supersedes_fk": {
+          "name": "merge_queue_policies_supersedes_fk",
+          "tableFrom": "merge_queue_policies",
+          "tableTo": "merge_queue_policies",
+          "columnsFrom": [
+            "org_id",
+            "supersedes"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "merge_queue_policies_org_id_id_pk": {
+          "name": "merge_queue_policies_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"merge_queue_policies\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"merge_queue_policies\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "merge_queue_policies_schema_version_check": {
+          "name": "merge_queue_policies_schema_version_check",
+          "value": "\"merge_queue_policies\".\"schema_version\" = 'queue_policy.v1'"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.merge_queue_windows": {
+      "name": "merge_queue_windows",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_id": {
+          "name": "policy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_branch": {
+          "name": "target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "intervals": {
+          "name": "intervals",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "merge_queue_windows_policy_name_unique": {
+          "name": "merge_queue_windows_policy_name_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "policy_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "merge_queue_windows_org_project": {
+          "name": "merge_queue_windows_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "merge_queue_windows_org_id_organizations_id_fk": {
+          "name": "merge_queue_windows_org_id_organizations_id_fk",
+          "tableFrom": "merge_queue_windows",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_windows_policy_fk": {
+          "name": "merge_queue_windows_policy_fk",
+          "tableFrom": "merge_queue_windows",
+          "tableTo": "merge_queue_policies",
+          "columnsFrom": [
+            "org_id",
+            "policy_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_windows_project_fk": {
+          "name": "merge_queue_windows_project_fk",
+          "tableFrom": "merge_queue_windows",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "merge_queue_windows_org_id_id_pk": {
+          "name": "merge_queue_windows_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"merge_queue_windows\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"merge_queue_windows\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "merge_queue_windows_kind_check": {
+          "name": "merge_queue_windows_kind_check",
+          "value": "\"merge_queue_windows\".\"kind\" IN ('allow','blackout')"
         }
       },
       "isRLSEnabled": true
