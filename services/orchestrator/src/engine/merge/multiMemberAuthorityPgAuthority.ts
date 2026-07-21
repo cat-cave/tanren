@@ -15,6 +15,7 @@ import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { buildAuthorityLandStore, type LandFinalizeContext } from "./mergeAuthorityLandFinalizer.js";
 import { MergeAuthorityV2Impl, subjectsEqual, type AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
 import {
+  loadCurrentQuarantineVersion,
   loadPersistedBatchDecisionSignals,
   rethrowTypedCodeHostInfrastructure,
   type PersistedBatchDecisionSignals,
@@ -44,6 +45,7 @@ export function buildPgExactBatchAuthority(input: {
       repo: input.repo,
       intoMain: input.intoMain,
       nodes: new PgIntegrationNodeModel(input.pool),
+      readQuarantineVersion: () => loadCurrentQuarantineVersion(input.pool, input.orgId, input.context.projectId),
       readDecisionSignals: () =>
         loadPersistedBatchDecisionSignals(
           input.pool,
@@ -64,6 +66,7 @@ export function buildPgExactBatchAuthority(input: {
           members: input.binding.members,
           gateConfigHash: input.binding.gateConfigHash,
           policyVersion: input.binding.policyVersion,
+          proofKeyInput: input.binding.proof.keyInput,
           gateProofBundleId: input.binding.proof.gateProofBundleId,
           proofBundleDigest: input.binding.proof.proofBundleDigest,
           proofRoot: input.binding.proof.proofRoot,
@@ -81,6 +84,8 @@ export interface PgExactBatchBindingRevalidatorDeps {
   readonly repo: CodeHostRepoRef;
   readonly intoMain: string;
   readonly nodes: PgIntegrationNodeModel;
+  /** Live active-set identity; a post-evaluation quarantine drift must block the CAS. */
+  readonly readQuarantineVersion: () => Promise<string>;
   readonly readDecisionSignals: () => Promise<PersistedBatchDecisionSignals>;
   /** Invoked immediately before the host CAS alongside every other freshness read. */
   readonly verifyGateProof: () => Promise<boolean>;
@@ -95,9 +100,10 @@ export class PgExactBatchBindingRevalidator implements LandBindingRevalidator {
       return invalid("authority received a different subject/envelope object");
     }
     const { binding } = this.deps;
-    const [node, exactGateProof, decisionSignals] = await Promise.all([
+    const [node, exactGateProof, quarantineVersion, decisionSignals] = await Promise.all([
       this.deps.nodes.findByMemberKey(this.deps.orgId, binding.memberSetHash),
       this.deps.verifyGateProof(),
+      this.deps.readQuarantineVersion(),
       this.deps.readDecisionSignals(),
     ]);
     if (
@@ -116,12 +122,15 @@ export class PgExactBatchBindingRevalidator implements LandBindingRevalidator {
     if (!exactGateProof) {
       return invalid("exact sealed V2 gate proof bundle is absent, incomplete, or stale");
     }
+    if (quarantineVersion !== binding.proof.keyInput.quarantineVersion) {
+      return invalid("active quarantine version changed after the V2 gate proof was evaluated");
+    }
     if (
       decisionSignals.gateVerdict !== "passed" ||
       decisionSignals.mergeability !== "clean" ||
       decisionSignals.conflicts !== "resolved"
     ) {
-      return invalid("V2 proof evidence no longer authorizes this integration node");
+      return invalid("live decision signals no longer authorize this integration node");
     }
     let currentMain: string | undefined;
     let memberHeads: ReadonlyArray<string | undefined>;

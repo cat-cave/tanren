@@ -90,6 +90,14 @@ function binding(): BatchAuthorityBinding {
     policyVersion: "policy-9",
     proof: {
       verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-7",
+        policyVersion: "policy-9",
+        runnerImage: "runner-review-rules",
+        appEnvHash: "env-review-rules",
+        quarantineVersion: "quarantine-review-rules",
+      },
       gateProofBundleId: "gate_proof_bundle:inode-batch-77",
       proofBundleDigest: parseDigest(`sha256:${"c".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"d".repeat(64)}`),

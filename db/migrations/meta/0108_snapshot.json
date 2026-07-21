@@ -4264,6 +4264,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "quarantine_version": {
+          "name": "quarantine_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "proof_bundle_id": {
           "name": "proof_bundle_id",
           "type": "text",

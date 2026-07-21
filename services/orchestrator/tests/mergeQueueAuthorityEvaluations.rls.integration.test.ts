@@ -191,6 +191,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
       intoMain: "main",
       nodes: new PgIntegrationNodeModel(runtimePool),
       verifyGateProof: async () => v2BundlePresent,
+      readQuarantineVersion: async () => fixtureA.binding.proof.keyInput.quarantineVersion,
       readDecisionSignals: async () => ({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" }),
     });
     const validate = () => revalidator.revalidate({ subject: fixtureA.envelope.subject, envelope: fixtureA.envelope });

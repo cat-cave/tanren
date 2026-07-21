@@ -209,6 +209,14 @@ function authorization(): { binding: BatchAuthorityBinding; authorization: LandA
     policyVersion: "policy-v1",
     proof: {
       verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-v1",
+        policyVersion: "policy-v1",
+        runnerImage: "runner-canonical-store",
+        appEnvHash: "env-canonical-store",
+        quarantineVersion: "quarantine-canonical-store",
+      },
       gateProofBundleId: "gate-proof-bundle-node-exact",
       proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),

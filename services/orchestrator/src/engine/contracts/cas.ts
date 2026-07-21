@@ -208,6 +208,16 @@ export interface CasByteStore {
 export interface BundleBindings {
   readonly integrationNodeId: string;
   readonly memberSetHash: string;
+  /**
+   * V2 native-gate identity. These five fields, together with memberSetHash,
+   * are the complete proofReuseKey coordinate whenever a gate bundle lands.
+   * Other SP-3 bundle families intentionally omit them.
+   */
+  readonly gateConfigHash?: string;
+  readonly policyVersion?: string;
+  readonly runnerImage?: string;
+  readonly appEnvHash?: string;
+  readonly quarantineVersion?: string;
   readonly preparedHeadSha: string;
   readonly jjTreeId: string;
   readonly artifactDigest: Digest;

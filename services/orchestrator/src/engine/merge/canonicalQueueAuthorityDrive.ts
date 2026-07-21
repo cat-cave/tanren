@@ -5,7 +5,7 @@
 
 // cspell:ignore rederive
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
-import { memberKey } from "../contracts/integrationNodes.js";
+import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { AuthorizeLandInput, LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import {
@@ -57,6 +57,7 @@ function hasExactCanonicalBinding(input: CanonicalQueueAuthorityLandInput): bool
         binding.members.map((member) => member.headSha),
       ) &&
     binding.proof.verdict === "passed" &&
+    hasExactProofIdentity(binding) &&
     nonBlankString(binding.gateConfigHash) &&
     nonBlankString(binding.proof.gateProofBundleId) &&
     envelope.headSha === binding.headSha &&
@@ -65,6 +66,24 @@ function hasExactCanonicalBinding(input: CanonicalQueueAuthorityLandInput): bool
     envelope.policyVersion === binding.policyVersion &&
     envelope.artifactDigest === batchArtifactDigest(binding) &&
     envelope.proofRoot === batchProofRoot(binding)
+  );
+}
+
+function hasExactProofIdentity(binding: BatchAuthorityBinding): boolean {
+  const key = binding.proof.keyInput;
+  return (
+    key.memberKey === binding.memberSetHash &&
+    key.gateConfigHash === binding.gateConfigHash &&
+    key.policyVersion === binding.policyVersion &&
+    [
+      key.memberKey,
+      key.gateConfigHash,
+      key.policyVersion,
+      key.runnerImage,
+      key.appEnvHash,
+      key.quarantineVersion,
+    ].every((value) => nonBlankString(value)) &&
+    nonBlankString(proofReuseKey(key))
   );
 }
 

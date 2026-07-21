@@ -329,7 +329,7 @@ async function verdictForIntegrated(
   if (bundle === undefined || bundle.gateVerdict !== "passed") {
     return { result: "fail", message: "native gate passed but its exact V2 gate proof bundle is incomplete" };
   }
-  return passWithBinding(gateResult.verdict, node, integrated, bundle);
+  return passWithBinding(gateResult.verdict, node, integrated, bundle, keyInput);
 }
 
 function reusedGateResult(
@@ -391,6 +391,7 @@ function passWithBinding(
   node: IntegrationNode,
   integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
   bundle: Awaited<ReturnType<GateProofBundleSealer["seal"]>>,
+  keyInput: ProofReuseKeyInput,
 ): BatchCheckVerdict {
   if (verdict.result !== "pass" || bundle.gateVerdict !== "passed") return verdict;
   const authorityBinding: BatchAuthorityBinding = {
@@ -405,6 +406,7 @@ function passWithBinding(
     policyVersion: node.policyVersion,
     proof: {
       verdict: "passed",
+      keyInput,
       gateProofBundleId: bundle.gateProofBundleId,
       proofBundleDigest: bundle.proofBundleDigest,
       proofRoot: bundle.proofRoot,
@@ -430,6 +432,7 @@ function gateBundleInput(
     members: node.members,
     gateConfigHash: keyInput.gateConfigHash,
     policyVersion: keyInput.policyVersion,
+    proofKeyInput: keyInput,
   };
 }
 

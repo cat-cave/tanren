@@ -30,6 +30,8 @@ export const gateProofBundles = pgTable(
     gateConfigHash: text("gate_config_hash").notNull(),
     /** Exact governance policy coordinate, likewise sealed with the V2 projection. */
     policyVersion: text("policy_version").notNull(),
+    /** Read index only; authority also requires this value in the signed SP-3 binding. */
+    quarantineVersion: text("quarantine_version").notNull(),
     proofBundleId: text("proof_bundle_id").notNull(),
     gateVerdict: text("gate_verdict").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

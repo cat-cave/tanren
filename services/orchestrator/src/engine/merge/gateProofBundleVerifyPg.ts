@@ -25,6 +25,12 @@ interface StoredBundleRow {
   integration_node_id: string;
   gate_config_hash: string;
   policy_version: string;
+  projection_quarantine_version: string;
+  sealed_gate_config_hash: string | null;
+  sealed_policy_version: string | null;
+  runner_image: string | null;
+  app_env_hash: string | null;
+  quarantine_version: string | null;
   member_set_hash: string;
   prepared_head_sha: string;
   jj_tree_id: string;
@@ -95,6 +101,7 @@ export async function readExactGateProofBundle(
       proofBundleDigest: sealed.bundleDigest,
       proofRoot: sealed.proofRoot,
       integrationNodeId: input.nodeId,
+      proofKeyInput: sealedProofKeyInput(first),
       plan: requirements.plan,
       sections,
       gateVerdict: parsedGateVerdict,
@@ -109,6 +116,9 @@ async function readRows(pool: pg.Pool, input: Omit<GateProofBundleInput, "native
     const result = await client.query<StoredBundleRow>(
       `SELECT g.id AS gate_proof_bundle_id, g.gate_verdict, g.proof_bundle_id,
               b.bundle_digest, b.proof_root, b.bytes_digest, b.integration_node_id, g.gate_config_hash, g.policy_version,
+              g.quarantine_version AS projection_quarantine_version,
+              b.gate_config_hash AS sealed_gate_config_hash, b.policy_version AS sealed_policy_version,
+              b.runner_image, b.app_env_hash, b.quarantine_version,
               b.member_set_hash,
               b.prepared_head_sha, b.jj_tree_id, b.artifact_digest, b.expected_main_sha,
               b.signing_key_id, b.root_signature, b.nonce, b.issued_at, b.expires_at,
@@ -136,6 +146,15 @@ function sameBundleBinding(row: StoredBundleRow, input: Omit<GateProofBundleInpu
     row.integration_node_id === input.nodeId &&
     row.gate_config_hash === input.gateConfigHash &&
     row.policy_version === input.policyVersion &&
+    row.projection_quarantine_version === input.proofKeyInput.quarantineVersion &&
+    row.sealed_gate_config_hash === input.proofKeyInput.gateConfigHash &&
+    row.sealed_policy_version === input.proofKeyInput.policyVersion &&
+    row.runner_image === input.proofKeyInput.runnerImage &&
+    row.app_env_hash === input.proofKeyInput.appEnvHash &&
+    row.quarantine_version === input.proofKeyInput.quarantineVersion &&
+    input.proofKeyInput.memberKey === input.memberSetHash &&
+    input.proofKeyInput.gateConfigHash === input.gateConfigHash &&
+    input.proofKeyInput.policyVersion === input.policyVersion &&
     row.member_set_hash === input.memberSetHash &&
     row.prepared_head_sha === input.headSha &&
     row.jj_tree_id === input.treeHash &&
@@ -155,6 +174,12 @@ function sameProjection(row: StoredBundleRow, first: StoredBundleRow): boolean {
     row.integration_node_id === first.integration_node_id &&
     row.gate_config_hash === first.gate_config_hash &&
     row.policy_version === first.policy_version &&
+    row.projection_quarantine_version === first.projection_quarantine_version &&
+    row.sealed_gate_config_hash === first.sealed_gate_config_hash &&
+    row.sealed_policy_version === first.sealed_policy_version &&
+    row.runner_image === first.runner_image &&
+    row.app_env_hash === first.app_env_hash &&
+    row.quarantine_version === first.quarantine_version &&
     row.member_set_hash === first.member_set_hash &&
     row.prepared_head_sha === first.prepared_head_sha &&
     row.jj_tree_id === first.jj_tree_id &&
@@ -176,6 +201,11 @@ function sealedBundle(rows: readonly StoredBundleRow[]): ProofBundleSealed {
     bindings: {
       integrationNodeId: requiredText(first.integration_node_id, "integration_node_id"),
       memberSetHash: requiredText(first.member_set_hash, "member_set_hash"),
+      gateConfigHash: optionalText(first.sealed_gate_config_hash, "sealed_gate_config_hash"),
+      policyVersion: optionalText(first.sealed_policy_version, "sealed_policy_version"),
+      runnerImage: optionalText(first.runner_image, "runner_image"),
+      appEnvHash: optionalText(first.app_env_hash, "app_env_hash"),
+      quarantineVersion: optionalText(first.quarantine_version, "quarantine_version"),
       preparedHeadSha: requiredText(first.prepared_head_sha, "prepared_head_sha"),
       jjTreeId: requiredText(first.jj_tree_id, "jj_tree_id"),
       artifactDigest: parseDigest(first.artifact_digest),
@@ -187,6 +217,17 @@ function sealedBundle(rows: readonly StoredBundleRow[]): ProofBundleSealed {
     bytesDigest: parseDigest(first.bytes_digest),
     signingKeyId: requiredText(first.signing_key_id, "signing_key_id"),
     rootSignature: requiredBytes(first.root_signature, "root_signature"),
+  };
+}
+
+function sealedProofKeyInput(row: StoredBundleRow): GateProofBundleV2["proofKeyInput"] {
+  return {
+    memberKey: requiredText(row.member_set_hash, "member_set_hash"),
+    gateConfigHash: requiredNullableText(row.sealed_gate_config_hash, "sealed_gate_config_hash"),
+    policyVersion: requiredNullableText(row.sealed_policy_version, "sealed_policy_version"),
+    runnerImage: requiredNullableText(row.runner_image, "runner_image"),
+    appEnvHash: requiredNullableText(row.app_env_hash, "app_env_hash"),
+    quarantineVersion: requiredNullableText(row.quarantine_version, "quarantine_version"),
   };
 }
 
@@ -326,6 +367,11 @@ function requiredText(value: string, field: string): string {
 
 function requiredNullableText(value: unknown, field: string): string {
   if (typeof value !== "string") throw new TypeError(`${field} must be a non-blank string`);
+  return requiredText(value, field);
+}
+
+function optionalText(value: string | null, field: string): string | undefined {
+  if (value === null) return undefined;
   return requiredText(value, field);
 }
 

@@ -383,6 +383,7 @@ export function fakeBatchAuthorityBinding(entries: ReadonlyArray<MergeQueueEntry
     policyVersion: keyInput.policyVersion,
     proof: {
       verdict: "passed",
+      keyInput,
       gateProofBundleId: `gate-proof-bundle-${memberSetHash}`,
       proofBundleDigest: parseDigest(`sha256:${createHash("sha256").update(`bundle:${memberSetHash}`).digest("hex")}`),
       proofRoot: parseDigest(`sha256:${createHash("sha256").update(`root:${memberSetHash}`).digest("hex")}`),

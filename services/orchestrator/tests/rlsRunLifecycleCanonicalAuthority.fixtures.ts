@@ -79,9 +79,56 @@ export async function buildLifecycleCanonicalAuthority(input: CanonicalNodeInput
     memberFindings: [],
   });
   if (evaluation.kind !== "authorized_subset") {
-    throw new Error(`canonical lifecycle node was not authorized: ${evaluation.kind}`);
+    throw new Error(
+      `canonical lifecycle node was not authorized: ${evaluation.kind} (${evaluation.reasonCodes.join(",")}) ${JSON.stringify(evaluation.authorization?.reasons)}`,
+    );
   }
   return { authority, binding, evaluation, writer, host };
+}
+
+/** Real-land regression control for a quarantine generation that changes after V2 sealing. */
+export async function landLifecycleQuarantineDrift(input: CanonicalNodeInput) {
+  const bundle = await buildLifecycleCanonicalAuthority(input);
+  await runWithOrgScope(input.pool, input.orgId, (client) =>
+    client.query(
+      `INSERT INTO quarantined_tests
+         (id, project_id, check_name, test_id, toggled_sha_count, observation_count, evidence)
+       VALUES ($1, $2, 'member_behavior', $3, 1, 1, $4::jsonb)`,
+      [
+        "quarantine-lifecycle-member-behavior",
+        input.entry.projectId,
+        `${input.entry.runId}:member-behavior`,
+        JSON.stringify({ memberRunId: input.entry.runId, reason: "land-time quarantine drift control" }),
+      ],
+    ),
+  );
+  return {
+    outcome: await bundle.authority.land(bundle.evaluation.authorization),
+    hostLandCalls: bundle.host.landCalls,
+  };
+}
+
+/** Execute both decisive V2 negative controls against the real Pg land authority. */
+export async function runLifecycleV2LandNegativeControls(input: CanonicalNodeInput) {
+  const quarantineDrift = await landLifecycleQuarantineDrift(input);
+  const deleted = await buildLifecycleCanonicalAuthority(input);
+  await runWithOrgScope(input.pool, input.orgId, async (client) => {
+    await client.query("DELETE FROM gate_proof_bundle_sections WHERE org_id = $1 AND gate_proof_bundle_id = $2", [
+      input.orgId,
+      deleted.binding.proof.gateProofBundleId,
+    ]);
+    await client.query("DELETE FROM gate_proof_bundles WHERE org_id = $1 AND id = $2", [
+      input.orgId,
+      deleted.binding.proof.gateProofBundleId,
+    ]);
+  });
+  return {
+    quarantineDrift,
+    deletedBundle: {
+      outcome: await deleted.authority.land(deleted.evaluation.authorization),
+      hostLandCalls: deleted.host.landCalls,
+    },
+  };
 }
 
 async function mergeTaskId(pool: Pool, orgId: string, runId: string): Promise<string> {

@@ -138,6 +138,7 @@ export async function seedMq2Tenant(input: {
     policyVersion: keyInput.policyVersion,
     proof: {
       verdict: "passed",
+      keyInput,
       gateProofBundleId: `gate_proof_bundle:${nodeId}`,
       proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),

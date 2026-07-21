@@ -21,6 +21,14 @@ const input: Omit<GateProofBundleInput, "nativeCi"> = {
   members: [{ specId: "spec_v2_unit", runId: "run_v2_unit", branch: "v2-unit", headSha: "member_v2_unit" }],
   gateConfigHash: "gate-config-v2-unit",
   policyVersion: "policy-v2-unit",
+  proofKeyInput: {
+    memberKey: "member-set-v2-unit",
+    gateConfigHash: "gate-config-v2-unit",
+    policyVersion: "policy-v2-unit",
+    runnerImage: "runner-v2-unit",
+    appEnvHash: "env-v2-unit",
+    quarantineVersion: "quarantine-v2-unit",
+  },
 };
 
 type StoredRow = Record<string, unknown>;
@@ -85,6 +93,12 @@ function rows(section?: { readonly required: boolean; readonly kind: string | nu
       integration_node_id: input.nodeId,
       gate_config_hash: input.gateConfigHash,
       policy_version: input.policyVersion,
+      projection_quarantine_version: input.proofKeyInput.quarantineVersion,
+      sealed_gate_config_hash: input.proofKeyInput.gateConfigHash,
+      sealed_policy_version: input.proofKeyInput.policyVersion,
+      runner_image: input.proofKeyInput.runnerImage,
+      app_env_hash: input.proofKeyInput.appEnvHash,
+      quarantine_version: input.proofKeyInput.quarantineVersion,
       member_set_hash: input.memberSetHash,
       prepared_head_sha: input.headSha,
       jj_tree_id: input.treeHash,
@@ -138,6 +152,18 @@ describe("PgGateProofBundleVerifier — DB-free exact V2 fail-closed arms", () =
     const pool = new RecordingPool(rows());
     await expect(
       readExactGateProofBundle(pool as never, proof.substrate, { ...input, gateConfigHash: "different-config" }),
+    ).resolves.toBeUndefined();
+    expect(proof.verifyCalls()).toBe(0);
+  });
+
+  it("rejects a cryptographically valid bundle when any sealed proof-reuse component drifts", async () => {
+    const proof = verifiedProofSubstrate();
+    const pool = new RecordingPool(rows());
+    await expect(
+      readExactGateProofBundle(pool as never, proof.substrate, {
+        ...input,
+        proofKeyInput: { ...input.proofKeyInput, quarantineVersion: "quarantine-drifted-at-land" },
+      }),
     ).resolves.toBeUndefined();
     expect(proof.verifyCalls()).toBe(0);
   });

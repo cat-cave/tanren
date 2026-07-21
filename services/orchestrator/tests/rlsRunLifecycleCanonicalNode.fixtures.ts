@@ -1,4 +1,5 @@
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import { runWithOrgScope } from "@tanren/db";
 import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 import { memberKey } from "../src/engine/contracts/integrationNodes.js";
@@ -6,7 +7,7 @@ import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import type { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 import { PgGateProofBundleSealer } from "../src/engine/merge/gateProofBundleSealPg.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
-import { activeQuarantineVersion } from "../src/engine/workflow/ciQuarantine.js";
+import { activeQuarantineVersion, loadActiveQuarantine } from "../src/engine/workflow/ciQuarantine.js";
 import { buildMultiMemberEnvelope } from "../src/engine/merge/multiMemberAuthorityPgState.js";
 import { TestProofSubstrate } from "./helpers/mergeTrainTestSubstrate.js";
 import { LIFECYCLE_BASE_SHA, LIFECYCLE_TREE_SHA } from "./rlsRunLifecycleAuthority.fixtures.js";
@@ -29,13 +30,16 @@ export async function materializeLifecycleCanonicalNode(input: {
     headSha: input.headSha,
   };
   const memberSetHash = memberKey(LIFECYCLE_BASE_SHA, [member.headSha]);
+  const quarantineVersion = await runWithOrgScope(input.pool, input.orgId, async (client) =>
+    activeQuarantineVersion(await loadActiveQuarantine(client, input.entry.projectId)),
+  );
   const keyInput = {
     memberKey: memberSetHash,
     gateConfigHash: "gc",
     policyVersion: "1",
     runnerImage: "runner:v0",
     appEnvHash: "lifecycle-test",
-    quarantineVersion: activeQuarantineVersion({ checkNames: new Set(), testIds: [] }),
+    quarantineVersion,
   };
   const nodeId = await buildCoverageAuthorityReadyNodeMaterializer(input.pool)({
     orgId: input.orgId,
@@ -66,6 +70,7 @@ export async function materializeLifecycleCanonicalNode(input: {
     members: [member],
     gateConfigHash: keyInput.gateConfigHash,
     policyVersion: keyInput.policyVersion,
+    proofKeyInput: keyInput,
     nativeCi: {
       gateConfigHash: keyInput.gateConfigHash,
       tiers: ["pre_merge"],
@@ -86,6 +91,7 @@ export async function materializeLifecycleCanonicalNode(input: {
     policyVersion: keyInput.policyVersion,
     proof: {
       verdict: "passed" as const,
+      keyInput,
       gateProofBundleId: bundle.gateProofBundleId,
       proofBundleDigest: bundle.proofBundleDigest,
       proofRoot: bundle.proofRoot,

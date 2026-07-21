@@ -89,15 +89,20 @@ export function computeProofRoot(members: readonly ProofUnitRef[]): Digest {
 /** Canonicalize `BundleBindings` into a key-sorted canonical body (all string fields). */
 export function canonicalBindings(bindings: BundleBindings): CanonicalBody {
   return {
+    ...(bindings.appEnvHash === undefined ? {} : { appEnvHash: bindings.appEnvHash }),
     artifactDigest: bindings.artifactDigest,
     expectedMainSha: bindings.expectedMainSha,
     expiresAt: bindings.expiresAt,
+    ...(bindings.gateConfigHash === undefined ? {} : { gateConfigHash: bindings.gateConfigHash }),
     integrationNodeId: bindings.integrationNodeId,
     issuedAt: bindings.issuedAt,
     jjTreeId: bindings.jjTreeId,
     memberSetHash: bindings.memberSetHash,
     nonce: bindings.nonce,
+    ...(bindings.policyVersion === undefined ? {} : { policyVersion: bindings.policyVersion }),
     preparedHeadSha: bindings.preparedHeadSha,
+    ...(bindings.quarantineVersion === undefined ? {} : { quarantineVersion: bindings.quarantineVersion }),
+    ...(bindings.runnerImage === undefined ? {} : { runnerImage: bindings.runnerImage }),
   };
 }
 

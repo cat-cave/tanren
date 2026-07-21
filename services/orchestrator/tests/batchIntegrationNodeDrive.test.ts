@@ -46,6 +46,7 @@ class FakeGateBundles implements GateProofBundleSealer {
       proofBundleDigest: parseDigest(`sha256:${"d".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"e".repeat(64)}`),
       integrationNodeId: input.nodeId,
+      proofKeyInput: input.proofKeyInput,
       plan: {
         required: { native_ci: true, runtime_behavior: false, design_render: false, artifact_provenance: false },
       },

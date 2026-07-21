@@ -7,6 +7,7 @@ import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.j
 import type { BudgetScope, ConflictResolution, GateVerdict, MergeabilityState } from "../contracts/mergeAuthority.js";
 import { GitHubOutageError } from "../providers/githubRetry.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
+import { activeQuarantineVersion, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import type { GateProofBundleVerifier } from "./gateProofBundleTypes.js";
 import { budgetScopeFrom } from "./mergeAuthorityInputs.js";
 import { MultiMemberAuthorityInfrastructureFault } from "./multiMemberAuthorityEvidence.js";
@@ -87,6 +88,7 @@ export async function loadPersistedBatchDecisionSignals(
       members: binding.members,
       gateConfigHash: binding.gateConfigHash,
       policyVersion: binding.policyVersion,
+      proofKeyInput: binding.proof.keyInput,
       gateProofBundleId: binding.proof.gateProofBundleId,
       proofBundleDigest: binding.proof.proofBundleDigest,
       proofRoot: binding.proof.proofRoot,
@@ -95,6 +97,13 @@ export async function loadPersistedBatchDecisionSignals(
   } catch {
     return unknownSignals();
   }
+}
+
+/** Exact current active-set identity used by proof reuse and pre-CAS freshness. */
+export async function loadCurrentQuarantineVersion(pool: pg.Pool, orgId: string, projectId: string): Promise<string> {
+  return runWithOrgScope(pool, orgId, async (client) =>
+    activeQuarantineVersion(await loadActiveQuarantine(client, projectId)),
+  );
 }
 
 /** Preserve typed provider outages; untyped/config failures remain unknown. */

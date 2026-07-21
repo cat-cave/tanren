@@ -13,6 +13,7 @@ import { batchArtifactDigest, batchProofRoot } from "../src/engine/merge/multiMe
 interface RevalidationState {
   node: IntegrationNode | undefined;
   gateProofValid: boolean;
+  quarantineVersion: string;
   readonly refs: Map<string, string>;
 }
 
@@ -37,6 +38,14 @@ function binding(): BatchAuthorityBinding {
     policyVersion: "policy-v1",
     proof: {
       verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-v1",
+        policyVersion: "policy-v1",
+        runnerImage: "runner-mq16",
+        appEnvHash: "env-mq16",
+        quarantineVersion: "quarantine-mq16-ready",
+      },
       gateProofBundleId: "gate_proof_bundle:inode-mq16",
       proofBundleDigest: `sha256:${"a".repeat(64)}` as BatchAuthorityBinding["proof"]["proofBundleDigest"],
       proofRoot: `sha256:${"b".repeat(64)}` as BatchAuthorityBinding["proof"]["proofRoot"],
@@ -97,6 +106,7 @@ function buildAuthority() {
   const state: RevalidationState = {
     node: persistedNode(exact),
     gateProofValid: true,
+    quarantineVersion: exact.proof.keyInput.quarantineVersion,
     refs: new Map([
       ["main", exact.baseSha],
       ...exact.members.map((member) => [member.branch, member.headSha] as const),
@@ -119,6 +129,7 @@ function buildAuthority() {
     intoMain: value.target.intoMain,
     nodes: { findByMemberKey } as unknown as PgIntegrationNodeModel,
     verifyGateProof: async () => state.gateProofValid,
+    readQuarantineVersion: async () => state.quarantineVersion,
     readDecisionSignals: async () => ({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" }),
   });
   const store = {
@@ -159,6 +170,12 @@ describe("MergeAuthorityV2 land-time exact binding revalidation", () => {
       name: "the sealed V2 gate-proof bundle was deleted after authorization",
       makeStale: (state) => {
         state.gateProofValid = false;
+      },
+    },
+    {
+      name: "a member behavior was quarantined after the V2 bundle was sealed",
+      makeStale: (state) => {
+        state.quarantineVersion = "quarantine-mq16-drifted";
       },
     },
     {

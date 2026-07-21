@@ -49,6 +49,14 @@ function exactFixture(): {
     policyVersion: "policy-a",
     proof: {
       verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-a",
+        policyVersion: "policy-a",
+        runnerImage: "runner-canonical-drive",
+        appEnvHash: "env-canonical-drive",
+        quarantineVersion: "quarantine-canonical-drive",
+      },
       gateProofBundleId: "gate_proof_bundle:node-a",
       proofBundleDigest: parseDigest(`sha256:${"c".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"d".repeat(64)}`),

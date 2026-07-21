@@ -45,6 +45,14 @@ function binding(): BatchAuthorityBinding {
     policyVersion: "policy-9",
     proof: {
       verdict: "passed",
+      keyInput: {
+        memberKey: memberSetHash,
+        gateConfigHash: "gate-7",
+        policyVersion: "policy-9",
+        runnerImage: "runner-behavior-gate",
+        appEnvHash: "env-behavior-gate",
+        quarantineVersion: "quarantine-behavior-gate",
+      },
       gateProofBundleId: "gate_proof_bundle:inode-batch-42",
       proofBundleDigest: parseDigest(`sha256:${"a".repeat(64)}`),
       proofRoot: parseDigest(`sha256:${"b".repeat(64)}`),

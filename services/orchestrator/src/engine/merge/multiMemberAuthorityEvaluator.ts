@@ -2,8 +2,9 @@
 // SP-4 `authorizeLand`; host land remains exclusively in the existing per-member path.
 
 import { decideFromFindings } from "../contracts/auditPosture.js";
+import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import { severityRank, type Finding } from "../contracts/findings.js";
-import { memberKey } from "../contracts/integrationNodes.js";
+import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { LandAuthorization, LandBindingMember } from "../contracts/mergeAuthority.js";
 import {
   classifyMergeSignal,
@@ -352,7 +353,8 @@ function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[
   if (
     binding.proof.verdict !== "passed" ||
     !nonBlankString(binding.gateConfigHash) ||
-    !nonBlankString(binding.proof.gateProofBundleId)
+    !nonBlankString(binding.proof.gateProofBundleId) ||
+    !hasExactProofIdentity(binding)
   ) {
     errors.push("passing_proof_binding_mismatch");
   }
@@ -387,6 +389,25 @@ function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[
   const memberKeys = binding.members.map((member) => `${member.specId}\0${member.runId}`);
   if (new Set(memberKeys).size !== memberKeys.length) errors.push("duplicate_bound_member");
   return stableUnique(errors);
+}
+
+/** The V2 seal must carry every component of the frozen proofReuseKey, never a subset. */
+function hasExactProofIdentity(binding: BatchAuthorityBinding): boolean {
+  const key = binding.proof.keyInput;
+  return (
+    key.memberKey === binding.memberSetHash &&
+    key.gateConfigHash === binding.gateConfigHash &&
+    key.policyVersion === binding.policyVersion &&
+    [
+      key.memberKey,
+      key.gateConfigHash,
+      key.policyVersion,
+      key.runnerImage,
+      key.appEnvHash,
+      key.quarantineVersion,
+    ].every((value) => nonBlankString(value)) &&
+    nonBlankString(proofReuseKey(key))
+  );
 }
 
 function sameEnvelopeMembers(

@@ -1,5 +1,5 @@
 import type { CasByteStore, Digest, ProofSubstrate } from "../contracts/cas.js";
-import type { IntegrationNodeMember } from "../contracts/integrationNodes.js";
+import type { IntegrationNodeMember, ProofReuseKeyInput } from "../contracts/integrationNodes.js";
 import type { GateProofBundleV2, GateSectionKind, RequiredSectionPlan } from "../contracts/gateProof.js";
 import type { GateVerdict } from "../contracts/mergeAuthority.js";
 
@@ -23,6 +23,8 @@ export interface GateProofBundleInput {
   readonly members: readonly IntegrationNodeMember[];
   readonly gateConfigHash: string;
   readonly policyVersion: string;
+  /** Full six-component proof identity; V2 seals every component before land. */
+  readonly proofKeyInput: ProofReuseKeyInput;
   readonly nativeCi: NativeCiGateObservation;
 }
 
@@ -55,6 +57,7 @@ export interface GateProofBundleVerifier {
     readonly members: readonly IntegrationNodeMember[];
     readonly gateConfigHash: string;
     readonly policyVersion: string;
+    readonly proofKeyInput: ProofReuseKeyInput;
     readonly gateProofBundleId: string;
     readonly proofBundleDigest: Digest;
     readonly proofRoot: Digest;

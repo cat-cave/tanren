@@ -38,6 +38,11 @@ export class PgGateProofBundleSealer implements GateProofBundleSealer {
       bindings: {
         integrationNodeId: input.nodeId,
         memberSetHash: input.memberSetHash,
+        gateConfigHash: input.proofKeyInput.gateConfigHash,
+        policyVersion: input.proofKeyInput.policyVersion,
+        runnerImage: input.proofKeyInput.runnerImage,
+        appEnvHash: input.proofKeyInput.appEnvHash,
+        quarantineVersion: input.proofKeyInput.quarantineVersion,
         preparedHeadSha: input.headSha,
         jjTreeId: input.treeHash,
         artifactDigest,
@@ -55,6 +60,7 @@ export class PgGateProofBundleSealer implements GateProofBundleSealer {
       proofBundleDigest: sealed.bundleDigest,
       proofRoot: sealed.proofRoot,
       integrationNodeId: input.nodeId,
+      proofKeyInput: input.proofKeyInput,
       plan: requirements.plan,
       sections,
       gateVerdict,
@@ -138,13 +144,14 @@ async function persistProjection(
     ]);
     await client.query(
       `INSERT INTO gate_proof_bundles
-         (org_id, project_id, id, integration_node_id, gate_config_hash, policy_version, proof_bundle_id, gate_verdict)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (org_id, project_id, id, integration_node_id, gate_config_hash, policy_version, quarantine_version, proof_bundle_id, gate_verdict)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (org_id, id) DO UPDATE SET
          project_id = EXCLUDED.project_id,
          integration_node_id = EXCLUDED.integration_node_id,
          gate_config_hash = EXCLUDED.gate_config_hash,
          policy_version = EXCLUDED.policy_version,
+         quarantine_version = EXCLUDED.quarantine_version,
          proof_bundle_id = EXCLUDED.proof_bundle_id,
          gate_verdict = EXCLUDED.gate_verdict`,
       [
@@ -154,6 +161,7 @@ async function persistProjection(
         input.nodeId,
         input.gateConfigHash,
         input.policyVersion,
+        input.proofKeyInput.quarantineVersion,
         proofBundleId,
         bundle.gateVerdict,
       ],
@@ -237,6 +245,12 @@ function assertInput(input: GateProofBundleInput): void {
     ["member_set_hash", input.memberSetHash],
     ["gate_config_hash", input.gateConfigHash],
     ["policy_version", input.policyVersion],
+    ["proof_member_key", input.proofKeyInput.memberKey],
+    ["proof_gate_config_hash", input.proofKeyInput.gateConfigHash],
+    ["proof_policy_version", input.proofKeyInput.policyVersion],
+    ["proof_runner_image", input.proofKeyInput.runnerImage],
+    ["proof_app_env_hash", input.proofKeyInput.appEnvHash],
+    ["proof_quarantine_version", input.proofKeyInput.quarantineVersion],
   ];
   if (coordinates.some(([, value]) => typeof value !== "string" || value.trim() === "")) {
     throw new TypeError("V2 gate proof has an invalid binding coordinate");
@@ -252,6 +266,13 @@ function assertInput(input: GateProofBundleInput): void {
   }
   if (input.gateConfigHash !== input.nativeCi.gateConfigHash) {
     throw new TypeError("V2 gate proof native CI config hash differs from the persisted integration node coordinate");
+  }
+  if (
+    input.proofKeyInput.memberKey !== input.memberSetHash ||
+    input.proofKeyInput.gateConfigHash !== input.gateConfigHash ||
+    input.proofKeyInput.policyVersion !== input.policyVersion
+  ) {
+    throw new TypeError("V2 gate proof identity differs from the persisted integration node coordinate");
   }
   if (!Array.isArray(input.members) || input.members.length === 0 || !input.members.every(validMember)) {
     throw new TypeError("V2 gate proof refuses an invalid or empty integration member set");
