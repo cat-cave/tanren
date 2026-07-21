@@ -50,6 +50,7 @@ export {
   events,
 };
 export { mergeEagerBeams } from "./schemaEagerBeams.js";
+export { mergeRuntimeOutcomes } from "./schemaMergeRuntimeOutcomes.js";
 export { mergeQueueCommands, mergeQueuePolicies, mergeQueueWindows } from "./schemaQueuePolicy.js";
 export const tasks = pgTable(
   "tasks",

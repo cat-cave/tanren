@@ -28,6 +28,12 @@ export const authorityDecisionsReference = pgTable("authority_decisions", {
   id: text("id").notNull(),
 });
 
+/** Reference-only host-CAS intent identity (migration 0039). */
+export const authorityEffectIntentsReference = pgTable("authority_effect_intents", {
+  orgId: text("org_id").notNull(),
+  id: text("id").notNull(),
+});
+
 export const casArtifactsReference = pgTable("cas_artifacts", {
   orgId: text("org_id").notNull(),
   digest: text("digest").notNull(),

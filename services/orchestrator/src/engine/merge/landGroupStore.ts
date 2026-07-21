@@ -6,10 +6,12 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { memberKey } from "../contracts/integrationNodes.js";
 import type { LandAuthorization, LandBindingMember } from "../contracts/mergeAuthority.js";
+import type { RuntimeOutcomeProofCoordinate } from "../contracts/runtimeOutcome.js";
 import { PgEventStore } from "../eventStore.js";
 import { serviceAuditActor } from "../events/schemas/audit.js";
 import { applyFinalizeLand, authorityDecisionIdFor } from "./mergeAuthorityLandFinalizer.js";
 import type { AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
+import { persistRuntimeOutcome } from "./runtimeOutcomeStore.js";
 
 export interface LandGroupMemberContext extends Omit<LandBindingMember, "disposition"> {
   readonly prNumber: number;
@@ -45,9 +47,18 @@ interface ReceiptRow {
  */
 export class PgLandGroupStore implements AuthorityLandStore {
   private readonly reconcileToken: string;
+  private runtimeOutcome: RuntimeOutcomeProofCoordinate | undefined;
 
   constructor(private readonly input: PgLandGroupStoreInput) {
     this.reconcileToken = `land-group-${input.groupId}`;
+  }
+
+  /** Required by the V2 authority factory before this store can finalize a V2 CAS. */
+  public bindRuntimeOutcome(input: RuntimeOutcomeProofCoordinate): void {
+    if (this.runtimeOutcome !== undefined && !sameRuntimeCoordinate(this.runtimeOutcome, input)) {
+      throw new Error("land group cannot be rebound to a different V2 runtime outcome coordinate");
+    }
+    this.runtimeOutcome = input;
   }
 
   async persistAuthorizedDecision(input: {
@@ -142,6 +153,7 @@ export class PgLandGroupStore implements AuthorityLandStore {
           [this.input.orgId, this.input.groupId, key],
         );
       }
+      await this.persistRuntimeOutcome(client, input.authorization, input.mainSha);
       return this.completeOnClient(client, input.authorization, input.mainSha);
     });
   }
@@ -267,6 +279,28 @@ export class PgLandGroupStore implements AuthorityLandStore {
     return { auditId };
   }
 
+  private async persistRuntimeOutcome(client: pg.PoolClient, auth: LandAuthorization, mainSha: string): Promise<void> {
+    const coordinate = this.runtimeOutcome;
+    if (coordinate === undefined) return;
+    const tail = this.input.members.at(-1);
+    if (tail === undefined) throw new Error("a land group requires at least one member");
+    await persistRuntimeOutcome(
+      client,
+      {
+        ...coordinate,
+        id: `runtime-outcome:${this.reconcileToken}`,
+        orgId: this.input.orgId,
+        projectId: this.input.projectId,
+        authorityDecisionId: authorityDecisionIdFor(auth),
+        effectIntentId: this.reconcileToken,
+        decision: "authorized",
+        result: "landed",
+        mainSha,
+      },
+      { orgId: this.input.orgId, projectId: this.input.projectId, runId: tail.runId, specId: tail.specId },
+    );
+  }
+
   private async appendCompleted(client: pg.PoolClient, auth: LandAuthorization, mainSha: string): Promise<void> {
     const tail = this.input.members.at(-1);
     if (tail === undefined) throw new Error("a land group requires at least one member");
@@ -315,4 +349,32 @@ export class PgLandGroupStore implements AuthorityLandStore {
 
 function memberIdentity(baseSha: string, member: Pick<LandBindingMember, "specId" | "runId" | "headSha">): string {
   return `${memberKey(baseSha, [member.headSha])}:${member.specId}:${member.runId}`;
+}
+
+function sameRuntimeCoordinate(left: RuntimeOutcomeProofCoordinate, right: RuntimeOutcomeProofCoordinate): boolean {
+  return (
+    left.gateProofBundleId === right.gateProofBundleId &&
+    left.proofBundleDigest === right.proofBundleDigest &&
+    left.proofRoot === right.proofRoot &&
+    left.quarantineVersion === right.quarantineVersion &&
+    left.baseSha === right.baseSha &&
+    left.headSha === right.headSha &&
+    left.treeHash === right.treeHash &&
+    left.memberSetHash === right.memberSetHash &&
+    left.gateConfigHash === right.gateConfigHash &&
+    left.policyVersion === right.policyVersion &&
+    left.runnerImage === right.runnerImage &&
+    left.appEnvHash === right.appEnvHash &&
+    left.members.length === right.members.length &&
+    left.members.every((member, index) => {
+      const candidate = right.members[index];
+      return (
+        candidate !== undefined &&
+        member.specId === candidate.specId &&
+        member.runId === candidate.runId &&
+        member.branch === candidate.branch &&
+        member.headSha === candidate.headSha
+      );
+    })
+  );
 }

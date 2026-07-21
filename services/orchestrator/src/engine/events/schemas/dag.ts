@@ -400,9 +400,47 @@ export const IntegrationProofReusedPayload = z
     proofReuseKey: z.string(),
     // The reused verdict — always `passed` (only a PASSING proof short-circuits the gate).
     verdict: z.literal("passed"),
+    // The V2 sealed bundle that the production gate verified before it skipped work.
+    gateProofBundleId: z.string().min(1),
+    proofBundleDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    quarantineVersion: z.string().min(1),
+    baseSha: z.string().min(1),
+    headSha: z.string().min(1),
+    // Exact multiset of sealed section-unit digests (sorted by the producer before emit).
+    sectionDigests: z.array(z.string().regex(/^sha256:[0-9a-f]{64}$/u)).min(1),
   })
   .strict();
 export type IntegrationProofReusedPayload = z.infer<typeof IntegrationProofReusedPayload>;
+
+/** The immutable V2 proof≡effect receipt appended with the terminal authority outcome. */
+export const MergeRuntimeOutcomeRecordedPayload = z
+  .object({
+    outcomeId: z.string().min(1),
+    decision: z.enum(["authorized", "blocked", "needs_attention"]),
+    result: z.enum(["landed", "declined", "quarantined"]),
+    gateProofBundleId: z.string().min(1),
+    proofBundleDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    proofRoot: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    quarantineVersion: z.string().min(1),
+    baseSha: z.string().min(1),
+    headSha: z.string().min(1),
+    memberSetHash: z.string().min(1),
+    mainSha: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const landed = value.result === "landed";
+    if (landed && (value.decision !== "authorized" || value.mainSha === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "a landed runtime outcome requires authorized decision and mainSha",
+      });
+    }
+    if (!landed && value.mainSha !== undefined) {
+      context.addIssue({ code: "custom", message: "a non-landed runtime outcome cannot carry mainSha" });
+    }
+  });
+export type MergeRuntimeOutcomeRecordedPayload = z.infer<typeof MergeRuntimeOutcomeRecordedPayload>;
 
 // dag.spec.needs_attention (apex v35 — the unified GENUINE-HALT event; v67 #122 added the
 // `wandering_halt` source) is defined in `dagNeedsAttention.ts` (file-size cap) and

@@ -44,6 +44,7 @@ import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWrite
 import { ancestorStackSchema } from "../../engine/dag/ancestorStack.js";
 import { AuditEnvelope } from "../../engine/events/schemas/audit.js";
 import { registerRunStateAtomicRoutes } from "./runStateAtomicWrites.js";
+import { runtimeOutcomeSchema } from "./runtimeOutcomeSchemas.js";
 
 const setRunStatusSchema = z.object({
   runId: z.string().min(1),
@@ -78,6 +79,7 @@ const finalizeLandSchema = z.object({
   // in-16: the authorizing decision id the transactional delivery-outbox row is FK-bound to.
   authorityDecisionId: z.string().min(1),
   auditEnvelope: AuditEnvelope,
+  runtimeOutcome: runtimeOutcomeSchema.optional(),
 });
 
 const setSpecStatusSchema = z.object({

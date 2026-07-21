@@ -255,6 +255,7 @@ export const eventTypesSeed = [
   { name: "merge.regate.gate_rework_routed", defaultSeverity: "info" },
   { name: "merge.repair.routed", defaultSeverity: "warn" },
   { name: "merge.retargeted", defaultSeverity: "info" },
+  { name: "merge.runtime_outcome.recorded", defaultSeverity: "info" },
   { name: "merge.scheduled", defaultSeverity: "info" },
   { name: "merge.signal.classified", defaultSeverity: "info" },
   { name: "merge.speculative_held", defaultSeverity: "info" },

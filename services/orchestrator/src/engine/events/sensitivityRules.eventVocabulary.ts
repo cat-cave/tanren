@@ -30,6 +30,32 @@ export {
 };
 
 export const eventVocabularySensitivityRules: SensitivityRule[] = [
+  ...[
+    "nodeId",
+    "recordedOnNodeId",
+    "memberKey",
+    "proofReuseKey",
+    "verdict",
+    "gateProofBundleId",
+    "proofBundleDigest",
+    "quarantineVersion",
+    "baseSha",
+    "headSha",
+    "sectionDigests[]",
+  ].map((path) => ({ eventName: "integration.proof.reused", path, tag: "public" as const })),
+  ...[
+    "outcomeId",
+    "decision",
+    "result",
+    "gateProofBundleId",
+    "proofBundleDigest",
+    "proofRoot",
+    "quarantineVersion",
+    "baseSha",
+    "headSha",
+    "memberSetHash",
+    "mainSha",
+  ].map((path) => ({ eventName: "merge.runtime_outcome.recorded", path, tag: "public" as const })),
   ...eventVocabularyW0SensitivityRules,
   ...eventVocabularyW1aIntegrationAuthorSensitivityRules,
   ...eagerBeamSensitivityRules,

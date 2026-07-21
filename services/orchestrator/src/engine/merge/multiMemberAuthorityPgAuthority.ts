@@ -21,6 +21,11 @@ import {
   type PersistedBatchDecisionSignals,
 } from "./multiMemberAuthorityEvidencePg.js";
 import type { GateProofBundleVerifier } from "./gateProofBundleTypes.js";
+import type { RuntimeOutcomeProofCoordinate } from "../contracts/runtimeOutcome.js";
+
+interface RuntimeOutcomeAwareLandStore extends AuthorityLandStore {
+  bindRuntimeOutcome(input: RuntimeOutcomeProofCoordinate): void;
+}
 
 export function buildPgExactBatchAuthority(input: {
   readonly pool: pg.Pool;
@@ -35,6 +40,15 @@ export function buildPgExactBatchAuthority(input: {
   readonly gateProofs: GateProofBundleVerifier;
   readonly landStore?: AuthorityLandStore;
 }): MergeAuthorityV2 {
+  const runtimeOutcome = runtimeOutcomeCoordinate(input.binding);
+  const landStore =
+    input.landStore ?? buildAuthorityLandStore(input.pool, { ...input.context, runtimeOutcome }, input.runStateWriter);
+  if (input.landStore !== undefined) {
+    if (!isRuntimeOutcomeAware(landStore)) {
+      throw new TypeError("an exact V2 authority requires a runtime-outcome-aware land store");
+    }
+    landStore.bindRuntimeOutcome(runtimeOutcome);
+  }
   return new MergeAuthorityV2Impl(
     input.host,
     new PgExactBatchBindingRevalidator({
@@ -72,8 +86,31 @@ export function buildPgExactBatchAuthority(input: {
           proofRoot: input.binding.proof.proofRoot,
         }),
     }),
-    input.landStore ?? buildAuthorityLandStore(input.pool, input.context, input.runStateWriter),
+    landStore,
   );
+}
+
+/** Exact immutable proof/effect coordinate shared by runtime outcomes and the host CAS. */
+export function runtimeOutcomeCoordinate(binding: BatchAuthorityBinding): RuntimeOutcomeProofCoordinate {
+  return {
+    gateProofBundleId: binding.proof.gateProofBundleId,
+    proofBundleDigest: binding.proof.proofBundleDigest,
+    proofRoot: binding.proof.proofRoot,
+    quarantineVersion: binding.proof.keyInput.quarantineVersion,
+    baseSha: binding.baseSha,
+    headSha: binding.headSha,
+    treeHash: binding.treeHash,
+    memberSetHash: binding.memberSetHash,
+    members: binding.members,
+    gateConfigHash: binding.gateConfigHash,
+    policyVersion: binding.policyVersion,
+    runnerImage: binding.proof.keyInput.runnerImage,
+    appEnvHash: binding.proof.keyInput.appEnvHash,
+  };
+}
+
+function isRuntimeOutcomeAware(value: AuthorityLandStore): value is RuntimeOutcomeAwareLandStore {
+  return "bindRuntimeOutcome" in value && typeof value.bindRuntimeOutcome === "function";
 }
 
 export interface PgExactBatchBindingRevalidatorDeps {

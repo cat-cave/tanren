@@ -10,7 +10,6 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engi
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
 import { PgEventStore, type AppendEventInput, type EventStore } from "../src/engine/eventStore.js";
 import { driveBatchThroughNode } from "../src/engine/merge/batchIntegrationNodeDrive.js";
-import { batchProofUnitGraph } from "../src/engine/merge/batchNodeGate.js";
 import { BehaviorCoverageEdgesStore } from "../src/engine/repositories/behaviorCoverageEdges.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
@@ -289,7 +288,6 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
       {
         ...v2Deps,
         eventStore,
-        proofUnits: batchProofUnitGraph(appPool, eventStore),
         jjWorkspaceDeps: { ssh: diff } as never,
         integrate: async (_deps, _input, continuation) => ({
           outcome: "integrated",

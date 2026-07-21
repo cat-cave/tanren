@@ -19,7 +19,9 @@ import { applySetSpecStatus } from "../worker/runStateLifecycleSql.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { FinalizeLandInput, RunStateWriter } from "../contracts/runStateWriter.js";
 import type { LandAuthorization } from "../contracts/mergeAuthority.js";
+import type { RuntimeOutcomeProofCoordinate } from "../contracts/runtimeOutcome.js";
 import type { AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
+import { persistRuntimeOutcome } from "./runtimeOutcomeStore.js";
 
 /** Anything that can run a parameterized query — the pool or a checked-out client. */
 type LandQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -43,7 +45,11 @@ export async function applyFinalizeLand(client: LandQueryClient, input: Finalize
   );
   const status = spec.rows[0]?.status;
   if (status === undefined) throw new Error(`cannot finalize land: spec ${input.specId} is missing`);
-  if (status === "merged") return;
+  if (status === "merged") {
+    if (input.runtimeOutcome === undefined) return;
+    await assertRuntimeOutcomePresent(client, input.runtimeOutcome);
+    return;
+  }
 
   const events = new PgEventStore(client);
   await events.append({
@@ -70,6 +76,16 @@ export async function applyFinalizeLand(client: LandQueryClient, input: Finalize
     status: "merged",
     notFromStatuses: ["merged"],
   });
+  if (input.runtimeOutcome !== undefined) {
+    await persistRuntimeOutcome(client, input.runtimeOutcome, input);
+    await persistReceiptOnClient(client, {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      effectIntentId: input.runtimeOutcome.effectIntentId,
+      mainSha: input.runtimeOutcome.mainSha,
+      auditId: input.runId,
+    });
+  }
   // in-16 — TRANSACTIONAL DELIVERY OUTBOX. On this authorized land, enqueue a durable
   // `delivery_runs` outbox row on the SAME in-transaction client as `merge.completed` +
   // the spec `merged` flip: all-or-nothing with the land record, so there is never a
@@ -108,6 +124,8 @@ export interface LandFinalizeContext {
   prNumber: number;
   integration: "direct_merge" | "native_queue";
   auditEnvelope: AuditEnvelope;
+  /** Exact V2 proof coordinate required for a runtime authority outcome. */
+  runtimeOutcome?: RuntimeOutcomeProofCoordinate;
 }
 
 /**
@@ -121,6 +139,7 @@ function finalizeLandInputFrom(
   context: LandFinalizeContext,
   mainSha: string,
   authorityDecisionId: string,
+  effectIntentId: string,
 ): FinalizeLandInput {
   return {
     orgId: context.orgId,
@@ -134,6 +153,21 @@ function finalizeLandInputFrom(
     mergeSha: mainSha,
     authorityDecisionId,
     auditEnvelope: context.auditEnvelope,
+    ...(context.runtimeOutcome === undefined
+      ? {}
+      : {
+          runtimeOutcome: {
+            ...context.runtimeOutcome,
+            id: `runtime-outcome:${effectIntentId}`,
+            orgId: context.orgId,
+            projectId: context.projectId,
+            authorityDecisionId,
+            effectIntentId,
+            decision: "authorized" as const,
+            result: "landed" as const,
+            mainSha,
+          },
+        }),
   };
 }
 
@@ -207,13 +241,69 @@ async function persistReceiptRow(
   auditId: string,
 ): Promise<void> {
   await runWithOrgScope(pool, context.orgId, async (client) => {
-    await client.query(
-      `INSERT INTO authority_land_receipts (org_id, project_id, id, effect_intent_id, main_sha, audit_id)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (org_id, effect_intent_id) DO NOTHING`,
-      [context.orgId, context.projectId, `receipt-${effectIntentId}`, effectIntentId, mainSha, auditId],
-    );
+    await persistReceiptOnClient(client, {
+      orgId: context.orgId,
+      projectId: context.projectId,
+      effectIntentId,
+      mainSha,
+      auditId,
+    });
   });
+}
+
+export async function persistReceiptOnClient(
+  client: LandQueryClient,
+  input: { orgId: string; projectId: string; effectIntentId?: string; mainSha?: string; auditId: string },
+): Promise<void> {
+  if (
+    typeof input.effectIntentId !== "string" ||
+    input.effectIntentId.trim() === "" ||
+    typeof input.mainSha !== "string" ||
+    input.mainSha.trim() === ""
+  ) {
+    throw new TypeError("runtime outcome receipt requires the exact non-blank effect coordinate");
+  }
+  await client.query(
+    `INSERT INTO authority_land_receipts (org_id, project_id, id, effect_intent_id, main_sha, audit_id)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (org_id, effect_intent_id) DO NOTHING`,
+    [
+      input.orgId,
+      input.projectId,
+      `receipt-${input.effectIntentId}`,
+      input.effectIntentId,
+      input.mainSha,
+      input.auditId,
+    ],
+  );
+}
+
+async function assertRuntimeOutcomePresent(
+  client: LandQueryClient,
+  input: NonNullable<FinalizeLandInput["runtimeOutcome"]>,
+): Promise<void> {
+  const row = await client.query<{ id: string }>(
+    `SELECT id FROM merge_runtime_outcomes
+      WHERE org_id = $1 AND id = $2 AND effect_intent_id = $3
+        AND gate_proof_bundle_id = $4 AND proof_bundle_digest = $5 AND proof_root = $6
+        AND quarantine_version = $7 AND base_sha = $8 AND head_sha = $9 AND tree_hash = $10
+        AND member_set_hash = $11 AND decision = 'authorized' AND result = 'landed' AND main_sha = $12`,
+    [
+      input.orgId,
+      input.id,
+      input.effectIntentId ?? null,
+      input.gateProofBundleId,
+      input.proofBundleDigest,
+      input.proofRoot,
+      input.quarantineVersion,
+      input.baseSha,
+      input.headSha,
+      input.treeHash,
+      input.memberSetHash,
+      input.mainSha ?? null,
+    ],
+  );
+  if (row.rowCount !== 1) throw new Error("merged V2 land is missing its exact runtime outcome");
 }
 
 /**
@@ -257,9 +347,16 @@ export function buildAuthorityLandStore(
       // in-16: the authorizing decision id (matching step 1's `persistDecisionRows`) rides
       // the finalize input so the delivery-outbox row it inserts is FK-bound to the decision.
       const { auditId } = await writer.finalizeLand(
-        finalizeLandInputFrom(context, input.mainSha, authorityDecisionIdFor(input.authorization)),
+        finalizeLandInputFrom(
+          context,
+          input.mainSha,
+          authorityDecisionIdFor(input.authorization),
+          input.effectIntentId,
+        ),
       );
-      await persistReceiptRow(pool, context, input.effectIntentId, input.mainSha, auditId);
+      if (context.runtimeOutcome === undefined) {
+        await persistReceiptRow(pool, context, input.effectIntentId, input.mainSha, auditId);
+      }
       return { auditId };
     },
   };
