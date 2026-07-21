@@ -62,23 +62,23 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## merge-queue (16)
 
-| Node  | Phase | Status  | Purpose                                                                  | Deps             |
-| ----- | ----- | ------- | ------------------------------------------------------------------------ | ---------------- |
-| mq-1  | MVP   | ✅ done | v96 regression lock + typed authority reasons (policy ≠ infra)           | SP·4             |
-| mq-2  | MVP   | ✅ done | MergeAuthority-V2 multi-member eval, 7 typed dispositions                | mq-1 · SP·1/3    |
-| mq-3  | MVP   | ✅ done | Generalized safe-subset solver (ddmin / QuickXPlain) (#979)              | mq-2 · SP·3      |
-| mq-4  | MVP   | ✅ done | Member isolation + partition-scoped leases (no project-wide lock)        | mq-2 · SP·1      |
-| mq-5  | MVP   | ✅ done | Atomic land-group reconciliation (one CAS, all members)                  | mq-2/3 · SP·3/4  |
-| mq-11 | MVP   | ✅ done | IntegrationNodeMaterializer behind jj WorkspaceVcsCore (#1002)           | mq-5 · SP·3/4    |
-| mq-6  | full  | ✅ done | Granular Merkle proof graph — per-unit reuse, wired to live gate (#1010) | mq-2 · SP·3/5    |
-| mq-7  | full  | ✅ done | Flake classification + exact quarantine + epochs (#1120)                 | mq-3/6 · SP·5    |
+| Node  | Phase | Status   | Purpose                                                                  | Deps             |
+| ----- | ----- | -------- | ------------------------------------------------------------------------ | ---------------- |
+| mq-1  | MVP   | ✅ done  | v96 regression lock + typed authority reasons (policy ≠ infra)           | SP·4             |
+| mq-2  | MVP   | ✅ done  | MergeAuthority-V2 multi-member eval, 7 typed dispositions                | mq-1 · SP·1/3    |
+| mq-3  | MVP   | ✅ done  | Generalized safe-subset solver (ddmin / QuickXPlain) (#979)              | mq-2 · SP·3      |
+| mq-4  | MVP   | ✅ done  | Member isolation + partition-scoped leases (no project-wide lock)        | mq-2 · SP·1      |
+| mq-5  | MVP   | ✅ done  | Atomic land-group reconciliation (one CAS, all members)                  | mq-2/3 · SP·3/4  |
+| mq-11 | MVP   | ✅ done  | IntegrationNodeMaterializer behind jj WorkspaceVcsCore (#1002)           | mq-5 · SP·3/4    |
+| mq-6  | full  | ✅ done  | Granular Merkle proof graph — per-unit reuse, wired to live gate (#1010) | mq-2 · SP·3/5    |
+| mq-7  | full  | ✅ done  | Flake classification + exact quarantine + epochs (#1120)                 | mq-3/6 · SP·5    |
 | mq-8  | full  | ✅ #1144 | EAGER speculative beam search (build before ready)                       | mq-4/6 · SP·4    |
 | mq-9  | full  | ✅ #1146 | IntegrationGraphScheduler + semantic partitions + dynamic batches        | mq-3/4/6         |
-| mq-10 | full  | ✅ done | Autonomous repair + re-spec router (RespecPacketV1) (#1122)              | mq-2/3 · SP·1/2  |
+| mq-10 | full  | ✅ done  | Autonomous repair + re-spec router (RespecPacketV1) (#1122)              | mq-2/3 · SP·1/2  |
 | mq-12 | full  | ✅ #1143 | Fragment/F2 evidence-contract extension                                  | mq-6/7 · SP·2/5  |
 | mq-13 | full  | ✅ #1147 | Deploy/verify/demo/rollback loop extension                               | mq-5/10 · SP·5/6 |
 | mq-14 | full  | ✅ #1148 | QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands)      | mq-2/4/9 · SP·4  |
-| mq-15 | full  | ✅ done | Dashboard merge-train viz + exportable signed artifacts (#1138)          | mq-2/3/6/7/10/13 |
+| mq-15 | full  | ✅ done  | Dashboard merge-train viz + exportable signed artifacts (#1138)          | mq-2/3/6/7/10/13 |
 | mq-16 | full  | ✅ #1150 | Merge-Queue-V2 backfill / one-way authority cutover                      | mq-2/5 · SP·8    |
 
 ## runtime-verification (26)
@@ -161,17 +161,17 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## design-system (9)
 
-| Node | Phase | Status  | Purpose                                                                                                                                                                                                                                                                                                                  | Deps                 |
-| ---- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- |
-| ds-0 | MVP   | ✅ done | Design contracts & schema foundation (DesignContractV2, RLS, proof keys) (#981)                                                                                                                                                                                                                                          | SP·1..8              |
-| ds-1 | MVP   | ✅ done | Executable token core (DTCG resolver, base/plain, DesignVfs, CAS, offline validator)                                                                                                                                                                                                                                     | ds-0 · SP·3/1        |
-| ds-2 | MVP   | ✅ done | Web adapter MVP (shadcn/Radix/Tailwind, catalog, exports, Writer injection) (#1003)                                                                                                                                                                                                                                      | ds-0/1 · SP·2        |
-| ds-3 | MVP   | ✅ done | F2D authoring + design-composition producer — callable end-to-end (#1092)                                                                                                                                                                                                                                                | ds-0/1/2 · SP·2/3/5  |
-| ds-4 | MVP   | ✅ done | A4 visual verification + native gate — render/capture harness (#1098) + a11y verdict oracle (#1099) + verification producer & fail-closed gate binding (#1103) + land-gate aggregation fix (#1108) + real DesignContractV2 posture live (#1105) + production-wired pixel render-worker + fail-closed visual gate (#1112) | ds-0..3 · SP·5/3/4/1 |
-| ds-5 | MVP   | ✅ done | Dashboard/API/within-org theme reuse (Studio, evidence lab, bindings, exports) (#1121)                                                                                                                                                                                                                                   | ds-0..4 · SP·1/3     |
+| Node | Phase | Status   | Purpose                                                                                                                                                                                                                                                                                                                  | Deps                 |
+| ---- | ----- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- |
+| ds-0 | MVP   | ✅ done  | Design contracts & schema foundation (DesignContractV2, RLS, proof keys) (#981)                                                                                                                                                                                                                                          | SP·1..8              |
+| ds-1 | MVP   | ✅ done  | Executable token core (DTCG resolver, base/plain, DesignVfs, CAS, offline validator)                                                                                                                                                                                                                                     | ds-0 · SP·3/1        |
+| ds-2 | MVP   | ✅ done  | Web adapter MVP (shadcn/Radix/Tailwind, catalog, exports, Writer injection) (#1003)                                                                                                                                                                                                                                      | ds-0/1 · SP·2        |
+| ds-3 | MVP   | ✅ done  | F2D authoring + design-composition producer — callable end-to-end (#1092)                                                                                                                                                                                                                                                | ds-0/1/2 · SP·2/3/5  |
+| ds-4 | MVP   | ✅ done  | A4 visual verification + native gate — render/capture harness (#1098) + a11y verdict oracle (#1099) + verification producer & fail-closed gate binding (#1103) + land-gate aggregation fix (#1108) + real DesignContractV2 posture live (#1105) + production-wired pixel render-worker + fail-closed visual gate (#1112) | ds-0..3 · SP·5/3/4/1 |
+| ds-5 | MVP   | ✅ done  | Dashboard/API/within-org theme reuse (Studio, evidence lab, bindings, exports) (#1121)                                                                                                                                                                                                                                   | ds-0..4 · SP·1/3     |
 | ds-6 | full  | ✅ #1145 | Queue/deploy/demo compounding (design-aware proof keys, eager matrix, live demo, A4≡demo)                                                                                                                                                                                                                                | ds-4/5 · SP·5/4/3    |
 | ds-7 | full  | ✅ #1149 | Full framework reach (Bevy, SwiftUI, Compose, Flutter, RN, document/media adapters)                                                                                                                                                                                                                                      | ds-2/4 · SP·5/2      |
-| ds-8 | full  | ⬜ todo | Ecosystem & cross-org (Figma bridge, public projection, grants/forks, external registry)                                                                                                                                                                                                                                 | ds-5/6 · SP·4/3      |
+| ds-8 | full  | ⬜ todo  | Ecosystem & cross-org (Figma bridge, public projection, grants/forks, external registry)                                                                                                                                                                                                                                 | ds-5/6 · SP·4/3      |
 
 ## governance (34)
 
