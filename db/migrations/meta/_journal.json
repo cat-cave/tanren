@@ -715,6 +715,13 @@
       "when": 1784616711021,
       "tag": "0104_design_adapter_conformance_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1784631851960,
+      "tag": "0105_classy_purifiers",
+      "breakpoints": true
     }
   ]
 }

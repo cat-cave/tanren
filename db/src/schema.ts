@@ -48,7 +48,6 @@ export {
 };
 export { mergeEagerBeams } from "./schemaEagerBeams.js";
 export { mergeQueueCommands, mergeQueuePolicies, mergeQueueWindows } from "./schemaQueuePolicy.js";
-
 export const tasks = pgTable(
   "tasks",
   {
@@ -497,3 +496,4 @@ export { behaviorQuarantines } from "./schemaBehaviorQuarantines.js";
 export { mergeTrainArtifacts } from "./schemaMergeTrainArtifacts.js";
 export { landGroupDeliveryLoops } from "./schemaLandGroupDeliveryLoops.js";
 export { designAdapterConformanceRuns } from "./schemaDesignAdapterConformance.js";
+export * from "./schemaDesignEcosystem.js";

@@ -94,6 +94,47 @@ export const DesignExportsResponseSchema = z.object({
   ),
 });
 
+const EcosystemAvailabilitySchema = z.enum(["available", "revoked", "unavailable"]);
+export const DesignEcosystemResponseSchema = z.object({
+  version: z.literal(DS_STUDIO_SURFACE_VERSION),
+  orgId: z.string(),
+  grants: z.array(
+    z.object({
+      id: z.string(),
+      capability: z.enum(["import", "fork"]),
+      expiresAt: z.string(),
+      availability: EcosystemAvailabilitySchema,
+      publicSlug: z.string().nullable(),
+    }),
+  ),
+  imports: z.array(
+    z.object({
+      id: z.string(),
+      publicSlug: z.string().nullable(),
+      releaseId: z.string(),
+      syncPolicy: z.enum(["immutable_fork", "manual_sync"]),
+      lastSeenUpstream: z.string(),
+      availability: EcosystemAvailabilitySchema,
+    }),
+  ),
+  externalImports: z.array(
+    z.object({
+      id: z.string(),
+      receipt: z.object({
+        version: z.literal(1),
+        schemaVersion: z.literal("design_external_import.v1"),
+        source: z.enum(["figma", "registry"]),
+        locator: z.string(),
+        externalRevision: z.string(),
+        snapshotDigest: z.string(),
+        licenseVerdict: z.enum(["approved", "unlicensed", "rejected"]),
+        lossinessReport: z.object({ lossless: z.boolean(), warnings: z.array(z.string()) }),
+        disposition: z.enum(["quarantined", "candidate", "rejected"]),
+      }),
+    }),
+  ),
+});
+
 // ds-6 — the DesignDeliveryProofV1 delivery-trace wire schema (A4 ≡ demo). Read-only; a
 // laundered/partial payload is rejected by safeParse before rendering. `equivalence` is the
 // closed-vocab DERIVED verdict — the client never receives (nor sends) a success boolean.
@@ -184,6 +225,7 @@ export type ProjectDesignBinding = z.infer<typeof ProjectDesignBindingSchema>;
 export type DesignEvidenceVerdict = z.infer<typeof DesignEvidenceVerdictSchema>;
 export type DesignExportsResponse = z.infer<typeof DesignExportsResponseSchema>;
 export type DesignExportFile = DesignExportsResponse["files"][number];
+export type DesignEcosystemView = z.infer<typeof DesignEcosystemResponseSchema>;
 
 /** The Studio screen's composed, already-fail-closed read model. A field left
  * `undefined` means the orchestrator did not return a valid response for it → the
@@ -195,6 +237,8 @@ export interface DesignStudioView {
   readonly exports: readonly DesignExportFile[] | undefined;
   /** ds-6 — the verified-join delivery trace (A4 ≡ demo); `undefined` ⇒ BLOCKED section. */
   readonly delivery: DesignDeliveryProof | undefined;
+  /** ds-8 grant/import/quarantine lineage; undefined means BLOCKED, never empty. */
+  readonly ecosystem: DesignEcosystemView | undefined;
 }
 
 export interface BindingWriteResult {

@@ -6,6 +6,7 @@
 
 import type {
   DesignDeliveryProof,
+  DesignEcosystemView,
   DesignEvidenceVerdict,
   DesignExportFile,
   DesignStudioView,
@@ -222,6 +223,61 @@ function ExportsPanel(props: { readonly exports: readonly DesignExportFile[] | u
   );
 }
 
+/** ds-8 — only destination-owned grants/forks and sanitized external receipts are visible. */
+function EcosystemPanel(props: { readonly ecosystem: DesignEcosystemView | undefined }) {
+  const ecosystem = props.ecosystem;
+  return (
+    <section class="panel">
+      <div class="panel-pad">
+        <div class="mini-eyebrow">ecosystem · grants, forks, and external quarantine</div>
+        {ecosystem === undefined ? (
+          <Blocked what="Ecosystem lineage" />
+        ) : ecosystem.grants.length === 0 &&
+          ecosystem.imports.length === 0 &&
+          ecosystem.externalImports.length === 0 ? (
+          <div class="empty">No redeemed grants, destination forks, or external snapshots yet.</div>
+        ) : (
+          <>
+            {ecosystem.grants.map((grant) => (
+              <div class="row-head">
+                <span class={`tag ${grant.availability === "available" ? "pass" : "warn"}`}>{grant.availability}</span>
+                <code>grant · {grant.id}</code>
+                <span>{grant.capability}</span>
+                <span>expires {grant.expiresAt}</span>
+                <span>{grant.publicSlug ?? "public projection unavailable"}</span>
+              </div>
+            ))}
+            {ecosystem.imports.map((imported) => (
+              <div class="row-head">
+                <span class={`tag ${imported.availability === "available" ? "pass" : "warn"}`}>
+                  {imported.availability}
+                </span>
+                <code>fork · {imported.releaseId}</code>
+                <span>{imported.syncPolicy}</span>
+                <span>{imported.publicSlug ?? "public projection unavailable"}</span>
+                <code>upstream · {imported.lastSeenUpstream}</code>
+              </div>
+            ))}
+            {ecosystem.externalImports.map((external) => (
+              <div class="row-head">
+                <span class={`tag ${external.receipt.disposition === "rejected" ? "fail" : "warn"}`}>
+                  {external.receipt.disposition}
+                </span>
+                <code>
+                  {external.receipt.source} · {external.id}
+                </code>
+                <span>{external.receipt.externalRevision}</span>
+                <span>{external.receipt.lossinessReport.lossless ? "lossless" : "lossy"}</span>
+                <span>{external.receipt.licenseVerdict}</span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /** ds-6 — the delivery trace: eager matrix → proof key/root → release/deploy → proof-backed
  * demo. A read-only PROJECTION (no run-command control). Any missing cell, failed assertion,
  * or unobservable behavior renders as blocked/unknown — NEVER a fabricated A4 ≡ demo. */
@@ -315,6 +371,7 @@ export function DesignStudioBody(props: DesignStudioBodyProps) {
               />
               <EvidenceLab evidence={props.view.evidence} />
               <DeliveryTrace delivery={props.view.delivery} />
+              <EcosystemPanel ecosystem={props.view.ecosystem} />
               <ExportsPanel exports={props.view.exports} />
             </>
           )}
