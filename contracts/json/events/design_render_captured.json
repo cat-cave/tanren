@@ -2,32 +2,36 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "behaviorRevisionId": {
+    "a11yViolationCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "artifactDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "designContractVersion": {
       "maxLength": 256,
       "minLength": 1,
       "type": "string"
     },
-    "checkpointId": {
+    "renderId": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "scenarioKey": {
       "maxLength": 256,
-      "minLength": 1,
-      "type": "string"
-    },
-    "theme": {
-      "maxLength": 64,
-      "minLength": 1,
-      "type": "string"
-    },
-    "viewport": {
-      "maxLength": 64,
       "minLength": 1,
       "type": "string"
     }
   },
   "required": [
-    "behaviorRevisionId",
-    "checkpointId",
-    "viewport",
-    "theme"
+    "renderId",
+    "artifactDigest",
+    "scenarioKey",
+    "designContractVersion",
+    "a11yViolationCount"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.design.render.captured"

@@ -5,6 +5,8 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { PgEventStore, type AppendEventInput } from "../../eventStore.js";
+import type { EventName } from "../../events/index.js";
 import { PgCasByteStore } from "../../cas/pgCasByteStore.js";
 import type { CasArtifactRef, CasByteStore, Digest } from "../../contracts/cas.js";
 import type { VisualComparisonRules } from "../../contracts/runtimeVerificationAdapters.js";
@@ -25,7 +27,11 @@ export interface VerifyAndRecordDesignRenderInput {
   readonly designSystemId: string;
   readonly releaseId: string;
   readonly artifactId: string;
+  /** Exact persisted manifest digest of the web artifact this pass renders. */
+  readonly artifactDigest: string;
   readonly contractDigest: string;
+  /** Per-clause content coordinates for the clauses this verification actually evaluates. */
+  readonly contractClauseRefs: readonly string[];
   readonly plainReleaseDigest: string;
   readonly polishedReleaseDigest: string;
   readonly fragmentLineage: readonly string[];
@@ -49,6 +55,10 @@ export interface VerifyAndRecordDesignRenderInput {
 export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRenderInput): Promise<void> {
   const standard = input.accessibilityPosture.standard;
   let verification: DesignRenderVerification;
+  const eventStore = {
+    append: async <N extends EventName>(event: AppendEventInput<N>): Promise<void> =>
+      runWithOrgScope(input.pool, event.orgId, (client) => new PgEventStore(client).append(event)),
+  };
   try {
     const cas = new PgCasByteStore(input.pool);
     const build = input.adapter.buildArtifact({
@@ -68,6 +78,8 @@ export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRe
       : undefined;
     verification = await verifyComposedDesignSystemRender({
       orgId: input.orgId,
+      projectId: input.projectId,
+      eventStore,
       cas,
       build,
       scenarios,
@@ -91,7 +103,7 @@ export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRe
       failingRuleIds: [],
     };
   }
-  await recordDesignRenderVerdict(input.pool, {
+  const renderVerificationId = await recordDesignRenderVerdict(input.pool, {
     orgId: input.orgId,
     projectId: input.projectId,
     designSystemId: input.designSystemId,
@@ -100,6 +112,33 @@ export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRe
     contractDigest: input.contractDigest,
     verification,
   });
+  await eventStore.append({
+    orgId: input.orgId,
+    projectId: input.projectId,
+    eventType: "design.render.verdict_recorded",
+    payload: {
+      renderVerificationId,
+      artifactDigest: input.artifactDigest,
+      pixelOutcome: renderOutcome(verification, "pixel"),
+      // No semantic checkpoint exists in this pass. Do not infer one from the aggregate.
+      semanticOutcome: "unknown",
+      a11yOutcome: renderOutcome(verification, "a11y"),
+      contractDigest: input.contractDigest,
+      contractClauseRefs: [...input.contractClauseRefs],
+    },
+  });
+}
+
+function renderOutcome(
+  verification: DesignRenderVerification,
+  kind: "pixel" | "semantic" | "a11y",
+): "passed" | "failed" | "unknown" {
+  const checkpoints = verification.checkpoints.filter((checkpoint) =>
+    kind === "pixel" ? checkpoint.checkpointId.endsWith("::pixel") : !checkpoint.checkpointId.endsWith("::pixel"),
+  );
+  if (kind === "semantic") return "unknown";
+  if (checkpoints.length === 0 || checkpoints.some((checkpoint) => checkpoint.verdict === "unknown")) return "unknown";
+  return checkpoints.every((checkpoint) => checkpoint.verdict === "passed") ? "passed" : "failed";
 }
 
 /**

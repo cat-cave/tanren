@@ -63,6 +63,9 @@ export class PgGateProofBundleSealer implements GateProofBundleSealer {
       proofKeyInput: input.proofKeyInput,
       plan: requirements.plan,
       sections,
+      runtimeBehaviorBindings: drafts.flatMap((draft) =>
+        draft.runtimeBehaviorBinding === undefined ? [] : [draft.runtimeBehaviorBinding],
+      ),
       gateVerdict,
     };
     await persistProjection(this.pool, input, bundle, sealed.bundleId);

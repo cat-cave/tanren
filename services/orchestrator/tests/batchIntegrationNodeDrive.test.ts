@@ -1,16 +1,3 @@
-// CORRECTNESS PROOF for the §3 batch integration-node drive (tanren-owns-the-engine.md
-// §3), Wave-3 / Slice-3. Asserts the load-bearing behaviors at the batch verdict site:
-//   - PROOF REUSE SKIPS THE RE-GATE: a node whose proofReuseKey matches a recorded
-//     PASSING proof does NOT invoke the gate runner (the gate spy is NOT called) +
-//     `integration.proof.reused` is emitted.
-//   - A MISS RUNS THE GATE + records the proof (so the next identical key reuses it).
-//   - DRIFT forces the gate to run (no stale reuse).
-//   - JJ-LOCAL INTEGRATION produces the SAME landable content the server build did
-//     (member-key equality) with NO `tanren/integ`/`tanren/batch` HOST ref written.
-//
-// The jj-local integration is injected as a FAKE port (no live runner) so the drive's
-// proof-reuse + node-upsert logic is asserted deterministically; the real jj integration
-// is conformance-pinned separately.
 import { describe, expect, it, vi } from "vitest";
 import { parseDigest } from "../src/engine/contracts/cas.js";
 import type { GateProofBundleV2 } from "../src/engine/contracts/gateProof.js";
@@ -29,13 +16,17 @@ import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegrat
 import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import type { GateProofBundleInput, GateProofBundleSealer } from "../src/engine/merge/gateProofBundleTypes.js";
 
-/** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
+const REAL_RUNTIME_BINDING = {
+  runtimeBehaviorContextHash: parseDigest(`sha256:${"d".repeat(64)}`),
+  requiredBehaviorRevisionCount: 7,
+};
 
 class FakeGateBundles implements GateProofBundleSealer {
   private readonly bundles = new Map<string, GateProofBundleV2>();
   private readonly sealedSectionDigests = new Map<string, readonly string[]>();
   private sequence = 0;
+  includeRuntimeBehavior = false;
 
   async seal(input: GateProofBundleInput): Promise<GateProofBundleV2> {
     const sequence = ++this.sequence;
@@ -47,7 +38,12 @@ class FakeGateBundles implements GateProofBundleSealer {
       integrationNodeId: input.nodeId,
       proofKeyInput: input.proofKeyInput,
       plan: {
-        required: { native_ci: true, runtime_behavior: false, design_render: false, artifact_provenance: false },
+        required: {
+          native_ci: true,
+          runtime_behavior: this.includeRuntimeBehavior,
+          design_render: false,
+          artifact_provenance: false,
+        },
       },
       sections: [
         {
@@ -56,7 +52,18 @@ class FakeGateBundles implements GateProofBundleSealer {
           verdict: input.nativeCi.verdict,
           unitDigests: [sectionDigest],
         },
+        ...(this.includeRuntimeBehavior
+          ? [
+              {
+                kind: "runtime_behavior" as const,
+                required: true,
+                verdict: "passed" as const,
+                unitDigests: [parseDigest(`sha256:${"e".repeat(64)}`)],
+              },
+            ]
+          : []),
       ],
+      ...(this.includeRuntimeBehavior ? { runtimeBehaviorBindings: [REAL_RUNTIME_BINDING] } : {}),
       gateVerdict: input.nativeCi.verdict,
     };
     const key = bundleKey(input);
@@ -73,7 +80,6 @@ class FakeGateBundles implements GateProofBundleSealer {
       : undefined;
   }
 
-  /** Test-only signature negative control: a changed sealed section must never reuse. */
   corruptSection(input: Omit<GateProofBundleInput, "nativeCi">): void {
     const key = bundleKey(input);
     const bundle = this.bundles.get(key);
@@ -111,11 +117,9 @@ function sameStrings(left: readonly string[], right: readonly string[] | undefin
   return right !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-/** An in-memory node + proof store (the PgIntegrationNodeModel, behavior-equivalent). */
 class FakeNodeStore implements BatchNodeStore {
   readonly nodes = new Map<string, IntegrationNode>();
   readonly gateBundles = new FakeGateBundles();
-  // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
 
   async materializeReadyNode(input: CoverageAuthorityReadyNodeInput): Promise<string> {
@@ -147,7 +151,6 @@ class FakeNodeStore implements BatchNodeStore {
   }
 }
 
-/** A recording event store (so we can assert the `integration.proof.reused` emit). */
 class RecordingEventStore {
   readonly appended: Array<{ eventType: EventName; payload: unknown }> = [];
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
@@ -171,24 +174,14 @@ const FACTS: BatchNodeDriveFacts = {
   quarantineVersion: "1",
 };
 
-/** The member head SHAs the fake jj integration "captured" — the divergence key. */
 const MEMBER_HEAD_SHAS = { spec_a: "a".repeat(40), spec_b: "b".repeat(40) };
 const INTEGRATED_HEAD = "c".repeat(40);
 
-/**
- * A FAKE jj-local integration port: it materializes a fixed integrated head WITHOUT a
- * live runner and runs the continuation with a dummy workspace. It NEVER writes a host
- * ref — the integration is purely local (the §3b invariant).
- */
 function fakeIntegratePort(store: FakeNodeStore, baseSha = FACTS.baseSha): BatchNodeDriveDeps["integrate"] {
   return async (_workspaceDeps, input, onIntegrated) => {
-    // The jj-local integration NEVER pushes a host ref (only a runner-local bookmark).
-    // The local ref name must be the local-batch bookmark, NOT a `tanren/integ|batch`
-    // host ref — assert that here so a regression that writes a host ref is caught.
     expect(input.localRef).toBe(batchLocalIntegrationRef(FACTS.tailSpecId));
     expect(input.localRef.startsWith("tanren/integ")).toBe(false);
     expect(input.localRef.startsWith("tanren/batch")).toBe(false);
-    // Nothing pushed — the integration is purely a runner-local jj bookmark.
     store.hostRefsWritten = [];
     const integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }> = {
       outcome: "integrated",
@@ -198,13 +191,11 @@ function fakeIntegratePort(store: FakeNodeStore, baseSha = FACTS.baseSha): Batch
       treeHash: "tree-deadbeef",
       memberHeadShas: MEMBER_HEAD_SHAS,
     };
-    // The dummy workspace is never touched by the fakes (resolveConfig/gate ignore it).
     const value = await onIntegrated({ target: {} as never, workspacePath: "/workspace" } as never, integrated);
     return { outcome: "integrated", value };
   };
 }
 
-/** Deps with the fake integration, a config-resolver that returns a fixed config, and a SPY gate. */
 function deps(
   store: FakeNodeStore,
   events: RecordingEventStore,
@@ -248,8 +239,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
     }));
-
-    // First check: cache miss → the gate RUNS.
     const first = await driveBatchThroughNode(FACTS, deps(store, events, gate));
     expect(first.result).toBe("pass");
     if (first.result !== "pass") throw new Error("expected a passing exact-node verdict");
@@ -270,17 +259,15 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       proofRoot: `sha256:${"15".padStart(64, "0")}`,
     });
     expect(gate).toHaveBeenCalledTimes(1);
-
-    // The node's memberKey is `hash(baseSha + ordered member HEAD shas)` — the SAME the
-    // server build would key (member-key equality / "same landable content").
+    expect(events.appended).toContainEqual({
+      eventType: "integration.proof.recorded",
+      payload: expect.objectContaining({ nodeId: authorityBinding.nodeId, verdict: "passed" }),
+    });
     const expectedKey = memberKey(FACTS.baseSha, [MEMBER_HEAD_SHAS.spec_a, MEMBER_HEAD_SHAS.spec_b]);
     expect(store.nodes.has(expectedKey)).toBe(true);
     expect(store.nodes.get(expectedKey)?.headSha).toBe(INTEGRATED_HEAD);
-    // NO host ref was written by the jj-local integration.
     expect(store.hostRefsWritten).toEqual([]);
 
-    // Second check: SAME six components → the recorded passing proof short-circuits the
-    // gate. THE proof-reuse-SKIPS-a-re-gate assertion: the gate spy is NOT called again.
     const gate2 = vi.fn<GateFn>(async () => ({
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
@@ -301,20 +288,39 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     });
   });
 
+  it("a fresh seal emits real runtime behavior coordinates, never reused", async () => {
+    const store = new FakeNodeStore();
+    store.gateBundles.includeRuntimeBehavior = true;
+    const events = new RecordingEventStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "pass" as const, integrationBranch: "x" },
+      passed: true,
+    }));
+
+    await expect(driveBatchThroughNode(FACTS, deps(store, events, gate))).resolves.toMatchObject({ result: "pass" });
+    expect(events.appended).toContainEqual({
+      eventType: "integration.proof.recorded",
+      payload: expect.objectContaining(REAL_RUNTIME_BINDING),
+    });
+    expect(events.appended).toContainEqual({
+      eventType: "gate.behavior_proof.bound",
+      payload: expect.objectContaining({
+        planSetHash: REAL_RUNTIME_BINDING.runtimeBehaviorContextHash,
+        requiredBehaviorRevisionCount: 7,
+      }),
+    });
+    expect(events.appended.some((event) => event.eventType === "integration.proof.reused")).toBe(false);
+  });
+
   it("DRIFT (a changed runnerImage) forces the gate to RUN — no stale reuse", async () => {
     const store = new FakeNodeStore();
     const gate = vi.fn<GateFn>(async () => ({
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
     }));
-    // Prime a passing proof under the baseline key.
     await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), gate));
     expect(gate).toHaveBeenCalledTimes(1);
 
-    // Now the runner image drifts → a DIFFERENT proofReuseKey → cache miss → the gate
-    // RUNS AGAIN (the recorded proof for the old image is NOT reused). The drifted gate
-    // returns a FAIL verdict, so the OBSERVABLE OUTCOME proves the gate truly ran (a
-    // stale reuse of the old PASS would instead have returned `pass`).
     const gate2 = vi.fn<GateFn>(async () => ({
       verdict: { result: "fail" as const, message: "drift" },
       passed: false,
@@ -335,9 +341,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     expect(first.result).toBe("fail");
     expect(failGate).toHaveBeenCalledTimes(1);
 
-    // The SAME key now finds a FAILED proof → recompute (the gate RUNS again, never a
-    // reuse). OBSERVABLE OUTCOME: the recompute's fresh PASS verdict flows back (a reuse
-    // of the stale FAILED proof would instead have returned without running gate2).
     const gate2 = vi.fn<GateFn>(async () => ({
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
@@ -490,9 +493,7 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     }));
     const driven = deps(store, new RecordingEventStore(), gate);
     driven.resolveFragmentEvidence = async () => ({ kind: "fallback", reason: "selector_set_mismatch" });
-
     const verdict = await driveBatchThroughNode(FACTS, driven);
-
     expect(verdict).toEqual({ result: "fail", message: "unselected changed test failed" });
     expect(gate).toHaveBeenCalledTimes(1);
   });

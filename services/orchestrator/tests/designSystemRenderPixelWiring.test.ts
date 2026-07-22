@@ -151,6 +151,8 @@ describe("ds-4 Slice B — pixel path wired into verifyComposedDesignSystemRende
     const cas = new InMemoryContentStore();
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_pixel_wiring",
+      eventStore: { append: async () => {} },
       cas,
       build: build(),
       scenarios: SCENARIOS,
@@ -169,6 +171,8 @@ describe("ds-4 Slice B — pixel path wired into verifyComposedDesignSystemRende
     const runner = new NeverRunner();
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_pixel_wiring",
+      eventStore: { append: async () => {} },
       cas,
       build: build(),
       scenarios: SCENARIOS,
@@ -265,6 +269,8 @@ describe("ds-4 Slice B — pixel path wired into verifyComposedDesignSystemRende
 
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_pixel_wiring",
+      eventStore: { append: async () => {} },
       cas,
       build: build(),
       scenarios: SCENARIOS,

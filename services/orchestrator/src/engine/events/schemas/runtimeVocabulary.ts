@@ -43,8 +43,8 @@ const VerdictOutcome = z.enum([
   "cancelled_superseded",
 ]);
 const FlakeState = z.enum(["stable", "suspected", "confirmed", "quarantined_fragment"]);
-const RenderVerdict = z.enum(["passed", "failed"]);
-const ProofVerdict = z.enum(["passed", "failed"]);
+const RenderVerdict = z.enum(["passed", "failed", "unknown"]);
+const ProofVerdict = z.enum(["passed", "failed", "unknown"]);
 const DeployEnvironment = z.enum(["preview", "staging", "production"]);
 
 // ---------------------------------------------------------------------------
@@ -174,18 +174,24 @@ export const BehaviorEffectObservedPayload = z
 
 export const DesignRenderCapturedPayload = z
   .object({
-    behaviorRevisionId: Id,
-    checkpointId: Id,
-    viewport: z.string().min(1).max(64),
-    theme: z.string().min(1).max(64),
+    renderId: Sha256Digest,
+    artifactDigest: Sha256Digest,
+    scenarioKey: Id,
+    designContractVersion: z.string().min(1).max(256),
+    a11yViolationCount: Count,
   })
   .strict();
 
 export const DesignRenderVerdictRecordedPayload = z
   .object({
-    behaviorRevisionId: Id,
-    checkpointId: Id,
-    verdict: RenderVerdict,
+    renderVerificationId: Id,
+    artifactDigest: Sha256Digest,
+    pixelOutcome: RenderVerdict,
+    semanticOutcome: RenderVerdict,
+    a11yOutcome: RenderVerdict,
+    /** Whole-contract coordinate; deliberately distinct from clause-level references. */
+    contractDigest: Sha256Digest,
+    contractClauseRefs: z.array(Sha256Digest).max(256),
   })
   .strict();
 
@@ -230,6 +236,10 @@ export const IntegrationProofRecordedPayload = z
     memberKey: Id,
     proofReuseKey: Id,
     verdict: ProofVerdict,
+    // A non-behavior integration proof has no runtime-behavior section to
+    // truthfully bind here, so both coordinates are omitted in that case.
+    runtimeBehaviorContextHash: Sha256Digest.optional(),
+    requiredBehaviorRevisionCount: Count.optional(),
   })
   .strict();
 

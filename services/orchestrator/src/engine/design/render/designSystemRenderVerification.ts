@@ -21,6 +21,7 @@
 // behavior change, no podman invocation.
 
 import type { CasByteStore } from "../../contracts/cas.js";
+import type { EventStore } from "../../eventStore.js";
 import type { DesignAccessibilityPosture } from "../system/designContractV2.js";
 import type { DesignRenderScenario } from "../system/designTargetAdapter.js";
 import { BrowserFreeRenderCaptureHarness } from "./browserFreeRenderCaptureHarness.js";
@@ -44,6 +45,9 @@ export interface RenderableComponentBuild {
 
 export interface DesignSystemRenderVerificationInput {
   readonly orgId: string;
+  readonly projectId: string;
+  /** Canonical event sink; production compose supplies an RLS-scoped PgEventStore. */
+  readonly eventStore: EventStore;
   readonly cas: CasByteStore;
   /** The built web artifact (catalog + component source files) to render from. */
   readonly build: RenderableComponentBuild;
@@ -96,7 +100,7 @@ export async function verifyComposedDesignSystemRender(
   // The browser-free a11y pass runs unless the a11y posture is advisory (an enabled pixel
   // knob does NOT force an a11y bar — the two passes are independent evidence kinds).
   if (!a11yAdvisory) {
-    const harness = new BrowserFreeRenderCaptureHarness(input.cas);
+    const harness = new BrowserFreeRenderCaptureHarness(input.cas, input.eventStore);
     const oracle = new RenderA11yVerdictOracle(input.cas);
     for (const scenario of input.scenarios) {
       const component = componentByKey.get(scenario.component);
@@ -110,6 +114,7 @@ export async function verifyComposedDesignSystemRender(
 
       const capture = await harness.capture({
         orgId: input.orgId,
+        projectId: input.projectId,
         scenario,
         componentSource: new TextDecoder().decode(file.bytes),
         componentExportName: pascalCase(component.key),

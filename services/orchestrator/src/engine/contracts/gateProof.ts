@@ -132,7 +132,15 @@ export interface GateProofBundleV2 {
   readonly proofKeyInput: ProofReuseKeyInput;
   readonly plan: RequiredSectionPlan;
   readonly sections: readonly GateSectionVerdict[];
+  /** Exact runtime-behavior body coordinates available on a freshly sealed bundle. */
+  readonly runtimeBehaviorBindings?: readonly RuntimeBehaviorBinding[];
   readonly gateVerdict: GateVerdict;
+}
+
+export interface RuntimeBehaviorBinding {
+  /** Runtime-behavior section body coordinate, not a proxy plan-set hash. */
+  readonly runtimeBehaviorContextHash: Digest;
+  readonly requiredBehaviorRevisionCount: number;
 }
 
 export function orderSections(sections: readonly GateSectionVerdict[]): readonly GateSectionVerdict[] {

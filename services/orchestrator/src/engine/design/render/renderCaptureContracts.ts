@@ -21,6 +21,8 @@ import type { DesignRenderScenario } from "../system/designTargetAdapter.js";
 /** The component + scenario to render. `componentSource` is the REAL catalog TSX. */
 export interface RenderCaptureRequest {
   readonly orgId: string;
+  /** Project coordinate stamped on the durable capture event. */
+  readonly projectId?: string;
   readonly scenario: DesignRenderScenario;
   /** The catalog component's real TSX source (e.g. `webCatalog` `components/ui/button.tsx`). */
   readonly componentSource: string;

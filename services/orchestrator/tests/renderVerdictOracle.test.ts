@@ -40,6 +40,7 @@ class InMemoryContentStore implements CasByteStore {
 
 const ORG_ID = "org_ds4_oracle";
 const DESIGN_CONTRACT_VERSION = "dcv_oracle_1";
+const EVENTS = { append: async () => {} };
 
 function realCatalogAdapter(): WebDesignTargetAdapter {
   return new WebDesignTargetAdapter({
@@ -93,6 +94,7 @@ const IMG_NO_ALT_SOURCE = [
 async function captureButton(harness: BrowserFreeRenderCaptureHarness): Promise<RenderCaptureOutcome> {
   return harness.capture({
     orgId: ORG_ID,
+    projectId: "project_ds4_oracle",
     scenario: await firstButtonScenario(),
     componentSource: realButtonSource(),
     componentExportName: "Button",
@@ -105,6 +107,7 @@ async function captureButton(harness: BrowserFreeRenderCaptureHarness): Promise<
 async function captureNoAltImage(harness: BrowserFreeRenderCaptureHarness): Promise<RenderCaptureOutcome> {
   return harness.capture({
     orgId: ORG_ID,
+    projectId: "project_ds4_oracle",
     scenario: await firstButtonScenario(),
     componentSource: IMG_NO_ALT_SOURCE,
     componentExportName: "NoAltImage",
@@ -142,7 +145,7 @@ describe("deriveA11ySeverityBar (posture → axe impact bar)", () => {
 describe("RenderA11yVerdictOracle", () => {
   it("REAL critical axe violation + a real WCAG posture → failed_visual with the rule id as evidence", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     // The harness really rendered the <img> (no fabricated axe result).
     const capture = await captureNoAltImage(harness);
     expect(capture.kind).toBe("captured");
@@ -167,7 +170,7 @@ describe("RenderA11yVerdictOracle", () => {
 
   it("clean component + a real WCAG posture → passed", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const capture = await captureButton(harness);
     expect(capture.kind).toBe("captured");
 
@@ -185,7 +188,7 @@ describe("RenderA11yVerdictOracle", () => {
 
   it("posture 'none' → passed even with a real critical violation (informational, not failing)", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const capture = await captureNoAltImage(harness);
     expect(capture.kind).toBe("captured");
 
@@ -204,7 +207,7 @@ describe("RenderA11yVerdictOracle", () => {
 
   it("FAIL-CLOSED: a render_failed capture → inconclusive, NEVER passed", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const broken = [
       'import { Nope } from "@tanren/definitely-not-real";',
       "export const Broken = () => Nope();",
@@ -232,7 +235,7 @@ describe("RenderA11yVerdictOracle", () => {
 
   it("FAIL-CLOSED: an absent/unreadable a11y_audit → inconclusive, NEVER passed", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const capture = await captureButton(harness);
     expect(capture.kind).toBe("captured");
 
@@ -251,7 +254,7 @@ describe("RenderA11yVerdictOracle", () => {
 
   it("FAIL-CLOSED: a declared-but-unmappable posture → inconclusive, NEVER passed", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const capture = await captureButton(harness);
     expect(capture.kind).toBe("captured");
 
