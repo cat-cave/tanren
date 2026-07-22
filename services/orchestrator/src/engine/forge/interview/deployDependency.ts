@@ -95,7 +95,7 @@ export class DeployProvisioningUnavailableError extends Error {}
 
 export function missingDeployProviderError(): DeployProviderMissingError {
   return new DeployProviderMissingError(
-    "greenfield/apex creation requires an explicit deploy providerKind (deploy.vercel or deploy.flyio)",
+    "greenfield creation requires an explicit deploy providerKind (deploy.vercel or deploy.flyio)",
   );
 }
 
