@@ -1,9 +1,10 @@
 /**
- * rv-26.6 (apex P6): the interactive BROWSER acceptance surface driver. Given a plan's
+ * rv-26.6: the interactive BROWSER acceptance surface driver. Given a plan's
  * `clickInteractions` and the deployed dashboard's base URL, it drives a REAL browser
  * (through the {@link BrowserClickRunner} seam) to perform N clicks on a target selector
- * — apex P6's Gherkin: an operator clicks "Send notification" 100 times in the deployed
- * UI. Each CONFIRMED click emits one `behavior.action.observed` event through the
+ * — an operator clicks a target selector N times in the deployed UI, with both the
+ * selector and N supplied by the specification. Each CONFIRMED click emits one
+ * `behavior.action.observed` event through the
  * canonical {@link AcceptanceEventSink}, and the interaction's confirmed-click count is
  * returned as the observation `<interactionId>.clickCount` (so an assertion
  * `notify.clickCount equals 100` executes against a REAL count).
@@ -13,7 +14,7 @@
  * refactor of it. It drives ONLY the public dashboard HTTP surface (the served URL); DB
  * reads are verification-only and belong to other stages.
  *
- * FAIL-CLOSED, NEVER FABRICATE (the P6 core invariant):
+ * FAIL-CLOSED, NEVER FABRICATE:
  *  - The base URL cannot be resolved (no deploy) ⇒ `unavailable`
  *    (inconclusive_infrastructure). No clicks are invented.
  *  - The browser cannot launch / the page is unreachable / a click cannot be confirmed ⇒

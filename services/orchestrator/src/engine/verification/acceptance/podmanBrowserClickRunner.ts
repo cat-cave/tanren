@@ -1,4 +1,4 @@
-// rv-26.6 (apex P6) — the REAL containerized browser click runner.
+// rv-26.6 — the REAL containerized browser click runner.
 //
 // The orchestrator host (Nix) cannot launch a prebuilt chromium (missing FHS libs), but
 // it CAN run one INSIDE the render-worker container (Playwright's bookworm/FHS image),

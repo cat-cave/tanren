@@ -1,6 +1,6 @@
 // gv-4: HTTP contract for the stacked-PR retarget safety view. Surfaces the
 // complete persisted ancestor member vector + resolved walk target so operators
-// and apex proofs can assert that merged transitive ancestors never remain as
+// and behavior-verification proofs can assert that merged transitive ancestors never remain as
 // the PR base. Strict Zod shape — no UI affordances.
 
 import { z } from "zod";
@@ -15,7 +15,7 @@ export const StackRetargetMember = ancestorStackMemberSchema
 export type StackRetargetMember = z.infer<typeof StackRetargetMember>;
 
 /**
- * Resolved stack-retarget view for one run. `missionNodeId` pins the apex proof
+ * Resolved stack-retarget view for one run. `missionNodeId` pins the behavior-verification proof
  * to gv-4 without inventing a new event type (reuse `merge.retargeted`).
  */
 export const StackRetargetView = z

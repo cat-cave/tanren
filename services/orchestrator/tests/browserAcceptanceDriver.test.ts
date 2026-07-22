@@ -1,6 +1,6 @@
-// rv-26.6 (apex P6) DECISIVE driver proof (DB-free). It drives the REAL
+// rv-26.6 DECISIVE driver proof (DB-free). It drives the REAL
 // AcceptanceOrchestrator through the REAL BrowserAcceptanceSurfaceDriver + the REAL
-// canonical event-append seam, proving the P6 invariant the audit probes:
+// canonical event-append seam, proving the fail-closed invariant the audit probes:
 //   - 100 confirmed clicks ⇒ EXACTLY 100 `behavior.action.observed` events (no missing /
 //     no dup) AND a `notify.clickCount == 100` observation ⇒ passed,
 //   - a browser that cannot launch / an absent-or-erroring click ⇒ the surface is
@@ -118,7 +118,7 @@ function unresolvedResolver(reason: string): AcceptanceBaseUrlResolver {
   return { resolve: (_input: AcceptanceDriveInput) => Promise.resolve({ kind: "unresolved" as const, reason }) };
 }
 
-function clickPlan(clicks: number, expected: number, selector = "#send-notification"): AcceptancePlan {
+function clickPlan(clicks: number, expected: number, selector = "#target-control"): AcceptancePlan {
   return {
     planId: "plan_browser_rv266",
     behaviorRevisionId: "br_browser_rv266",
@@ -163,7 +163,7 @@ function orchestratorWith(runner: BrowserClickRunner, resolver: AcceptanceBaseUr
 describe("BrowserAcceptanceSurfaceDriver — real clicks, exact count, no fabrication", () => {
   it("DECISIVE: 100 confirmed clicks ⇒ exactly 100 behavior.action.observed + clickCount==100 ⇒ passed", async () => {
     const events = new RecordingEventSink();
-    const orchestrator = orchestratorWith(fixtureRunner("#send-notification"), fixedResolver("http://fixture"), events);
+    const orchestrator = orchestratorWith(fixtureRunner("#target-control"), fixedResolver("http://fixture"), events);
     const result = await orchestrator.execute(request([clickPlan(100, 100)]));
     const behavior = result.behaviors[0]!;
 
@@ -186,7 +186,7 @@ describe("BrowserAcceptanceSurfaceDriver — real clicks, exact count, no fabric
     const events = new RecordingEventSink();
     // The assertion demands 100 but the interaction confirms only 100 clicks — a plan asking
     // clickCount==101 must FAIL (never laundered by an off-by-one).
-    const orchestrator = orchestratorWith(fixtureRunner("#send-notification"), fixedResolver("http://fixture"), events);
+    const orchestrator = orchestratorWith(fixtureRunner("#target-control"), fixedResolver("http://fixture"), events);
     const behavior = (await orchestrator.execute(request([clickPlan(100, 101)]))).behaviors[0]!;
     expect(behavior.outcome).not.toBe("passed");
     expect(events.actionObserved().length).toBe(100);
@@ -195,7 +195,7 @@ describe("BrowserAcceptanceSurfaceDriver — real clicks, exact count, no fabric
   it("NEGATIVE CONTROL: an absent/erroring click ⇒ inconclusive_infrastructure, ZERO events, no fabricated count", async () => {
     const events = new RecordingEventSink();
     // The fixture has no such control ⇒ the runner fails loud ⇒ the surface is unavailable.
-    const orchestrator = orchestratorWith(fixtureRunner("#send-notification"), fixedResolver("http://fixture"), events);
+    const orchestrator = orchestratorWith(fixtureRunner("#target-control"), fixedResolver("http://fixture"), events);
     const behavior = (await orchestrator.execute(request([clickPlan(100, 100, "#missing")]))).behaviors[0]!;
     // NOT passed, NOT failed_product on a fabricated count — the surface never executed.
     expect(behavior.outcome).not.toBe("passed");
@@ -207,7 +207,7 @@ describe("BrowserAcceptanceSurfaceDriver — real clicks, exact count, no fabric
   it("NEGATIVE CONTROL: an unresolved deploy URL ⇒ inconclusive, no events, no clicks invented", async () => {
     const events = new RecordingEventSink();
     const orchestrator = orchestratorWith(
-      fixtureRunner("#send-notification"),
+      fixtureRunner("#target-control"),
       unresolvedResolver("no release instance"),
       events,
     );
