@@ -328,3 +328,27 @@ and issues, no merge), and finally merge mode after fixtures prove duplicate-pol
 head-race, unknown-check, sandbox-failure, abandonment, and post-merge issue
 idempotency. There is no permissive mode: a missing prerequisite delays rollout
 rather than relaxing a guardrail.
+
+## Transition to Tanren-in-Tanren
+
+The CRA is **transitional scaffolding**, not a permanent system. Its purpose is to
+harden Tanren to beta-stable under distributed contribution; once every surface works
+and apex-difficulty fixtures run reliably, Tanren dogfoods itself — its own engine
+develops and delivers Tanren, with issue intake as the work source and self-updating
+deploys. The CRA is deliberately a hand-built, engine-external **mirror** of
+capabilities Tanren already encodes natively, so the eventual cutover is conceptual
+continuity rather than a rewrite. Each component has an explicit retirement target:
+
+| CRA component (scaffolding, external) | Tanren-native capability that absorbs it |
+| --- | --- |
+| GitHub issues as the work roster | Tanren's own issue intake / back-half symptom sources |
+| Track-1 contributor agents in worktrees | the autonomy engine (DagWalker + writer adapters + `integration_nodes`) |
+| Deep adversarial audit + P0–P3 finding triage | `MergeAuthority` + runtime behavior-verification + audit-as-P0–P3-findings gated by `auditPosture` |
+| Fail-closed autonomous squash merge | the native intelligent merge queue / `MergeAuthority` CAS land on jj |
+| (manual today) deploy of Tanren's own release | `DeployAdapter` + merge-reflecting deploy pointed at Tanren's own release → self-update |
+
+The P0/P1-blocks / P2/P3-defers doneness model the CRA uses is the same shape as
+Tanren's native `auditPosture` — so the CRA is not inventing a review philosophy but
+standing in for a posture Tanren already holds. Build each CRA piece thin and
+engine-external; when its native counterpart is proven beta-stable, retire the
+scaffolding piece and route through Tanren instead.
