@@ -14,6 +14,7 @@ import {
   type StartedBehaviorVerificationRunStage,
   type WriteBehaviorVerificationRunStageInput,
 } from "../behaviorVerificationRunStage.js";
+import { readRuntimeBehaviorContext } from "./resolutionBehaviorContext.js";
 
 export type BaselineProbe = Pick<SymptomProbeAdapter, "runBaseline">;
 type ContractReader = Pick<SymptomContractStore, "get">;
@@ -255,6 +256,15 @@ export class BaselineReproductionStage implements ResolutionStage {
     job: ResolutionJob,
     contract: SymptomContractRow,
   ): Promise<BaselineReproductionContext> {
+    // bh-15: when the walker passes the locked behavior context, the release/env
+    // binding is still resolved here, but the canonical `runtimeBehaviorContextHash`
+    // is the locked digest — so baseline proves (and stores) the SAME frozen
+    // behavior identity that production does.
+    const locked = readRuntimeBehaviorContext(ctx);
+    if (locked !== undefined) {
+      const base = await this.contextResolver.resolve({ job, contract });
+      return { ...base, runtimeBehaviorContextHash: locked.contextDigest };
+    }
     if (ctx === undefined || ctx === null || (isRecord(ctx) && Object.keys(ctx).length === 0)) {
       return this.contextResolver.resolve({ job, contract });
     }

@@ -47,3 +47,39 @@ export type ProductionResolutionStageResult = ResolutionStageResultCommon &
   );
 
 export type ResolutionStageResult = BaselineResolutionStageResult | ProductionResolutionStageResult;
+
+/**
+ * bh-15 — one EXACT bound behavior revision, loaded whole (Given/When/Then +
+ * the immutable content digest + its resolved acceptance plan). The revision is
+ * the one BOUND to the release under verification, never the latest lineage head.
+ */
+export interface LockedBehaviorRevision {
+  readonly behaviorRevisionId: string;
+  readonly behaviorId: string;
+  readonly personaRevisionId: string;
+  readonly ordinal: number;
+  readonly title: string;
+  readonly given: string;
+  readonly when: string;
+  readonly then: string;
+  readonly contentDigest: string;
+  readonly acceptancePlanId: string;
+}
+
+/**
+ * bh-15 — the single immutable behavior context every resolution stage executes
+ * BEFORE it probes, previews, replays, or soaks. It pins the exact
+ * behavior/persona revision set bound to the active symptom contract's release,
+ * so baseline, production, counterfactual, and soak all prove the SAME frozen
+ * behaviors. `contextDigest` is the canonical identity stored in the
+ * verification-run facts (`behavior_verification_runs.runtime_behavior_context_hash`).
+ */
+export interface RuntimeBehaviorContext {
+  readonly contractId: string;
+  readonly issueLoopId: string;
+  readonly releaseInstanceId: string;
+  readonly artifactDigest: string;
+  readonly behaviors: readonly LockedBehaviorRevision[];
+  readonly personaRevisionIds: readonly string[];
+  readonly contextDigest: string;
+}

@@ -28,3 +28,12 @@ export {
   type BaselineRuntimeContextResolver,
 } from "./baselineReproductionStage.js";
 export { ProductionSymptomStage, type ProductionSymptomStageDeps } from "./productionSymptomStage.js";
+export {
+  PgRuntimeBehaviorContextLoader,
+  LockedBehaviorContextError,
+  lockedBehaviorContextFailureResult,
+  readRuntimeBehaviorContext,
+  type RuntimeBehaviorContextLoader,
+  type PgRuntimeBehaviorContextLoaderDeps,
+  type LockedBehaviorContextReason,
+} from "./resolutionBehaviorContext.js";

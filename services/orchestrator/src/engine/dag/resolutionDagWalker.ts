@@ -20,6 +20,12 @@ import {
   type RegressionBisector,
 } from "../verification/postMergeReproof/regressionBisection.js";
 import type { BehaviorQuarantineReader } from "../verification/acceptance/behaviorQuarantineGovernance.js";
+import {
+  LockedBehaviorContextError,
+  lockedBehaviorContextFailureResult,
+  type RuntimeBehaviorContextLoader,
+} from "../verification/resolutionStages/resolutionBehaviorContext.js";
+import type { RuntimeBehaviorContext } from "../contracts/resolutionStage.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -68,6 +74,16 @@ export interface ResolutionDagWalkerDeps {
    * ⇒ no behavior is treated as quarantined (bisection runs for every regressed verdict, as before).
    */
   readonly behaviorQuarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantinedInEpoch">;
+  /**
+   * bh-15 locked behavior-context loader. Before EVERY stage runs, it pins the
+   * exact behavior/persona revision set bound to the release under verification
+   * and passes one immutable `RuntimeBehaviorContext` into the stage. A
+   * `LockedBehaviorContextError` settles the job inconclusive/stale_contract
+   * WITHOUT running the probe, the ResolutionAuthority, or the source-close outbox.
+   * Required in the live composition; its absence disables locking (legacy unit
+   * harnesses that inject fake stages).
+   */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -205,7 +221,11 @@ export class ResolutionDagWalker {
     timer.unref?.();
 
     try {
-      const result = await stage.run(job, {});
+      // bh-15: lock the exact bound behavior context BEFORE the probe. A failed
+      // lock is fail-closed — the stage, the ResolutionAuthority, and the
+      // source-close outbox are all skipped, and the job settles terminally.
+      const behaviorContext = await this.loadLockedBehaviorContext(job);
+      const result = await stage.run(job, behaviorContext === undefined ? {} : { behaviorContext });
       stopped = true;
       clearInterval(timer);
       await heartbeatInFlight;
@@ -242,7 +262,41 @@ export class ResolutionDagWalker {
     } catch (error) {
       stopped = true;
       clearInterval(timer);
+      await heartbeatInFlight;
+      if (error instanceof LockedBehaviorContextError) {
+        await this.settleLockedBehaviorContextFailure(job, error);
+        return;
+      }
       await this.releaseAfterStageFailure(job, claim, error);
+    }
+  }
+
+  /** Absent loader ⇒ locking disabled (legacy fake-stage harnesses); live composition wires it. */
+  private async loadLockedBehaviorContext(job: ResolutionJob): Promise<RuntimeBehaviorContext | undefined> {
+    if (this.deps.behaviorContextLoader === undefined) return undefined;
+    return this.deps.behaviorContextLoader.load(job);
+  }
+
+  /**
+   * Settle a job whose locked behavior context could not be resolved. It records
+   * the terminal (`stale_contract`) or retryable (`inconclusive`) settlement
+   * through the SAME classification-guarded seam every stage uses — the probe,
+   * the ResolutionAuthority, and the source-close outbox never ran, so no stage
+   * work advanced on an empty, latest, or substituted behavior.
+   */
+  private async settleLockedBehaviorContextFailure(
+    job: ResolutionJob,
+    error: LockedBehaviorContextError,
+  ): Promise<void> {
+    log.warn("locked behavior context unavailable; settling without running stage", {
+      resolutionJobId: job.id,
+      stage: job.stage,
+      reason: error.reason,
+      classification: error.classification,
+    });
+    const settled = await settleResolutionJob(this.deps.store, job, lockedBehaviorContextFailureResult(error));
+    if (!settled) {
+      throw new ResolutionLeaseLostError(`resolution job ${job.id} lost its lease before locked-context settlement`);
     }
   }
 

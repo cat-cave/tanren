@@ -17,6 +17,7 @@ import {
   startBehaviorVerificationRunStage,
   type StartedBehaviorVerificationRunStage,
 } from "../behaviorVerificationRunStage.js";
+import { readRuntimeBehaviorContext } from "./resolutionBehaviorContext.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 
@@ -57,7 +58,7 @@ export class ProductionSymptomStage implements ResolutionStage {
     this.eventsForClient = deps.eventsForClient ?? ((client) => new PgEventStore(client));
   }
 
-  public async run(job: ResolutionJob, _ctx: unknown): Promise<ResolutionStageResult> {
+  public async run(job: ResolutionJob, ctx: unknown): Promise<ResolutionStageResult> {
     if (job.stage !== this.kind) {
       throw new ProductionSymptomStageBindingError(`production stage cannot run ${job.stage} job ${job.id}`);
     }
@@ -66,13 +67,19 @@ export class ProductionSymptomStage implements ResolutionStage {
     const productionContract = contractAtProductionRelease(contract.contract, release.url);
     const verificationRunId = `vrun_resolution_${job.id}`;
     const contractHash = symptomContractHash(contract.contract);
-    const contextHash = runtimeContextHash({
-      contractHash,
-      artifactDigest: release.artifactDigest,
-      environmentId: binding.environmentId,
-      releaseInstanceId: release.releaseInstanceId,
-      productionUrl: productionContract.target["url"] as string,
-    });
+    // bh-15: prefer the walker's locked behavior-context digest so production
+    // stores the SAME `runtime_behavior_context_hash` baseline did for this
+    // release; fall back to the local binding hash only when run outside the walker.
+    const locked = readRuntimeBehaviorContext(ctx);
+    const contextHash =
+      locked?.contextDigest ??
+      runtimeContextHash({
+        contractHash,
+        artifactDigest: release.artifactDigest,
+        environmentId: binding.environmentId,
+        releaseInstanceId: release.releaseInstanceId,
+        productionUrl: productionContract.target["url"] as string,
+      });
 
     const started = await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
       const receipt = await startBehaviorVerificationRunStage(client, {

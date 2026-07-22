@@ -84,6 +84,8 @@ export type EvidenceRunSection = {
   readonly verificationRunId: string;
   readonly artifactDigest: string | null;
   readonly classification: string | null;
+  /** bh-15: the locked behavior-context digest this stage ran against, shown per stage. */
+  readonly runtimeBehaviorContextHash?: string | null;
 };
 
 export type ProductionSymptomSection = {
@@ -94,6 +96,8 @@ export type ProductionSymptomSection = {
   readonly preparedHeadSha: string | null;
   readonly probedUrl: string | null;
   readonly assertions: ReadonlyArray<{ readonly id: string; readonly outcome: string }>;
+  /** bh-15: the locked behavior-context digest this stage ran against, shown per stage. */
+  readonly runtimeBehaviorContextHash?: string | null;
 };
 
 export type ResolutionDecisionSection = {
