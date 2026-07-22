@@ -21,6 +21,7 @@ import type { ResolutionStage, ResolutionStageKind } from "../src/engine/contrac
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 import {
   ADMIN_URL,
   APP_USER,
@@ -220,6 +221,9 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
         // The DEFAULT reproofCoordinator (real, over this pool) settles the deploy side,
         // proving the manual retry path cannot complete a failure with the release left live.
         pool: app,
+        // This case exercises the rv-19 product_failure ROLLBACK, not the bh-15 lock — a
+        // stub loader lets the injected stage return its verdict so the rollback path runs.
+        behaviorContextLoader: stubBehaviorContextLoader(),
         contracts: {
           get: () => Promise.resolve({ id: "contract_a", projectId: PROJECT_A, issueLoopId: "loop_a" } as never),
         },
