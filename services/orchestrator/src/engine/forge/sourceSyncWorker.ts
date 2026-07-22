@@ -18,6 +18,12 @@ export interface SourceSyncWorkerDeps {
   workerId?: string;
   claimLeaseMs?: number;
   retryMs?: number;
+  leaseHeartbeatScheduler?: SourceSyncLeaseHeartbeatScheduler;
+}
+
+/** Schedules lease renewal ticks; injectable so integration tests need no wall-clock race. */
+export interface SourceSyncLeaseHeartbeatScheduler {
+  every(callback: () => Promise<void>, intervalMs: number): { stop(): void };
 }
 
 export interface SourceSyncProcessResult {
@@ -35,6 +41,14 @@ interface WorkContext {
   source: InboxSource;
   loop: IssueLoopRow;
 }
+
+const defaultLeaseHeartbeatScheduler: SourceSyncLeaseHeartbeatScheduler = {
+  every(callback, intervalMs) {
+    const interval = setInterval(() => void callback(), intervalMs);
+    interval.unref?.();
+    return { stop: () => clearInterval(interval) };
+  },
+};
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -201,12 +215,14 @@ function startLeaseHeartbeat(
       renewing = false;
     }
   };
-  const interval = setInterval(() => void renew(), Math.max(1, Math.floor(leaseMs / 3)));
-  interval.unref?.();
+  const scheduled = (deps.leaseHeartbeatScheduler ?? defaultLeaseHeartbeatScheduler).every(
+    () => renew(),
+    Math.max(1, Math.floor(leaseMs / 3)),
+  );
   return {
     stop(): void {
       stopped = true;
-      clearInterval(interval);
+      scheduled.stop();
     },
   };
 }
