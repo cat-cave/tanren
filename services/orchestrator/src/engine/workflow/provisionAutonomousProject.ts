@@ -1,7 +1,7 @@
 // SHARED project-bootstrap provisioning seam (Codex forward-look round 4: a fresh
-// apex project wasn't seeded with what the autonomy loops need). Provisioning was
+// autonomous project wasn't seeded with what the autonomy loops need). Provisioning was
 // SCATTERED + INCOMPLETE: onboarding seeded the issues inbox + the notification
-// route, but the greenfield path (which apex uses) seeded ONLY the inbox (no
+// route, but the greenfield path seeded ONLY the inbox (no
 // notification route, no audit jobs), and brownfield-link seeded only the inbox.
 // So an autonomous project was under-provisioned and the autonomy loops dead-ended.
 //
@@ -14,7 +14,7 @@
 //      security/deps/mutation/stale_specs scheduled-audit jobs, so the audit loop
 //      has work to pick up on a fresh project.
 //   2. Default notification route (Loop 5) — `ensureDefaultNotificationRoute`: the
-//      per-org default ntfy route for the apex-critical milestone events, so
+//      per-org default ntfy route for the autonomous-run-critical milestone events, so
 //      greenfield/brownfield get it too (not just onboarding).
 //   3. Issues inbox source — `ensureIssuesInboxSource`: the post-merge re-intake /
 //      user-report inbox, seeded consistently on every path.

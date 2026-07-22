@@ -11,7 +11,7 @@
 //
 // OPT-IN, DEFAULT OFF: this adds a real preview deploy per gate (cost + time). It runs
 // ONLY when the project opted into `preMergeBehaviorGate` AND the run wired a producer;
-// otherwise the merge stage does NO preview deploy (a genuine zero-cost no-op). apex's
+// otherwise the merge stage does NO preview deploy (a genuine zero-cost no-op). The run's
 // back-half is already covered by the POST-merge re-proof (rv-19), so this is an
 // ADDITIONAL safety layer, not the critical path.
 //

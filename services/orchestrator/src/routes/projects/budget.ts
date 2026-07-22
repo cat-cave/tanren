@@ -63,7 +63,7 @@ export const ProjectPatchSchema = z.object({
 });
 
 /**
- * The read-shape both GET and PUT return — the apex-proof + operator surface.
+ * The read-shape both GET and PUT return — the behavior-proof + operator surface.
  *
  * Vocabulary discipline (FOCUS-aligned): `spentUsd` is REAL money out the door
  * (BilledCost; the figure the ceiling ALWAYS gates — the doctrine). `notionalUsd` is

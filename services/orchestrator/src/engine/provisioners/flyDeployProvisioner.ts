@@ -320,7 +320,7 @@ class FlyDeployApi implements DeployProviderApi {
     } else {
       // No builder + flag off: refuse. A Fly release with no builder releases a static
       // image and ignores the merged `source`, so it cannot prove "the live product
-      // reflects this merge" — fail LOUD so apex never accidentally "proves" deploy on Fly
+      // reflects this merge" — fail LOUD so the engine never accidentally "proves" deploy on Fly
       // (it must use `deploy.vercel`, or configure a builder, or accept the static semantics).
       throw new Error(
         "fly deploy is NOT merge-reflecting (no image builder configured; it would release a static image and " +

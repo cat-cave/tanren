@@ -40,7 +40,7 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
     upstreamChange?: UpstreamChangeContext;
     productVision?: ProductVision;
   }): Promise<ConflictAnswer> {
-    // Empty-gather short-circuit (apex pre-run §7.2): NO conflicted files means there
+    // Empty-gather short-circuit: NO conflicted files means there
     // is nothing for the model to resolve — return a no-op `resolve` answer WITHOUT a
     // (whole-files-in / whole-files-out) model call. Idempotent + cheap; the resolver
     // guards the empty-files apply path so this never reaches an apply.
@@ -125,7 +125,7 @@ export function buildConflictResolverPrompt(input: {
 
 // Above this line count a conflicted file is HUNK-SCOPED in the prompt: only its
 // conflict regions (+ a small context window) go inline, not the whole file. This
-// bounds the input a large mostly-non-conflict file costs (apex pre-run §7.2); the
+// bounds the input a large mostly-non-conflict file costs; the
 // output contract is unchanged (the model reads non-conflict regions from its
 // read-only workspace + reproduces them, returning the full resolved file).
 const CONFLICT_FULL_FILE_LINE_CAP = 200;

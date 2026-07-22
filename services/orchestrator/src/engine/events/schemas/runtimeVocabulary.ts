@@ -4,7 +4,7 @@ import { z } from "zod";
 //
 // The registered event schemas the Runtime Behavior Proof Graph emits, frozen
 // here EXACTLY from the runtime spec's "Required events" list
-// (docs/roadmap/mission-complete/nodes/runtime-ui-apex-phasing-risks.md §7).
+// (docs/roadmap/mission-complete/nodes/runtime-ui-phasing-risks.md §7).
 // Names already present in the live EventRegistry — `gate.verdict`,
 // `integration.proof.reused`, `merge.batch.bisecting`, `demo.evidence.recorded`
 // — are NOT redeclared here; only the genuinely new rv-25 names are frozen.

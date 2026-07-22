@@ -278,7 +278,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         return response.stdout;
       };
       const firstRawText = await runOnce(opts.prompt);
-      // ONE bounded schema-repair pass (apex pre-run §7.1): a malformed-then-valid
+      // ONE bounded schema-repair pass: a malformed-then-valid
       // answer repairs in a single cheap re-call instead of throwing the stage (or,
       // for the auditor, becoming a synthetic P0 that drives a FULL loop iteration).
       // A second miss throws LOUD. Behavior is unchanged for a well-formed answer.

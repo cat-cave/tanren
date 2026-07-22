@@ -93,7 +93,7 @@ export interface CleanedPushSource {
 // v71 path built a single commit (tree = writer HEAD, parent = bootstrapSha) and
 // rebased it onto cloneHead. That eliminated inter-writer draft self-conflicts, but a
 // SINGLE composed commit can still 3-way-conflict when bootstrap content diverges from
-// cloneHead on paths the writer also touched (content conflict / modify-delete). apex
+// cloneHead on paths the writer also touched (content conflict / modify-delete). An autonomous run
 // v85 halted there on scaffold (`could not apply … Tanren composed change`, Rebasing
 // 1/1) after fixed-point re-drives — needs_attention. Rebase is the wrong tool: the
 // desired tree is a pure path overlay, not a patch application.

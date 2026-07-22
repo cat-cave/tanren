@@ -7,7 +7,7 @@
 // layer then sends through.
 //
 // PLANE A ONLY. This provisions Tanren's OWN Slack notifications (the Forge
-// interaction plane the operator uses to drive Tanren). The apex product's own
+// interaction plane the operator uses to drive Tanren). The built product's own
 // Slack bot is Plane B (the built product's app environment, `project_app_env`)
 // and is configured + injected separately — there is NO crossover here.
 //

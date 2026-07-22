@@ -24,7 +24,7 @@ export async function checkIterationBudget(input: SubtaskLoopInput): Promise<Pro
 // terminal pair for a per-iteration budget pause (audit finding #4). The prior shape was a
 // bare `markTaskDone(rejected_by_auditor)` with NO paired `task.failed` envelope — a §1c
 // single-finalize violation: the planner row read terminal-`done` while the timeline had no
-// matching terminal `task.*` event, so every $50-ceiling apex pause stranded the audit trail.
+// matching terminal `task.*` event, so every $50-ceiling budget pause stranded the audit trail.
 // Routing through `markPlannerFailed` (the PR #705 wrapper) lands the row + `task.failed`
 // (`failureKind: "budget_paused"`) in ONE org-scoped transaction through the writer seam.
 export async function emitBudgetPause(

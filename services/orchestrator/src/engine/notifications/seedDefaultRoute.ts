@@ -1,6 +1,6 @@
 // Onboarding-seeded DEFAULT notification route (api-mirrors-ux + no-silent
 // doctrine). When an org/project is set up, seed a per-org ntfy target + the
-// routes that make the apex-critical MILESTONE events (budget fraction/pause +
+// routes that make the autonomous-run-critical MILESTONE events (budget fraction/pause +
 // deploy.verified/failed/skipped + the human-escalation needs_attention) reach a
 // human on the dashboard-visible matrix BY DEFAULT — without an operator
 // hand-configuring a `notification_targets` row first.
@@ -27,22 +27,22 @@ import type { NotificationRouteRow, NotificationTargetRow, Severity } from "./sc
 // idempotency check (and the dashboard) can recognize it as the seeded default.
 export const DEFAULT_ROUTE_TARGET_LABEL = "default route (onboarding)";
 
-// The apex-critical MILESTONE events the default route delivers. Every entry is a
+// The autonomous-run-critical MILESTONE events the default route delivers. Every entry is a
 // warn+-severity event (eventDefaultSeverity.ts) — the exact escalations a live
-// apex run must surface to a human (budget burn, the genuine pause, the
+// autonomous run must surface to a human (budget burn, the genuine pause, the
 // proven-live deploy + its failures, a needs_attention human-decision hold, the
 // operator-actionable demo/accounting failures).
 //
 // `demo.failed` (warn — PR #742) rides here because a demo that cannot even
 // SURFACE (unresolvable surface / unsupported kind / provider read fail) blocks
-// the full autonomous loop from proving out — apex must see it. Without the
+// the full autonomous loop from proving out — the operator must see it. Without the
 // seed the event would only fire on the env-default belt-and-suspenders, never
 // on the per-org matrix operators actually browse.
 //
 // `usage.accounting_failed` (fail — PR #754) rides here because a run-end
 // accounting failure means a run finished with no persisted usage row (an audit
 // hole under the plane-split; a fail-closed signal that budget deltas may have
-// been skipped). Apex must see it for the same reason — visible on the matrix,
+// been skipped). The operator must see it for the same reason — visible on the matrix,
 // not just carried via the env-default.
 export const DEFAULT_ROUTE_EVENTS = [
   "dag.budget.milestone",
@@ -79,7 +79,7 @@ export interface EnsureDefaultRouteResult {
 }
 
 /**
- * Ensure the org has a default ntfy notification route for the apex-critical
+ * Ensure the org has a default ntfy notification route for the autonomous-run-critical
  * milestone events. Reads the org's existing targets (org-scoped under RLS) and,
  * if no seeded default target exists, creates one; then ensures a `warn`-floor
  * route exists for each `DEFAULT_ROUTE_EVENTS` entry the target is missing.

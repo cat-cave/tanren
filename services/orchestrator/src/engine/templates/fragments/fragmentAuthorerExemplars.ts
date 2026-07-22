@@ -10,7 +10,7 @@
 //     runtime would ENOENT in production.
 //   - Inline constants make the prompt deterministic + zero-I/O in the hot path.
 //
-// DOCTRINE (fix/f2-exemplar-inline-literals — apex): every exemplar's `apply()`
+// DOCTRINE (fix/f2-exemplar-inline-literals): every exemplar's `apply()`
 // block calls the constrained-subset ops with LITERAL STRING ARGUMENTS ONLY. No
 // module-scope `const FOO = "..."; vfs.write("path", FOO);` — the parser
 // (`unifiedLibrary.ts:parseStringLiteral`) rejects an identifier argument LOUDLY,
