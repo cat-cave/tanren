@@ -1,4 +1,5 @@
-// apex v79/v80 loop closure — subtask-loop-level tests that pin the routing +
+// provenance: the v79 trial surfaced this.
+// Run-loop closure regression — subtask-loop-level tests that pin the routing +
 // coverage-guard behavior end-to-end (kept out of plannerLoop.test.ts to hold that
 // file's 500-line cap). The workflow-level seam (`materializeTriageNewSpecs`) lives
 // in `triageNewSpecsMaterialize.test.ts`.
@@ -17,7 +18,7 @@ import {
   p0Audit,
 } from "./helpers/plannerLoopHelpers.js";
 
-describe("apex v79/v80 loop closure — coverage guard + kind:spec routing at the subtask loop", () => {
+describe("run-loop closure regression — coverage guard + kind:spec routing at the subtask loop", () => {
   it("triage returning EMPTY workItems on non-empty findings does NOT falsely pass (coverage guard)", async () => {
     // A triage agent that returns empty workItems on non-empty findings would otherwise
     // collapse to `outcome: "passed"` (both tasksHere AND newSpecs empty), dropping every
@@ -93,7 +94,7 @@ describe("apex v79/v80 loop closure — coverage guard + kind:spec routing at th
 });
 
 // ---------------------------------------------------------------------------
-// Codex critic RA1 (pre-apex-v80) — the coverage guard must also gate PARTIAL
+// Codex critic RA1 (pre-v80) — the coverage guard must also gate PARTIAL
 // coverage, not just empty workItems. If triage returns any workItems whose union
 // of `findingIds` is a STRICT SUBSET of the input findings, the uncovered findings
 // would otherwise be silently dropped downstream (`summarizeTriageRouting` +
@@ -114,7 +115,7 @@ const makeWorkItem = (id: string, findingIds: readonly string[]): TriageWorkItem
   findingIds: [...findingIds],
 });
 
-describe("apex v80 loop closure — ensureFindingCoverage (Codex critic RA1: partial coverage)", () => {
+describe("run-loop closure regression — ensureFindingCoverage (Codex critic RA1: partial coverage)", () => {
   it("partial coverage synthesizes a P0 for the UNCOVERED findings only (does NOT silently drop them)", () => {
     // 3 findings; triage's workItems cover findings [0] and [2] but omit [1] from
     // every `findingIds` trail. The guard must append a coverage-gap P0 subsuming
