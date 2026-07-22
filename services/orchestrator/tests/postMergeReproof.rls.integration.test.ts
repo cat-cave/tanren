@@ -70,7 +70,15 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     app = new Pool({ connectionString: connectionUrl(database, true) });
     await seedOrg(owner, ORG_A, PROJECT_A, [DIGEST_PRIOR, DIGEST_NEW]);
     await seedOrg(owner, ORG_B, PROJECT_B, [DIGEST_B]);
-    coordinator = new PostMergeReproofCoordinator({ pool: app });
+    // These rv-19 settlement fixtures intentionally do not materialize an
+    // acceptance ledger; the completeness authority has its own DB integration
+    // coverage. Keep this suite focused on the promote/rollback fence.
+    coordinator = new PostMergeReproofCoordinator({
+      pool: app,
+      completenessChecker: {
+        check: async () => ({ complete: true, kind: "complete", runId: "fixture", requiredBehaviorRevisionCount: 1 }),
+      },
+    });
   }, 60_000);
 
   afterAll(async () => {

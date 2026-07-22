@@ -32,6 +32,26 @@ type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
 
 /**
+ * The single production requirement predicate for behavior-gated merge runs.  Both the
+ * land authority and promotion-time completeness authority use this reader: a persisted
+ * `pre_merge` verification bound to the merge run's `run_id` is the requirement signal.
+ */
+export async function findLatestPreMergeBehaviorRun(
+  client: QueryClient,
+  orgId: string,
+  runId: string,
+): Promise<{ readonly id: string; readonly status: string } | undefined> {
+  return (
+    await client.query<{ id: string; status: string }>(
+      `SELECT id, status FROM behavior_verification_runs
+        WHERE org_id = $1 AND run_id = $2 AND purpose = 'pre_merge'
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [orgId, runId],
+    )
+  ).rows[0];
+}
+
+/**
  * The run's behavior-acceptance outcome at land time.
  *   - `not_applicable` — no PRE-MERGE behavior verification with a blocking verdict was
  *     required for this run. The land decides on the other signals alone; NEVER blocks.
@@ -200,14 +220,7 @@ export async function resolveLandTimeBehaviorGate(
   const scope: OrgScope = withOrgScope ?? ((org, operation) => runWithOrgScope(pool, org, operation));
   return scope(orgId, async (client) => {
     // The latest pre-merge behavior verification run bound to THIS merge run.
-    const runRow = (
-      await client.query<{ id: string; status: string }>(
-        `SELECT id, status FROM behavior_verification_runs
-          WHERE org_id = $1 AND run_id = $2 AND purpose = 'pre_merge'
-          ORDER BY created_at DESC, id DESC LIMIT 1`,
-        [orgId, runId],
-      )
-    ).rows[0];
+    const runRow = await findLatestPreMergeBehaviorRun(client, orgId, runId);
     if (runRow === undefined) {
       return { kind: "not_applicable" };
     }
