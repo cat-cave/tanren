@@ -1,0 +1,31 @@
+name: Spine node
+description: A planned mission-complete node (a general engine capability). One node = one PR-sized unit.
+title: "node(<id>): <name>"
+labels: ["node"]
+body:
+  - type: markdown
+    attributes:
+      value: "A node is a **general** capability any project/tenant uses. It must NOT be apex-shaped or name apex (apex is a fixture-class run through the normal pipeline — see docs/operator-guide/apex.md)."
+  - type: input
+    id: node-id
+    attributes: { label: Node id, placeholder: "e.g. bh-18 / gv-24 / rv-21" }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What + seam, description: "The capability, the contract/seam it slots into (name real files), and what it produces that is provable/callable/visible." }
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes: { label: Acceptance + REQUIRED negative control, description: "Positive proof (real test/smoke) AND the fail-open it must block (a concrete negative control)." }
+    validations: { required: true }
+  - type: input
+    id: deps
+    attributes: { label: Deps, placeholder: "nodes/contracts/migrations it needs (must already exist or be earlier in order)" }
+    validations: { required: true }
+  - type: input
+    id: migration
+    attributes: { label: Migration, placeholder: "none, or the table/columns it adds (FORCE RLS + org scope); real slot assigned at build time" }
+  - type: input
+    id: size-wave
+    attributes: { label: Size + wave, placeholder: "e.g. ~650 lines, wave 3" }
+    validations: { required: true }
