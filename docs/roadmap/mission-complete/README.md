@@ -30,7 +30,7 @@ contributor) needs to drive the remaining work is here or linked from here.
 | `README.md` (this)                                                      | The master handover: objective, DAG, principles, build flow                                                                                                                                                                                                                                                                                                                    |
 | `integrated-build-dag.html`                                             | The visual blueprint — spine + 142 nodes + seams + waves. Open in a browser                                                                                                                                                                                                                                                                                                    |
 | `build-workflow.mjs.txt`                                                | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
-| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail. The four oversized buckets (runtime, backhalf, integrations, design) are split into a canonical entry plus sibling continuation files; see the reading note below                                                                       |
+| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, runtime-behavior proof, deps, validation) from the six `sol` audits. The authoritative node detail. The four oversized buckets (runtime, backhalf, integrations, design) are split into a canonical entry plus sibling continuation files; see the reading note below                                                           |
 
 > **Reading the node specs:** `mergequeue.md` and `governance.md` are single files. The
 > four oversized buckets are split to respect the 500-line source-file cap. Each keeps a
@@ -84,14 +84,14 @@ respec router, deploy/rollback, QueuePolicyV1, dashboard, V2 cutover).
 Most of the _spine_ was built here (rv-1/2/3/5/6/9/10/11/14/15/21). Remaining consumer
 MVP: `rv-4,7,8,12,13,16,17,18,19,20,22,23,24,25,26` (coverage edges, fixture leases,
 side-effect observers, A3 causal-correlation, A4 visual, behavior-aware bisection,
-flake governance, proof-backed demo, post-merge re-proof, dashboards, apex vertical).
+flake governance, proof-backed demo, post-merge re-proof, dashboards, runtime-behavior acceptance).
 
 ### integrations (22) — provision + bind + cross-validate integrations in the DAG
 
 `in-1..22` (all MVP): lifecycle model + RLS, typed contracts, requirement compiler,
 capability DAG nodes, reconciliation saga, ApplicationIntegrationProvisioner, Slack
 product binding (fix the wrong-plane bug), BindingMaterializer → `project_app_env`,
-transactional delivery outbox, A3 live trigger/observe, Control Center UI, apex
+transactional delivery outbox, A3 live trigger/observe, Control Center UI, integration-evidence
 attestation. **This is what makes the fixture's "Slack at 100 clicks" buildable.**
 
 ### back-half (35) — trustworthy self-healing that verifies the fix live
@@ -151,8 +151,8 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
    (`gpt-5.6-luna`) for production authoring. Use `grok`/`glm` for the many light
    verifies (`glm` for the smallest). Not workforce-bound — shell out for capacity.
 8. **Provable + callable + visible.** A node is done only when it (a) fires named
-   events a live apex run asserts, (b) exposes an HTTP surface, and (c) surfaces in
-   the dashboard UI. See each node's `apex-proof`/`http`/`ui` in `nodes/*.md`.
+   events the runtime-behavior pipeline asserts, (b) exposes an HTTP surface, and (c) surfaces in
+   the dashboard UI. See each node's runtime-behavior-proof/`http`/`ui` obligations in `nodes/*.md`.
 9. **More than the sum.** Design every node to exploit the seams in §4 — the point is
    an integrated engine, not six good tools bolted together.
 
@@ -174,7 +174,7 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
   spine (already done); relaunch it with `args: {phase: "consumers"}` to fan out the
   76 MVP consumer nodes off the now-merged spine (build → push PR → verify, sequential
   where shared-branch, gated). Waves: `0` spine (done) → `1` spine impl (done) → `2`
-  consumer MVP → `3` the v97 apex vertical → `4` full-tier.
+  consumer MVP → `3` the general runtime-behavior acceptance work → `4` full-tier.
 
 ## 7. The objective, restated: back to apex fixtures
 
@@ -182,14 +182,16 @@ The whole point is to return to apex with an engine that closes what v96 could n
 
 - **v96's persistence bug was a deploy-infra gap** (fixed: single-instance reap, #930)
   — the back-half loop fired but couldn't autonomously fix an infra bug.
-- **The fair test** the engine must now pass: a clean apex run with a **product-level**
+- **The fair test** the engine must now pass: the finished general pipeline running an
+  apex-class fixture with a **product-level**
   planted bug — notes → build → deploy → planted issue → auto-triage → merged fix →
   **re-verified live symptom** (SP-5 + back-half) → working product, no human in the
   inner loop; plus the Slack-at-100 integration actually firing (integrations bucket)
   and the merge queue never hard-stalling on an unconvergeable spec (merge-queue
   bucket, the v96 halt).
-- The v97 apex vertical is authored as Wave 3 (`rv-26` + `in-22`) — it is the
-  acceptance test for the whole program.
+- Wave 3's acceptance test runs the finished general pipeline against an apex-class
+  fixture. `rv-26` and `in-22` are the general runtime-proof and integration-evidence
+  nodes that make that test possible, not an "apex vertical."
 
 Provenance: this plan came from six `gpt-5.6-sol` "unlimited-ambition" audits (one per
 bucket) → 142 extracted nodes → the integrated synthesis (`integrated-build-dag.html`)

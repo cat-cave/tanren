@@ -147,4 +147,4 @@ The central entities and rules are:
 This bucket is split to respect the 500-line source-file cap. Section (1) above is the ideal design and owned-stack advantages; the operational spec continues in spec order across these sibling files:
 
 1. [(2) Comparator parity matrix, (3) data model, (4) engine integration, (5) HTTP surface](./backhalf-comparator-data-engine-http.md)
-2. [(6) UI/dashboard surface, (7) apex-provability, (8) effort + phasing, (9) risks/unknowns](./backhalf-ui-apex-phasing-risks.md)
+2. [(6) UI/dashboard surface, (7) runtime-behavior provability, (8) effort + phasing, (9) risks/unknowns](./backhalf-ui-apex-phasing-risks.md)

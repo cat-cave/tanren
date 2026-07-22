@@ -199,4 +199,4 @@ This architecture unlocks capabilities point products cannot compose:
 
 This bucket is split to respect the 500-line source-file cap. Section (1) above is the ideal design and owned-stack advantages; the operational spec continues in this sibling file:
 
-1. [(2) comparator parity, (3) data model, (4) engine integration, (5) HTTP surface, (6) UI/dashboard, (7) apex-provability, (8) effort + phasing, (9) risks/unknowns](./integrations-engine-surfaces-phasing-risks.md)
+1. [(2) comparator parity, (3) data model, (4) engine integration, (5) HTTP surface, (6) UI/dashboard, (7) runtime-behavior provability, (8) effort + phasing, (9) risks/unknowns](./integrations-engine-surfaces-phasing-risks.md)

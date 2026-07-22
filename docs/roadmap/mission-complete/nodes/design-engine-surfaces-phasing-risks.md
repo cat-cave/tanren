@@ -1,5 +1,5 @@
 > Continuation of the design bucket. Section (1) ideal design lives in [`design.md`](./design.md).
-> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (2) COMPARATOR PARITY MATRIX
 
@@ -244,7 +244,11 @@ Supported projections include:
 
 A companion CLI provides `tanren design pull`, `diff`, `resolve`, `validate`, `render`, `export`, and `verify-bundle`. Validation works offline with the included manifest and conformance fixtures; remote proof verification additionally checks signed evidence and event lineage.
 
-## (7) APEX-PROVABILITY (which events/artifacts prove it fired live)
+## (7) Runtime-behavior provability (which events/artifacts prove it fired live)
+
+> The general pipeline emits and asserts the following for **every behavior-gated run**;
+> an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
 
 Every new event is schema-registered, sensitivity-audited, org-scoped, and appended through `EventStore`.
 
@@ -267,7 +271,7 @@ Every new event is schema-registered, sensitivity-audited, org-scoped, and appen
 | Existing `deploy.triggered/verified`                        | Merged commit, deployment and reachable live surface.                                                                                                                                                                                                                          |
 | Existing `demo.evidence.recorded` and `demo.completed`      | Per-behavior live interaction, screenshots/video/trace and result. The current engine already records one evidence event per behavior ([demoEngine.ts:130](/home/trevor/projects/tanren/services/orchestrator/src/engine/demo/demoEngine.ts:130)).                             |
 
-### Mandatory apex trial
+### Fixture exercise
 
 The acceptance trial should intentionally exercise the whole moat:
 
@@ -284,7 +288,7 @@ The acceptance trial should intentionally exercise the whole moat:
 11. Publish an updated theme, show its cross-project impact DAG, and prove both projects migrate through ordinary specs rather than direct mutation.
 12. Export the bundle, validate it offline, import/fork it into another authorized org, and verify RLS prevents access before grant redemption.
 
-The final apex page should display one unbroken trace ID from Forge behavior through the live demo artifact.
+The final fixture page should display one unbroken trace ID from Forge behavior through the live demo artifact.
 
 ## (8) EFFORT + PHASING (MVP vs full, rough size, deps on sibling buckets)
 

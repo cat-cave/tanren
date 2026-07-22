@@ -27,9 +27,9 @@ generics, not silently rename, not hand-seed outside the SP-8 path.
 
 | Unit               | What                                                                                                                                                | Credit                          |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| **SPEC-FREEZE-Wn** | Docs freeze: exact names, severity, minimal strict payload fields, sensitivity, apex correlation, collision resolution                              | **0**                           |
+| **SPEC-FREEZE-Wn** | Docs freeze: exact names, severity, minimal strict payload fields, sensitivity, runtime-behavior correlation, collision resolution                  | **0**                           |
 | **EV-SUB-Wn**      | Thin substrate: Zod in sole `EventRegistry` path + `eventDefaultSeverity` + sensitivity + `codegen:events` + one additive `INSERT INTO event_types` | **0**                           |
-| **Consumer emit**  | Production `PgEventStore` append of the frozen name + HTTP/UI + apex correlation                                                                    | **node** when principle 8 holds |
+| **Consumer emit**  | Production `PgEventStore` append of the frozen name + HTTP/UI + runtime-behavior correlation                                                        | **node** when principle 8 holds |
 
 ### 1.2 Status vocabulary (per row)
 

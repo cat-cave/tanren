@@ -1,5 +1,5 @@
 > Continuation of the backhalf bucket. Section (1) ideal design lives in [`backhalf.md`](./backhalf.md).
-> This file holds §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (6) UI/DASHBOARD SURFACE
 
@@ -30,9 +30,16 @@ Export:
 
 A `tanren proof verify <file>` command validates schema, signatures, hash links, event ordering, authority versions, merge/deployment identity, assertion completeness, and source readback. The default export contains hashes and redacted evidence only; raw sensitive artifacts require separate authorization.
 
-## (7) APEX-PROVABILITY
+## (7) Runtime-behavior provability
 
-The existing hermetic apex issue proof maps an in-memory webhook, creates a synthetic triage result, and directly lands through the fake code host in [apexE2eDriver.drive.ts](/home/trevor/projects/tanren/services/orchestrator/tests/apexE2eDriver.drive.ts:188). Its proof stops at `mergedPrUrl` in [apexE2eDriver.ts](/home/trevor/projects/tanren/services/orchestrator/tests/apexE2eDriver.ts:119). Extend it through the real back half.
+> The general pipeline emits and asserts these obligations for **every behavior-gated
+> run**; an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
+
+The existing hermetic runtime-behavior driver maps an in-memory webhook, creates a
+synthetic triage result, and directly lands through the fake code host in
+`runtimeBehaviorE2eDriver.drive.ts`. Its proof stops at `mergedPrUrl` in
+`runtimeBehaviorE2eDriver.ts`. Extend it through the real back half.
 
 ### The decisive planted scenario
 
@@ -109,7 +116,7 @@ webhook delivery + signature metadata
 → provider close receipt + authoritative readback
 ```
 
-### Apex assertions
+### Runtime-behavior assertions
 
 The test must prove:
 
@@ -127,7 +134,7 @@ The test must prove:
 - Probe infrastructure failure cannot close the issue or blame the patch.
 - A speculative batch failure maps to the correct integration node and can be bisected.
 
-Validation layers should include adapter conformance suites, state-machine/property tests, RLS integration tests, crash/fault injection, the expanded hermetic apex driver, and a live Fly/source-provider burn-in.
+Validation layers should include adapter conformance suites, state-machine/property tests, RLS integration tests, crash/fault injection, the expanded hermetic runtime-behavior driver, and a live Fly/source-provider burn-in.
 
 ## (8) EFFORT + PHASING
 

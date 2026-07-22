@@ -1,5 +1,5 @@
 > Continuation of the runtime bucket. Section (1) ideal design lives in [`runtime.md`](./runtime.md).
-> This file holds §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (6) UI/DASHBOARD SURFACE (what the operator sees + any exportable/validateable artifact)
 
@@ -132,24 +132,28 @@ validates schema, signature, artifact hashes, behavior/plan completeness, exact 
 
 The existing review UI is a manual checkbox exercise in [ReviewBody.tsx:284–325](/home/trevor/projects/tanren/services/dashboard/src/components/review/ReviewBody.tsx:284). Keep human review for intent and baseline governance, but do not ask operators to eyeball evidence that Tanren can execute and assert.
 
-## (7) APEX-PROVABILITY (which events/artifacts prove it fired live)
+## (7) Runtime-behavior provability (which events/artifacts prove it fired live)
 
-Define one mandatory apex workflow, `apex-runtime-behavior-proof`, that proves the whole architecture rather than isolated units.
+> The general pipeline emits and asserts the following for **every behavior-gated run**;
+> an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
 
-### Apex behavior
+### Example fixture behavior
 
 ```gherkin
-Given notifications are enabled for a dedicated Tanren organization
+Given a behavior-gated product declares N interactions on a target surface
 And a real Slack workspace and empty leased channel are connected
-When an operator clicks "Send notification" 100 times in the deployed UI
-Then exactly 100 distinct Slack messages land in that channel
+When an operator performs N declared interactions in the deployed UI
+Then exactly N distinct external effects land on that target surface
 And no notification is missing or duplicated
 And the rendered confirmation state matches the DesignContract
 ```
 
+This is one example fixture behavior, not the definition of apex.
+
 ### Positive-path proof
 
-The apex run must prove:
+The general pipeline proves, for any behavior-gated run:
 
 1. Forge created an immutable behavior revision.
 2. The compiler produced a non-empty plan with action, external observer and visual assertion fragments.
@@ -226,9 +230,9 @@ Every event is emitted through `eventStore.ts`; payloads contain stable IDs, has
 - Queue-bisection tree.
 - Production verification and demo evidence.
 
-### Negative apex proofs
+### Negative-path provability (fault detection)
 
-The apex suite must also demonstrate that the system catches failures:
+The general pipeline must also demonstrate that it catches failures:
 
 1. **Assertion sensitivity:** a child jj node disables Slack emission. The generated behavior fails, `MergeAuthority` blocks it and the bad node never lands.
 2. **Visual sensitivity:** alter a required token/layout state. Runtime visual verification fails and produces a DesignOracle finding tied to the exact contract clause.
@@ -241,7 +245,7 @@ The apex suite must also demonstrate that the system catches failures:
 9. **Baseline laundering:** attempt to approve a new baseline from the implementation agent; policy rejects it.
 10. **Demo honesty:** remove proof evidence; the demo becomes unverified instead of falling back to `/`.
 
-The database-level apex invariant is:
+The behavior-completeness invariant is:
 
 ```text
 required_behavior_revision_count
@@ -259,7 +263,9 @@ AND gate proof artifact digest = promoted artifact digest
 
 `ci_test_results` must be non-zero as a compatibility projection, while first-class behavior tables prove the stronger identity.
 
-The apex workflow must drive only public HTTP/dashboard surfaces and real provisioned resources, with database/artifact reads used only for verification. That fits the no-mocks end-to-end requirement in [architecture-checks.md:53](/home/trevor/projects/tanren/docs/contracts/architecture-checks.md:53).
+Runtime-behavior verification drives only public HTTP/dashboard surfaces and real
+provisioned resources, with database/artifact reads used only for verification. That
+fits the no-mocks end-to-end requirement in [architecture-checks.md:53](/home/trevor/projects/tanren/docs/contracts/architecture-checks.md:53).
 
 ## (8) EFFORT + PHASING (MVP vs full, rough size, deps on sibling buckets)
 
@@ -284,7 +290,7 @@ The MVP should cover all four mandates narrowly, not postpone A3/A4:
 - Proof-backed production demo.
 - Basic Behavior Proof Matrix and artifact viewer.
 - Gherkin, JUnit and signed proof exports.
-- Positive and negative apex workflow.
+- Positive and negative runtime-behavior verification.
 
 Rough size:
 

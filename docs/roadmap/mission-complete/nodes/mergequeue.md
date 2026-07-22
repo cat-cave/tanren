@@ -340,9 +340,13 @@ Exportable/validatable artifacts:
 
 Every artifact carries schema version, org/project, immutable hashes, policy/design/quarantine revisions, and event IDs.
 
-## (7) APEX-PROVABILITY
+## (7) Runtime-behavior provability
 
-The decisive apex is the exact six-member v96 regression:
+> The general pipeline emits and asserts the following for **every behavior-gated run**;
+> an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
+
+One example fixture exercise is the exact six-member v96 regression:
 
 1. A six-member group forms and its native gate passes.
 2. Member C has an unfixable P1 audit finding.
@@ -380,7 +384,7 @@ Negative assertions are equally important:
 - No quarantined test causes a `failure_set` row.
 - No queue/partition lease remains held by C while another authorized subset exists.
 
-A second apex injects a test that toggles on the identical node:
+A second fixture exercise injects a test that toggles on the identical node:
 
 1. `ci.flaky.detected`
 2. `ci.flake.confirmed`
@@ -404,7 +408,7 @@ The brief prohibits calendar estimates in roadmap work [PROJECT_BRIEF.md](/home/
 | 2. Robust generalized isolation    | Multiple/nonmonotone failure sets, parallel `ddmin`, maximal-safe solver, proof ancestry, dynamic batches, failure-search simulator.                                                      | Additional 7–10 specs, 1–2 migrations, roughly 10–16k LOC.  |
 | 3. Proof graph and flake immunity  | Per-unit proof reuse, exact JUnit logical verdict, quarantine epochs, shadow probes, test prevention, F2 stack adapters.                                                                  | Additional 8–12 specs, 1–2 migrations, roughly 14–22k LOC.  |
 | 4. Full comparator operations      | All queue modes, semantic scopes/capacities/barriers, priorities, pause/freeze/windows, comments/CLI/API, nested train UI, metrics, policy simulation/import/export.                      | Additional 8–12 specs, 1–2 migrations, roughly 14–22k LOC.  |
-| 5. Owned-stack apex                | EAGER frontier prediction, agent repair/respec/split, cross-project trains, preview/canary, rollback, post-deploy causal replay, signed attestations.                                     | Additional 10–16 specs, 2–3 migrations, roughly 18–30k LOC. |
+| 5. Owned-stack runtime behavior    | EAGER frontier prediction, agent repair/respec/split, cross-project trains, preview/canary, rollback, post-deploy causal replay, signed attestations.                                     | Additional 10–16 specs, 2–3 migrations, roughly 18–30k LOC. |
 
 A credible production MVP is therefore roughly **14–20 PR-sized roadmap specs**. The unlimited ideal is roughly **45–65 specs**, **8–12 migrations**, and **60–95k LOC including conformance, regression, integration, UI, and apex tests**. It is a major subsystem, not a batch-coordinator patch.
 
@@ -423,7 +427,7 @@ Dependencies on sibling capability buckets:
 
 Worktree isolation should follow the brief: every roadmap spec declares owned paths and provided/consumed contracts [PROJECT_BRIEF.md](/home/trevor/projects/tanren/PROJECT_BRIEF.md:1314). Serialize migrations, `mergeAuthority.ts`, event registry/schema, route mounts, and shared dashboard navigation. Most solver, proof, flake, API, adapter, and UI work can proceed behind frozen contracts in parallel worktrees.
 
-Implementation validation is narrow affected checks during each spec, then `just fast-check`, `just ci`, and `just smoke`, followed by a real multi-member fixture apex with deploy/demo evidence.
+Implementation validation is narrow affected checks during each spec, then `just fast-check`, `just ci`, and `just smoke`, followed by a real multi-member fixture exercise with deploy/demo evidence.
 
 ## (9) RISKS/UNKNOWNS
 
