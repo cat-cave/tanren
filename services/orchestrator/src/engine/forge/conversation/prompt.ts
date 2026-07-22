@@ -68,7 +68,7 @@ export function buildForgePrompt(context: ForgeConversationContext): string {
     }
   }
 
-  // TERMINAL pass (apex pre-run §7.10): the tool-round budget is spent. Tell the
+  // TERMINAL pass: the tool-round budget is spent. Tell the
   // model it MUST finalize now — NO further tool requests will run — so it commits to
   // a ForgeAnswer from what it already has instead of burning the last call on tools.
   if (context.finalize === true) {

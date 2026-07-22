@@ -233,7 +233,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // tally the operator acts on, so keep the per-behavior grain at `info` (no matrix spam).
   "demo.evidence.recorded": "info",
   // demo.completed ("the demo finished"): routine `info` summary when every behavior
-  // passed. The dispatcher promotes to `warn` when `failed > 0` (apex's "deploy verified
+  // passed. The dispatcher promotes to `warn` when `failed > 0` (the "deploy verified
   // but a planted issue makes behaviors fail" signal) so the fail-tier summary reaches
   // the operator via the default route, even without a per-event route configured.
   "demo.completed": "info",

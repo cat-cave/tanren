@@ -1,5 +1,5 @@
 // The operator cancel-spec/cancel-run write path — the human-drivable control the
-// operator API lacked (the §4 fix-soon leftover from the apex pre-run audit). An
+// operator API lacked (the §4 fix-soon leftover from the pre-run audit). An
 // operator who decides a spec should NOT proceed (a mis-scoped spec, a dead-end run
 // burning credits) cancels it cleanly. Cancelling:
 //

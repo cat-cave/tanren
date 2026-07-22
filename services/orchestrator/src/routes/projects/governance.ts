@@ -1,6 +1,6 @@
 // The per-project GOVERNANCE surface: the OBSERVATION + MUTATION endpoints for
 // the governance settings that decide whether the autonomous DagWalker can
-// advance a project (apex.md "missing endpoint → add it"). This is the SUPPORTED
+// advance a project (missing endpoint → add it). This is the SUPPORTED
 // way to flip an existing project to autonomous — an operator never hand-crafts a
 // full-config PATCH to change these.
 //

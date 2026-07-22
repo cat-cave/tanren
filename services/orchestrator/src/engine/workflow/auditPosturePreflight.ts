@@ -4,7 +4,7 @@
 // posture (`blockReviewAt: 'P1'`, `p2p3Handling: 'fix-if-idle'`, no autonomous
 // remediation) a blocking P0/P1 finding PARKS at needs_attention and a residual
 // P2/P3 is fixed only when idle — for a NON-autonomous run that human-stop is the
-// intended policy. But for an AUTONOMOUS / apex run there is no operator to act on a
+// intended policy. But for an AUTONOMOUS run there is no operator to act on a
 // parked finding, so a posture that strands findings would silently NO-OP the proof.
 //
 // This preflight is the LOUD guard: for an autonomous run it asserts the resolved

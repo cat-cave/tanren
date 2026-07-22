@@ -8,7 +8,7 @@
 //
 //   1. env_key MATCH                            → use it (unchanged from P3).
 //   2. no-match + toolchain ⊆ golden baseline   → the golden base (SHORT-CIRCUIT — no
-//      build; apex-style node+pnpm projects land here and NEVER trigger a build).
+//      build; baseline-subset node+pnpm projects land here and NEVER trigger a build).
 //   3. no-match + toolchain ⊄ baseline (mise)   → JIT-create (build→validate→publish)
 //      SYNCHRONOUSLY + seed from the published env image (like the synchronous
 //      code-template create-then-seed). A creation FAILURE propagates LOUD.
@@ -106,7 +106,7 @@ export async function resolveProjectEnvWithCreation(
   // Branch 2 — the GOLDEN-BASE SHORT-CIRCUIT (the do-NOT-over-build rule): the
   // toolchain is a SUBSET of the golden baseline, so the golden base ALREADY serves it
   // (it IS a validated env for this toolchain) — resolve to the golden base, no build.
-  // apex-style node+pnpm toolchains land here.
+  // Baseline-subset node+pnpm toolchains land here.
   if (toolchainCoveredByGoldenBaseline(toolchain)) {
     log.info("toolchain covered by golden baseline — short-circuit to golden base (no JIT build)", {
       projectId: input.projectId,

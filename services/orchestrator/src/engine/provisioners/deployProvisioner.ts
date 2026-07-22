@@ -1,6 +1,6 @@
 // The shared shape of the deploy IntegrationProvisioners: Vercel + Fly.
 // A deploy provisioner creates the deploy app/project under the org/team grant so
-// the built product can be deployed (unblocks apex's live-preview-deploy). Both
+// the built product can be deployed (unblocks live-preview deployment). Both
 // providers share the same lifecycle — discover (list existing apps) / provision
 // (idempotent find-or-create) / bind (link an existing app) — and the same
 // artifact wiring (a `deployRef` + a `previewUrlPattern` in projectConfig + a

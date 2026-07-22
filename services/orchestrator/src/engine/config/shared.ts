@@ -58,7 +58,7 @@ export function emptyRoutingTable(): RoutingTable {
 // ---- (removed) Retry budgets / escape hatches ----------------------------
 //
 // The old `EscapeHatches` config block (`maxWriterIterPerSubtask`,
-// `maxRetriesPerTransientFailure`, `maxSpecDiscoveryRoundsWithForge`) is GONE (apex
+// `maxRetriesPerTransientFailure`, `maxSpecDiscoveryRoundsWithForge`) is GONE (the
 // v35 — intelligent non-convergence detection). They were hardcoded ATTEMPT CAPS: a
 // flat number of iterations/retries/rounds that escalated regardless of whether the
 // loop was making PROGRESS. The binding principle is that NO loop is bounded by a count
@@ -174,7 +174,7 @@ export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;
 //   - `annual`    — the CURRENT CALENDAR YEAR (UTC): spend recorded since
 //                   `date_trunc('year', now())`. The coarsest rolling window.
 //   - `total`     — the project's LIFETIME: every cost record ever attributed to
-//                   the project. A hard lifetime cap (e.g. a fixed `apex` budget).
+//                   the project. A hard lifetime cap (e.g. a fixed run budget).
 //
 // All non-`total` values are CALENDAR-anchored rolling windows. The period lives
 // in config jsonb; an absent value defaults to `monthly`.
@@ -264,7 +264,7 @@ export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
 // with EXTERNAL (non-Tanren) contributors at the merge point (see
 // workflow/reviewMerge/governancePosture.ts). `lenient` additionally relaxes the
 // in-loop GATE: under it, `lint`/`typecheck` failures are ADVISORY (warn,
-// non-blocking) while `build`/`test` stay BLOCKING — the functional-but-weak apex
+// non-blocking) while `build`/`test` stay BLOCKING — the functional-but-weak autonomous-run
 // doctrine, so an autonomous greenfield build lands imperfect code and improves it
 // via the issue loop rather than stalling on first-pass quality. For the
 // external-contributor decision, `lenient` behaves like `strict` (Tanren-only PRs

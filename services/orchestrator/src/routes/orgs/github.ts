@@ -1,6 +1,6 @@
 // Wave-2 operator API: human-drivable "Connect GitHub" + readiness routes,
 // mirroring a real settings screen + an onboarding checklist. The gap this
-// closes (found driving apex): to connect GitHub today an operator must
+// closes (found during live operation): to connect GitHub today an operator must
 // hand-craft a raw `PATCH /orgs/:orgId` config with a `github_app` block
 // (including an `installedAt` timestamp) or hand-set a `defaultCredentials`
 // credential ref — nothing a real user does — and there is NO way to learn, up

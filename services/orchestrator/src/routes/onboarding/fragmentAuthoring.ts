@@ -21,7 +21,7 @@
 // composition-validity is NOT runtime-validity. `buildFragmentAuthoring` takes
 // `runtimeValiditySmoke` as an OPTIONAL dep and silently skips the runtime
 // step when it's absent (a fragment with `next@^99.0.0` would then persist as
-// validated and only blow up at project bootstrap — one full apex trial
+// validated and only blow up at project bootstrap — one full trial
 // wasted). `buildLiveRunFragmentAuthoring` MUST wire the live subprocess
 // invokers below so the gate actually runs in prod; a regression test in
 // `tests/fragmentAuthoringProdWiring.test.ts` pins this.
