@@ -2,7 +2,11 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
 import type { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
-import { BaselineReproductionStage, type BaselineProbe } from "../../engine/verification/resolutionStages/index.js";
+import {
+  BaselineReproductionStage,
+  type BaselineProbe,
+  type RuntimeBehaviorContextLoader,
+} from "../../engine/verification/resolutionStages/index.js";
 import { createInternalAcceptanceRunRoutes } from "./acceptanceRuns.js";
 import { createInternalClaimRoutes } from "./claimJob.js";
 import { createInternalFixtureLeaseRoutes } from "./fixtureLeases.js";
@@ -16,6 +20,8 @@ export interface InternalControlAppDeps {
   readonly verifier: MtlsPeerVerifier;
   readonly baselineProbe?: BaselineProbe;
   readonly resolutionJobStore?: ResolutionJobStore;
+  /** bh-15 locked behavior-context loader for the /reproduce surface; defaults to the live loader. */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
 }
 
 /** Assemble every mTLS-only route in one dependency-bounded control-plane app. */
@@ -30,6 +36,7 @@ export function buildInternalControlApp(deps: InternalControlAppDeps): Hono {
       pool: deps.pool,
       verifier: deps.verifier,
       ...(deps.resolutionJobStore === undefined ? {} : { store: deps.resolutionJobStore }),
+      ...(deps.behaviorContextLoader === undefined ? {} : { behaviorContextLoader: deps.behaviorContextLoader }),
       baselineStage: new BaselineReproductionStage({
         pool: deps.pool,
         ...(deps.baselineProbe === undefined ? {} : { probe: deps.baselineProbe }),

@@ -305,11 +305,12 @@ describe("production verification retry route", () => {
       error: "stale_behavior_contract",
       reason: "empty_binding",
     });
-    // The probe/stage, the ResolutionAuthority, and completion never ran; the job returned to retryable.
+    // The probe/stage and the ResolutionAuthority never ran; a stale binding is
+    // TERMINAL — the job is COMPLETED (stale_contract), never returned to retryable.
     expect(executed).toEqual([]);
     expect(authorizations).toEqual([]);
-    expect(completed).toEqual([]);
-    expect(released).toEqual([expect.objectContaining({ id: "rjob_manual_1", state: "retryable" })]);
+    expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);
+    expect(released).toEqual([]);
   });
 });
 

@@ -19,7 +19,7 @@ import { serve } from "@hono/node-server";
 import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
 import type { MtlsPeerVerifier } from "./engine/contracts/mtlsChannel.js";
-import type { BaselineProbe } from "./engine/verification/resolutionStages/index.js";
+import type { BaselineProbe, RuntimeBehaviorContextLoader } from "./engine/verification/resolutionStages/index.js";
 import type { ResolutionJobStore } from "./engine/repositories/resolutionJobs.js";
 import { parsedEnv } from "./envSchema.js";
 import { createLogger } from "./engine/observability/logger.js";
@@ -49,6 +49,8 @@ export interface InternalAppDependencies {
   readonly baselineProbe?: BaselineProbe;
   /** Test seam for mTLS reproduction lease fencing. */
   readonly resolutionJobStore?: ResolutionJobStore;
+  /** Test seam for the bh-15 locked behavior-context loader on /reproduce. */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
 }
 
 /** Build the internal control-plane Hono app (the `/internal/*` surface). */
@@ -62,6 +64,7 @@ export function buildInternalApp(deps: InternalAppDependencies): ReturnType<type
     verifier,
     ...(deps.baselineProbe === undefined ? {} : { baselineProbe: deps.baselineProbe }),
     ...(deps.resolutionJobStore === undefined ? {} : { resolutionJobStore: deps.resolutionJobStore }),
+    ...(deps.behaviorContextLoader === undefined ? {} : { behaviorContextLoader: deps.behaviorContextLoader }),
   });
 }
 

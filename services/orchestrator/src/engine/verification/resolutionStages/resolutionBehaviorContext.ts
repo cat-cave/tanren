@@ -31,6 +31,7 @@ import { PgAcceptancePlanLoader, type AcceptancePlanLoader } from "../acceptance
 
 export type LockedBehaviorContextReason =
   | "missing_release_binding"
+  | "unlocked_context"
   | "empty_binding"
   | "unresolved_revision"
   | "acceptance_unresolved";
@@ -99,16 +100,14 @@ export class PgRuntimeBehaviorContextLoader implements RuntimeBehaviorContextLoa
   }
 
   public async load(job: ResolutionJob): Promise<RuntimeBehaviorContext> {
-    const { releaseInstanceId, artifactDigest, behaviors } = await runWithOrgScope(
-      this.pool,
-      job.orgId,
-      async (client) => {
-        const frozenReleaseId = requireFrozenReleaseInstanceId(job);
-        const artifact = await this.readReleaseArtifact(client, job.orgId, frozenReleaseId);
-        const bound = await readBoundRevisions(client, job.orgId, frozenReleaseId);
-        return { releaseInstanceId: frozenReleaseId, artifactDigest: artifact, behaviors: bound };
-      },
-    );
+    // Fail closed on a missing frozen binding BEFORE opening any DB transaction, so
+    // an unbound job can never reach — let alone drift to — a release lookup.
+    const releaseInstanceId = requireFrozenReleaseInstanceId(job);
+    const { artifactDigest, behaviors } = await runWithOrgScope(this.pool, job.orgId, async (client) => {
+      const artifact = await this.readReleaseArtifact(client, job.orgId, releaseInstanceId);
+      const bound = await readBoundRevisions(client, job.orgId, releaseInstanceId);
+      return { artifactDigest: artifact, behaviors: bound };
+    });
 
     // Load each bound revision's executable acceptance plan on the plan loader's
     // own org-scoped transactions (outside the read above). A revision whose

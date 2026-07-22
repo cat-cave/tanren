@@ -192,6 +192,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       id: "rjob_resolution_periodic",
       issueLoopId: LOOP_ID,
       contractId,
+      releaseInstanceId: "release_resolution_walker",
       stage: "baseline",
       idempotencyKey: "resolution-periodic",
     });
@@ -246,6 +247,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       id: "rjob_resolution_recovery",
       issueLoopId: LOOP_ID,
       contractId,
+      releaseInstanceId: "release_resolution_walker",
       stage: "baseline",
       idempotencyKey: "resolution-recovery",
     });
@@ -255,7 +257,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
     const stage = stages.get("baseline");
     if (stage === undefined) throw new Error("baseline stage must be registered");
     const before = probe.calls();
-    await stage.run(crashed, {});
+    await stage.run(crashed, { behaviorContext: await stubBehaviorContextLoader().load(crashed) });
     expect(probe.calls() - before).toBe(1);
     // Model the precise crash window after receipt finalization but before its
     // separate issue-loop transition commits. Recovery must replay that CAS.
@@ -302,6 +304,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       id: "rjob_resolution_infra_retry",
       issueLoopId: LOOP_ID,
       contractId,
+      releaseInstanceId: "release_resolution_walker",
       stage: "baseline",
       idempotencyKey: "resolution-infra-retry",
     });
@@ -367,6 +370,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       id: "rjob_resolution_terminal_loop",
       issueLoopId: LOOP_ID,
       contractId,
+      releaseInstanceId: "release_resolution_walker",
       stage: "baseline",
       idempotencyKey: "resolution-terminal-loop",
     });

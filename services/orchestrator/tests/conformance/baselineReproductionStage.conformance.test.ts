@@ -11,6 +11,7 @@ import {
   BaselineReproductionStage,
   finalizeBaselineVerificationRun,
 } from "../../src/engine/verification/resolutionStages/baselineReproductionStage.js";
+import { LockedBehaviorContextError } from "../../src/engine/verification/resolutionStages/resolutionBehaviorContext.js";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 
@@ -26,6 +27,20 @@ const job: ResolutionJob = {
   leaseExpiry: "2026-01-01T00:01:00.000Z",
   idempotencyKey: "iloop_baseline:baseline",
   attempt: 2,
+};
+
+// bh-15: the stage now consumes ONLY a locked behavior context; supply a valid
+// one so these conformance cases exercise settlement, not the lock itself.
+const LOCKED_CONTEXT = {
+  behaviorContext: {
+    contractId: job.contractId,
+    issueLoopId: job.issueLoopId,
+    releaseInstanceId: "release_baseline",
+    artifactDigest: DIGEST,
+    behaviors: [],
+    personaRevisionIds: [],
+    contextDigest: DIGEST,
+  },
 };
 
 const lockedContract: SymptomContractV1 = {
@@ -84,12 +99,10 @@ function stageFor(outcome: SymptomBaselineResult["baselineOutcome"]) {
     contracts: { get: async () => contract() },
     contextResolver: {
       resolve: async () => ({
-        verificationRunId: "vrun_baseline",
         environmentId: "venv_baseline",
         preparedHeadSha: "a".repeat(40),
         jjTreeId: "tree_baseline",
         planSetHash: DIGEST,
-        runtimeBehaviorContextHash: DIGEST,
         artifactDigest: DIGEST,
         policy: { proofPolicy: "active_causal" },
       }),
@@ -226,7 +239,7 @@ describe("BaselineReproductionStage conformance", () => {
   it("records a reproduced product failure as a successful baseline assertion", async () => {
     const harness = stageFor("reproduced");
 
-    await expect(harness.stage.run(job, {})).resolves.toMatchObject<Partial<ResolutionStageResult>>({
+    await expect(harness.stage.run(job, LOCKED_CONTEXT)).resolves.toMatchObject<Partial<ResolutionStageResult>>({
       outcome: "passed",
       classification: "product_failure",
       proofGrade: "active_causal",
@@ -242,7 +255,7 @@ describe("BaselineReproductionStage conformance", () => {
   it("keeps an infrastructure failure inconclusive and awaits reproduction", async () => {
     const harness = stageFor("inconclusive");
 
-    await expect(harness.stage.run(job, {})).resolves.toMatchObject<Partial<ResolutionStageResult>>({
+    await expect(harness.stage.run(job, LOCKED_CONTEXT)).resolves.toMatchObject<Partial<ResolutionStageResult>>({
       outcome: "inconclusive",
       classification: "infra_failure",
       verificationRunId: "vrun_baseline",
@@ -281,7 +294,7 @@ describe("BaselineReproductionStage conformance", () => {
       },
     });
 
-    await expect(stage.run(job, {})).rejects.toThrow(finalizationError);
+    await expect(stage.run(job, LOCKED_CONTEXT)).rejects.toThrow(finalizationError);
     expect(finalizations).toEqual(["product_failure"]);
     expect(loopStates).toEqual([]);
   });
@@ -293,21 +306,20 @@ describe("BaselineReproductionStage conformance", () => {
       contracts: { get: async () => contract() },
       contextResolver: {
         resolve: async () => ({
-          verificationRunId: "vrun_sql_baseline",
           environmentId: "venv_baseline",
           preparedHeadSha: "a".repeat(40),
           jjTreeId: "tree_baseline",
           planSetHash: DIGEST,
-          runtimeBehaviorContextHash: DIGEST,
           artifactDigest: DIGEST,
           policy: { proofPolicy: "active_causal" },
         }),
       },
       probe: { runBaseline: async () => ({ ...baseline("reproduced"), verificationRunId: "vrun_sql_baseline" }) },
       transitionIssueLoop: async () => {},
+      verificationRunId: () => "vrun_sql_baseline",
     });
 
-    await expect(stage.run(job, {})).resolves.toMatchObject({
+    await expect(stage.run(job, LOCKED_CONTEXT)).resolves.toMatchObject({
       outcome: "passed",
       classification: "product_failure",
       verificationRunId: "vrun_sql_baseline",
@@ -366,12 +378,19 @@ describe("BaselineReproductionStage conformance", () => {
     ]);
   });
 
-  it("runs /reproduce through buildInternalApp's real BaselineReproductionStage", async () => {
+  it("fails /reproduce CLOSED (terminal stale_contract) when the locked behavior context cannot be loaded — the baseline stage never runs", async () => {
     const pool = new BaselineStageSqlMemoryPool();
     const probeCalls: string[] = [];
+    const completes: string[] = [];
+    const releases: string[] = [];
     const app = buildInternalApp({
       pool: pool as never,
       verifier: new AllowAllPeerVerifier(),
+      // The lock fails: no caller-supplied context can stand in, and a stale/absent
+      // binding is TERMINAL — the endpoint settles stale_contract, never retryable.
+      behaviorContextLoader: {
+        load: () => Promise.reject(new LockedBehaviorContextError("empty_binding", "release binds no behaviors")),
+      },
       baselineProbe: {
         runBaseline: async (input) => {
           probeCalls.push(input.verificationRunId);
@@ -383,9 +402,11 @@ describe("BaselineReproductionStage conformance", () => {
           return job;
         },
         async complete() {
+          completes.push(job.id);
           return true;
         },
         async release() {
+          releases.push(job.id);
           return true;
         },
       } as unknown as ResolutionJobStore,
@@ -396,37 +417,18 @@ describe("BaselineReproductionStage conformance", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          orgId: job.orgId,
-          leaseOwner: job.leaseOwner,
-          context: {
-            verificationRunId: "vrun_composition",
-            environmentId: "venv_baseline",
-            preparedHeadSha: "a".repeat(40),
-            jjTreeId: "tree_baseline",
-            planSetHash: DIGEST,
-            runtimeBehaviorContextHash: DIGEST,
-            artifactDigest: DIGEST,
-            policy: { proofPolicy: "active_causal" },
-          },
-        }),
+        body: JSON.stringify({ orgId: job.orgId, leaseOwner: job.leaseOwner }),
       },
       { incoming: { socket: {} } },
     );
 
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      result: { outcome: "failed", classification: "stale_contract", verificationRunId: "vrun_composition" },
-    });
-    expect(probeCalls).toEqual(["vrun_composition"]);
-    expect(pool.verificationRuns).toEqual([
-      {
-        id: "vrun_composition",
-        stage: "baseline",
-        resolutionJobId: job.id,
-        classification: "stale_contract",
-        status: "completed",
-      },
-    ]);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "stale_behavior_contract", reason: "empty_binding" });
+    // The baseline stage never ran (no probe, no verification run row); the job was
+    // COMPLETED (terminal), not returned to retryable.
+    expect(probeCalls).toEqual([]);
+    expect(pool.verificationRuns).toEqual([]);
+    expect(completes).toEqual([job.id]);
+    expect(releases).toEqual([]);
   });
 });
