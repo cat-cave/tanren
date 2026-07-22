@@ -132,7 +132,7 @@ export function checkNoHostProcessSpawn(projectFiles) {
       // run, analogous to liveEnvBuildDriver's host-side image build. The `PixelRenderRunner`
       // seam lets tests inject a fixture-PNG double; only THIS file imports child_process.
       file === "services/orchestrator/src/engine/design/render/podmanScreenshotRunner.ts" ||
-      // rv-26.6 (apex P6) browser click runner: the SAME confined host-side container-spawn
+      // rv-26.6 browser click runner: the SAME confined host-side container-spawn
       // seam as podmanScreenshotRunner. It shells `podman run` on the ORCHESTRATOR HOST to
       // drive N REAL Playwright chromium clicks INSIDE the render-worker container (the host
       // can't launch a prebuilt chromium). It is NOT workload execution over SSH — it is an

@@ -1,4 +1,4 @@
--- rv-26.4: read-only, security-invoker projection for the promotion-time apex
+-- rv-26.4: read-only, security-invoker projection for the promotion-time behavior
 -- completeness check.  It intentionally exposes only org/project-scoped rows;
 -- underlying RLS remains authoritative (a caller without app.current_org_id sees
 -- no rows).  The TypeScript authority rechecks exact sets before promotion.

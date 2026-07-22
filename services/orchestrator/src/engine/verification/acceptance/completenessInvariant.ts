@@ -35,7 +35,7 @@ export interface AcceptanceCompletenessInput {
 }
 
 /**
- * The promotion-time apex invariant.  This deliberately reads first-class release,
+ * The promotion-time behavior-completeness invariant. This deliberately reads first-class release,
  * plan, and verdict facts; `ci_test_results` is only the final compatibility
  * projection and cannot rescue a missing behavior proof.
  */

@@ -1,4 +1,4 @@
-// rv-26.6 (apex P6) — the podman click runner's fail-loud contract, exercised against a
+// rv-26.6 — the podman click runner's fail-loud contract, exercised against a
 // STUB `podman` executable (no real container/browser needed). It proves the REAL
 // production runner code path — execFile, temp-dir params handoff, result.json parse, and
 // the EXACT count enforcement — returns a real count on success and FAILS LOUD (never a

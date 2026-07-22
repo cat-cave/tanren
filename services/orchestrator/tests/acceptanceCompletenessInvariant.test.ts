@@ -7,7 +7,7 @@ const input = { orgId: "org", projectId: "project", releaseInstanceId: "release"
 function checker(overrides: Partial<Record<number, readonly Record<string, unknown>[]>> = {}) {
   let call = 0;
   const rows: Record<number, readonly Record<string, unknown>[]> = {
-    1: [{ integration_node_id: "run-apex" }],
+    1: [{ integration_node_id: "run-1" }],
     2: [{ id: "pre-merge-run", status: "completed" }],
     3: [{ behavior_revision_id: "behavior-a" }],
     4: [{ id: "acceptance-run" }],
@@ -69,7 +69,7 @@ describe("acceptance completeness invariant", () => {
     ).resolves.toEqual({ complete: false, failure: "required_verdict_unexecuted" });
   });
 
-  it("real apex binding (release integration_node_id = runId) applies and blocks a missing verdict", async () => {
+  it("release integration-node binding applies and blocks a missing verdict", async () => {
     await expect(checker({ 6: [] }).check(input)).resolves.toEqual({
       complete: false,
       failure: "verdict_set_mismatch",

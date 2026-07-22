@@ -73,7 +73,7 @@ const httpProbeSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: canonical.optional(),
 });
-// rv-26.6 (apex P6): an interactive browser click interaction. Its confirmed-click count
+// rv-26.6: an interactive browser click interaction. Its confirmed-click count
 // is observed as `<interactionId>.clickCount`.
 const clickInteractionSchema = z.object({
   interactionId: z.string().min(1),
