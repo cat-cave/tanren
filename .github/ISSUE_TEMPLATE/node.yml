@@ -12,19 +12,32 @@ body:
     validations: { required: true }
   - type: textarea
     id: what
-    attributes: { label: What + seam, description: "The capability, the contract/seam it slots into (name real files), and what it produces that is provable/callable/visible." }
+    attributes:
+      {
+        label: What + seam,
+        description: "The capability, the contract/seam it slots into (name real files), and what it produces that is provable/callable/visible.",
+      }
     validations: { required: true }
   - type: textarea
     id: acceptance
-    attributes: { label: Acceptance + REQUIRED negative control, description: "Positive proof (real test/smoke) AND the fail-open it must block (a concrete negative control)." }
+    attributes:
+      {
+        label: Acceptance + REQUIRED negative control,
+        description: "Positive proof (real test/smoke) AND the fail-open it must block (a concrete negative control).",
+      }
     validations: { required: true }
   - type: input
     id: deps
-    attributes: { label: Deps, placeholder: "nodes/contracts/migrations it needs (must already exist or be earlier in order)" }
+    attributes:
+      { label: Deps, placeholder: "nodes/contracts/migrations it needs (must already exist or be earlier in order)" }
     validations: { required: true }
   - type: input
     id: migration
-    attributes: { label: Migration, placeholder: "none, or the table/columns it adds (FORCE RLS + org scope); real slot assigned at build time" }
+    attributes:
+      {
+        label: Migration,
+        placeholder: "none, or the table/columns it adds (FORCE RLS + org scope); real slot assigned at build time",
+      }
   - type: input
     id: size-wave
     attributes: { label: Size + wave, placeholder: "e.g. ~650 lines, wave 3" }

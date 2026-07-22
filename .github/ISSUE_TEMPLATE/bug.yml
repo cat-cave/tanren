@@ -8,15 +8,21 @@ body:
       value: "For bugs **with Tanren**, surfaced while driving a fixture or real workload. Fixes must be **general** (never fixture-shaped). If it's a bug in the product Tanren built, that's not this."
   - type: textarea
     id: symptom
-    attributes: { label: Symptom + where, description: "What went wrong, the run/stage, and the file/seam if known (file:line)." }
+    attributes:
+      { label: Symptom + where, description: "What went wrong, the run/stage, and the file/seam if known (file:line)." }
     validations: { required: true }
   - type: textarea
     id: expected
-    attributes: { label: Expected general behavior + fix direction, description: "What the general pipeline should do; the honest fix (no scaffolding)." }
+    attributes:
+      {
+        label: Expected general behavior + fix direction,
+        description: "What the general pipeline should do; the honest fix (no scaffolding).",
+      }
     validations: { required: true }
   - type: textarea
     id: negctrl
-    attributes: { label: Negative control the fix must add, description: "The fail-open the fix must block, as a real test." }
+    attributes:
+      { label: Negative control the fix must add, description: "The fail-open the fix must block, as a real test." }
     validations: { required: true }
   - type: input
     id: severity
