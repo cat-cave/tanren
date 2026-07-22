@@ -88,7 +88,9 @@ export class BrowserFreeRenderCaptureHarness {
         eventType: "design.render.captured",
         payload: {
           renderId,
-          artifactDigest: a11yRef.digest,
+          // The rendered web artifact is the DOM snapshot. The a11y audit is
+          // a distinct evidence artifact and must never masquerade as it.
+          artifactDigest: domRef.digest,
           scenarioKey: scenario.scenarioKey,
           designContractVersion,
           a11yViolationCount: capture.audit.violationCount,

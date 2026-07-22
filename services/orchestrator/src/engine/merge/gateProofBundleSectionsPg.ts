@@ -143,7 +143,7 @@ async function runtimeBehaviorDraft(
       verdict,
       draft: { kind: "runtime_behavior", verdict, subjectId: runtimeSubject(memberRunId), body },
       runtimeBehaviorBinding: {
-        planSetHash: parseDigest(body.runtimeBehaviorContextHash),
+        runtimeBehaviorContextHash: parseDigest(body.runtimeBehaviorContextHash),
         requiredBehaviorRevisionCount: body.requiredBehaviorRevisionCount,
       },
     };

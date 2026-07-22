@@ -30,6 +30,7 @@ const RUNTIME_VERIFICATION_SOURCE_ROOTS = [
   "../src/engine/postMerge",
   "../src/engine/runtimeVerification",
   "../src/engine/deploy",
+  "../src/engine/merge",
 ] as const;
 
 // ---------------------------------------------------------------------------

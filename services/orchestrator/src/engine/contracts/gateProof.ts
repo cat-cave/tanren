@@ -138,7 +138,8 @@ export interface GateProofBundleV2 {
 }
 
 export interface RuntimeBehaviorBinding {
-  readonly planSetHash: Digest;
+  /** Runtime-behavior section body coordinate, not a proxy plan-set hash. */
+  readonly runtimeBehaviorContextHash: Digest;
   readonly requiredBehaviorRevisionCount: number;
 }
 

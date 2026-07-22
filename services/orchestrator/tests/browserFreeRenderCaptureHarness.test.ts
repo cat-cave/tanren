@@ -15,6 +15,7 @@ import type { DesignRenderScenario } from "../src/engine/design/system/designTar
 import { resolveDtcgTokens } from "../src/engine/design/system/dtcgResolver.js";
 import { WebDesignTargetAdapter } from "../src/engine/design/system/webAdapter.js";
 import { BrowserFreeRenderCaptureHarness } from "../src/engine/design/render/browserFreeRenderCaptureHarness.js";
+import type { AppendEventInput } from "../src/engine/eventStore.js";
 
 // A real org-scoped CasByteStore backed by memory: content-addressed, same seam
 // PgCasByteStore implements. The bytes it stores are REAL harness output.
@@ -37,7 +38,6 @@ class InMemoryContentStore implements CasByteStore {
 
 const ORG_ID = "org_ds4";
 const DESIGN_CONTRACT_VERSION = "dcv_1";
-const EVENTS = { append: async () => {} };
 
 function realCatalogAdapter(): WebDesignTargetAdapter {
   return new WebDesignTargetAdapter({
@@ -82,7 +82,8 @@ async function firstButtonScenario(): Promise<DesignRenderScenario> {
 describe("BrowserFreeRenderCaptureHarness", () => {
   it("renders the REAL ds-2 Button via React SSR and stores real DOM + a11y capture bytes in CAS", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
+    const appended: AppendEventInput[] = [];
+    const harness = new BrowserFreeRenderCaptureHarness(cas, { append: async (event) => appended.push(event) });
     const scenario = await firstButtonScenario();
 
     const outcome = await harness.capture({
@@ -107,6 +108,14 @@ describe("BrowserFreeRenderCaptureHarness", () => {
     expect(domRef?.evidenceKind).toBe("dom");
     expect(a11yRef?.evidenceKind).toBe("a11y_tree");
     if (domRef === undefined || a11yRef === undefined) return;
+
+    expect(appended).toContainEqual({
+      orgId: ORG_ID,
+      projectId: "project_ds4",
+      eventType: "design.render.captured",
+      payload: expect.objectContaining({ artifactDigest: domRef.casRef.digest }),
+    });
+    expect(appended[0]?.payload).not.toMatchObject({ artifactDigest: a11yRef.casRef.digest });
 
     // The DOM bytes are REAL: a rendered <button> from the real Button component.
     const domBytes = await cas.get(ORG_ID, domRef.casRef.digest);

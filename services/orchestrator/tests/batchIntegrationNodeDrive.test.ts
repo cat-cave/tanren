@@ -17,7 +17,10 @@ import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerif
 import type { GateProofBundleInput, GateProofBundleSealer } from "../src/engine/merge/gateProofBundleTypes.js";
 
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
-const REAL_RUNTIME_BINDING = { planSetHash: parseDigest(`sha256:${"d".repeat(64)}`), requiredBehaviorRevisionCount: 7 };
+const REAL_RUNTIME_BINDING = {
+  runtimeBehaviorContextHash: parseDigest(`sha256:${"d".repeat(64)}`),
+  requiredBehaviorRevisionCount: 7,
+};
 
 class FakeGateBundles implements GateProofBundleSealer {
   private readonly bundles = new Map<string, GateProofBundleV2>();
@@ -236,8 +239,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
     }));
-
-    // First check: cache miss → the gate RUNS.
     const first = await driveBatchThroughNode(FACTS, deps(store, events, gate));
     expect(first.result).toBe("pass");
     if (first.result !== "pass") throw new Error("expected a passing exact-node verdict");
@@ -262,17 +263,11 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
       eventType: "integration.proof.recorded",
       payload: expect.objectContaining({ nodeId: authorityBinding.nodeId, verdict: "passed" }),
     });
-
-    // The node's memberKey is `hash(baseSha + ordered member HEAD shas)` — the SAME the
-    // server build would key (member-key equality / "same landable content").
     const expectedKey = memberKey(FACTS.baseSha, [MEMBER_HEAD_SHAS.spec_a, MEMBER_HEAD_SHAS.spec_b]);
     expect(store.nodes.has(expectedKey)).toBe(true);
     expect(store.nodes.get(expectedKey)?.headSha).toBe(INTEGRATED_HEAD);
-    // NO host ref was written by the jj-local integration.
     expect(store.hostRefsWritten).toEqual([]);
 
-    // Second check: SAME six components → the recorded passing proof short-circuits the
-    // gate. THE proof-reuse-SKIPS-a-re-gate assertion: the gate spy is NOT called again.
     const gate2 = vi.fn<GateFn>(async () => ({
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,
@@ -304,8 +299,15 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
 
     await expect(driveBatchThroughNode(FACTS, deps(store, events, gate))).resolves.toMatchObject({ result: "pass" });
     expect(events.appended).toContainEqual({
-      eventType: "gate.behavior_proof.bound",
+      eventType: "integration.proof.recorded",
       payload: expect.objectContaining(REAL_RUNTIME_BINDING),
+    });
+    expect(events.appended).toContainEqual({
+      eventType: "gate.behavior_proof.bound",
+      payload: expect.objectContaining({
+        planSetHash: REAL_RUNTIME_BINDING.runtimeBehaviorContextHash,
+        requiredBehaviorRevisionCount: 7,
+      }),
     });
     expect(events.appended.some((event) => event.eventType === "integration.proof.reused")).toBe(false);
   });
@@ -339,8 +341,6 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     expect(first.result).toBe("fail");
     expect(failGate).toHaveBeenCalledTimes(1);
 
-    // reuse). OBSERVABLE OUTCOME: the recompute's fresh PASS verdict flows back (a reuse
-    // of the stale FAILED proof would instead have returned without running gate2).
     const gate2 = vi.fn<GateFn>(async () => ({
       verdict: { result: "pass" as const, integrationBranch: "x" },
       passed: true,

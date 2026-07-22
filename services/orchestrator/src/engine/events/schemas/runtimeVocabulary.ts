@@ -236,6 +236,10 @@ export const IntegrationProofRecordedPayload = z
     memberKey: Id,
     proofReuseKey: Id,
     verdict: ProofVerdict,
+    // A non-behavior integration proof has no runtime-behavior section to
+    // truthfully bind here, so both coordinates are omitted in that case.
+    runtimeBehaviorContextHash: Sha256Digest.optional(),
+    requiredBehaviorRevisionCount: Count.optional(),
   })
   .strict();
 

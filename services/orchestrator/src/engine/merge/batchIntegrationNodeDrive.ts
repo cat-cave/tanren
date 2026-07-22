@@ -288,6 +288,7 @@ async function verdictForIntegrated(
     // A fresh seal is durable proof creation, distinct from the exact-bundle reuse path
     // above. Emit only after `seal` returns its immutable coordinate; a failed native gate
     // is still a recorded proof and must not be hidden as a successful reuse.
+    const runtimeBehaviorBinding = bundle.runtimeBehaviorBindings?.[0];
     await deps.eventStore.append({
       orgId: facts.orgId,
       projectId: facts.projectId,
@@ -297,6 +298,12 @@ async function verdictForIntegrated(
         memberKey: node.memberKey,
         proofReuseKey: proofReuseKey(keyInput),
         verdict: bundle.gateVerdict,
+        ...(runtimeBehaviorBinding === undefined
+          ? {}
+          : {
+              runtimeBehaviorContextHash: runtimeBehaviorBinding.runtimeBehaviorContextHash,
+              requiredBehaviorRevisionCount: runtimeBehaviorBinding.requiredBehaviorRevisionCount,
+            }),
       },
     });
     for (const binding of bundle.runtimeBehaviorBindings ?? []) {
@@ -308,7 +315,7 @@ async function verdictForIntegrated(
           integrationNodeId: node.nodeId,
           gateProofBundleDigest: bundle.proofBundleDigest,
           requiredBehaviorRevisionCount: binding.requiredBehaviorRevisionCount,
-          planSetHash: binding.planSetHash,
+          planSetHash: binding.runtimeBehaviorContextHash,
         },
       });
     }
