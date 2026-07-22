@@ -59,8 +59,8 @@ const MINIMAL_DESIGN_CONTRACT = {
   intent: "a calm, information-dense control surface an operator trusts at a glance",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 
@@ -479,12 +479,13 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
 
     // THE MOAT — the captured persona NAMES + behavior keys resolved to the
     // PERSISTED persona/behavior ids (first-class links, not freeform text). The
-    // deterministic interview bound two personas + two behaviors, plus a
+    // deterministic interview binds EXACTLY its three personas + eight behaviors
+    // (rv-21: the design seed must cover every captured persona + behavior), plus a
     // persona-scoped layout dimension (the line worker's view).
     expect(contract.personaRefs).toBeDefined();
-    expect(contract.personaRefs).toHaveLength(2);
+    expect(contract.personaRefs).toHaveLength(3);
     expect(contract.behaviorRefs).toBeDefined();
-    expect(contract.behaviorRefs).toHaveLength(2);
+    expect(contract.behaviorRefs).toHaveLength(8);
     // Every resolved ref is a real persisted id (no dangling refs).
     for (const ref of contract.personaRefs ?? []) expect(ref).toMatch(/^persona_/u);
     const layout = (contract.dimensions ?? []).find((d) => d.key === "layout");

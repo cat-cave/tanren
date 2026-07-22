@@ -32,8 +32,8 @@ const MINIMAL_DESIGN_CONTRACT = {
   intent: "a calm, information-dense control surface an operator trusts at a glance",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 

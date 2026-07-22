@@ -97,6 +97,58 @@ export function behaviorKey(persona: string, title: string): string {
   return `${persona.trim().toLowerCase()}::${title.trim().toLowerCase()}`;
 }
 
+// rv-21 (trap #7 proof=effect / #11 no orphan) — the SYNTHESIZED contract that will be
+// persisted must cover EXACTLY the entities the derive persisted: no dropped ref, no
+// phantom ref. A divergence (e.g. the captured/thin path resolving an empty MOAT while
+// entities exist, or a provider answer under-covering) is a LOUD fail-closed halt BEFORE
+// the contract row is written — and because the graph write runs in one org-scoped
+// transaction, the throw rolls the whole graph back (no orphan personas/behaviors).
+export class DesignCoverageMismatchError extends Error {
+  constructor(readonly detail: string) {
+    super(
+      `synthesized design contract coverage diverges from the persisted entity graph: ${detail}. ` +
+        "The contract's personaRefs/behaviorRefs MUST be an exact multiset of the persisted persona/behavior " +
+        "identities — a dropped or phantom reference is a fail-closed halt, never a silently narrowed design obligation.",
+    );
+    this.name = "DesignCoverageMismatchError";
+  }
+}
+
+function multisetEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((value, index) => value === sortedB[index]);
+}
+
+/**
+ * Assert the about-to-be-persisted `DesignContractV1` covers EXACTLY the persisted
+ * persona + behavior identities (exact multiset — no missing, no extra). Called in the
+ * graph transaction immediately BEFORE `persistDesignContract`, so a mismatch fails
+ * closed (typed error) and rolls back with no contract/entity orphan. Each persisted
+ * behavior identity is, by construction (`deriveBehaviorSpec`), atomically bound to its
+ * immutable current rv-1 revision — so an exact behaviorRefs match is a match against the
+ * current-revision-bearing behavior set.
+ */
+export function assertContractCoversGraph(
+  contract: DesignContractV1,
+  persistedPersonaIds: readonly string[],
+  persistedBehaviorIds: readonly string[],
+): void {
+  if (!multisetEqual(contract.personaRefs, persistedPersonaIds)) {
+    throw new DesignCoverageMismatchError(
+      `personaRefs [${[...contract.personaRefs].sort().join(", ")}] != persisted personas ` +
+        `[${[...persistedPersonaIds].sort().join(", ")}]`,
+    );
+  }
+  if (!multisetEqual(contract.behaviorRefs, persistedBehaviorIds)) {
+    throw new DesignCoverageMismatchError(
+      `behaviorRefs [${[...contract.behaviorRefs].sort().join(", ")}] != persisted behaviors ` +
+        `[${[...persistedBehaviorIds].sort().join(", ")}]`,
+    );
+  }
+}
+
 // Map the captured design contract → the persisted `DesignContractV1`, resolving
 // the persona/behavior links against the maps the derive built. A captured name/key
 // that resolves to no persisted entity is a LOUD failure (`DanglingDesignRefError`),

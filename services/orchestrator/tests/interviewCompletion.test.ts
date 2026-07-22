@@ -83,12 +83,46 @@ describe("evaluateInterviewCompletion — the deterministic completion predicate
     }
   });
 
-  it("does NOT count a behavior whose Given/When/Then is blank (no coercion of blanks to present)", () => {
+  it("Gap 1 — whitespace-only content counts as MISSING, never present (no blank-slip)", () => {
+    const blankPitch = completeCapture();
+    blankPitch.identity = { slug: "acme", pitch: "   ", repoHint: "" };
+    expect(evaluateInterviewCompletion(blankPitch).missing).toContain("identity");
+
+    const blankInterface = { ...completeCapture(), interfaces: [{ name: "   ", note: "" }] };
+    expect(evaluateInterviewCompletion(blankInterface).missing).toContain("interface");
+
+    const blankArchitecture = { ...completeCapture(), architecture: [{ layer: "   ", choice: "next.js" }] };
+    expect(evaluateInterviewCompletion(blankArchitecture).missing).toContain("architecture");
+
+    const blankSeed = completeCapture();
+    blankSeed.designContract = { ...blankSeed.designContract!, intent: "   " };
+    expect(evaluateInterviewCompletion(blankSeed).missing).toContain("designSeed");
+  });
+
+  it("Gap 3 — a behavior with a blank Given/When/Then is INVALID (incompleteBehavior), not merely uncounted", () => {
     /* eslint-disable-next-line unicorn/no-thenable */
     const behaviors = [{ persona: "operator", title: "half-formed", given: "a product", when: "  ", then: "" }];
     const result = evaluateInterviewCompletion({ ...completeCapture(), behaviors });
     expect(result.complete).toBe(false);
     expect(result.missing).toContain("behavior");
+    expect(result.invalid).toContainEqual(
+      expect.objectContaining({ kind: "incompleteBehavior", ref: "operator::half-formed" }),
+    );
+  });
+
+  it("a captured persona that owns no fully-formed behavior is invalid (personaWithoutBehavior)", () => {
+    /* eslint-disable-next-line unicorn/no-thenable */
+    const behaviors = [{ persona: "operator", title: "see status", given: "g", when: "w", then: "t" }];
+    const twoPersonas = {
+      ...completeCapture(),
+      personas: [
+        { name: "operator", description: "runs it", surface: "" },
+        { name: "auditor", description: "watches", surface: "" },
+      ],
+      behaviors,
+    };
+    const result = evaluateInterviewCompletion(twoPersonas);
+    expect(result.invalid).toContainEqual(expect.objectContaining({ kind: "personaWithoutBehavior", ref: "auditor" }));
   });
 
   it("surfaces a behavior naming an uncaptured persona as invalid (no captured reference silently dropped)", () => {
@@ -98,6 +132,20 @@ describe("evaluateInterviewCompletion — the deterministic completion predicate
     expect(result.complete).toBe(false);
     expect(result.missing).toContain("behavior");
     expect(result.invalid).toContainEqual(expect.objectContaining({ kind: "behaviorPersona", ref: "ghost" }));
+  });
+
+  it("Gap 2 — an EMPTY design-seed MOAT does not vacuously complete (every persona + behavior must be covered)", () => {
+    const base = completeCapture();
+    const emptyMoat = {
+      ...base,
+      designContract: { ...base.designContract!, personas: [], behaviors: [] },
+    };
+    const result = evaluateInterviewCompletion(emptyMoat);
+    expect(result.complete).toBe(false);
+    expect(result.invalid).toContainEqual(expect.objectContaining({ kind: "uncoveredPersona", ref: "operator" }));
+    expect(result.invalid).toContainEqual(
+      expect.objectContaining({ kind: "uncoveredBehavior", ref: "operator::see status" }),
+    );
   });
 
   it("surfaces dangling design-seed persona and behavior refs (and a dimension persona ref) as invalid", () => {

@@ -37,11 +37,29 @@ export type InterviewCaptureArea =
   | "architecture"
   | "lifecycle";
 
-// A captured reference that resolves to no captured entity — surfaced (never silently
-// dropped) so the operator/next-question sees exactly which link is dangling. `kind`
-// names WHICH ref surface carries it; `ref` is the offending natural key.
+// A captured reference that is dangling OR a required coverage that is absent — surfaced
+// (never silently dropped) so the operator/next-question sees exactly what is wrong.
+//   - behaviorPersona      — a behavior names a persona the interview never captured.
+//   - incompleteBehavior   — a behavior resolves its persona but its Given/When/Then is
+//                            not fully formed (a half-specified behavior is not shippable).
+//   - personaWithoutBehavior — a captured persona owns no fully-formed behavior (an actor
+//                            with nothing to do is not a complete vision AND would make the
+//                            synthesized design coverage non-exact).
+//   - designPersona        — the design seed names a persona the interview never captured.
+//   - designBehavior       — the design seed names a behavior the interview never captured.
+//   - uncoveredPersona     — a captured persona the design seed fails to cover (the MOAT
+//                            must be EXACT, never vacuously empty).
+//   - uncoveredBehavior    — a captured fully-formed behavior the design seed fails to cover.
+// `ref` is the offending natural key.
 export interface InterviewInvalidRef {
-  kind: "behaviorPersona" | "designPersona" | "designBehavior";
+  kind:
+    | "behaviorPersona"
+    | "incompleteBehavior"
+    | "personaWithoutBehavior"
+    | "designPersona"
+    | "designBehavior"
+    | "uncoveredPersona"
+    | "uncoveredBehavior";
   ref: string;
   detail: string;
 }
@@ -90,12 +108,14 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
   const missing: InterviewCaptureArea[] = [];
   const invalid: InterviewInvalidRef[] = [];
 
-  // identity — the product must have a captured identity (slug + pitch; the schema
-  // guarantees both are non-blank when present, so presence is sufficient here).
-  if (capture.identity === null) missing.push("identity");
+  // identity — a captured identity whose slug AND pitch carry non-blank CONTENT (trim +
+  // reject whitespace-only; `z.string().min(1)` accepts "   ", so presence is not enough).
+  if (capture.identity === null || !nonBlank(capture.identity.slug) || !nonBlank(capture.identity.pitch)) {
+    missing.push("identity");
+  }
 
-  // personas — build the resolution set (case-folded names) FIRST; behavior + design
-  // refs vet against it below.
+  // personas — build the resolution set (case-folded, non-blank names) FIRST; behavior +
+  // design refs vet against it below.
   const personaNames = new Set<string>();
   for (const persona of capture.personas) {
     if (nonBlank(persona.name)) personaNames.add(persona.name.trim().toLowerCase());
@@ -103,16 +123,17 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
   if (personaNames.size === 0) missing.push("persona");
 
   // behaviors — require POSITIVE evidence of ≥1 FULLY-FORMED Given/When/Then behavior
-  // whose persona RESOLVES (§4 no vacuous truth: not "no bad behavior", but "≥1 good
-  // behavior"). A behavior naming an uncaptured persona is surfaced as invalid (§ no
-  // silent drop) and does NOT count toward the requirement.
+  // whose persona RESOLVES (§4 no vacuous truth). ONLY a fully-formed + resolving behavior
+  // becomes coverage-eligible (enters `behaviorKeys`); a behavior naming an uncaptured
+  // persona (`behaviorPersona`) or with a blank G/W/T (`incompleteBehavior`) is surfaced
+  // invalid and does NOT count — a half-specified behavior can neither complete the
+  // interview nor be "covered" by the design seed.
   const behaviorKeys = new Set<string>();
-  let resolvableGwtBehaviors = 0;
+  const personasWithBehavior = new Set<string>();
   for (const behavior of capture.behaviors) {
+    const personaKey = behavior.persona.trim().toLowerCase();
     const key = behaviorKey(behavior.persona, behavior.title);
-    behaviorKeys.add(key);
-    const personaResolves = personaNames.has(behavior.persona.trim().toLowerCase());
-    if (!personaResolves) {
+    if (!personaNames.has(personaKey)) {
       invalid.push({
         kind: "behaviorPersona",
         ref: behavior.persona,
@@ -120,24 +141,47 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
       });
       continue;
     }
-    if (nonBlank(behavior.given) && nonBlank(behavior.when) && nonBlank(behavior.then)) {
-      resolvableGwtBehaviors += 1;
+    if (!nonBlank(behavior.given) || !nonBlank(behavior.when) || !nonBlank(behavior.then)) {
+      invalid.push({
+        kind: "incompleteBehavior",
+        ref: key,
+        detail: `behavior '${behavior.title}' is missing a non-blank Given/When/Then — a half-specified behavior is not shippable`,
+      });
+      continue;
+    }
+    behaviorKeys.add(key);
+    personasWithBehavior.add(personaKey);
+  }
+  if (behaviorKeys.size === 0) missing.push("behavior");
+
+  // Every captured persona must OWN ≥1 fully-formed behavior — an actor with nothing to do
+  // is not a complete vision, and it would also make the synthesized design coverage
+  // non-exact in provider mode (a persona with no behavior never appears in the design's
+  // coverage surfaces). Surfaced so the design coverage == the persisted entity set.
+  for (const name of personaNames) {
+    if (!personasWithBehavior.has(name)) {
+      invalid.push({
+        kind: "personaWithoutBehavior",
+        ref: name,
+        detail: `persona '${name}' owns no fully-formed behavior — every captured persona must have at least one`,
+      });
     }
   }
-  if (resolvableGwtBehaviors === 0) missing.push("behavior");
 
-  // interfaces — ≥1 declared delivery surface.
-  if (capture.interfaces.length === 0) missing.push("interface");
+  // interfaces — ≥1 declared delivery surface with a non-blank name.
+  if (!capture.interfaces.some((iface) => nonBlank(iface.name))) missing.push("interface");
 
-  // design seed — an EXPLICIT domain-general design contract (domain + identity +
-  // intent; schema guarantees non-blank when present). A design-light project still
-  // declares an explicit minimal seed; a SILENT absence is not a valid completion.
+  // design seed — an EXPLICIT domain-general design contract with non-blank core content
+  // (domain + identity + intent). A design-light project still declares an explicit
+  // minimal seed; a null OR blank-core seed is NOT a valid completion.
   if (capture.designContract === null) {
     missing.push("designSeed");
   } else {
-    // Vet the seed's MOAT refs against the captured graph so no design ref is silently
-    // dropped (the derive would otherwise fail loud deep in the graph write).
     const seed = capture.designContract;
+    if (!nonBlank(seed.domain) || !nonBlank(seed.identity) || !nonBlank(seed.intent)) {
+      missing.push("designSeed");
+    }
+    // Vet the seed's MOAT refs against the captured graph (no dangling ref silently kept).
     const vetPersona = (name: string) => {
       if (!personaNames.has(name.trim().toLowerCase())) {
         invalid.push({
@@ -154,14 +198,37 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
         invalid.push({
           kind: "designBehavior",
           ref: key,
-          detail: `design seed names behavior '${key}', which the interview never captured`,
+          detail: `design seed names behavior '${key}', which is not a captured fully-formed behavior`,
+        });
+      }
+    }
+    // EXACT coverage (§4 no vacuous truth): the MOAT must cover EVERY captured persona AND
+    // EVERY fully-formed behavior — an empty or partial seed MOAT is a coverage gap, never
+    // vacuously complete. (Extras/unknowns are caught as designPersona/designBehavior above.)
+    const seedPersonaSet = new Set(seed.personas.map((name) => name.trim().toLowerCase()));
+    for (const name of personaNames) {
+      if (!seedPersonaSet.has(name)) {
+        invalid.push({
+          kind: "uncoveredPersona",
+          ref: name,
+          detail: `design seed does not cover captured persona '${name}' — the design MOAT must bind every persona`,
+        });
+      }
+    }
+    const seedBehaviorSet = new Set(seed.behaviors.map((key) => key.trim().toLowerCase()));
+    for (const key of behaviorKeys) {
+      if (!seedBehaviorSet.has(key)) {
+        invalid.push({
+          kind: "uncoveredBehavior",
+          ref: key,
+          detail: `design seed does not cover captured behavior '${key}' — the design MOAT must bind every behavior`,
         });
       }
     }
   }
 
-  // architecture — ≥1 captured architecture line (the human-readable stack summary).
-  if (capture.architecture.length === 0) missing.push("architecture");
+  // architecture — ≥1 captured architecture line with non-blank layer AND choice.
+  if (!capture.architecture.some((line) => nonBlank(line.layer) && nonBlank(line.choice))) missing.push("architecture");
 
   // lifecycle — the load-bearing concrete-command declaration.
   if (capture.lifecycle === null) missing.push("lifecycle");

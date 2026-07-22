@@ -35,6 +35,7 @@ import {
   DeployProvisioningUnavailableError,
   deriveFromCapture,
   DeriveRollbackError,
+  DesignCoverageMismatchError,
   FragmentAuthoringFailedError,
   InterviewCapture,
   InterviewIncompleteError,
@@ -312,6 +313,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           { error: "interview_incomplete", missing: error.missing, invalid: error.invalid, message: error.message },
           409,
         );
+      }
+      // rv-21 (proof=effect) — the synthesized design contract did not cover exactly the
+      // persisted persona/behavior graph; the derive failed closed (no contract row, the
+      // graph rolled back). A typed fault, never a silent success with a narrowed obligation.
+      if (error instanceof DesignCoverageMismatchError) {
+        return respond({ error: "design_coverage_mismatch", message: error.message }, 500);
       }
       if (error instanceof ProjectNotFoundError) {
         return respond({ error: "project_not_found", message: error.message }, 404);

@@ -36,8 +36,8 @@ const CAPTURE: InterviewCapture = {
     intent: "never duplicate external effects",
     principles: [],
     constraints: [],
-    personas: [],
-    behaviors: [],
+    personas: ["operator"],
+    behaviors: ["operator::inspect status"],
     dimensions: [],
   },
   lifecycle: {

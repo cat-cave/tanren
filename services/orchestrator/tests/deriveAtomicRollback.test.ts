@@ -40,8 +40,8 @@ const MINIMAL_DESIGN_CONTRACT = {
   intent: "calm + dense control surface",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 

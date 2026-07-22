@@ -48,7 +48,12 @@ export { DeriveRollbackError, type CompensationFailure, type DeleteRepositoryCal
 
 // Native design subsystem (WS-D1) — the LOUD guards for a required design contract +
 // dangling moat refs (mirroring `MissingLifecycleError`).
-export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";
+export {
+  assertContractCoversGraph,
+  DanglingDesignRefError,
+  DesignCoverageMismatchError,
+  MissingDesignContractError,
+} from "./deriveDesignContract.js";
 
 // Environment management (env-management.md §2.2 halt-loud, H1 #4) — re-exported so
 // the greenfield onboarding route dispatches the typed error to a 400 body without

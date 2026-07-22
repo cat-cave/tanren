@@ -20,6 +20,7 @@ import type { CreatedRepository } from "../../contracts/codeHostTypes.js";
 import type { InterviewCapture } from "./types.js";
 import { ProjectDerivationStore, type ProjectDerivationRow } from "../../repositories/projectDerivations.js";
 import {
+  assertContractCoversGraph,
   buildDerivationDesignPlan,
   type DerivationDesignPlan,
   type DerivationDesignResult,
@@ -154,7 +155,11 @@ export async function buildEntityGraphOnClient(
   milestoneIds.push(...ifaceResult.milestoneIds);
   const behaviorIds = ifaceResult.behaviorIds;
 
-  // 4 · design contract.
+  // 4 · design contract. rv-21 (proof=effect) — before writing the contract row, assert
+  // the synthesized contract covers EXACTLY the persisted persona + behavior identities
+  // (exact multiset). A divergence fails closed here; the surrounding org-scoped
+  // transaction rolls the whole graph back, so no contract/entity orphan is left.
+  assertContractCoversGraph(design.contract, [...personaIdByName.values()], behaviorIds);
   const designContract = await persistDesignContract(pool, {
     orgId: input.orgId,
     projectId,
