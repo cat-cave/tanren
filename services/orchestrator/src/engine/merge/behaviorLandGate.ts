@@ -294,7 +294,7 @@ export async function resolveLandTimeBehaviorFailure(
   orgId: string,
   runId: string,
   withOrgScope?: OrgScope,
-): Promise<BehaviorFailureCoordinate | null> {
+): Promise<BehaviorFailureCoordinate | undefined> {
   const scope: OrgScope = withOrgScope ?? ((org, operation) => runWithOrgScope(pool, org, operation));
   return scope(orgId, async (client) => {
     const run = (
@@ -305,7 +305,7 @@ export async function resolveLandTimeBehaviorFailure(
         [orgId, runId],
       )
     ).rows[0];
-    if (run === undefined || decodeRunStatus(run.status) !== "completed") return null;
+    if (run === undefined || decodeRunStatus(run.status) !== "completed") return undefined;
     const failure = (
       await client.query<{ id: string; behavior_revision_id: string; outcome: string }>(
         `SELECT id, behavior_revision_id, outcome
@@ -316,7 +316,7 @@ export async function resolveLandTimeBehaviorFailure(
         [orgId, run.id],
       )
     ).rows[0];
-    if (failure === undefined) return null;
+    if (failure === undefined) return undefined;
     const outcome = failure.outcome as BehaviorFailureCoordinate["outcome"];
     if (!DECISIVE_FAILURES.has(outcome))
       throw new TypeError(`behavior failure has an unknown outcome: ${failure.outcome}`);
