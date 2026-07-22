@@ -6,22 +6,49 @@ to contribute a small, auditable engine change.
 
 ## Contribution flow
 
-The live work roster is GitHub issues, not the historical ledger. Claim a planned
-engine node labelled `node`, or file an engine bug labelled `bug`. A bug is a
-failure in Tanren itself, not in a product Tanren built.
+The live work roster is GitHub issues. Every issue carries a **type** (exactly one:
+`bug` for a failure in Tanren itself — not in a product Tanren built — or
+`enhancement` for a scoped, PR-sized engine capability). Triage adds a **bucket**
+(`runtime` / `governance` / `back-half` / `merge-queue`) and a **priority** (`P1`
+critical / `P2` normal / `P3` low). Ordering is native GitHub issue dependencies:
+`A blocked_by B` means B lands first. There is no wave or milestone scheme.
 
-1. Work from an isolated Git worktree on a short-lived branch.
-2. Keep one independently reviewable unit of work in each PR.
-3. Open the PR with the [PR template](.github/pull_request_template.md); use the
-   [node issue template](.github/ISSUE_TEMPLATE/node.yml) or [bug issue
+1. Pick a ready issue and [claim it](#claiming-an-issue).
+2. Work from an isolated Git worktree on a short-lived branch.
+3. Keep one independently reviewable unit of work in each PR.
+4. Open the PR with the [PR template](.github/pull_request_template.md) and
+   reference the issue (`Closes #N`). Use the [enhancement issue
+   template](.github/ISSUE_TEMPLATE/enhancement.yml) or [bug issue
    template](.github/ISSUE_TEMPLATE/bug.yml) to record the capability, seam, and
-   required negative control.
-4. Submit it for central audit, address findings on the same branch, and merge
+   required negative control when filing.
+5. Submit it for central audit, address findings on the same branch, and merge
    only after the audit and gate evidence are green and the branch is current
    with `main`.
 
 For the broader parallel-work protocol, including path ownership and dependency
 planning, read the [parallel orchestration playbook](docs/playbooks/parallel-orchestration.md).
+
+## Claiming an issue
+
+There is no claim bot, and external contributors do not have write access, so the
+mechanism is deliberately simple:
+
+1. **Pick a ready issue.** An issue is ready only when it is not `blocked_by` an
+   open issue — check the issue's Dependencies panel ("blocked by"). Skip anything
+   still blocked; its blocker lands first.
+2. **Comment to claim it.** Say you're taking it; a maintainer assigns it to you.
+   Hold **one** open claim at a time.
+3. **Release if you stall.** If you can't finish, comment to release it so someone
+   else can pick it up. Reclaiming an abandoned claim is currently manual — a
+   maintainer may reassign an issue whose claim is stale and has no PR activity.
+
+## Feature requests & questions
+
+Propose ideas and feature requests in **[Discussions →
+Ideas](https://github.com/cat-cave/tanren/discussions/new?category=ideas)**, and ask
+questions in **[Discussions →
+Q&A](https://github.com/cat-cave/tanren/discussions/new?category=q-a)**. File a
+GitHub issue only for an actionable bug or a scoped engine task.
 
 ## Worktree and PR discipline
 
@@ -30,7 +57,7 @@ paths. Serialize any PR that edits a database migration or a shared composition
 file, including navigation, `screens.ts`, or `main.ts`; a migration has one
 owner and one serialized slot. Do not make concurrent edits to those barriers.
 
-Target roughly 1,000 changed lines or fewer per node. Split larger work into a
+Target roughly 1,000 changed lines or fewer per PR. Split larger work into a
 chain of small PRs rather than one broad change. Each PR must state its issue,
 owned paths, validation, and any required merge sequencing in the template.
 

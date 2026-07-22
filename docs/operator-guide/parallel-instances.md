@@ -102,7 +102,7 @@ Parallel runs are worth it because they feed **one** hardening stream. When your
 run hits an engine bug (not a bug in the product Tanren is building — a bug in
 Tanren itself), the loop is:
 
-1. **File it** as a GitHub issue with `label:bug`. Include the trial it surfaced on
+1. **File it** as a GitHub issue typed `bug`. Include the trial it surfaced on
    (e.g. "surfaced on a v-N run") and the halt class — that provenance is valuable
    and welcome. The repository carries issue and PR templates under `.github/` and a
    root [`CONTRIBUTING.md`](../../CONTRIBUTING.md) that spell out the format.
@@ -115,9 +115,9 @@ Tanren itself), the loop is:
 
 This is how many operators' runs converge: dozens of independent trials each throw
 off real bugs, and they all flow through a single, audited merge queue on the
-shared repo. (The engine node roster is likewise tracked as GitHub issues with
-`label:node`; the historical `docs/roadmap/mission-complete/LEDGER.md` is
-deprecated and kept for history only.)
+shared repo. (The live roster is GitHub issues, typed `bug` or `enhancement` and
+ordered by `blocked_by`/`blocks`; the historical
+`docs/roadmap/mission-complete/LEDGER.md` is deprecated and kept for history only.)
 
 ### The two-layer gate (never bypass CI)
 

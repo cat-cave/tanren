@@ -1,1 +1,8 @@
 blank_issues_enabled: false
+contact_links:
+  - name: "💡 Feature request or idea"
+    url: https://github.com/cat-cave/tanren/discussions/new?category=ideas
+    about: "Propose a feature or share an idea in Discussions → Ideas."
+  - name: "❓ Question / help"
+    url: https://github.com/cat-cave/tanren/discussions/new?category=q-a
+    about: "Ask a question or get help in Discussions → Q&A."
