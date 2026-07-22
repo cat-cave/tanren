@@ -17,7 +17,7 @@ import {
   deriveFromCapture,
   emptyCapture,
   mergeCapture,
-  MissingLifecycleError,
+  InterviewIncompleteError,
   runRound,
   type CaptureLifecycle,
   type InterviewAnswerer,
@@ -32,6 +32,7 @@ import {
   successfulBootstrapProject,
   type StubState,
 } from "./fixtures/forge/interviewDeriveStub.js";
+import { completeCaptureExtras } from "./fixtures/forge/completeCapture.js";
 
 // A TS/pnpm lifecycle capture (apex v27 default) — NOT a Tanren hardcode: the
 // project DECLARES it; the scaffold authors the justfile from it.
@@ -68,6 +69,7 @@ const MINIMAL_DESIGN_CONTRACT = {
 // guards).
 const captureWithLifecycle = (): InterviewCapture => ({
   ...emptyCapture(),
+  ...completeCaptureExtras(),
   lifecycle: TS_LIFECYCLE,
   designContract: MINIMAL_DESIGN_CONTRACT,
 });
@@ -279,22 +281,23 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(deploy?.acceptanceCriteria.join("\n")).toContain("just deploy");
   });
 
-  it("FAILS LOUD when the architecture step captured no lifecycle (never silently defaults to Node)", async () => {
+  it("FAILS LOUD (unified interview-incomplete) when the capture has no lifecycle (never silently defaults to Node)", async () => {
     const { pool, state } = stubPool();
-    // A deploy provider IS supplied — so the rejection is specifically the missing
-    // lifecycle (the scaffold can't author a justfile without it), not the deploy guard.
-    await expect(
-      deriveFromCapture(
-        { pool },
-        {
-          orgId: "org_a",
-          capture: emptyCapture(),
-          actor,
-          repoUrl: TEST_REPO_URL,
-          deploy: { providerKind: "deploy.vercel" },
-        },
-      ),
-    ).rejects.toBeInstanceOf(MissingLifecycleError);
+    // An empty capture is incomplete — the rv-21 completion gate rejects it BEFORE any
+    // project is created, and `lifecycle` is among the missing areas (the scaffold can't
+    // author a justfile without it); never a silent Node default.
+    const error = await deriveFromCapture(
+      { pool },
+      {
+        orgId: "org_a",
+        capture: emptyCapture(),
+        actor,
+        repoUrl: TEST_REPO_URL,
+        deploy: { providerKind: "deploy.vercel" },
+      },
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(InterviewIncompleteError);
+    expect((error as InterviewIncompleteError).missing).toContain("lifecycle");
     expect(state.projects.size).toBe(0);
   });
 

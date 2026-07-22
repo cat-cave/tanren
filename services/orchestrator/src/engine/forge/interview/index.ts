@@ -60,6 +60,15 @@ export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOption
 // threads into the F2 writer prompt (acceptance criteria + personas + behaviors).
 export { buildProductContextFromCapture } from "./derive.js";
 export { buildInterviewPrompt } from "./prompt.js";
+// rv-21 — the single deterministic interview-completion predicate + its typed
+// derive-boundary halt.
+export {
+  evaluateInterviewCompletion,
+  InterviewIncompleteError,
+  type InterviewCaptureArea,
+  type InterviewCompletionResult,
+  type InterviewInvalidRef,
+} from "./interviewCompletion.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
 export {
   buildSeedScaffoldDescription,

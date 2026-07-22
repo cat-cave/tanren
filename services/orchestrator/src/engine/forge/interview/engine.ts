@@ -21,6 +21,7 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture, resolveLifecycle } from "./capture.js";
+import { evaluateInterviewCompletion, type InterviewCompletionResult } from "./interviewCompletion.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveInput, type DeriveResult } from "./derive.js";
@@ -89,7 +90,14 @@ export interface RunRoundResult {
   suggestions: InterviewSuggestion[];
   // The capture AFTER merging this round's delta.
   capture: InterviewCapture;
+  // TRUE only when the answerer signalled done AND the deterministic completion
+  // predicate agrees the capture is complete (rv-21). An Answerer that claims
+  // completion EARLY cannot end the interview — `completion` below carries the typed
+  // areas still owed so the surface can ask for exactly them next.
   complete: boolean;
+  // The deterministic completeness assessment of the running capture (rv-21) — always
+  // present so the surface renders remaining capture areas + any dangling reference.
+  completion: InterviewCompletionResult;
   // Present only when this round attempted to mutate the confirmed lifecycle (a
   // rejected silent drift, or an accepted explicit change) — surfaced so the
   // operator sees it. Omitted otherwise.
@@ -128,13 +136,18 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
     });
     lifecycleDrift = { kind: "changed", effective: lifecycle.lifecycle, attempted: lifecycle.lifecycle };
   }
+  // rv-21 — the SINGLE deterministic completion gate. An answerer's `complete: true`
+  // only ends the interview when the accumulated capture is ACTUALLY complete; an early
+  // claim keeps the round incomplete and surfaces the typed missing/invalid areas.
+  const completion = evaluateInterviewCompletion(nextCapture);
   return {
     round: input.round,
     totalRounds,
     say: output.say,
     suggestions: output.suggestions,
     capture: nextCapture,
-    complete: output.complete,
+    complete: output.complete && completion.complete,
+    completion,
     ...(lifecycleDrift === undefined ? {} : { lifecycleDrift }),
   };
 }

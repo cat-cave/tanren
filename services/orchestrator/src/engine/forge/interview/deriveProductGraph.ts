@@ -52,6 +52,7 @@ import {
   providerDesignResult,
   type DerivationDesignPlan,
 } from "./deriveDesignContract.js";
+import { evaluateInterviewCompletion, InterviewIncompleteError } from "./interviewCompletion.js";
 import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
 import type { DeriveInput, DeriveResult } from "./derive.js";
 
@@ -246,6 +247,15 @@ async function resolveDurableDesign(input: {
 
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
   const capture = InterviewCapture.parse(input.capture);
+  // rv-21 — the derive boundary gate. The SAME deterministic completion predicate the
+  // interview rounds run is enforced here BEFORE the derivation lock and before any
+  // repository / project / design-contract row is created: an incomplete or self-
+  // inconsistent capture is a LOUD, fail-closed halt (never a partial derive off a
+  // half-captured vision, never a silently-dropped dangling reference). This subsumes
+  // the bare lifecycle/design-seed null checks below (which remain as internal
+  // invariants for the deeper graph-write callers).
+  const completion = evaluateInterviewCompletion(capture);
+  if (!completion.complete) throw new InterviewIncompleteError(completion.missing, completion.invalid);
   if (capture.lifecycle === null) throw new MissingLifecycleError();
   if (capture.designContract === null) throw new MissingDesignContractError();
   const lifecycle = capture.lifecycle;

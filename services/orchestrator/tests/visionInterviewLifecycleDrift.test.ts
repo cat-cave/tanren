@@ -34,6 +34,7 @@ import {
   noopComposeDesignSystem,
   successfulBootstrapProject,
 } from "./fixtures/forge/interviewDeriveStub.js";
+import { completeCaptureExtras } from "./fixtures/forge/completeCapture.js";
 
 // PR-G (task #77) — opaque composed-template identifier; no GitHub repo at this ref.
 const stubMaterialize = (): MaterializeTemplate => async (input) => ({
@@ -81,6 +82,7 @@ const DRIFTED: CaptureLifecycle = {
 
 const confirmedCapture = (): InterviewCapture => ({
   ...emptyCapture(),
+  ...completeCaptureExtras(),
   lifecycle: TS_LIFECYCLE,
   lifecycleConfirmed: true,
   // The design contract is REQUIRED at derive (the no-silent-noop guard) — a minimal

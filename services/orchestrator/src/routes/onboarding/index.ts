@@ -37,6 +37,7 @@ import {
   DeriveRollbackError,
   FragmentAuthoringFailedError,
   InterviewCapture,
+  InterviewIncompleteError,
   JitBuildRequiredError,
   MissingLifecycleError,
   MissingProjectSlugError,
@@ -302,6 +303,16 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
         c.json(orphans === undefined ? body : { ...body, orphanedResources: orphans }, status as never);
       const repoError = greenfieldRepositoryErrorResponse(c, error, orphans);
       if (repoError !== undefined) return repoError;
+      // rv-21 — the derive boundary rejected an INCOMPLETE / self-inconsistent capture
+      // (missing a required area OR a dangling persona/behavior ref) BEFORE any repository /
+      // project / design-contract row was created: a typed 409 carrying the exact missing +
+      // invalid areas, never a generic 500 and never a partial derive off a half vision.
+      if (error instanceof InterviewIncompleteError) {
+        return respond(
+          { error: "interview_incomplete", missing: error.missing, invalid: error.invalid, message: error.message },
+          409,
+        );
+      }
       if (error instanceof ProjectNotFoundError) {
         return respond({ error: "project_not_found", message: error.message }, 404);
       }
