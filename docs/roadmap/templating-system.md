@@ -386,9 +386,9 @@ so it clears the matrix warn floor and reaches the operator).
 
 ---
 
-## apex interaction — the next live-validation vehicle
+## Normal-flow fixture interaction — the next live-validation vehicle
 
-apex will exercise the F2 path end-to-end the next time a captured lifecycle
+An apex-class fixture will exercise the general F2 path end-to-end when its captured lifecycle
 references a fragment the bundled library doesn't have — the russian-
 fanfiction case, the gcp→AWS deploy swap, etc. The first such run halts on
 the authoring writer's output; the operator inspects the
@@ -396,9 +396,9 @@ the authoring writer's output; the operator inspects the
 and retries. Each authored fragment lands in the org's `fragments` table and
 is reusable across the org's projects.
 
-DO NOT pre-seed the org `fragments` table — let apex flush the path
-end-to-end so the writer's prompt + the validator's smoke composition are
-proven on real cases.
+DO NOT pre-seed the org `fragments` table for that fixture run — let the normal
+project flow flush the path end-to-end so the writer's prompt + the validator's
+smoke composition are proven on real cases.
 
 ---
 

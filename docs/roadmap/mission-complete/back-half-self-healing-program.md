@@ -1,7 +1,8 @@
 # Back-half self-healing cluster — serialized build program
 
 > **Status:** planning doc (authored 2026-07-17). This is the execution plan for the
-> apex-critical **self-healing cluster** (bh-6/8/10/11/12/13/14) — the nodes that make
+> general **self-healing cluster** (bh-6/8/10/11/12/13/14), required by the current
+> apex-class acceptance fixture — the nodes that make
 > the autonomous loop CLOSE: reproduce a planted product bug → fix it → re-verify the
 > symptom is gone in **production**, no human in the inner loop. Unlike the parallel
 > waves, this cluster is one mutually-dependent chain and runs as a dedicated
@@ -115,10 +116,11 @@ an LLM-intent judgment, filed under full-tier failure-aware model routing. **MVP
 ships deterministic-only** (one P0 successor per distinct failure signature;
 identical-signature recurrence → `needs_attention`, hard stop — no arbitrary attempt cap).
 
-## Closing this cluster is NECESSARY but NOT SUFFICIENT for apex v97
+## Closing this cluster is necessary but not sufficient for the v97 normal-flow fixture run
 
-The apex critical path is **{this cluster} ∪ {rv runtime-probe execution tail} ∪ {in-\*
-deploy/provision + A3-live-observe}**:
+The current apex example's dependency path is **{this cluster} ∪ {rv runtime-probe
+execution tail} ∪ {in-\* deploy/provision + A3-live-observe}**. These are general
+capabilities, not an apex-specific path:
 
 1. **rv tail** — bh-8/bh-10 reuse the A1/A3 ports; the rv nodes that actually execute a
    DOM/visual probe against a live surface and materialize `verification_assertions`
@@ -129,5 +131,6 @@ deploy/provision + A3-live-observe}**:
    nodes produce.
 
 Closing bh-6/8/10/11/12/13/14 makes the self-healing _decision loop_ provable
-end-to-end; the planted-bug apex run additionally requires the rv probe-execution and
-in-\* deploy nodes green so there is a live artifact to reproduce against and re-verify on.
+end-to-end; a normal-flow run of the planted-bug fixture additionally requires the rv
+probe-execution and in-\* deploy nodes green so there is a live artifact to reproduce
+against and re-verify on.

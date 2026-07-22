@@ -26,7 +26,7 @@ migrate them.
 this PREP (0 credit)
   -> SPEC-FREEZE-W1-A docs freeze (0 credit)
   -> EV-SUB-Wn registry/seed/migration (0 credit)
-  -> IN-7 producer + HTTP + UI + apex proof (node credit)
+  -> IN-7 producer + HTTP + UI + normal-flow live-run proof (node credit)
 ```
 
 This prep depends on the merged SP-2 contract only. It does not depend on IN-1
@@ -71,7 +71,7 @@ before editing any additional path.
 - `db/migrations/**`, migration journal/snapshots, or runtime catalog upserts
 - `event-vocabulary-waves.md` freeze status or any claim that a name is final
 - SP-2 `authoringKernel.ts` or a new kernel implementation
-- IN-7 product persistence, producer wiring, HTTP, UI, nav, screens, or apex
+- IN-7 product persistence, producer wiring, HTTP, UI, nav, screens, or live fixture validation
 - Generic or aliased `fragment.authoring.*` events
 - Invented fragment digests, row/event transaction atomicity, or EventStore
   idempotency support
@@ -99,6 +99,7 @@ before editing any additional path.
 
 This prep remains zero-credit even when merged. IN-7 remains incomplete until a
 later frozen/installed vocabulary is emitted by the real family binding and is
-also callable through HTTP, visible in the dashboard, and asserted by live apex
-evidence. Do not push or open a PR until the orchestrating root audits the local
+also callable through HTTP, visible in the dashboard, and asserted by the general
+pipeline during a live fixture run. Do not push or open a PR until the
+orchestrating root audits the local
 candidate.

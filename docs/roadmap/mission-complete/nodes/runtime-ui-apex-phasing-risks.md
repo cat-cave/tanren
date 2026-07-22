@@ -333,15 +333,15 @@ Rough total program size:
 
 ### Phasing
 
-| Phase                     | Deliverable                                                                                                             | Exit condition                                                               |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 0 — authority foundations | Behavior revisions, plan schemas, hashes, artifact manifest, RLS and event contracts.                                   | One behavior compiles deterministically and verifies cross-tenant isolation. |
-| 1 — compiler and F2       | Typed DSL, fragment registry, missing-fragment DAG and negative controls.                                               | Every MVP behavior has a validated, non-vacuous plan.                        |
-| 2 — deployed gate         | Fly preview lifecycle, Playwright/API executor, evidence store, native gate bundle, MergeAuthority and queue bisection. | A deployed behavior failure blocks and bisects an exact jj node.             |
-| 3 — causal integrations   | Slack fixture/observer, correlation protocol and cardinality assertions.                                                | The real 100-click/100-message apex passes and its negative control fails.   |
-| 4 — rendered design       | DesignContractV2, render capture, deterministic verdicts and DesignOracle routing.                                      | A visual contract regression blocks and produces actionable evidence.        |
-| 5 — production/demo/UI    | Promote-same-artifact, production re-proof, proof-backed demo, history and dashboard.                                   | The promoted artifact and demo are bound to the same behavior proof.         |
-| 6 — full intelligence     | Broader adapters, adaptive scheduler, interaction reduction, flake governance and automatic respec.                     | Full comparator parity and owned-stack advantages operate across surfaces.   |
+| Phase                     | Deliverable                                                                                                             | Exit condition                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 0 — authority foundations | Behavior revisions, plan schemas, hashes, artifact manifest, RLS and event contracts.                                   | One behavior compiles deterministically and verifies cross-tenant isolation.                                                     |
+| 1 — compiler and F2       | Typed DSL, fragment registry, missing-fragment DAG and negative controls.                                               | Every MVP behavior has a validated, non-vacuous plan.                                                                            |
+| 2 — deployed gate         | Fly preview lifecycle, Playwright/API executor, evidence store, native gate bundle, MergeAuthority and queue bisection. | A deployed behavior failure blocks and bisects an exact jj node.                                                                 |
+| 3 — causal integrations   | Slack fixture/observer, correlation protocol and cardinality assertions.                                                | The current example fixture's real 100-click/100-message case passes through the normal pipeline and its negative control fails. |
+| 4 — rendered design       | DesignContractV2, render capture, deterministic verdicts and DesignOracle routing.                                      | A visual contract regression blocks and produces actionable evidence.                                                            |
+| 5 — production/demo/UI    | Promote-same-artifact, production re-proof, proof-backed demo, history and dashboard.                                   | The promoted artifact and demo are bound to the same behavior proof.                                                             |
+| 6 — full intelligence     | Broader adapters, adaptive scheduler, interaction reduction, flake governance and automatic respec.                     | Full comparator parity and owned-stack advantages operate across surfaces.                                                       |
 
 ### Sibling-bucket dependencies
 

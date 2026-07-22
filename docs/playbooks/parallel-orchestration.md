@@ -126,8 +126,9 @@ building, the critic is strong at catching what the builder missed. Four uses:
 
 - **Critic** — adversarial, _refute_-prompted review of a diff or a finding,
   before merge. Cite `file:line`, classify BLOCKING vs non-blocking, end with a
-  SHIP/FIX-FIRST verdict. (The apex "critic-arc" proof is three independent critic
-  rounds coming back clean.)
+  SHIP/FIX-FIRST verdict. (The live-validation "critic arc" records three independent
+  critic rounds coming back clean; it is contributor process evidence, not an
+  apex-specific engine proof.)
 - **Triage / root-cause** — when a run or CI fails, the critic investigates the
   root cause independently rather than the implementer re-reading its own work.
 - **Lull-audit** — during downtime, sweep for _negative implementations_ (silent

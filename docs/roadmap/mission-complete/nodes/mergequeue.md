@@ -410,7 +410,7 @@ The brief prohibits calendar estimates in roadmap work [PROJECT_BRIEF.md](/home/
 | 4. Full comparator operations      | All queue modes, semantic scopes/capacities/barriers, priorities, pause/freeze/windows, comments/CLI/API, nested train UI, metrics, policy simulation/import/export.                      | Additional 8–12 specs, 1–2 migrations, roughly 14–22k LOC.  |
 | 5. Owned-stack runtime behavior    | EAGER frontier prediction, agent repair/respec/split, cross-project trains, preview/canary, rollback, post-deploy causal replay, signed attestations.                                     | Additional 10–16 specs, 2–3 migrations, roughly 18–30k LOC. |
 
-A credible production MVP is therefore roughly **14–20 PR-sized roadmap specs**. The unlimited ideal is roughly **45–65 specs**, **8–12 migrations**, and **60–95k LOC including conformance, regression, integration, UI, and apex tests**. It is a major subsystem, not a batch-coordinator patch.
+A credible production MVP is therefore roughly **14–20 PR-sized roadmap specs**. The unlimited ideal is roughly **45–65 specs**, **8–12 migrations**, and **60–95k LOC including conformance, regression, integration, UI, and max-difficulty fixture tests through the normal pipeline**. It is a major subsystem, not a batch-coordinator patch.
 
 Dependencies on sibling capability buckets:
 

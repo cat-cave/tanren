@@ -84,8 +84,8 @@ description, source: byo | provisioned }`. Secret values never live in DB config
     its secrets.
 
 This is shipped (the App Environment store + the scope-resolved SSH injection),
-parallel to the Plane-A provisioner work and exercised by `apex` (the apex
-product's Slack bot token + any app env are Plane B).
+parallel to the Plane-A provisioner work and exercised by ordinary project runs;
+the current link-shortener apex example's Slack bot token and app env are Plane B.
 
 ## Boundary model
 
@@ -98,7 +98,7 @@ product's Slack bot token + any app env are Plane B).
 ## Integration matrix
 
 The **Current code state / Required change** split this table once carried is gone:
-the four apex-relevant provisioners — **Sentry, Slack, Fly, Vercel** — plus the
+the provisioners used by the current apex example — **Sentry, Slack, Fly, Vercel** — plus the
 **Hetzner allocator** are **shipped** behind the `IntegrationProvisioner` contract +
 registry (see "Substrate (shipped)" below). The single **Remaining refinement**
 column records only the least-privilege / discovery / new-backend work that is still
@@ -146,7 +146,8 @@ The boundary model above is realized by:
 3. Onboarding / greenfield flows request capabilities, not leaf secrets:
    "enable Sentry errors" calls the Sentry provisioner, creates the project /
    key / source, and passes the DSN into the generated project.
-   Autonomous greenfield/apex creation also requests `deploy` up front. The
+   Normal autonomous greenfield creation, including an apex-class fixture, requests
+   `deploy` up front. The
    caller must name `deploy.vercel` or `deploy.flyio`; when the org has not linked
    that provider, creation returns structured `not_linked` evidence instead of
    creating a project with no deploy path. When more than one account is eligible,
@@ -157,8 +158,8 @@ The boundary model above is realized by:
 The per-provider matrix's "Remaining refinement" column records the
 least-privilege and discovery work that is still worthwhile per provider
 (e.g. tighter scopes, repo-access checks, new allocator backends) — not missing
-foundations. The apex-relevant provisioners (Sentry / Slack / Fly / Vercel /
-Hetzner) are shipped.
+foundations. The provisioners used by the current apex example (Sentry / Slack /
+Fly / Vercel / Hetzner) are shipped; other fixtures may require different providers.
 
 ## Sentry concrete model
 
