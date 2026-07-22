@@ -29,6 +29,15 @@ import type { CanonicalBody } from "../../contracts/cas.js";
 import type { BehaviorVerdictOutcome } from "../../contracts/runtimeVerificationAdapters.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
+type CiCompatibilityOutcome = "passed" | "failed" | "error" | "skipped";
+
+/** Raised when an attempt's append-only CI projection already exists with different facts. */
+export class CiCompatibilityProjectionConflictError extends Error {
+  public override readonly name = "CiCompatibilityProjectionConflictError";
+  public constructor(attemptId: string) {
+    super(`CI compatibility projection for behavior attempt ${attemptId} conflicts with immutable history`);
+  }
+}
 
 /** Raised when a verdict names a producing attempt that does not exist in its run. */
 export class OrphanVerdictError extends Error {
@@ -156,6 +165,7 @@ export async function ensureVerificationPlanRow(
 
 /** Record one real attempt row (run + plan + behavior referents FK-enforced). */
 export async function recordAttemptRow(client: QueryClient, id: string, input: RecordAttemptInput): Promise<string> {
+  validateAttemptInput(id, input);
   await client.query(
     `INSERT INTO behavior_verification_attempts
        (org_id, id, project_id, run_id, behavior_revision_id, plan_id, example_hash, matrix_hash,
@@ -182,7 +192,129 @@ export async function recordAttemptRow(client: QueryClient, id: string, input: R
       input.artifactManifestDigest ?? null,
     ],
   );
+  await writeCiCompatibilityProjection(client, id, input);
   return id;
+}
+
+/**
+ * Append the behavior attempt's CI-reader compatibility row. The insert selects the just-persisted
+ * attempt and its owning behavior run, so `head_sha`, optional workflow `run_id`, timestamps, and
+ * both direct referents all come from one exact database coordinate. A replay is accepted only
+ * when every immutable projected field still matches; a conflicting retry throws and the caller's
+ * org-scoped transaction rolls back instead of overwriting history.
+ */
+export async function writeCiCompatibilityProjection(
+  client: QueryClient,
+  attemptId: string,
+  input: RecordAttemptInput,
+): Promise<void> {
+  validateAttemptInput(attemptId, input);
+  const outcome = normalizeAttemptForCi(input.outcome);
+  const projectionId = `behavior:${input.orgId}:${attemptId}`;
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO ci_test_results
+       (id, project_id, org_id, test_id, file, suite, head_sha, source_kind, run_id,
+        behavior_verification_run_id, behavior_attempt_id, attempt, outcome, duration_ms,
+        retries, observed_at)
+     SELECT $1, a.project_id, a.org_id,
+            'behavior:' || a.behavior_revision_id || ':' || a.example_hash || ':' || a.matrix_hash,
+            NULL, 'runtime-behavior', r.prepared_head_sha, 'behavior_verification', r.run_id,
+            r.id, a.id, 1, $4,
+            CASE WHEN a.finished_at IS NULL THEN NULL
+                 ELSE floor(extract(epoch FROM (a.finished_at - a.started_at)) * 1000)::integer END,
+            0, coalesce(a.finished_at, a.started_at)
+       FROM behavior_verification_attempts a
+       JOIN behavior_verification_runs r
+         ON r.org_id = a.org_id AND r.project_id = a.project_id AND r.id = a.run_id
+      WHERE a.org_id = $2 AND a.id = $3 AND a.project_id = $5
+     ON CONFLICT (org_id, behavior_attempt_id)
+       WHERE source_kind = 'behavior_verification'
+     DO NOTHING
+     RETURNING id`,
+    [projectionId, input.orgId, attemptId, outcome, input.projectId],
+  );
+  if ((inserted.rowCount ?? 0) === 1) return;
+
+  const replay = await client.query<{ matches: unknown }>(
+    `SELECT c.id = $1
+            AND c.project_id = a.project_id
+            AND c.test_id = 'behavior:' || a.behavior_revision_id || ':' || a.example_hash || ':' || a.matrix_hash
+            AND c.file IS NULL AND c.suite = 'runtime-behavior'
+            AND c.head_sha = r.prepared_head_sha AND c.source_kind = 'behavior_verification'
+            AND c.run_id IS NOT DISTINCT FROM r.run_id
+            AND c.behavior_verification_run_id = r.id AND c.behavior_attempt_id = a.id
+            AND c.attempt = 1 AND c.outcome = $4
+            AND c.duration_ms IS NOT DISTINCT FROM
+                CASE WHEN a.finished_at IS NULL THEN NULL
+                     ELSE floor(extract(epoch FROM (a.finished_at - a.started_at)) * 1000)::integer END
+            AND c.retries = 0
+            AND c.observed_at = coalesce(a.finished_at, a.started_at) AS matches
+       FROM behavior_verification_attempts a
+       JOIN behavior_verification_runs r
+         ON r.org_id = a.org_id AND r.project_id = a.project_id AND r.id = a.run_id
+       JOIN ci_test_results c
+         ON c.org_id = a.org_id AND c.behavior_attempt_id = a.id
+        AND c.source_kind = 'behavior_verification'
+      WHERE a.org_id = $2 AND a.id = $3 AND a.project_id = $5`,
+    [projectionId, input.orgId, attemptId, outcome, input.projectId],
+  );
+  const row = replay.rows[0];
+  if (row === undefined) {
+    throw new Error(`CI compatibility projection for behavior attempt ${attemptId} has no exact owning run referent`);
+  }
+  if (row.matches !== true) throw new CiCompatibilityProjectionConflictError(attemptId);
+}
+
+/** Exhaustive behavior-verdict → CI-reader outcome normalization. */
+export function normalizeAttemptForCi(outcome: BehaviorVerdictOutcome): CiCompatibilityOutcome {
+  switch (outcome) {
+    case "passed":
+      return "passed";
+    case "failed_product":
+    case "failed_verification_contract":
+    case "failed_visual":
+      return "failed";
+    case "inconclusive_infrastructure":
+    case "inconclusive_external":
+      return "error";
+    case "cancelled_superseded":
+      return "skipped";
+    default: {
+      const exhaustive: never = outcome;
+      throw new TypeError(`unknown behavior verdict outcome: ${String(exhaustive)}`);
+    }
+  }
+}
+
+function validateAttemptInput(attemptId: string, input: RecordAttemptInput): void {
+  for (const [name, value] of [
+    ["attemptId", attemptId],
+    ["orgId", input.orgId],
+    ["projectId", input.projectId],
+    ["runId", input.runId],
+    ["behaviorRevisionId", input.behaviorRevisionId],
+    ["planId", input.planId],
+    ["exampleHash", input.exampleHash],
+    ["matrixHash", input.matrixHash],
+    ["seed", input.seed],
+    ["classification", input.classification],
+  ] as const) {
+    if (value.trim().length === 0) throw new TypeError(`${name} must be a non-blank string`);
+  }
+  if (!Number.isInteger(input.shard) || input.shard < 0) throw new TypeError("shard must be a non-negative integer");
+  const started = timestampMillis(input.startedAt, "startedAt");
+  if (input.finishedAt !== undefined) {
+    const finished = timestampMillis(input.finishedAt, "finishedAt");
+    if (finished < started) throw new TypeError("finishedAt must not precede startedAt");
+  }
+  normalizeAttemptForCi(input.outcome);
+}
+
+function timestampMillis(value: string, name: string): number {
+  if (value.trim().length === 0) throw new TypeError(`${name} must be a non-blank timestamp`);
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new TypeError(`${name} must be a valid timestamp`);
+  return parsed;
 }
 
 /**

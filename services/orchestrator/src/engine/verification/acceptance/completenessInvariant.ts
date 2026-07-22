@@ -148,19 +148,23 @@ export async function checkInScope(
   );
   if (integer(proof.rows[0]?.count) !== 1) return { complete: false, failure: "gate_proof_artifact_mismatch" };
 
-  const ci = await client.query<{ count: unknown }>(
-    `SELECT COUNT(*)::int AS count
-       FROM ci_test_results c
-       JOIN integration_nodes n ON n.org_id = c.org_id AND n.project_id = c.project_id
-       JOIN release_instances ri ON ri.org_id = n.org_id AND ri.integration_node_id = n.node_id
-      WHERE c.org_id = $1 AND c.project_id = $2 AND ri.id = $3
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(n.members) member
-           WHERE member ->> 'runId' = c.run_id
-        )`,
-    [input.orgId, input.projectId, input.releaseInstanceId],
+  const ci = await client.query<{ attempt_count: unknown; projection_count: unknown }>(
+    `SELECT COUNT(a.id)::int AS attempt_count, COUNT(c.id)::int AS projection_count
+       FROM behavior_verification_attempts a
+       LEFT JOIN ci_test_results c
+         ON c.org_id = a.org_id
+        AND c.project_id = a.project_id
+        AND c.source_kind = 'behavior_verification'
+        AND c.behavior_verification_run_id = a.run_id
+        AND c.behavior_attempt_id = a.id
+      WHERE a.org_id = $1 AND a.project_id = $2 AND a.run_id = $3`,
+    [input.orgId, input.projectId, runId],
   );
-  if (!positiveInt(ci.rows[0]?.count)) return { complete: false, failure: "ci_compat_projection_missing" };
+  const attemptCount = integer(ci.rows[0]?.attempt_count);
+  const projectionCount = integer(ci.rows[0]?.projection_count);
+  if (attemptCount < 1 || projectionCount !== attemptCount) {
+    return { complete: false, failure: "ci_compat_projection_missing" };
+  }
   return { complete: true, kind: "complete", runId, requiredBehaviorRevisionCount: required.length };
 }
 

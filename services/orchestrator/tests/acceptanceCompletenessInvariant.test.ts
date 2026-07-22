@@ -14,7 +14,7 @@ function checker(overrides: Partial<Record<number, readonly Record<string, unkno
     5: [{ behavior_revision_id: "behavior-a" }],
     6: [{ behavior_revision_id: "behavior-a", outcome: "passed", executed_assertion_count: 1 }],
     7: [{ count: 1 }],
-    8: [{ count: 1 }],
+    8: [{ attempt_count: 1, projection_count: 1 }],
     ...overrides,
   };
   const pool = {
@@ -73,6 +73,13 @@ describe("acceptance completeness invariant", () => {
     await expect(checker({ 6: [] }).check(input)).resolves.toEqual({
       complete: false,
       failure: "verdict_set_mismatch",
+    });
+  });
+
+  it("blocks when any direct behavior-attempt compatibility projection is missing", async () => {
+    await expect(checker({ 8: [{ attempt_count: 2, projection_count: 1 }] }).check(input)).resolves.toEqual({
+      complete: false,
+      failure: "ci_compat_projection_missing",
     });
   });
 });

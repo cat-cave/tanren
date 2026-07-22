@@ -87,6 +87,12 @@ export const behaviorVerificationRunsReference = pgTable(
   ],
 );
 
+/** Reference-only runtime-verification attempt identity (migration 0037). */
+export const behaviorVerificationAttemptsReference = pgTable("behavior_verification_attempts", {
+  orgId: text("org_id").notNull(),
+  id: text("id").notNull(),
+});
+
 /** Reference-only deployed release identity (migration 0036). */
 export const releaseInstancesReference = pgTable("release_instances", {
   orgId: text("org_id").notNull(),

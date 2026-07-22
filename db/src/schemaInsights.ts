@@ -9,9 +9,10 @@
 // See docs/architecture/insights.md for the operator-facing reference.
 
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { check, foreignKey, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { desc } from "drizzle-orm";
 import { organizations, projects, runs, users } from "./schemaCore.js";
+import { behaviorVerificationAttemptsReference, behaviorVerificationRunsReference } from "./schemaSpineReferences.js";
 
 export const workflowInsights = pgTable(
   "workflow_insights",
@@ -123,9 +124,13 @@ export const ciTestResults = pgTable(
     suite: text("suite"),
     /** The commit SHA the report was produced against (CI `github.sha`). */
     headSha: text("head_sha").notNull(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.runId),
+    /** Native JUnit history or the behavior-attempt compatibility projection. */
+    sourceKind: text("source_kind").notNull().default("native_ci"),
+    runId: text("run_id").references(() => runs.runId),
+    /** Direct behavior-run referent; set only by behavior-verification projections. */
+    behaviorVerificationRunId: text("behavior_verification_run_id"),
+    /** Direct behavior-attempt referent; unique for behavior-verification projections. */
+    behaviorAttemptId: text("behavior_attempt_id"),
     /** The CI re-run attempt this report came from (GitHub `run_attempt`), ≥ 1. */
     attempt: integer("attempt").notNull().default(1),
     /** Normalized outcome: passed / failed / error / skipped. */
@@ -137,6 +142,11 @@ export const ciTestResults = pgTable(
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check("ci_test_results_source_kind_check", sql`${table.sourceKind} IN ('native_ci','behavior_verification')`),
+    check(
+      "ci_test_results_source_shape_check",
+      sql`(${table.sourceKind} = 'native_ci' AND ${table.runId} IS NOT NULL AND ${table.behaviorVerificationRunId} IS NULL AND ${table.behaviorAttemptId} IS NULL) OR (${table.sourceKind} = 'behavior_verification' AND ${table.behaviorVerificationRunId} IS NOT NULL AND ${table.behaviorAttemptId} IS NOT NULL)`,
+    ),
     check("ci_test_results_outcome_check", sql`${table.outcome} IN ('passed','failed','error','skipped')`),
     check("ci_test_results_attempt_check", sql`${table.attempt} >= 1`),
     check("ci_test_results_retries_check", sql`${table.retries} >= 0`),
@@ -145,5 +155,19 @@ export const ciTestResults = pgTable(
     // Per-test history lookups: a single test's results over time within a project.
     index("ci_test_results_project_test").on(table.projectId, table.testId, desc(table.observedAt)),
     index("ci_test_results_run").on(table.runId),
+    index("ci_test_results_behavior_run").on(table.orgId, table.behaviorVerificationRunId),
+    uniqueIndex("ci_test_results_behavior_attempt_unique")
+      .on(table.orgId, table.behaviorAttemptId)
+      .where(sql`${table.sourceKind} = 'behavior_verification'`),
+    foreignKey({
+      columns: [table.orgId, table.behaviorVerificationRunId],
+      foreignColumns: [behaviorVerificationRunsReference.orgId, behaviorVerificationRunsReference.id],
+      name: "ci_test_results_behavior_run_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.behaviorAttemptId],
+      foreignColumns: [behaviorVerificationAttemptsReference.orgId, behaviorVerificationAttemptsReference.id],
+      name: "ci_test_results_behavior_attempt_fk",
+    }),
   ],
 );
