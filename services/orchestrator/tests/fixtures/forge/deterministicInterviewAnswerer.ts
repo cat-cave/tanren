@@ -170,9 +170,19 @@ const SCRIPT: InterviewRoundOutput[] = [
         intent: "a calm, information-dense control surface that an operator trusts at a glance",
         principles: ["two accent colors max", "no AI-slop gradients"],
         constraints: ["WCAG AA"],
-        // THE MOAT — bind to the project's typed persona + behavior graph.
-        personas: ["ops manager", "line worker"],
-        behaviors: ["line worker::clock in with badge", "ops manager::place a purchase order"],
+        // THE MOAT — bind EXACTLY the project's typed persona + behavior graph (rv-21:
+        // the design seed must cover EVERY captured persona + fully-formed behavior).
+        personas: ["ops manager", "line worker", "cfo"],
+        behaviors: [
+          "line worker::clock in with badge",
+          "line worker::pull the day's pick list",
+          "line worker::scan items off the bin",
+          "line worker::confirm each scan",
+          "line worker::push tote to staging",
+          "ops manager::place a purchase order",
+          "ops manager::review supplier scorecard",
+          "cfo::run the monthly close",
+        ],
         dimensions: [
           {
             key: "tokens",

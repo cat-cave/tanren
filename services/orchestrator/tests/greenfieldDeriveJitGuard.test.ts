@@ -14,6 +14,7 @@ import {
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
 import { preparedDeploy, stubPool } from "./fixtures/forge/interviewDeriveStub.js";
+import { completeCaptureExtras } from "./fixtures/forge/completeCapture.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -31,8 +32,8 @@ const MINIMAL_DESIGN_CONTRACT = {
   intent: "a calm, information-dense control surface an operator trusts at a glance",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 
@@ -73,6 +74,7 @@ function baselineSubsetLifecycle(): CaptureLifecycle {
 function captureWith(lifecycle: CaptureLifecycle): InterviewCapture {
   return {
     ...emptyCapture(),
+    ...completeCaptureExtras(),
     lifecycle,
     designContract: MINIMAL_DESIGN_CONTRACT,
   };

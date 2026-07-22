@@ -70,8 +70,12 @@ export const CaptureIdentity = z
             "slug must be a hostname-safe DNS label (lowercase alphanumerics + single dashes)",
           ),
       ),
-    pitch: z.string().min(1).max(400),
-    repoHint: z.string().max(200).default(""),
+    // rv-21 — TRIM at ingestion: normalize once at the capture boundary so the predicate,
+    // `behaviorKey`, `deriveBehaviorSpec`, `buildDerivationDesignPlan`, and the persist
+    // layer ALL see the same canonical value. A whitespace-padded value can no longer pass
+    // the gate then miss a downstream map lookup (the silent-drop root cause).
+    pitch: z.string().trim().min(1).max(400),
+    repoHint: z.string().trim().max(200).default(""),
   })
   .strict();
 export type CaptureIdentity = z.infer<typeof CaptureIdentity>;
@@ -80,9 +84,11 @@ export type CaptureIdentity = z.infer<typeof CaptureIdentity>;
 // (desktop / handheld / …) for the architecture step; purely descriptive.
 export const CapturePersona = z
   .object({
-    name: z.string().min(1).max(80),
-    description: z.string().min(1).max(280),
-    surface: z.string().max(80).default(""),
+    // rv-21 — `name` is a resolution KEY (persona id planning + behavior/design ref
+    // resolution) AND is persisted; trim at ingestion so every consumer agrees.
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().min(1).max(280),
+    surface: z.string().trim().max(80).default(""),
   })
   .strict();
 export type CapturePersona = z.infer<typeof CapturePersona>;
@@ -92,11 +98,13 @@ export type CapturePersona = z.infer<typeof CapturePersona>;
 // field name); the thenable-object lint does not apply to a schema field.
 export const CaptureBehavior = z
   .object({
-    persona: z.string().min(1).max(80),
-    title: z.string().min(1).max(160),
-    given: z.string().max(280).default(""),
-    when: z.string().max(280).default(""),
-    then: z.string().max(280).default(""),
+    // rv-21 — `persona` + `title` are resolution KEYS (`behaviorKey`, persona lookup) AND
+    // persisted; the G/W/T are persisted content. Trim all at ingestion.
+    persona: z.string().trim().min(1).max(80),
+    title: z.string().trim().min(1).max(160),
+    given: z.string().trim().max(280).default(""),
+    when: z.string().trim().max(280).default(""),
+    then: z.string().trim().max(280).default(""),
   })
   .strict();
 /* eslint-enable unicorn/no-thenable */
@@ -105,8 +113,9 @@ export type CaptureBehavior = z.infer<typeof CaptureBehavior>;
 // An inferred interface (a delivery surface, e.g. "desktop dashboard").
 export const CaptureInterface = z
   .object({
-    name: z.string().min(1).max(120),
-    note: z.string().max(200).default(""),
+    // rv-21 — `name` is persisted (milestone name) + used for surface matching; trim.
+    name: z.string().trim().min(1).max(120),
+    note: z.string().trim().max(200).default(""),
   })
   .strict();
 export type CaptureInterface = z.infer<typeof CaptureInterface>;
@@ -117,8 +126,8 @@ export type CaptureInterface = z.infer<typeof CaptureInterface>;
 // scaffold authors the justfile from).
 export const CaptureArchitectureLine = z
   .object({
-    layer: z.string().min(1).max(40),
-    choice: z.string().min(1).max(160),
+    layer: z.string().trim().min(1).max(40),
+    choice: z.string().trim().min(1).max(160),
   })
   .strict();
 export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
@@ -167,8 +176,13 @@ export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
 const MISE_TOOL_NAME = /^[a-z0-9][a-z0-9._-]*$/u;
 export const CaptureToolEntry = z
   .object({
-    name: z.string().min(1).max(80).regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
-    version: z.string().min(1).max(80),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .regex(MISE_TOOL_NAME, "mise tool name must be lowercase alphanumeric + . _ -"),
+    version: z.string().trim().min(1).max(80),
   })
   .strict();
 export type CaptureToolEntry = z.infer<typeof CaptureToolEntry>;
@@ -177,15 +191,17 @@ export type CaptureToolchain = z.infer<typeof CaptureToolchain>;
 
 export const CaptureLifecycle = z
   .object({
-    // The chosen stack/runtime label (descriptive — NOT a switch Tanren reads).
-    stack: z.string().min(1).max(120),
+    // The chosen stack/runtime label (descriptive — NOT a switch Tanren reads). rv-21 —
+    // trim the persisted lifecycle fields (trim strips only leading/trailing whitespace,
+    // preserving newline-joined multi-line commands).
+    stack: z.string().trim().min(1).max(120),
     // The conventional targets → the stack commands that fill them.
-    bootstrap: z.string().min(1).max(400),
-    tier1: z.string().min(1).max(400),
-    tier2: z.string().min(1).max(400),
-    tier3: z.string().min(1).max(400),
-    build: z.string().min(1).max(400),
-    deploy: z.string().min(1).max(400),
+    bootstrap: z.string().trim().min(1).max(400),
+    tier1: z.string().trim().min(1).max(400),
+    tier2: z.string().trim().min(1).max(400),
+    tier3: z.string().trim().min(1).max(400),
+    build: z.string().trim().min(1).max(400),
+    deploy: z.string().trim().min(1).max(400),
     // The `upgrade` verb (environment-management.md §4.5/§7 P1) — the stack command
     // that BUMPS this project's dependencies to latest + regenerates its lockfile
     // (`pnpm update --latest` | `cargo update` | `uv lock --upgrade` | `go get -u`),
@@ -195,7 +211,7 @@ export const CaptureLifecycle = z
     // target STUBs and the project has no Tanren-driven forced-upgrade lever. Allows ""
     // (a project may explicitly declare no upgrade command) — unlike the tier verbs,
     // which are required — defaulting to "" when omitted.
-    upgrade: z.string().max(400).default(""),
+    upgrade: z.string().trim().max(400).default(""),
     // The project's TOOLCHAIN (list of {name, version}; see `CaptureToolchain`).
     // OPTIONAL: a project may declare none (provisions inside its own bootstrap, or
     // rides the runner baseline) — absent/empty ⇒ no `mise.toml` materialized.
@@ -214,15 +230,15 @@ export type CaptureLifecycle = z.infer<typeof CaptureLifecycle>;
 // (design/designContract.ts) so derive maps capture → contract 1:1.
 export const CaptureDesignDimension = z
   .object({
-    key: z.string().min(1).max(80),
-    label: z.string().min(1).max(160),
-    intent: z.string().min(1).max(2000),
-    guidance: z.string().max(2000).default(""),
+    key: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(1).max(160),
+    intent: z.string().trim().min(1).max(2000),
+    guidance: z.string().trim().max(2000).default(""),
     // PERSONA-SCOPED design (the moat): the persona NAMES whose view this
     // dimension describes. Captured by NAME (the natural key) — derive resolves
     // them to the persisted persona ids that become `personaRefs` on the contract
     // dimension. Empty ⇒ the dimension applies to every persona on the contract.
-    personas: z.array(z.string().min(1).max(80)).default([]),
+    personas: z.array(z.string().trim().min(1).max(80)).default([]),
   })
   .strict();
 export type CaptureDesignDimension = z.infer<typeof CaptureDesignDimension>;
@@ -240,26 +256,26 @@ export const CaptureDesignContract = z
   .object({
     // The descriptive design DOMAIN label ("saas-web", "mobile-game",
     // "novel-translation") — domain-derived; Tanren never branches on it.
-    domain: z.string().min(1).max(120),
+    domain: z.string().trim().min(1).max(120),
     // The one-line design identity (what the product IS, design-wise).
-    identity: z.string().min(1).max(400),
+    identity: z.string().trim().min(1).max(400),
     // The overarching design intent / north star the writer builds toward.
-    intent: z.string().min(1).max(4000),
+    intent: z.string().trim().min(1).max(4000),
     // Durable design principles / rules (the design "rulesets"). May be empty.
-    principles: z.array(z.string().min(1).max(400)).default([]),
+    principles: z.array(z.string().trim().min(1).max(400)).default([]),
     // Hard design constraints / non-negotiables. May be empty.
-    constraints: z.array(z.string().min(1).max(400)).default([]),
+    constraints: z.array(z.string().trim().min(1).max(400)).default([]),
     // THE MOAT — the persona NAMES this design serves (derive resolves them to the
     // persisted persona ids → `personaRefs`). Captured by name (the natural key);
     // a name that isn't a real captured persona is a LOUD failure at resolve
     // (`DanglingDesignRefError`, consistent with the design phase + oracle) — design
     // binds only to REAL typed personas, never a silent drop. Empty ⇒ none bound yet.
-    personas: z.array(z.string().min(1).max(80)).default([]),
+    personas: z.array(z.string().trim().min(1).max(80)).default([]),
     // THE MOAT — the BEHAVIORS this design must cover (design acceptance criteria),
     // captured by their natural key `persona::title` (matching how behaviors key in
     // the capture). Derive resolves them to persisted behavior ids → `behaviorRefs`.
     // Empty ⇒ none bound yet.
-    behaviors: z.array(z.string().min(1).max(280)).default([]),
+    behaviors: z.array(z.string().trim().min(1).max(280)).default([]),
     // The domain-adaptive dimension set — project/domain-declared, not a fixed
     // web schema. May be empty at first capture (the design phase enriches it).
     dimensions: z.array(CaptureDesignDimension).default([]),
@@ -299,7 +315,7 @@ export const InterviewCapture = z
     // signal on the delta. Carried on the capture (re-submitted each round) so the
     // pin survives the round trip with no interview-session table.
     lifecycleConfirmed: z.boolean().default(false),
-    rulesets: z.array(z.string().min(1)).default([]),
+    rulesets: z.array(z.string().trim().min(1)).default([]),
   })
   .strict();
 export type InterviewCapture = z.infer<typeof InterviewCapture>;
@@ -390,7 +406,7 @@ export const InterviewCaptureDelta = z
     // DRIFT and the confirmed one is preserved. Has no effect on the first (initial)
     // lifecycle capture — that always lands. `null`/absent = no change requested.
     lifecycleChange: z.boolean().nullish(),
-    rulesets: z.array(z.string().min(1)).nullish(),
+    rulesets: z.array(z.string().trim().min(1)).nullish(),
   })
   .strict();
 export type InterviewCaptureDelta = z.infer<typeof InterviewCaptureDelta>;

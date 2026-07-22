@@ -13,6 +13,7 @@ import {
 } from "../src/engine/forge/interview/index.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
 import { stubPool, noopComposeDesignSystem, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
+import { completeCaptureExtras } from "./fixtures/forge/completeCapture.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -39,13 +40,14 @@ const MINIMAL_DESIGN_CONTRACT = {
   intent: "calm + dense control surface",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 
 const captureWithLifecycle = (): InterviewCapture => ({
   ...emptyCapture(),
+  ...completeCaptureExtras(),
   identity: { slug: "linkly", pitch: "A short link service.", repoHint: "" },
   lifecycle: TS_LIFECYCLE,
   designContract: MINIMAL_DESIGN_CONTRACT,

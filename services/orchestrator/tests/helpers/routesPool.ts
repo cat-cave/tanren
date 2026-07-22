@@ -3,6 +3,7 @@ import { handleConfigCasSql } from "./routesPoolConfigCas.js";
 import { isEventStoreAppend, recordRouteEvent } from "./routesPoolEvents.js";
 import { handleProjectDerivationQuery, type ProjectDerivationFakeRow } from "./routesPoolProjectDerivations.js";
 import { RoutesPoolDerivationEvidence } from "./routesPoolDerivationEvidence.js";
+import { createRevisionSpineStub } from "./revisionSpineMemory.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -62,6 +63,10 @@ export class RoutesPool {
   readonly runs: Array<Record<string, unknown>> = [];
   readonly inboxSources: Array<Record<string, unknown>> = [];
   readonly derivationEvidence = new RoutesPoolDerivationEvidence();
+  // rv-1 immutable persona/behavior revision spine (minted by the derive's behavior
+  // build-out). A capture that now carries personas/behaviors (rv-21 completeness)
+  // mints revisions through this in-memory spine, exactly like the shared stub pool.
+  private readonly revisionSpine = createRevisionSpineStub();
   readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
   /** Captured NOTIFY statements (channel + payload) so a test can assert a re-walk wake. */
   readonly notifies: Array<{ channel: string; payload: string }> = [];
@@ -175,7 +180,13 @@ export class RoutesPool {
       return { rows: [], rowCount: 0 };
     }
     if (trimmed.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
-    const derivationEvidence = this.derivationEvidence.handle(trimmed, params, this);
+    // WHITESPACE-NORMALIZED form (single spaces) — the shared derivation-evidence +
+    // revision-spine stubs match single-line prefixes, but PersonaStore/BehaviorStore
+    // emit MULTI-LINE column lists (`SELECT\n  id,\n  scope,...`). Normalize before
+    // delegating so a capture carrying personas/behaviors (rv-21 completeness) resolves,
+    // exactly as the shared stub pool does. RoutesPool's own matchers keep `trimmed`.
+    const normalized = trimmed.replaceAll(/\s+/gu, " ");
+    const derivationEvidence = this.derivationEvidence.handle(normalized, params, this);
     if (derivationEvidence !== undefined) return derivationEvidence;
     // NOTIFY <channel>[, '<payload>'] — capture the re-walk wake (audit §3.7e) so a test
     // can assert raising a paused project's ceiling fires a `tanren_dag` notification.
@@ -455,6 +466,10 @@ export class RoutesPool {
       this.inboxSources.push(row);
       return { rows: [row], rowCount: 1 };
     }
+
+    // rv-1 — the immutable persona/behavior revision spine mint (deriveBehaviorSpec).
+    const spine = this.revisionSpine(normalized, params);
+    if (spine !== undefined) return spine;
 
     return { rows: [], rowCount: 0 };
   }

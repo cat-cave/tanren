@@ -17,6 +17,7 @@ import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../../src/routes/projects/index.js";
 import { FakeRepoCreateHttp } from "../conformance/fakes/fakeRepoCreateHttp.js";
+import { completeCaptureExtras } from "../fixtures/forge/completeCapture.js";
 import { RoutesPool } from "./routesPool.js";
 
 // The org-default static `github_token` ref `seedStaticTokenOrg` configures — the
@@ -235,16 +236,17 @@ export const GREENFIELD_DESIGN_CONTRACT = {
   intent: "a calm, information-dense control surface an operator trusts at a glance",
   principles: [],
   constraints: [],
-  personas: [],
-  behaviors: [],
+  personas: ["operator"],
+  behaviors: ["operator::inspect status"],
   dimensions: [],
 };
 
-// A capture WITH a lifecycle + an explicit design contract but no deploy — isolates the
-// deploy-guard rejection so it does not trip the (earlier) missing-lifecycle / missing-
-// design-contract guards.
+// A COMPLETE capture (rv-21 completion predicate) except with NO deploy — isolates the
+// deploy-guard rejection so it passes the completeness gate + the missing-lifecycle /
+// missing-design-contract guards and reaches the deploy guard under test.
 export const captureWithLifecycle = () => ({
   ...emptyCapture(),
+  ...completeCaptureExtras(),
   lifecycle: GREENFIELD_TS_LIFECYCLE,
   designContract: GREENFIELD_DESIGN_CONTRACT,
 });
@@ -252,6 +254,7 @@ export const captureWithLifecycle = () => ({
 export function apexCapture() {
   return {
     ...emptyCapture(),
+    ...completeCaptureExtras(),
     identity: { slug: "apex-url-shortener-v22", pitch: "A short link service for an operations team.", repoHint: "" },
     lifecycle: GREENFIELD_TS_LIFECYCLE,
     designContract: GREENFIELD_DESIGN_CONTRACT,

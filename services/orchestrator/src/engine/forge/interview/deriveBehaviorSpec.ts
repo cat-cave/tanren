@@ -165,7 +165,10 @@ export async function deriveBehaviorSpec(
   );
   await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: input.milestoneId }, input.actor);
 
-  const personaId = input.personaIdByName.get(input.behavior.persona.toLowerCase());
+  // rv-21 — trim-consistent lookup (the capture is trimmed at ingestion, but resolve on the
+  // same `trim().toLowerCase()` key the plan/predicate/`behaviorKey` use, so a padded ref
+  // can never miss the map and silently drop the behavior).
+  const personaId = input.personaIdByName.get(input.behavior.persona.trim().toLowerCase());
   if (personaId === undefined) {
     return spec;
   }
@@ -207,7 +210,7 @@ function interfaceForBehavior(
   capture: InterviewCapture,
   interfaces: CaptureInterface[],
 ): CaptureInterface | undefined {
-  const persona = capture.personas.find((p) => p.name.toLowerCase() === behavior.persona.toLowerCase());
+  const persona = capture.personas.find((p) => p.name.trim().toLowerCase() === behavior.persona.trim().toLowerCase());
   const surface = (persona?.surface ?? "").toLowerCase();
   if (surface !== "") {
     const match = interfaces.find(
