@@ -12,6 +12,7 @@ import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import type { ResolutionAuthority } from "../src/engine/contracts/resolutionAuthority.js";
 import type { ResolutionStage, ResolutionStageKind } from "../src/engine/contracts/resolutionStage.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 import {
   ADMIN_URL,
   connectionUrl,
@@ -72,6 +73,7 @@ describeDb("rv-19 walker-driven post-merge re-proof settlement — real Postgres
 
   const buildWalker = (stage: ResolutionStage, store: ResolutionJobStore, leaseOwner: string) =>
     new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: () => Promise.resolve([ORG_A]),
       stages: new Map<ResolutionStageKind, ResolutionStage>([["production", stage]]),

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ResolutionStage, ResolutionStageKind } from "../src/engine/contracts/resolutionStage.js";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -290,6 +291,7 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     );
 
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => [ORG_A],
       stages: new Map<ResolutionStageKind, ResolutionStage>([

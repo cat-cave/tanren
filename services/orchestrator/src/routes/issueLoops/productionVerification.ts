@@ -30,7 +30,12 @@ import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js"
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
 import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
 import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
-import { createResolutionStageRegistry } from "../../engine/verification/resolutionStages/index.js";
+import {
+  createResolutionStageRegistry,
+  LockedBehaviorContextError,
+  PgRuntimeBehaviorContextLoader,
+  type RuntimeBehaviorContextLoader,
+} from "../../engine/verification/resolutionStages/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -80,6 +85,13 @@ export interface ProductionVerificationRoutesOptions {
    */
   readonly behaviorQuarantineReader?: Pick<PgBehaviorQuarantineStore, "isQuarantinedInEpoch">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
+  /**
+   * bh-15 locked behavior-context loader. This operator-retry surface, like the
+   * walker, locks the exact frozen behavior context BEFORE the probe runs; a
+   * `LockedBehaviorContextError` fails closed (409) rather than re-proving against
+   * an unlocked or drifted behavior. Defaults to the live loader.
+   */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
   readonly releaseById?: (
     orgId: string,
     releaseInstanceId: string,
@@ -122,6 +134,8 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
+  const behaviorContextLoader =
+    options.behaviorContextLoader ?? new PgRuntimeBehaviorContextLoader({ pool: options.pool });
   const releaseById =
     options.releaseById ??
     ((orgId, releaseInstanceId) =>
@@ -179,9 +193,22 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
     if (job === undefined) {
       return c.json({ error: "production_verification_lease_not_active", resolutionJobId: queued.id }, 423);
     }
+    // bh-15: lock the exact frozen behavior context BEFORE the probe on this
+    // operator-retry surface too. A stale/missing binding fails closed (409) — the
+    // probe, the ResolutionAuthority, and the source-close outbox never run.
+    let behaviorContext;
+    try {
+      behaviorContext = await behaviorContextLoader.load(job);
+    } catch (error) {
+      await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
+      if (error instanceof LockedBehaviorContextError) {
+        return c.json({ error: "stale_behavior_contract", reason: error.reason, resolutionJobId: queued.id }, 409);
+      }
+      throw error;
+    }
     let verdict: ResolutionStageResult;
     try {
-      verdict = await stage.run(job, { source: "operator_retry" });
+      verdict = await stage.run(job, { behaviorContext, source: "operator_retry" });
     } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;

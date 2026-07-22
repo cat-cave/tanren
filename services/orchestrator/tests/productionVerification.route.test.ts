@@ -12,6 +12,11 @@ import type { ActorContextEnv } from "../src/middleware/auth.js";
 import type { SettleReproofInput } from "../src/engine/verification/postMergeReproof/coordinator.js";
 import type { BisectionResult } from "../src/engine/verification/postMergeReproof/regressionBisection.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
+import {
+  LockedBehaviorContextError,
+  type RuntimeBehaviorContextLoader,
+} from "../src/engine/verification/resolutionStages/index.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 
 const FAILURE_VERDICT = {
   outcome: "failed" as const,
@@ -62,6 +67,7 @@ function appFor(
   verdict: ResolutionStageResult = VERDICT,
   authorizations: string[] = [],
   reproofSettles: SettleReproofInput[] = [],
+  behaviorContextLoader: RuntimeBehaviorContextLoader = stubBehaviorContextLoader(),
 ) {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
@@ -72,6 +78,7 @@ function appFor(
     "/v1/orgs",
     createProductionVerificationRoutes({
       pool: {} as never,
+      behaviorContextLoader,
       reproofCoordinator: {
         settle(input) {
           reproofSettles.push(input);
@@ -271,6 +278,39 @@ describe("production verification retry route", () => {
       }),
     ]);
   });
+
+  it("fails closed (409) when the frozen behavior context cannot be locked — the stage, authority, and settlement never run", async () => {
+    const executed: ResolutionJob[] = [];
+    const completed: string[] = [];
+    const released: unknown[] = [];
+    const authorizations: string[] = [];
+    const staleLoader: RuntimeBehaviorContextLoader = {
+      load: () => Promise.reject(new LockedBehaviorContextError("empty_binding", "release binds no behaviors")),
+    };
+    const response = await appFor([], executed, completed, released, VERDICT, authorizations, [], staleLoader).request(
+      "/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          contractId: "contract_1",
+          releaseInstanceId: "release_1",
+          idempotencyKey: "operator-retry-stale",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "stale_behavior_contract",
+      reason: "empty_binding",
+    });
+    // The probe/stage, the ResolutionAuthority, and completion never ran; the job returned to retryable.
+    expect(executed).toEqual([]);
+    expect(authorizations).toEqual([]);
+    expect(completed).toEqual([]);
+    expect(released).toEqual([expect.objectContaining({ id: "rjob_manual_1", state: "retryable" })]);
+  });
 });
 
 // rv-17: the operator-retry route is the SECOND production bisection call site. It must consult the
@@ -298,6 +338,7 @@ function appForBisection(opts: { isQuarantined: boolean; bisectCalls: string[] }
     "/v1/orgs",
     createProductionVerificationRoutes({
       pool: {} as never,
+      behaviorContextLoader: stubBehaviorContextLoader(),
       reproofCoordinator: { settle: () => Promise.resolve("held") },
       // A REGRESSED post-merge behavior verdict — without the quarantine guard this WOULD bisect.
       // mq-7: the observed epoch (artifact_digest these verdicts were recorded at) — masking is

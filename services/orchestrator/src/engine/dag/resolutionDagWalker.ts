@@ -25,7 +25,6 @@ import {
   lockedBehaviorContextFailureResult,
   type RuntimeBehaviorContextLoader,
 } from "../verification/resolutionStages/resolutionBehaviorContext.js";
-import type { RuntimeBehaviorContext } from "../contracts/resolutionStage.js";
 
 const log = createLogger("resolution-dag-walker");
 
@@ -75,15 +74,14 @@ export interface ResolutionDagWalkerDeps {
    */
   readonly behaviorQuarantineReader?: Pick<BehaviorQuarantineReader, "isQuarantinedInEpoch">;
   /**
-   * bh-15 locked behavior-context loader. Before EVERY stage runs, it pins the
-   * exact behavior/persona revision set bound to the release under verification
-   * and passes one immutable `RuntimeBehaviorContext` into the stage. A
-   * `LockedBehaviorContextError` settles the job inconclusive/stale_contract
-   * WITHOUT running the probe, the ResolutionAuthority, or the source-close outbox.
-   * Required in the live composition; its absence disables locking (legacy unit
-   * harnesses that inject fake stages).
+   * bh-15 locked behavior-context loader. REQUIRED: before EVERY stage runs, it
+   * pins the exact behavior/persona revision set frozen to the release under
+   * verification and passes one immutable `RuntimeBehaviorContext` into the stage.
+   * A `LockedBehaviorContextError` settles the job stale_contract WITHOUT running
+   * the probe, the ResolutionAuthority, or the source-close outbox. There is no
+   * code path where a stage runs unlocked — an unwired loader fails construction.
    */
-  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
+  readonly behaviorContextLoader: RuntimeBehaviorContextLoader;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -119,6 +117,12 @@ export class ResolutionDagWalker {
     private readonly deps: ResolutionDagWalkerDeps,
     options: ResolutionDagWalkerOptions = {},
   ) {
+    // Fail closed at construction: the locked behavior-context loader is the
+    // safety lock every stage runs behind. An unwired loader must never degrade
+    // to running stages unlocked.
+    if (deps.behaviorContextLoader === undefined) {
+      throw new Error("ResolutionDagWalker requires a behaviorContextLoader — refusing to run stages unlocked");
+    }
     this.scanIntervalMs = Math.max(1, options.scanIntervalMs ?? 30_000);
     this.leaseMs = deps.leaseMs ?? DEFAULT_RESOLUTION_JOB_LEASE_MS;
   }
@@ -221,11 +225,11 @@ export class ResolutionDagWalker {
     timer.unref?.();
 
     try {
-      // bh-15: lock the exact bound behavior context BEFORE the probe. A failed
+      // bh-15: lock the exact frozen behavior context BEFORE the probe. A failed
       // lock is fail-closed — the stage, the ResolutionAuthority, and the
       // source-close outbox are all skipped, and the job settles terminally.
-      const behaviorContext = await this.loadLockedBehaviorContext(job);
-      const result = await stage.run(job, behaviorContext === undefined ? {} : { behaviorContext });
+      const behaviorContext = await this.deps.behaviorContextLoader.load(job);
+      const result = await stage.run(job, { behaviorContext });
       stopped = true;
       clearInterval(timer);
       await heartbeatInFlight;
@@ -269,12 +273,6 @@ export class ResolutionDagWalker {
       }
       await this.releaseAfterStageFailure(job, claim, error);
     }
-  }
-
-  /** Absent loader ⇒ locking disabled (legacy fake-stage harnesses); live composition wires it. */
-  private async loadLockedBehaviorContext(job: ResolutionJob): Promise<RuntimeBehaviorContext | undefined> {
-    if (this.deps.behaviorContextLoader === undefined) return undefined;
-    return this.deps.behaviorContextLoader.load(job);
   }
 
   /**

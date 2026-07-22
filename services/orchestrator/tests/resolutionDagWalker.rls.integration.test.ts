@@ -11,6 +11,7 @@ import type { SymptomContractV1 } from "../src/engine/contracts/symptomContract.
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 import {
   BaselineReproductionStage,
   createResolutionStageRegistry,
@@ -197,6 +198,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
     const stages = createResolutionStageRegistry({ pool: app });
     expect(stages.get("baseline")).toBeInstanceOf(BaselineReproductionStage);
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_ID],
       stages,
@@ -265,6 +267,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       ),
     );
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_ID],
       stages,
@@ -311,6 +314,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       },
     });
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_ID],
       stages: new Map([["baseline", stage]]),
@@ -367,6 +371,7 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       idempotencyKey: "resolution-terminal-loop",
     });
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_ID],
       stages: new Map([["baseline", new BaselineReproductionStage({ pool: app })]]),

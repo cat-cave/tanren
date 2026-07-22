@@ -30,6 +30,7 @@ import {
   LockedBehaviorContextError,
   PgRuntimeBehaviorContextLoader,
   ProductionSymptomStage,
+  type RuntimeBehaviorContextLoader,
 } from "../src/engine/verification/resolutionStages/index.js";
 
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
@@ -182,6 +183,7 @@ async function baselineJob(store: ResolutionJobStore, id: string): Promise<Resol
     id,
     issueLoopId: LOOP,
     contractId: CONTRACT_ID,
+    releaseInstanceId: RELEASE,
     stage: "baseline",
     idempotencyKey: `${id}:baseline`,
   });
@@ -316,35 +318,85 @@ describeDb("bh-15 locked behavior-context loader", () => {
     expect(baselineHash).toBe(productionHash);
   });
 
-  it("negative control: an empty bound set settles stale_contract with no probe, authority, run, or source-close — never the latest head", async () => {
-    // Remove the binding so the release delivers NO bound behaviors.
+  it("negative control (a): a walker constructed WITHOUT the loader fails closed at construction", () => {
+    expect(
+      () =>
+        new ResolutionDagWalker({
+          store: new ResolutionJobStore(app),
+          orgIds: () => Promise.resolve([ORG]),
+          stages: createResolutionStageRegistry({ pool: app }),
+          leaseOwner: "walker-no-loader",
+          behaviorContextLoader: undefined as unknown as RuntimeBehaviorContextLoader,
+        }),
+    ).toThrow(/requires a behaviorContextLoader/u);
+  });
+
+  it("negative control (b): no frozen release binding — even with a NEWER live release present — settles stale_contract and never resolves the newer release's behavior", async () => {
+    // A NEWER live production release bound to a DIFFERENT behavior. A recency
+    // (`ORDER BY created_at DESC`) fallback would resolve THIS release's behavior;
+    // the lock must fail closed instead of drifting to it.
+    const NEWER_RELEASE = "release_bh15_newer";
+    const OTHER_BEHAVIOR_ID = "behavior_bh15_other";
+    const OTHER_REVISION = "behavior_revision_bh15_other";
+    const OTHER_GIVEN = "Given the NEWER release behavior that must NEVER be loaded";
     await owner.query(
-      `DELETE FROM release_instance_behavior_revisions WHERE org_id = $1 AND release_instance_id = $2`,
-      [ORG, RELEASE],
+      `INSERT INTO behavior_revisions
+         (id, org_id, project_id, behavior_id, persona_revision_id, revision_number, title, given, "when", "then",
+          content_digest, acceptance, status)
+       VALUES ($1, $2, $3, $4, $5, 1, 'other', $6, 'w', 't', $7, $8::jsonb, 'active')`,
+      [
+        OTHER_REVISION,
+        ORG,
+        PROJECT,
+        OTHER_BEHAVIOR_ID,
+        PERSONA,
+        OTHER_GIVEN,
+        digest("other-rev"),
+        JSON.stringify(ACCEPTANCE),
+      ],
     );
-    // The newer active head still exists; the loader must NOT substitute it.
-    const activeHead = await owner.query(
-      `SELECT id FROM behavior_revisions WHERE org_id = $1 AND behavior_id = $2 AND status = 'active'`,
-      [ORG, BEHAVIOR_ID],
+    await owner.query(
+      `INSERT INTO release_instances
+         (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref, artifact_digest,
+          provider_checksum, integration_node_id, url, state, created_at)
+       VALUES ($1, $2, $3, 'deploy.fixture', 'app-bh15', 'production', 'dep-bh15-newer', $4, $5, NULL, $6, $7, 'live', now() + interval '1 hour')`,
+      [ORG, NEWER_RELEASE, PROJECT, "b".repeat(40), ARTIFACT, NODE, releaseUrl],
     );
-    expect(activeHead.rows).toHaveLength(1);
-    expect(activeHead.rows[0]?.id).not.toBe(BOUND_REVISION);
+    await owner.query(
+      `INSERT INTO release_instance_behavior_revisions (org_id, release_instance_id, behavior_revision_id, ordinal)
+       VALUES ($1, $2, $3, 0)`,
+      [ORG, NEWER_RELEASE, OTHER_REVISION],
+    );
 
     const loader = new PgRuntimeBehaviorContextLoader({ pool: app });
-    const jobs = new ResolutionJobStore(app);
-    const probeJob = await productionJob(jobs, "rjob_neg_probe");
+    // A production job with NO frozen release binding (reachable via the steer command).
+    const unsetJob: ResolutionJob = {
+      id: "rjob_neg_unset",
+      orgId: ORG,
+      projectId: PROJECT,
+      issueLoopId: LOOP,
+      contractId: CONTRACT_ID,
+      stage: "production",
+      state: "running",
+      leaseOwner: "worker-neg",
+      leaseExpiry: new Date(Date.now() + 60_000).toISOString(),
+      idempotencyKey: "rjob_neg_unset:production",
+      attempt: 1,
+    };
     let failure: unknown;
     try {
-      await loader.load(probeJob);
+      await loader.load(unsetJob);
     } catch (error) {
       failure = error;
     }
     expect(failure).toBeInstanceOf(LockedBehaviorContextError);
-    expect((failure as LockedBehaviorContextError).reason).toBe("empty_binding");
+    // Fails on the MISSING binding — it never fell through to the newer release.
+    expect((failure as LockedBehaviorContextError).reason).toBe("missing_release_binding");
     expect((failure as LockedBehaviorContextError).classification).toBe("stale_contract");
 
-    // Drive the LIVE walker path (real loader + real registry). The probe, the
-    // ResolutionAuthority, and the source-close outbox must NEVER run.
+    // Drive the LIVE walker path (real loader + real registry) with an unset job.
+    // The probe, the ResolutionAuthority, and the source-close outbox must never run,
+    // and the newer release's behavior must never be loaded into a run.
     let authorizeCalls = 0;
     const authority: ResolutionAuthority = {
       authorize: async () => {
@@ -360,7 +412,7 @@ describeDb("bh-15 locked behavior-context loader", () => {
       id: "rjob_neg_walker",
       issueLoopId: LOOP,
       contractId: CONTRACT_ID,
-      releaseInstanceId: RELEASE,
+      // deliberately NO releaseInstanceId
       stage: "production",
       idempotencyKey: "rjob_neg_walker:production",
     });
@@ -385,6 +437,17 @@ describeDb("bh-15 locked behavior-context loader", () => {
     expect(authorizeCalls).toBe(0);
     expect(symptomRequests).toBe(symptomBefore);
     expect(await runContextHash(app, "rjob_neg_walker")).toBeNull();
+    const usedNewerBehavior = await runWithOrgScope(app, ORG, (client) =>
+      client.query(
+        `SELECT 1
+           FROM behavior_verification_runs r
+           JOIN behavior_verification_attempts a ON a.org_id = r.org_id AND a.run_id = r.id
+           JOIN behavior_verification_plans p ON p.org_id = a.org_id AND p.id = a.plan_id
+          WHERE r.org_id = $1 AND p.behavior_revision_id = $2`,
+        [ORG, OTHER_REVISION],
+      ),
+    );
+    expect(usedNewerBehavior.rowCount).toBe(0);
     const closes = await runWithOrgScope(app, ORG, (client) =>
       client.query(
         `SELECT 1 FROM source_sync_outbox WHERE org_id = $1 AND issue_loop_id = $2 AND operation = 'close'`,
@@ -392,5 +455,45 @@ describeDb("bh-15 locked behavior-context loader", () => {
       ),
     );
     expect(closes.rowCount).toBe(0);
+  });
+
+  it("negative control (c): an EMPTY bound set settles stale_contract and never substitutes the latest head", async () => {
+    // Remove RELEASE's binding so it delivers NO bound behaviors; the newer active
+    // head from the head-mutation above still exists and must NOT be substituted.
+    await owner.query(
+      `DELETE FROM release_instance_behavior_revisions WHERE org_id = $1 AND release_instance_id = $2`,
+      [ORG, RELEASE],
+    );
+    const activeHead = await owner.query(
+      `SELECT id FROM behavior_revisions WHERE org_id = $1 AND behavior_id = $2 AND status = 'active'`,
+      [ORG, BEHAVIOR_ID],
+    );
+    expect(activeHead.rows).toHaveLength(1);
+    expect(activeHead.rows[0]?.id).not.toBe(BOUND_REVISION);
+
+    const loader = new PgRuntimeBehaviorContextLoader({ pool: app });
+    const emptyJob: ResolutionJob = {
+      id: "rjob_neg_empty",
+      orgId: ORG,
+      projectId: PROJECT,
+      issueLoopId: LOOP,
+      contractId: CONTRACT_ID,
+      releaseInstanceId: RELEASE,
+      stage: "production",
+      state: "running",
+      leaseOwner: "worker-empty",
+      leaseExpiry: new Date(Date.now() + 60_000).toISOString(),
+      idempotencyKey: "rjob_neg_empty:production",
+      attempt: 1,
+    };
+    let failure: unknown;
+    try {
+      await loader.load(emptyJob);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(LockedBehaviorContextError);
+    expect((failure as LockedBehaviorContextError).reason).toBe("empty_binding");
+    expect((failure as LockedBehaviorContextError).classification).toBe("stale_contract");
   });
 });
