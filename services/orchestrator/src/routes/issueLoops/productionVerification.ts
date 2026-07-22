@@ -194,13 +194,16 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
     if (job === undefined) {
       return c.json({ error: "production_verification_lease_not_active", resolutionJobId: queued.id }, 423);
     }
-    // bh-15: lock the exact frozen behavior context BEFORE the probe on this
-    // operator-retry surface too. The probe, the ResolutionAuthority, and the
-    // source-close outbox never run on a lock failure. A stale/missing binding is
-    // TERMINAL (stale_contract) — re-running cannot fix it — so settle it, not retry.
-    let behaviorContext;
+    // bh-15: lock the exact frozen behavior context BEFORE the probe, then run the
+    // stage — in ONE try. The probe, the ResolutionAuthority, and the source-close
+    // outbox never run on a lock failure. ANY LockedBehaviorContextError (from the
+    // loader OR from inside stage.run, e.g. the binding's missing-environment case)
+    // is TERMINAL (stale_contract) — re-running cannot fix it — so it settles, never
+    // releases retryable. A genuinely transient/unrelated error still releases retryable.
+    let verdict: ResolutionStageResult;
     try {
-      behaviorContext = await behaviorContextLoader.load(job);
+      const behaviorContext = await behaviorContextLoader.load(job);
+      verdict = await stage.run(job, { behaviorContext, source: "operator_retry" });
     } catch (error) {
       if (error instanceof LockedBehaviorContextError) {
         const settled = await settleResolutionJob(jobs, job, lockedBehaviorContextFailureResult(error));
@@ -209,13 +212,6 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
         }
         return c.json({ error: "stale_behavior_contract", reason: error.reason, resolutionJobId: queued.id }, 409);
       }
-      await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
-      throw error;
-    }
-    let verdict: ResolutionStageResult;
-    try {
-      verdict = await stage.run(job, { behaviorContext, source: "operator_retry" });
-    } catch (error) {
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;
     }

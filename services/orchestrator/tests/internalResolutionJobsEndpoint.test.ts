@@ -183,6 +183,60 @@ describe("internal resolution-job endpoints", () => {
     expect(releases).toEqual([]);
   });
 
+  it("settles TERMINAL stale_contract when the lock error is thrown from INSIDE stage.run (e.g. missing environment), not retryable", async () => {
+    const lockedContext = {
+      contractId: job.contractId,
+      issueLoopId: job.issueLoopId,
+      releaseInstanceId: "release_baseline",
+      artifactDigest: `sha256:${"a".repeat(64)}`,
+      behaviors: [],
+      personaRevisionIds: [],
+      contextDigest: `sha256:${"a".repeat(64)}`,
+    };
+    const completes: string[] = [];
+    const releases: string[] = [];
+    const app = createInternalResolutionJobRoutes({
+      pool: {} as never,
+      verifier: new AllowAllPeerVerifier(),
+      // The loader SUCCEEDS; the resolver INSIDE the stage throws the lock error.
+      behaviorContextLoader: { load: async () => lockedContext },
+      baselineStage: {
+        kind: "baseline",
+        run: () =>
+          Promise.reject(
+            new LockedBehaviorContextError("missing_release_binding", "no ready environment for the frozen release"),
+          ),
+      },
+      store: {
+        async verifyActiveLease() {
+          return job;
+        },
+        async complete() {
+          completes.push(job.id);
+          return true;
+        },
+        async release() {
+          releases.push(job.id);
+          return true;
+        },
+      } as unknown as ResolutionJobStore,
+    });
+
+    const response = await trustedRequest(app, "/internal/resolution-jobs/rjob_1/reproduce", {
+      orgId: job.orgId,
+      leaseOwner: job.leaseOwner,
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "stale_behavior_contract",
+      reason: "missing_release_binding",
+    });
+    // TERMINAL (completed), never released retryable — a stage-thrown lock error is not reclaimable.
+    expect(completes).toEqual([job.id]);
+    expect(releases).toEqual([]);
+  });
+
   it("with the REAL loader and NO frozen release binding, fails CLOSED (missing_release_binding) before any release lookup — the baseline stage never runs", async () => {
     const completes: string[] = [];
     // `job` has no releaseInstanceId; the DEFAULT (real) loader rejects it BEFORE any

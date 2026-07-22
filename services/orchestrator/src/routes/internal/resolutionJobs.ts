@@ -78,32 +78,22 @@ export function createInternalResolutionJobRoutes(deps: ResolutionJobRouteDeps):
     if (job === undefined) return c.json({ error: "resolution_job_lease_not_active" }, 423);
     if (job.stage !== "baseline") return c.json({ error: "resolution_job_not_baseline" }, 409);
     if (deps.baselineStage === undefined) return c.json({ error: "baseline_stage_unavailable" }, 503);
-    // bh-15: lock the exact frozen behavior context BEFORE the baseline probe. A
-    // caller-supplied or empty context is never used; a stale/missing binding is
-    // TERMINAL (stale_contract) — re-running cannot fix it — so settle, not retry.
-    let behaviorContext;
+    // bh-15: lock the exact frozen behavior context BEFORE the baseline probe, then
+    // run the stage — in ONE try. A caller-supplied or empty context is never used.
+    // ANY LockedBehaviorContextError (from the loader OR from inside stage.run, e.g.
+    // the resolver's missing-environment case) is TERMINAL (stale_contract) —
+    // re-running cannot fix it — so it settles, never releases retryable. A genuinely
+    // transient/unrelated error still releases retryable.
+    let result;
     try {
-      behaviorContext = await behaviorContextLoader.load(job);
+      const behaviorContext = await behaviorContextLoader.load(job);
+      result = await deps.baselineStage.run(job, { behaviorContext });
     } catch (error) {
       if (error instanceof LockedBehaviorContextError) {
         const settled = await settleResolutionJob(store, job, lockedBehaviorContextFailureResult(error));
         if (!settled) return c.json({ error: "resolution_job_lease_lost" }, 423);
         return c.json({ error: "stale_behavior_contract", reason: error.reason }, 409);
       }
-      const released = await store.release({
-        orgId: job.orgId,
-        id: job.id,
-        leaseOwner: job.leaseOwner,
-        state: "retryable",
-      });
-      if (!released)
-        throw new Error(`baseline resolution job ${job.id} lock failed and could not be released`, { cause: error });
-      throw error;
-    }
-    let result;
-    try {
-      result = await deps.baselineStage.run(job, { behaviorContext });
-    } catch (error) {
       const released = await store.release({
         orgId: job.orgId,
         id: job.id,

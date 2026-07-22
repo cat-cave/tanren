@@ -68,6 +68,7 @@ function appFor(
   authorizations: string[] = [],
   reproofSettles: SettleReproofInput[] = [],
   behaviorContextLoader: RuntimeBehaviorContextLoader = stubBehaviorContextLoader(),
+  stageRunError?: Error,
 ) {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
@@ -166,6 +167,7 @@ function appFor(
           {
             kind: "production",
             async run(job) {
+              if (stageRunError !== undefined) throw stageRunError;
               executed.push(job);
               return verdict;
             },
@@ -307,6 +309,48 @@ describe("production verification retry route", () => {
     });
     // The probe/stage and the ResolutionAuthority never ran; a stale binding is
     // TERMINAL — the job is COMPLETED (stale_contract), never returned to retryable.
+    expect(executed).toEqual([]);
+    expect(authorizations).toEqual([]);
+    expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);
+    expect(released).toEqual([]);
+  });
+
+  it("settles TERMINAL (stale_contract, 409) when the lock error is thrown from INSIDE stage.run, not retryable", async () => {
+    const executed: ResolutionJob[] = [];
+    const completed: string[] = [];
+    const released: unknown[] = [];
+    const authorizations: string[] = [];
+    // The loader SUCCEEDS (default stub); the lock error is thrown from within the stage.
+    const stageLockError = new LockedBehaviorContextError(
+      "missing_release_binding",
+      "no ready environment for the frozen release",
+    );
+    const response = await appFor(
+      [],
+      executed,
+      completed,
+      released,
+      VERDICT,
+      authorizations,
+      [],
+      stubBehaviorContextLoader(),
+      stageLockError,
+    ).request("/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contractId: "contract_1",
+        releaseInstanceId: "release_1",
+        idempotencyKey: "operator-retry-stage-lock",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "stale_behavior_contract",
+      reason: "missing_release_binding",
+    });
+    // A stage-thrown lock error is TERMINAL — completed, never released retryable.
     expect(executed).toEqual([]);
     expect(authorizations).toEqual([]);
     expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);
