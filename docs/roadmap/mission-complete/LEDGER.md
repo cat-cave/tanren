@@ -2,10 +2,10 @@
 
 # Mission-complete node ledger — SUPERSEDED (history only)
 
-> **⚠️ SUPERSEDED (2026-07-22).** The live, claimable node roster is now **GitHub
-> issues** (`label:node`) — one issue per remaining node, each carrying its full
-> spec (what/seam · acceptance + negative control · deps · migration · size · wave),
-> grouped by `wave-N` milestones. See the isolation/bug issues too (`label:bug`).
+> **⚠️ SUPERSEDED (2026-07-22).** The live roster is now **GitHub issues**, typed
+> `bug` or `enhancement` and ordered by native `blocked_by`/`blocks` — one issue per
+> remaining unit of work, carrying its full spec (what/seam · acceptance + negative
+> control · deps · migration · size).
 > Contribution runs on the ideal flow: **claim → PR (template: gate + no-apex-shaping)
 > → central audit → merge.** This file is **retained as history of the 99 completed
 > nodes** — do NOT add forward-looking status here; file/claim a GitHub issue instead.

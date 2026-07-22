@@ -203,7 +203,7 @@ auto-triages it into a fix. That loop firing is a core thing a hard fixture prov
 ## 7. Where a found engine bug goes
 
 When a halt turns out to be a **Tanren engine bug** (not a product-code problem),
-file it as a **GitHub issue with `label:bug`** on the shared Tanren tracker — there is
+file it as a **GitHub issue typed `bug`** on the shared Tanren tracker — there is
 a bug issue template under `.github/ISSUE_TEMPLATE/bug.yml`. Then it is claimed,
 fixed via a PR (one unit of work per isolated worktree), centrally audited, and
 merged before it lands on `main`. This is how multiple operators on multiple machines,

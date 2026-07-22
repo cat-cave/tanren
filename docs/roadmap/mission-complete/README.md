@@ -170,11 +170,10 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
 - **Adversarial cross-model verify per node.** A second agent (different model)
   verifies each built node against its `nodes/*.md` validation column + a negative
   control before it counts as done.
-- **The runnable mechanism** is `build-workflow.mjs.txt`: default phase freezes+builds the
-  spine (already done); relaunch it with `args: {phase: "consumers"}` to fan out the
-  76 MVP consumer nodes off the now-merged spine (build → push PR → verify, sequential
-  where shared-branch, gated). Waves: `0` spine (done) → `1` spine impl (done) → `2`
-  consumer MVP → `3` the general runtime-behavior acceptance work → `4` full-tier.
+- **The runnable mechanism** is `build-workflow.mjs.txt`: its frozen phases record the
+  completed spine build. For forward work, use the live GitHub issues roster, typed
+  `bug` or `enhancement` and ordered by native `blocked_by`/`blocks` (build → push PR
+  → verify, sequential where shared-branch, gated).
 
 ## 7. The objective, restated: back to apex fixtures
 
@@ -189,7 +188,7 @@ The whole point is to return to apex with an engine that closes what v96 could n
   inner loop; plus the Slack-at-100 integration actually firing (integrations bucket)
   and the merge queue never hard-stalling on an unconvergeable spec (merge-queue
   bucket, the v96 halt).
-- Wave 3's acceptance test runs the finished general pipeline against an apex-class
+- The acceptance test runs the finished general pipeline against an apex-class
   fixture. `rv-26` and `in-22` are the general runtime-proof and integration-evidence
   nodes that make that test possible, not an "apex vertical."
 
