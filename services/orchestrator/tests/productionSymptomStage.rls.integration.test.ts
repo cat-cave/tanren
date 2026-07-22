@@ -15,6 +15,7 @@ import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import { SymptomEvidenceStore } from "../src/engine/repositories/symptomEvidence.js";
 import { ProductionSymptomStage } from "../src/engine/verification/resolutionStages/productionSymptomStage.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
@@ -266,7 +267,9 @@ describeDb("BH-10 production symptom stage — RLS false-green conformance", () 
       a.releaseId,
       "rjob_production_false_green",
     );
-    const falseGreen = await new ProductionSymptomStage({ pool: app }).run(falseGreenJob, {});
+    const falseGreen = await new ProductionSymptomStage({ pool: app }).run(falseGreenJob, {
+      behaviorContext: await stubBehaviorContextLoader().load(falseGreenJob),
+    });
     expect(falseGreen).toMatchObject({ outcome: "failed", classification: "product_failure" });
     expect(productionRequests).toContain("/symptom");
     expect(decoyRequests).not.toContain("/symptom");
@@ -284,7 +287,9 @@ describeDb("BH-10 production symptom stage — RLS false-green conformance", () 
       a.releaseId,
       "rjob_production_fixed",
     );
-    const fixed = await new ProductionSymptomStage({ pool: app }).run(fixedJob, {});
+    const fixed = await new ProductionSymptomStage({ pool: app }).run(fixedJob, {
+      behaviorContext: await stubBehaviorContextLoader().load(fixedJob),
+    });
     expect(fixed).toMatchObject({ outcome: "passed", classification: "product_resolved" });
     const assertions = new SymptomEvidenceStore(app);
     await expect(assertions.listAssertions(ORG_A, falseGreen.verificationRunId)).resolves.toMatchObject([

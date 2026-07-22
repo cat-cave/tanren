@@ -1,5 +1,4 @@
 import { runWithOrgScope } from "@tanren/db";
-import { createHash } from "node:crypto";
 import type pg from "pg";
 import type {
   ProductionResolutionStageResult,
@@ -17,6 +16,7 @@ import {
   startBehaviorVerificationRunStage,
   type StartedBehaviorVerificationRunStage,
 } from "../behaviorVerificationRunStage.js";
+import { LockedBehaviorContextError, readRuntimeBehaviorContext } from "./resolutionBehaviorContext.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 
@@ -57,22 +57,26 @@ export class ProductionSymptomStage implements ResolutionStage {
     this.eventsForClient = deps.eventsForClient ?? ((client) => new PgEventStore(client));
   }
 
-  public async run(job: ResolutionJob, _ctx: unknown): Promise<ResolutionStageResult> {
+  public async run(job: ResolutionJob, ctx: unknown): Promise<ResolutionStageResult> {
     if (job.stage !== this.kind) {
       throw new ProductionSymptomStageBindingError(`production stage cannot run ${job.stage} job ${job.id}`);
     }
+    // bh-15: the stage consumes ONLY the locked behavior-context digest — there is
+    // no self-computed fallback. Fail closed FIRST, before any DB/probe work, so an
+    // unlocked invocation never re-proves against an unbound/ad-hoc behavior identity.
+    const locked = readRuntimeBehaviorContext(ctx);
+    if (locked === undefined) {
+      throw new LockedBehaviorContextError(
+        "unlocked_context",
+        `production stage ran without a locked behavior context for job ${job.id}`,
+      );
+    }
+    const contextHash = locked.contextDigest;
     const contract = await this.requireContract(job);
     const { release, binding } = await this.requireLiveBinding(job);
     const productionContract = contractAtProductionRelease(contract.contract, release.url);
     const verificationRunId = `vrun_resolution_${job.id}`;
     const contractHash = symptomContractHash(contract.contract);
-    const contextHash = runtimeContextHash({
-      contractHash,
-      artifactDigest: release.artifactDigest,
-      environmentId: binding.environmentId,
-      releaseInstanceId: release.releaseInstanceId,
-      productionUrl: productionContract.target["url"] as string,
-    });
 
     const started = await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
       const receipt = await startBehaviorVerificationRunStage(client, {
@@ -272,7 +276,7 @@ async function runtimeBinding(
         AND environment.artifact_digest = $4
         AND environment.deployment_target = 'production'
         AND environment.lifecycle_status = 'ready'
-      ORDER BY environment.created_at DESC, environment.id DESC
+      ORDER BY environment.id ASC
       LIMIT 1`,
     [job.orgId, job.projectId, integrationNodeId, artifactDigest],
   );
@@ -336,10 +340,6 @@ function pathFromTarget(target: SymptomContractV1["target"]): string {
   } catch {
     throw new ProductionSymptomStageBindingError("HTTP symptom target URL is invalid");
   }
-}
-
-function runtimeContextHash(input: Readonly<Record<string, string>>): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
 }
 
 function nonemptyText(value: unknown, field: string): string {

@@ -8,12 +8,12 @@ import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Digest } from "../src/engine/contracts/cas.js";
-import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { buildResolutionAuthority } from "../src/engine/governance/resolutionAuthority.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { ProductionSymptomStage } from "../src/engine/verification/resolutionStages/productionSymptomStage.js";
 import { PgRepairRouter } from "../src/engine/workflow/repairRouting.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
+import { ResolutionDagWalker, stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 
 const describeDb = process.env["TANREN_RLS_DB_TEST"] === "1" ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
@@ -296,6 +296,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       idempotencyKey: id,
     });
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_ID],
       stages: new Map([["production", stage]]),
@@ -322,6 +323,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       "/v1/orgs",
       createProductionVerificationRoutes({
         pool: app,
+        behaviorContextLoader: stubBehaviorContextLoader(),
         jobId: () => id,
         executionLeaseOwner: () => `retry-${id}`,
       }),
@@ -348,7 +350,6 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     await walk("rjob_authority_cosmetic");
     cosmeticFix = false;
     await walk("rjob_authority_real_fix");
-
     const rows = await runWithOrgScope(app, ORG_ID, async (client) => {
       const [decisions, events, loop, outbox] = await Promise.all([
         client.query(
@@ -418,7 +419,6 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     const cosmetic = await retryVerification("rjob_authority_retry_cosmetic");
     cosmeticFix = false;
     const real = await retryVerification("rjob_authority_retry_real");
-
     expect(cosmetic.status).toBe(200);
     expect(real.status).toBe(200);
     const rows = await runWithOrgScope(app, ORG_ID, (client) =>

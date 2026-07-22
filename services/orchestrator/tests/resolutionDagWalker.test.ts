@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import type { ResolutionJob, ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
 import type { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 
 const job: ResolutionJob = {
   id: "rjob_1",
@@ -60,6 +61,7 @@ describe("ResolutionDagWalker", () => {
       },
     };
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => ["org_a"],
       stages: new Map([["baseline", stage]]),
@@ -116,6 +118,7 @@ describe("ResolutionDagWalker", () => {
       },
     };
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => ["org_a"],
       stages: new Map([["baseline", stage]]),
@@ -163,6 +166,7 @@ describe("ResolutionDagWalker", () => {
       },
     };
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => ["org_a"],
       stages: new Map([["baseline", stage]]),
@@ -198,6 +202,7 @@ describe("ResolutionDagWalker", () => {
       },
     } as unknown as ResolutionJobStore;
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => [productionJob.orgId],
       stages: new Map([
@@ -279,6 +284,7 @@ describe("ResolutionDagWalker", () => {
       },
     } as unknown as ResolutionJobStore;
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: async () => [boundJob.orgId],
       stages: new Map<"production", ResolutionStage>([

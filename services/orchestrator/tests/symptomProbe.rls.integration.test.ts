@@ -14,10 +14,13 @@ import type { SymptomContractV1 } from "../src/engine/contracts/symptomContract.
 import { HttpSymptomProbe } from "../src/engine/probes/httpSymptomProbe.js";
 import { SymptomEvidenceStore } from "../src/engine/repositories/symptomEvidence.js";
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
-import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { SymptomProbeAdapter } from "../src/engine/probes/symptomProbeAdapter.js";
-import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { BaselineReproductionStage } from "../src/engine/verification/resolutionStages/baselineReproductionStage.js";
+import {
+  ResolutionDagWalker,
+  ResolutionJobStore,
+  stubBehaviorContextLoader,
+} from "./helpers/stubBehaviorContextLoader.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -413,6 +416,7 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
       verificationRunId: () => (probeCall === 0 ? "vrun_baseline_product" : "vrun_baseline_infra"),
     });
     const walker = new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store: jobs,
       orgIds: async () => [ORG_A],
       stages: new Map([["baseline", stage]]),

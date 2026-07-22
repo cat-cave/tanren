@@ -27,6 +27,7 @@ import { PostMergeReproofCoordinator } from "../src/engine/verification/postMerg
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import type { ResolutionAuthority } from "../src/engine/contracts/resolutionAuthority.js";
+import { stubBehaviorContextLoader } from "./helpers/stubBehaviorContextLoader.js";
 import type {
   ProductionResolutionStageResult,
   ResolutionStage,
@@ -224,6 +225,7 @@ describeDb("rv-16a persisted post-merge production behavior verdict — real Pos
 
   const buildWalker = (store: ResolutionJobStore) =>
     new ResolutionDagWalker({
+      behaviorContextLoader: stubBehaviorContextLoader(),
       store,
       orgIds: () => Promise.resolve([ORG]),
       stages: new Map<ResolutionStageKind, ResolutionStage>([
