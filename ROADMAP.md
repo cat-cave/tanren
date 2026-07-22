@@ -384,10 +384,13 @@ cite); the merge-engine cutover rationale is
 
 ## 4. What is next (the live to-do)
 
-- **Phase 3 — `apex` (close the full autonomous loop).** The max-difficulty
-  fixture-class: deliberately varied rough operator notes → deployed products, built
-  autonomously over real surfaces, every change a merged PR with full provenance.
-  apex tests **Tanren**, not an individual fixture: the driver acts as a non-technical end user over the
+- **Phase 3 — `apex` (the acceptance test — close the full autonomous loop).** The
+  max-difficulty **fixture-class**: deliberately varied rough operator notes →
+  deployed products, driven through Tanren's **normal operator flow** (no apex-shaped
+  harness, workflow, or engine code), built autonomously over real surfaces, every
+  change a merged PR with full provenance. apex tests **Tanren**, not an individual
+  fixture — the link-shortener + Slack is just one example; we want several varied
+  ones to flush bugs in parallel. The driver acts as a non-technical end user over the
   HTTP API only, files real issues into Tanren for every defect, and never hand-fixes
   the generated repo. **The honest state (§1):** successive apex trials — v37–v46
   ran on the previous WSL host through 2026-06-19; v47–v79 have run on the new

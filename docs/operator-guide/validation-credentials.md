@@ -74,16 +74,16 @@ mocked return — that's the §8b contract.
 
 ## Priority + the wishlist (purpose #1)
 
-`P0` = the apex proof needs it · `P1` = proves a seam only conformance-tested
+`P0` = the current link-shortener apex example needs it · `P1` = proves a seam only conformance-tested
 today · `P2` = breadth. **Already configured:** Codex/Claude/opencode auth, a
 GitHub token, the local SSH runner.
 
 ### Recommended order to provision
 
-1. **Tier 1 — makes `apex` runnable as designed (P0):**
+1. **Tier 1 — runs the current link-shortener apex example through the normal flow (P0):**
    - **GitHub App** on a throwaway org/repo — App id + installation id + private-key PEM. Unlocks the preferred connectivity path _and_ real issue webhooks for intake.
    - **Slack org grant** — bot/app token with permission for Tanren to bind or create project channels/webhooks; a pre-created webhook URL is only a validation fallback.
-   - **Deploy provider grant** — a Fly.io / Render / Railway / Vercel org/team token (or a Hetzner VM allocator grant), so Tanren can create the apex web UI target instead of requiring a manually-created project.
+   - **Deploy provider grant** — a Fly.io / Render / Railway / Vercel org/team token (or a Hetzner VM allocator grant), so Tanren can create this example fixture's web UI target instead of requiring a manually-created project. Other apex fixtures may use other deploy targets or non-web surfaces.
 
 2. **Tier 2 — proves the seams only conformance-tested today (P1):**
    - **Hetzner** API token — the real allocator-family proof (provision → SSH → run → teardown), cents per run.
@@ -109,11 +109,11 @@ secret source, priority, cadence, and exactly what each proves — is the
 
 Three operator-local files hold the bootstrap + per-org tier-1 inventory:
 
-| File                              | Holds                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| `.env`                            | Infra bootstrap (DATABASE_URL, VAULT_TOKEN, TANREN_SECRET_STORE, …)    |
-| `.env.validation.local`           | Tier-1 live secrets (Hetzner token, OAuth secrets, managed-router key) |
-| `connections.manifest.local.yaml` | Apex credential manifest (refs only)                                   |
+| File                              | Holds                                                                               |
+| --------------------------------- | ----------------------------------------------------------------------------------- |
+| `.env`                            | Infra bootstrap (DATABASE_URL, VAULT_TOKEN, TANREN_SECRET_STORE, …)                 |
+| `.env.validation.local`           | Tier-1 live secrets (Hetzner token, OAuth secrets, managed-router key)              |
+| `connections.manifest.local.yaml` | Local validation credential manifest (refs only; includes the current apex example) |
 
 All three are gitignored. They live canonically in
 `${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/` (0700 dir, **0600 files —
@@ -138,7 +138,7 @@ PLAINTEXT LOCAL storage**); every worktree symlinks them in via
 
 | Mode                  | Behavior                                                                      | Used by                                             |
 | --------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
-| `canonical` (default) | Requires the canonical `.env` at `$TANREN_SECRETS_DIR`. Fails loud if absent. | Real apex / validation runs                         |
+| `canonical` (default) | Requires the canonical `.env` at `$TANREN_SECRETS_DIR`. Fails loud if absent. | Real project and fixture-validation runs            |
 | `dev-defaults`        | Links `.env -> .env.example` (compose-friendly defaults, no real creds).      | CI / smoke (declared in `.github/workflows/ci.yml`) |
 
 The default is the strict path so a fresh apex run fails closed rather than

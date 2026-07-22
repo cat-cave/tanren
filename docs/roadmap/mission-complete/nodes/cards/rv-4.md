@@ -60,7 +60,7 @@ event append failures never produce a green omission.
   integration node, head, tree, or member key changes.
 - Public HTTP read/write/analyze/replay surfaces and a dashboard screen showing
   graph completeness and durable selection evidence.
-- Named event proof suitable for a future apex assertion.
+- Named event proof suitable for a future normal-flow fixture assertion.
 
 **Downstream**
 

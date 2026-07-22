@@ -77,7 +77,8 @@ enter an open-ended audit loop.
 
 Claude subagents (Agent tool, `isolation: "worktree"`) and codex (its own
 `.codex/worktrees`) run **concurrently** — that is the 6–7 lanes. Reserve any
-ultra-tier model (`sol`) only for poison-everything audits (integration, apex design).
+ultra-tier model (`sol`) only for poison-everything audits (integration,
+normal-flow max-difficulty fixture acceptance).
 
 ### Rule 4 — Deterministic harness, not per-round prompt files
 
@@ -93,7 +94,7 @@ read LEDGER.md → pick a wave (dependency-ready, path-disjoint node set)
   → barrier pre-flight PR (migrations + events + shared files) → merge; FREEZE base SHA
   → fan out N cards to implementor lanes @ frozen base (Claude subagents ∥ codex)
   → each node: ONE grok audit (GO / one repair / GO) + a negative control
-  → root gates evidence: provable (named events an apex run asserts)
+  → root gates evidence: provable (named events the general pipeline asserts in a live run)
                        + callable (HTTP surface) + visible (dashboard)
   → merge each green audited SHA immediately (no batch-at-end)
   → update LEDGER.md rows in the merging PR → advance base → next wave
@@ -102,7 +103,7 @@ read LEDGER.md → pick a wave (dependency-ready, path-disjoint node set)
 ## 3. Definition of done (per node — all four, no credit otherwise)
 
 1. **Merged** to `main` with full green hosted CI + up-to-date-with-`main`.
-2. **Provable** — fires the named events its `nodes/*.md` apex-proof column asserts,
+2. **Provable** — fires the named events its `nodes/*.md` live-run-proof column asserts,
    with a negative control.
 3. **Callable** — exposes the HTTP surface in its spec.
 4. **Visible** — surfaces its state/action in the dashboard.

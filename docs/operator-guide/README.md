@@ -35,7 +35,7 @@ The model in one picture:
   import credentials, link a repo, submit a spec, trigger a run, watch it merge +
   deploy.
 - **`apex.md`** / **`apex-run-playbook.md`** — the live-validation vehicle: the
-  operator role + run rhythm + proof portfolio (`apex.md`), and the concrete
+  operator role + run rhythm + normal-flow evidence portfolio (`apex.md`), and the concrete
   drive-from-zero steps to pilot a run (`apex-run-playbook.md`).
 - **`ci-config.md`** — the native gate definition (`.tanren/ci.yml`).
 - **`deploy.md`** — deploy-on-merge, `verify`, and demos-as-evidence.

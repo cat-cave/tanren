@@ -199,13 +199,14 @@ greenfield creation, link a supported org deploy provider (`deploy.vercel` or
 `deploy.flyio`) through the integration API, then include that provider in the
 greenfield/onboarding request. If no provider is named, or the named provider is
 not linked for the org, creation fails loudly with `deploy_provider_missing` or
-`deploy_not_linked`; Tanren must not create an apex project that has no real path
-to a live deploy.
+`deploy_not_linked`; Tanren must not create any deploy-required project without a
+real path to a live deploy.
 
 ## Templating: every project DAG seeds from a fragment-composed template
 
-apex creates a greenfield project — and a greenfield project under Tanren's
-doctrine does **not** scaffold from scratch into an empty repo. EVERY project DAG
+The current example fixture creates a greenfield project through the normal flow —
+and a greenfield project under Tanren's doctrine does **not** scaffold from scratch
+into an empty repo. EVERY project DAG
 seeds from a **fragment-composed template**: derive runs `selectFragmentConfig`
 over the captured lifecycle against the unified library (bundled core fragments +
 the org-scoped fragments persisted by F2), composes the VFS deterministically, and
@@ -253,10 +254,12 @@ real merges with conflict resolution → a planted-bug issue auto-triaged and fi
 output artifact is **that provenance trail**, not a working URL shortener. Then,
 and only then, we formulate the benchmark.
 
-## The proof portfolio (the goal)
+## The normal-flow evidence portfolio (the goal)
 
-apex is the vehicle for a portfolio of validated proofs that **Tanren is an
-autonomous software org**. The proofs:
+Apex-class fixtures are demanding inputs from which the normal event, gate, deploy,
+and observation surfaces yield evidence that **Tanren is an autonomous software
+org**. This is reporting over the general pipeline, not apex-specific proof
+composition. The evidence categories are:
 
 - **autonomy-loop** — each loop the machine is designed to run (DAG-build, walker
   auto-execution, parallel merge, issue-triage→fix, deploy, audits, CI-intelligence,

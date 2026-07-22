@@ -147,7 +147,7 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
    finds finer issues (architecture → types → mechanical pins) — fold them into the
    frozen spec and re-run until `go`. This is the process hardening the foundation.
 7. **Model routing by task weight.** Reserve `gpt-5.6-sol` (ultra) for the few large,
-   poison-everything audits (integration audit, apex design). Use `codex`
+   poison-everything audits (integration audit, normal-flow fixture-acceptance design). Use `codex`
    (`gpt-5.6-luna`) for production authoring. Use `grok`/`glm` for the many light
    verifies (`glm` for the smallest). Not workforce-bound — shell out for capacity.
 8. **Provable + callable + visible.** A node is done only when it (a) fires named
