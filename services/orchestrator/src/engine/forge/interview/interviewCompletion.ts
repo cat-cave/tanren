@@ -37,8 +37,14 @@ export type InterviewCaptureArea =
   | "architecture"
   | "lifecycle";
 
-// A captured reference that is dangling OR a required coverage that is absent — surfaced
-// (never silently dropped) so the operator/next-question sees exactly what is wrong.
+// A captured reference that is dangling OR a required coverage that is absent OR a JUNK
+// entity derive would persist verbatim — surfaced (never silently dropped) so the
+// operator/next-question sees exactly what is wrong.
+//   - blankPersona         — a captured persona has a blank/whitespace name. Derive would
+//                            PERSIST it (a junk persona row), so the predicate REJECTS it
+//                            rather than silently skipping — otherwise the gate could certify
+//                            a capture that then wedges the derive (proof≠effect).
+//   - blankBehaviorTitle   — a captured behavior has a blank/whitespace title. Same reason.
 //   - behaviorPersona      — a behavior names a persona the interview never captured.
 //   - incompleteBehavior   — a behavior resolves its persona but its Given/When/Then is
 //                            not fully formed (a half-specified behavior is not shippable).
@@ -53,6 +59,8 @@ export type InterviewCaptureArea =
 // `ref` is the offending natural key.
 export interface InterviewInvalidRef {
   kind:
+    | "blankPersona"
+    | "blankBehaviorTitle"
     | "behaviorPersona"
     | "incompleteBehavior"
     | "personaWithoutBehavior"
@@ -114,11 +122,22 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
     missing.push("identity");
   }
 
-  // personas — build the resolution set (case-folded, non-blank names) FIRST; behavior +
-  // design refs vet against it below.
+  // personas — build the resolution set (case-folded names) FIRST; behavior + design refs
+  // vet against it below. A blank/whitespace persona name is REJECTED (never silently
+  // skipped): derive would PERSIST that junk persona (its `PersonaCreateInput`), so the
+  // predicate's validated set MUST equal derive's persist set — skipping it would let the
+  // gate certify a capture that then wedges the derive against the coverage assertion.
   const personaNames = new Set<string>();
   for (const persona of capture.personas) {
-    if (nonBlank(persona.name)) personaNames.add(persona.name.trim().toLowerCase());
+    if (!nonBlank(persona.name)) {
+      invalid.push({
+        kind: "blankPersona",
+        ref: persona.name,
+        detail: "a captured persona has a blank/whitespace name — reject, never persist a junk persona entity",
+      });
+      continue;
+    }
+    personaNames.add(persona.name.trim().toLowerCase());
   }
   if (personaNames.size === 0) missing.push("persona");
 
@@ -138,6 +157,17 @@ export function evaluateInterviewCompletion(capture: InterviewCapture): Intervie
         kind: "behaviorPersona",
         ref: behavior.persona,
         detail: `behavior '${behavior.title}' names persona '${behavior.persona}', which the interview never captured`,
+      });
+      continue;
+    }
+    // A blank/whitespace title is REJECTED (not skipped, not a coverage-eligible key like
+    // `operator::`): derive would PERSIST that junk behavior entity, so the predicate must
+    // reject it — proof (validated) MUST equal effect (persisted).
+    if (!nonBlank(behavior.title)) {
+      invalid.push({
+        kind: "blankBehaviorTitle",
+        ref: key,
+        detail: `persona '${behavior.persona}' has a behavior with a blank/whitespace title — reject, never persist a junk behavior entity`,
       });
       continue;
     }

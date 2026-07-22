@@ -3,6 +3,8 @@
 // pure-function cases pin every required area + every invalid-reference arm.
 
 import { describe, expect, it } from "vitest";
+import { BehaviorCreateInput } from "../src/engine/entities/behaviors.js";
+import { PersonaCreateInput } from "../src/engine/entities/personas.js";
 import {
   emptyCapture,
   evaluateInterviewCompletion,
@@ -108,6 +110,42 @@ describe("evaluateInterviewCompletion — the deterministic completion predicate
     expect(result.invalid).toContainEqual(
       expect.objectContaining({ kind: "incompleteBehavior", ref: "operator::half-formed" }),
     );
+  });
+
+  it("proof=effect — a blank-NAME persona is REJECTED, never silently skipped (derive would persist it)", () => {
+    // The predicate's validated set MUST equal derive's persist set. A blank-name persona
+    // must NOT be skipped: derive would persist a junk persona row, wedging the coverage
+    // assertion. So it is surfaced `blankPersona` → complete:false.
+    const base = completeCapture();
+    const withJunk = {
+      ...base,
+      personas: [...base.personas, { name: "   ", description: "junk", surface: "" }],
+    };
+    const result = evaluateInterviewCompletion(withJunk);
+    expect(result.complete).toBe(false);
+    expect(result.invalid).toContainEqual(expect.objectContaining({ kind: "blankPersona" }));
+  });
+
+  it("proof=effect — a blank-TITLE behavior is REJECTED, never a coverage-eligible `persona::` key", () => {
+    const base = completeCapture();
+    /* eslint-disable-next-line unicorn/no-thenable */
+    const junkBehavior = { persona: "operator", title: "   ", given: "g", when: "w", then: "t" };
+    const withJunk = { ...base, behaviors: [...base.behaviors, junkBehavior] };
+    const result = evaluateInterviewCompletion(withJunk);
+    expect(result.complete).toBe(false);
+    expect(result.invalid).toContainEqual(expect.objectContaining({ kind: "blankBehaviorTitle" }));
+  });
+
+  it("persist-layer defense — PersonaCreateInput/BehaviorCreateInput trim-and-reject a blank name/title", () => {
+    expect(() => PersonaCreateInput.parse({ scope: "project", orgId: "org_a", projectId: "p", name: "   " })).toThrow(
+      /string|character|empty|small/iu,
+    );
+    expect(() =>
+      PersonaCreateInput.parse({ scope: "project", orgId: "org_a", projectId: "p", name: "ops" }),
+    ).not.toThrow();
+    /* eslint-disable-next-line unicorn/no-thenable -- Given/When/Then is the behavior create-input vocabulary. */
+    const blankTitle = { personaId: "persona_a", title: "   ", given: "g", when: "w", then: "t" };
+    expect(() => BehaviorCreateInput.parse(blankTitle)).toThrow(/string|character|empty|small/iu);
   });
 
   it("a captured persona that owns no fully-formed behavior is invalid (personaWithoutBehavior)", () => {

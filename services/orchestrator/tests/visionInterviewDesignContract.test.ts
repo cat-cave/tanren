@@ -183,4 +183,47 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
     // The loud halt means no design contract row is persisted (the whole derive throws).
     expect(state.designContracts).toHaveLength(0);
   });
+
+  it("PROOF=EFFECT — a junk blank-name persona the gate would once have SKIPPED is rejected before any persist (no permanent-stuck state)", async () => {
+    // The coordinator's concrete failure: a capture that is otherwise complete + covered
+    // BUT carries a blank-name persona. If the predicate SKIPPED it, the gate would certify
+    // complete → derive would PERSIST the junk persona → the coverage assertion would throw
+    // and the derive would be permanently stuck. The predicate REJECTS it, so the derive
+    // boundary halts (InterviewIncompleteError, NOT DesignCoverageMismatchError) BEFORE any
+    // persona is persisted.
+    const { pool, state } = stubPool();
+    const junkCapture: InterviewCapture = {
+      ...emptyCapture(),
+      ...completeCaptureExtras(),
+      personas: [...completeCaptureExtras().personas, { name: "   ", description: "junk", surface: "" }],
+      lifecycle: TS_LIFECYCLE,
+      designContract: MINIMAL_DESIGN_CONTRACT,
+    };
+    const error = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy(request) {
+          return preparedDeploy(request.providerKind as "deploy.vercel" | "deploy.flyio");
+        },
+      },
+      {
+        orgId: "org_a",
+        capture: junkCapture,
+        actor,
+        repoUrl: TEST_REPO_URL,
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.vercel" },
+        materializeTemplate: stubMaterialize(),
+      },
+    ).catch((caught: unknown) => caught);
+    // The GATE caught it (not the in-tx coverage assertion) — proof the validated set is
+    // the persist set, so a junk entity never reaches the derive at all.
+    expect(error).toBeInstanceOf(InterviewIncompleteError);
+    expect((error as InterviewIncompleteError).invalid).toContainEqual(
+      expect.objectContaining({ kind: "blankPersona" }),
+    );
+    // NO junk persona (or any entity) was persisted — the halt is BEFORE any graph write.
+    expect(state.personas).toBe(0);
+    expect(state.projects.size).toBe(0);
+  });
 });
