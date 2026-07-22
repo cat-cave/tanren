@@ -6,7 +6,7 @@ import {
   ingestIssueObservation,
   type IssueSourceAdapter,
 } from "../src/engine/forge/issueSourceAdapter.js";
-import { processSourceSync } from "../src/engine/forge/sourceSyncWorker.js";
+import { processSourceSync, type SourceSyncLeaseHeartbeatScheduler } from "../src/engine/forge/sourceSyncWorker.js";
 import { IssueLoopStore } from "../src/engine/repositories/issueLoops.js";
 import { SourceSyncOutboxStore } from "../src/engine/repositories/sourceSyncOutbox.js";
 import { authorizeSourceSync, blockSourceSync } from "./helpers/sourceSyncAuthority.js";
@@ -197,6 +197,13 @@ describeDb("source-sync worker failure closure — RLS integration", () => {
     const pending = await closeOutbox(ISSUE_SOURCE_ID, "lease-heartbeat");
     const entered = deferred();
     const release = deferred();
+    let renewLease: (() => Promise<void>) | undefined;
+    const heartbeatScheduler: SourceSyncLeaseHeartbeatScheduler = {
+      every(callback) {
+        renewLease = callback;
+        return { stop() {} };
+      },
+    };
     let applies = 0;
     const adapter: IssueSourceAdapter = {
       provider: "test",
@@ -214,16 +221,36 @@ describeDb("source-sync worker failure closure — RLS integration", () => {
       },
     };
     const first = processSourceSync(
-      { pool: appPool, adapters: new Map([["issues", adapter]]), workerId: "lease-first", claimLeaseMs: 30 },
+      {
+        pool: appPool,
+        adapters: new Map([["issues", adapter]]),
+        workerId: "lease-first",
+        claimLeaseMs: 1_000,
+        leaseHeartbeatScheduler: heartbeatScheduler,
+      },
       pending.outbox,
     );
     await entered.promise;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 80);
-    });
+    const initialLease = await runWithOrgScope(appPool, ORG_ID, (client) =>
+      client.query<{ claim_expires_at: Date }>(
+        "SELECT claim_expires_at FROM source_sync_outbox WHERE org_id = $1 AND id = $2",
+        [ORG_ID, pending.outbox.id],
+      ),
+    );
+    if (renewLease === undefined) throw new Error("source-sync lease heartbeat was not scheduled");
+    await renewLease();
+    const renewedLease = await runWithOrgScope(appPool, ORG_ID, (client) =>
+      client.query<{ claim_expires_at: Date }>(
+        "SELECT claim_expires_at FROM source_sync_outbox WHERE org_id = $1 AND id = $2",
+        [ORG_ID, pending.outbox.id],
+      ),
+    );
+    expect(renewedLease.rows[0]?.claim_expires_at.getTime()).toBeGreaterThan(
+      initialLease.rows[0]?.claim_expires_at.getTime() ?? 0,
+    );
     await expect(
       processSourceSync(
-        { pool: appPool, adapters: new Map([["issues", adapter]]), workerId: "lease-reclaimer", claimLeaseMs: 30 },
+        { pool: appPool, adapters: new Map([["issues", adapter]]), workerId: "lease-reclaimer", claimLeaseMs: 1_000 },
         pending.outbox,
       ),
     ).resolves.toBeUndefined();
