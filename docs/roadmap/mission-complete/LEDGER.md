@@ -1,8 +1,18 @@
 <!-- cspell:ignore evsub descoped desynced nodegyp -->
 
-# Mission-complete node ledger — the single source of truth
+# Mission-complete node ledger — SUPERSEDED (history only)
 
-**This file is the authoritative live status of the 142 consumer nodes.** Prose
+> **⚠️ SUPERSEDED (2026-07-22).** The live, claimable node roster is now **GitHub
+> issues** (`label:node`) — one issue per remaining node, each carrying its full
+> spec (what/seam · acceptance + negative control · deps · migration · size · wave),
+> grouped by `wave-N` milestones. See the isolation/bug issues too (`label:bug`).
+> Contribution runs on the ideal flow: **claim → PR (template: gate + no-apex-shaping)
+> → central audit → merge.** This file is **retained as history of the 99 completed
+> nodes** — do NOT add forward-looking status here; file/claim a GitHub issue instead.
+> apex is a fixture-class run through the normal pipeline (see `docs/operator-guide/apex.md`);
+> nothing in the engine is apex-shaped.
+
+**Historical record of the 142-node build below.** Prose
 counts anywhere else (README, CLAUDE.md) are derived from here. When a node lands,
 update its row here in the **same PR** that merges it. Node IDs and specs are frozen
 by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _status_.
