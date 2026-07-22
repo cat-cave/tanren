@@ -339,13 +339,13 @@ deploys. The CRA is deliberately a hand-built, engine-external **mirror** of
 capabilities Tanren already encodes natively, so the eventual cutover is conceptual
 continuity rather than a rewrite. Each component has an explicit retirement target:
 
-| CRA component (scaffolding, external) | Tanren-native capability that absorbs it |
-| --- | --- |
-| GitHub issues as the work roster | Tanren's own issue intake / back-half symptom sources |
-| Track-1 contributor agents in worktrees | the autonomy engine (DagWalker + writer adapters + `integration_nodes`) |
+| CRA component (scaffolding, external)         | Tanren-native capability that absorbs it                                                           |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| GitHub issues as the work roster              | Tanren's own issue intake / back-half symptom sources                                              |
+| Track-1 contributor agents in worktrees       | the autonomy engine (DagWalker + writer adapters + `integration_nodes`)                            |
 | Deep adversarial audit + P0–P3 finding triage | `MergeAuthority` + runtime behavior-verification + audit-as-P0–P3-findings gated by `auditPosture` |
-| Fail-closed autonomous squash merge | the native intelligent merge queue / `MergeAuthority` CAS land on jj |
-| (manual today) deploy of Tanren's own release | `DeployAdapter` + merge-reflecting deploy pointed at Tanren's own release → self-update |
+| Fail-closed autonomous squash merge           | the native intelligent merge queue / `MergeAuthority` CAS land on jj                               |
+| (manual today) deploy of Tanren's own release | `DeployAdapter` + merge-reflecting deploy pointed at Tanren's own release → self-update            |
 
 The P0/P1-blocks / P2/P3-defers doneness model the CRA uses is the same shape as
 Tanren's native `auditPosture` — so the CRA is not inventing a review philosophy but
