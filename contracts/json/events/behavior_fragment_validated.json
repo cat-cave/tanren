@@ -38,8 +38,7 @@
     "behaviorRevisionId",
     "capability",
     "fragmentId",
-    "fragmentVersion",
-    "negativeControlPassed"
+    "fragmentVersion"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.behavior.fragment.validated"

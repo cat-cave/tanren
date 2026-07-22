@@ -65,7 +65,10 @@ class InMemoryAcceptanceRunStore implements AcceptanceRunStore {
 }
 
 class RecordingEventSink implements AcceptanceEventSink {
-  public append<N extends EventName>(_input: AppendEventInput<N>): Promise<void> {
+  public readonly events: AppendEventInput[] = [];
+
+  public append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    this.events.push(input);
     return Promise.resolve();
   }
 }
@@ -113,13 +116,14 @@ function request(plans: readonly AcceptancePlan[]) {
 
 async function runWith(baseUrl: string, p: AcceptancePlan) {
   const store = new InMemoryAcceptanceRunStore();
+  const events = new RecordingEventSink();
   const orchestrator = new AcceptanceOrchestrator({
     store,
-    events: new RecordingEventSink(),
+    events,
     drivers: [new HttpAcceptanceSurfaceDriver({ surface: "api", resolveBaseUrl: fixedResolver(baseUrl) })],
   });
   const result = await orchestrator.execute(request([p]));
-  return { store, behavior: result.behaviors[0]! };
+  return { store, events, behavior: result.behaviors[0]! };
 }
 
 describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication", () => {
@@ -170,7 +174,7 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
   });
 
   it("DECISIVE: a correct real response yields passed on real observed values", async () => {
-    const { behavior } = await runWith(
+    const { behavior, events } = await runWith(
       baseUrl,
       plan("/health", [
         { assertionId: "a1", subject: "p1.status", comparisonOperator: "equals", expected: 200 },
@@ -181,6 +185,15 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.outcome).toBe("passed");
     expect(behavior.executedAssertionCount).toBe(3);
     expect(behavior.passedAssertionCount).toBe(3);
+    const observedActions = events.events.filter((event) => event.eventType === "behavior.action.observed");
+    // There are three real driver observations (one per observed assertion), so
+    // there are exactly three action facts — this is not the one planned probe.
+    expect(observedActions).toHaveLength(3);
+    for (const event of observedActions) {
+      expect(event).toMatchObject({
+        payload: { behaviorRevisionId: "br_http_rv6", shardId: "plan_http_rv6:0", actionId: "p1", surface: "api" },
+      });
+    }
   });
 
   it("DECISIVE: a wrong response (500) fails the status assertion — failed_product, never passed", async () => {
@@ -222,6 +235,14 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.outcome).not.toBe("passed");
     expect(behavior.outcome).toBe("failed_verification_contract");
     expect(behavior.executedAssertionCount).toBe(0);
+  });
+
+  it("emits no action.observed when the real driver returned no observations, despite a planned probe", async () => {
+    const { events } = await runWith(
+      baseUrl,
+      plan("/health", [{ assertionId: "a1", subject: "p1.unknown", comparisonOperator: "equals", expected: null }]),
+    );
+    expect(events.events.filter((event) => event.eventType === "behavior.action.observed")).toHaveLength(0);
   });
 
   it("DECISIVE: not_equals / not_contains on a genuinely-absent field never pass (absent ≠ observed)", async () => {

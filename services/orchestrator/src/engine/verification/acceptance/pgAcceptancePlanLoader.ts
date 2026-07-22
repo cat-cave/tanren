@@ -17,6 +17,7 @@ import {
   type VerificationFragmentStore,
 } from "../../repositories/verificationFragmentStore.js";
 import type { AcceptancePlan } from "./orchestrator.js";
+import { PgAcceptanceEventSink, type AcceptanceEventSink } from "./eventSink.js";
 import {
   compileAndBindAcceptancePlan,
   type PlanCapabilityAuthoring,
@@ -46,6 +47,8 @@ export interface AcceptancePlanLoader {
 export interface PgAcceptancePlanLoaderOptions {
   readonly store?: VerificationFragmentStore;
   readonly authoring?: PlanCapabilityAuthoring;
+  /** The production loader always appends lifecycle facts through this canonical sink. */
+  readonly events?: AcceptanceEventSink;
 }
 
 interface AcceptanceRow {
@@ -59,12 +62,14 @@ interface AcceptanceRow {
 export class PgAcceptancePlanLoader implements AcceptancePlanLoader {
   private readonly store: VerificationFragmentStore;
   private readonly authoring?: PlanCapabilityAuthoring;
+  private readonly events: AcceptanceEventSink;
 
   public constructor(
     private readonly pool: pg.Pool,
     options: PgAcceptancePlanLoaderOptions = {},
   ) {
     this.store = options.store ?? new PgVerificationFragmentStore(pool);
+    this.events = options.events ?? new PgAcceptanceEventSink(pool);
     if (options.authoring !== undefined) this.authoring = options.authoring;
   }
 
@@ -103,6 +108,7 @@ export class PgAcceptancePlanLoader implements AcceptancePlanLoader {
           orgId: input.orgId,
           projectId: row.project_id ?? "",
           store: this.store,
+          events: this.events,
           ...(this.authoring === undefined ? {} : { authoring: this.authoring }),
         }),
       );
