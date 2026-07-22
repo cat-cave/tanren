@@ -67,7 +67,10 @@ export const MilestoneCreateInput = z.object({
   id: z.string().min(1).optional(),
   projectId: z.string().min(1),
   label: z.string().min(1),
-  name: z.string().min(1),
+  // rv-21 — trim-and-reject blank (matches PersonaCreateInput.name/BehaviorCreateInput.title):
+  // the interview-derived milestone name is the captured interface name; a whitespace-only
+  // name must never persist a junk milestone, even on a direct/programmatic derive.
+  name: z.string().trim().min(1),
   description: z.string().nullable().default(null),
   orderIndex: z.number().int(),
   eta: z.date().nullable().default(null),

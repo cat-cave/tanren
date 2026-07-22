@@ -8,8 +8,8 @@ import { PersonaCreateInput } from "../src/engine/entities/personas.js";
 import {
   emptyCapture,
   evaluateInterviewCompletion,
+  InterviewCapture,
   InterviewIncompleteError,
-  type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
 
 const LIFECYCLE = {
@@ -203,6 +203,57 @@ describe("evaluateInterviewCompletion — the deterministic completion predicate
     expect(result.invalid).toContainEqual(
       expect.objectContaining({ kind: "designBehavior", ref: "operator::missing" }),
     );
+  });
+
+  it("BOUNDARY NORMALIZATION — InterviewCapture.parse trims every key-bearing ref ONCE at ingestion", () => {
+    // The structural fix for the silent-drop root cause: a whitespace-PADDED (non-blank) ref
+    // is normalized at the capture schema, so the predicate, `behaviorKey`,
+    // `buildDerivationDesignPlan`, `deriveBehaviorSpec`, and the persist layer ALL see the
+    // same canonical value — a padded ref can no longer pass the gate then miss a downstream
+    // map lookup. Removing the schema `.trim()` flips THIS assertion red.
+    /* eslint-disable unicorn/no-thenable -- Given/When/Then is the captured behavior vocabulary. */
+    const parsed = InterviewCapture.parse({
+      identity: { slug: "acme", pitch: "  a padded pitch  ", repoHint: "" },
+      personas: [{ name: "  operator  ", description: "  runs it  ", surface: "  desktop  " }],
+      behaviors: [{ persona: "  operator  ", title: "  see status  ", given: " g ", when: " w ", then: " t " }],
+      interfaces: [{ name: "  dashboard  ", note: "" }],
+      architecture: [{ layer: "  web  ", choice: "  next.js  " }],
+      designContract: {
+        domain: "  saas-web  ",
+        identity: "  clean  ",
+        intent: "  dense  ",
+        personas: ["  operator  "],
+        behaviors: ["  operator::see status  "],
+      },
+      lifecycle: null,
+      rulesets: ["  main protected  "],
+    });
+    /* eslint-enable unicorn/no-thenable */
+    expect(parsed.identity?.pitch).toBe("a padded pitch");
+    expect(parsed.personas[0]?.name).toBe("operator");
+    expect(parsed.personas[0]?.surface).toBe("desktop");
+    expect(parsed.behaviors[0]?.persona).toBe("operator");
+    expect(parsed.behaviors[0]?.title).toBe("see status");
+    expect(parsed.behaviors[0]?.given).toBe("g");
+    expect(parsed.interfaces[0]?.name).toBe("dashboard");
+    expect(parsed.architecture[0]?.layer).toBe("web");
+    expect(parsed.architecture[0]?.choice).toBe("next.js");
+    expect(parsed.designContract?.domain).toBe("saas-web");
+    expect(parsed.designContract?.personas).toEqual(["operator"]);
+    expect(parsed.designContract?.behaviors).toEqual(["operator::see status"]);
+    expect(parsed.rulesets).toEqual(["main protected"]);
+    // The padded persona ref now matches the persona name — the predicate + derive agree.
+    expect(evaluateInterviewCompletion({ ...emptyCapture(), ...parsed, lifecycle: LIFECYCLE }).invalid).toEqual([]);
+  });
+
+  it("blank-after-trim key fields are REJECTED at the capture schema (min(1) on the trimmed value)", () => {
+    expect(() => InterviewCapture.parse({ personas: [{ name: "   ", description: "d" }] })).toThrow(
+      /character|string|small|empty/iu,
+    );
+    /* eslint-disable-next-line unicorn/no-thenable -- Given/When/Then is the captured behavior vocabulary. */
+    const blankTitleCapture = { behaviors: [{ persona: "op", title: "   ", given: "g", when: "w", then: "t" }] };
+    expect(() => InterviewCapture.parse(blankTitleCapture)).toThrow(/character|string|small|empty/iu);
+    expect(() => InterviewCapture.parse({ interfaces: [{ name: "   " }] })).toThrow(/character|string|small|empty/iu);
   });
 
   it("InterviewIncompleteError carries the typed missing + invalid areas in its message", () => {

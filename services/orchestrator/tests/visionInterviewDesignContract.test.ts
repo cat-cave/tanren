@@ -184,22 +184,33 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
     expect(state.designContracts).toHaveLength(0);
   });
 
-  it("PROOF=EFFECT — a junk blank-name persona the gate would once have SKIPPED is rejected before any persist (no permanent-stuck state)", async () => {
-    // The coordinator's concrete failure: a capture that is otherwise complete + covered
-    // BUT carries a blank-name persona. If the predicate SKIPPED it, the gate would certify
-    // complete → derive would PERSIST the junk persona → the coverage assertion would throw
-    // and the derive would be permanently stuck. The predicate REJECTS it, so the derive
-    // boundary halts (InterviewIncompleteError, NOT DesignCoverageMismatchError) BEFORE any
-    // persona is persisted.
+  it("PROOF=EFFECT — a WHITESPACE-PADDED persona ref is NORMALIZED at ingestion and derives successfully (behavior persisted, coverage passes — no wedge, no silent drop)", async () => {
+    // The re-audit's concrete failure: a behavior whose persona ref is `'operator '` (a
+    // NON-blank, padded value). Before the ingestion trim, the predicate trimmed → passed
+    // the gate, but `deriveBehaviorSpec` resolved on the UNTRIMMED key `'operator '` → missed
+    // the `'operator'` map entry → the behavior was silently DROPPED → the in-tx coverage
+    // assertion wedged. With the capture normalized ONCE at ingestion, the padded ref becomes
+    // `'operator'` everywhere: the behavior persists and `assertContractCoversGraph` PASSES.
     const { pool, state } = stubPool();
-    const junkCapture: InterviewCapture = {
+    const paddedCapture: InterviewCapture = {
       ...emptyCapture(),
       ...completeCaptureExtras(),
-      personas: [...completeCaptureExtras().personas, { name: "   ", description: "junk", surface: "" }],
+      // The persona ref is PADDED with trailing whitespace; the persona itself is 'operator'.
+      /* eslint-disable unicorn/no-thenable -- Given/When/Then is the captured behavior vocabulary. */
+      behaviors: [
+        {
+          persona: "operator ",
+          title: "inspect status",
+          given: "a running product",
+          when: "the operator opens status",
+          then: "the current status is visible",
+        },
+      ],
+      /* eslint-enable unicorn/no-thenable */
       lifecycle: TS_LIFECYCLE,
       designContract: MINIMAL_DESIGN_CONTRACT,
     };
-    const error = await deriveFromCapture(
+    const derived = await deriveFromCapture(
       {
         pool,
         async prepareDeploy(request) {
@@ -208,22 +219,21 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
       },
       {
         orgId: "org_a",
-        capture: junkCapture,
+        capture: paddedCapture,
         actor,
         repoUrl: TEST_REPO_URL,
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
         materializeTemplate: stubMaterialize(),
+        bootstrapProject: successfulBootstrapProject,
+        composeDesignSystem: noopComposeDesignSystem,
       },
-    ).catch((caught: unknown) => caught);
-    // The GATE caught it (not the in-tx coverage assertion) — proof the validated set is
-    // the persist set, so a junk entity never reaches the derive at all.
-    expect(error).toBeInstanceOf(InterviewIncompleteError);
-    expect((error as InterviewIncompleteError).invalid).toContainEqual(
-      expect.objectContaining({ kind: "blankPersona" }),
     );
-    // NO junk persona (or any entity) was persisted — the halt is BEFORE any graph write.
-    expect(state.personas).toBe(0);
-    expect(state.projects.size).toBe(0);
+    // The derive SUCCEEDED (no DesignCoverageMismatchError wedge) and the padded-ref behavior
+    // was actually persisted — the captured reference was NOT silently dropped.
+    expect(derived.designContract.id).toBeDefined();
+    expect(state.personas).toBe(1);
+    expect(state.behaviors).toBe(1);
+    expect(state.designContracts).toHaveLength(1);
   });
 });
