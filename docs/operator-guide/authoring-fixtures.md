@@ -70,8 +70,8 @@ that it can pass a rigged test, not that it builds hard projects generally.
 If you sit down to author a fixture and discover you _cannot_ express it, or it
 _cannot_ run, without changing the engine — a missing operator API endpoint, an
 unsupported deploy provider, an integration with no adapter — **that is an engine
-gap, not a fixture to special-case.** File it as a GitHub issue (`label:bug` or a
-node), fix it as one CI-gated PR through the normal contribution flow, and then
+gap, not a fixture to special-case.** File it as a GitHub issue typed `bug` or
+`enhancement`, fix it as one CI-gated PR through the normal contribution flow, and then
 the fixture runs over the general surface like any other. "This hard product
 surfaced a missing capability" is apex doing its job; "I hacked the engine so my
 product would build" is apex being defeated.

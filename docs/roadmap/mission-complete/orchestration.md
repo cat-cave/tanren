@@ -6,8 +6,9 @@ How a **no-code root orchestrator** drives the 142 consumer nodes to merge, fast
 across Claude native subagents **and** shelled-out codex / grok / opencode — without
 the convergence thrash that throttled the first attempt.
 
-Read alongside: `README.md` (the mission), `LEDGER.md` (live status, the source of
-truth), the per-node `nodes/*.md` specs + `nodes/cards/*.md`.
+Read alongside: `README.md` (the mission), the live GitHub issues roster (typed
+`bug` or `enhancement`, ordered by native `blocked_by`/`blocks`), and the per-node
+`nodes/*.md` specs + `nodes/cards/*.md`. `LEDGER.md` is deprecated history only.
 
 ---
 
@@ -49,18 +50,18 @@ them. Prefer many small green PRs landing back-to-back over one 400-file slab.
 > into its own serialized migration/prep PR** rather than folding it into a feature
 > node. Chain PRs flow; slabs stall.
 
-### Rule 1 — Barrier pre-flight (one serialized prep PR per wave)
+### Rule 1 — Barrier pre-flight (one serialized prep PR per dependency-ready batch)
 
-Before any fan-out, a **single** prep PR claims everything shared for the whole wave:
-the migration slot(s) (next free `0043+`), every event-vocab freeze the wave's nodes
+Before any fan-out, a **single** prep PR claims everything shared for the batch:
+the migration slot(s) (next free `0043+`), every event-vocab freeze the batch's issues
 emit, and any `screens.ts` / nav / `main.ts` edits. Merge it first. Consumer cards in
-that wave then touch **zero** barriers → they are genuinely path-disjoint → they never
-serialize or collide. This collapses the old freeze→sub→consumer ceremony into wave
+that batch then touch **zero** barriers → they are genuinely path-disjoint → they never
+serialize or collide. This collapses the old freeze→sub→consumer ceremony into batch
 setup.
 
-### Rule 2 — Frozen wave base; audit once
+### Rule 2 — Frozen batch base; audit once
 
-The integration base advances **only at wave boundaries**. Every node in a wave builds
+The integration base advances **only between dependency-ready batches**. Every issue in a batch builds
 against and is audited against the **same frozen SHA**. No per-SHA re-audit, no restack
 spiral. A node gets **one** adversarial audit pass: GO, or one repair then re-GO. If it
 can't converge in one repair, it drops back to `todo` and is re-scoped — it does not
@@ -68,12 +69,12 @@ enter an open-ended audit loop.
 
 ### Rule 3 — Role + model routing as fixed lanes
 
-| Lane                 | Model                                                                            | Job                                                                                                                                     |
-| -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **Root**             | Claude (this orchestrator)                                                       | Lease cards, run barrier pre-flight, freeze the wave base, gate evidence, merge, update `LEDGER.md`. **Never authors production code.** |
-| **Implementor** ×3–4 | Claude native subagents (worktree-isolated) + **codex/luna** for heavy authoring | One card each, disjoint paths, build to `just affected-typecheck` + the node's tests green.                                             |
-| **Auditor**          | **grok**                                                                         | One adversarial pass per node vs the card's validation column **+ a negative control**. Binary GO / NO-GO.                              |
-| **Mechanical**       | **opencode / glm**                                                               | Spelling, line-cap splits, audit-fix nits, card/manifest reconciliation.                                                                |
+| Lane                 | Model                                                                            | Job                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Root**             | Claude (this orchestrator)                                                       | Lease issues, run barrier pre-flight, freeze the batch base, gate evidence, merge, update the GitHub issue roster. **Never authors production code.** |
+| **Implementor** ×3–4 | Claude native subagents (worktree-isolated) + **codex/luna** for heavy authoring | One card each, disjoint paths, build to `just affected-typecheck` + the node's tests green.                                                           |
+| **Auditor**          | **grok**                                                                         | One adversarial pass per node vs the card's validation column **+ a negative control**. Binary GO / NO-GO.                                            |
+| **Mechanical**       | **opencode / glm**                                                               | Spelling, line-cap splits, audit-fix nits, card/manifest reconciliation.                                                                              |
 
 Claude subagents (Agent tool, `isolation: "worktree"`) and codex (its own
 `.codex/worktrees`) run **concurrently** — that is the 6–7 lanes. Reserve any
@@ -83,21 +84,21 @@ normal-flow max-difficulty fixture acceptance).
 ### Rule 4 — Deterministic harness, not per-round prompt files
 
 Do **not** hand-write a prompt file per audit round (that produced the 604-file
-graveyard). Drive each wave with the **Workflow tool** as a `author → audit → gate`
-pipeline, one item per node, structured results. The root reads `LEDGER.md`, selects
+graveyard). Drive each dependency-ready batch with the **Workflow tool** as a `author → audit → gate`
+pipeline, one item per node, structured results. The root reads GitHub issues, selects
 the next dependency-ready path-disjoint set, and fans it through the pipeline.
 
 ## 2. The loop
 
 ```
-read LEDGER.md → pick a wave (dependency-ready, path-disjoint node set)
+read GitHub issues → pick a dependency-ready, path-disjoint issue set
   → barrier pre-flight PR (migrations + events + shared files) → merge; FREEZE base SHA
   → fan out N cards to implementor lanes @ frozen base (Claude subagents ∥ codex)
   → each node: ONE grok audit (GO / one repair / GO) + a negative control
   → root gates evidence: provable (named events the general pipeline asserts in a live run)
                        + callable (HTTP surface) + visible (dashboard)
   → merge each green audited SHA immediately (no batch-at-end)
-  → update LEDGER.md rows in the merging PR → advance base → next wave
+  → update GitHub issue state in the merging PR → advance base → next batch
 ```
 
 ## 3. Definition of done (per node — all four, no credit otherwise)

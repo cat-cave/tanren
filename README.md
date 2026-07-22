@@ -6,6 +6,11 @@ the merge with its **own native checks**, merges, and then deploys the change an
 runs a demo against the live surface — against your real repository, with honest
 cost accounting.
 
+> **New here?** Want to build something with Tanren on your machine? Start with the
+> [external onboarding guide](docs/operator-guide/external-onboarding.md). Want to
+> contribute to the engine? Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+> [GitHub issues roster](https://github.com/cat-cave/tanren/issues).
+
 **Tanren is opinionated about the method, not the product.** You choose what you
 build, the language and framework, which LLMs do the work, the deploy target, and
 how much human review is required. Tanren owns the delivery operating model:
@@ -324,10 +329,10 @@ instances on their own machines, each driving its own apex-difficulty fixture, a
 filing to one shared GitHub issue tracker. **To run your own apex-difficulty fixture
 or contribute a fix to the engine, start here:**
 
-- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the contribution model: claim a node or
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the contribution model: claim an issue or
   file a bug → work in an isolated worktree (one unit of work per PR) → open a PR →
-  central audit → merge. The live, claimable node roster is **GitHub issues**
-  (`label:node`); bugs are `label:bug`.
+  central audit → merge. The live roster is **GitHub issues**, typed `bug` or
+  `enhancement` and ordered by `blocked_by`/`blocks`.
 - **[`docs/operator-guide/external-onboarding.md`](docs/operator-guide/external-onboarding.md)**
   — stand up your own Tanren instance from a fresh checkout on your own machine.
 - **[`docs/operator-guide/authoring-fixtures.md`](docs/operator-guide/authoring-fixtures.md)**

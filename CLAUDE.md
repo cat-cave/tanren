@@ -4,11 +4,11 @@
 > **mission-complete build** — finishing the strengthened engine's **142 consumer
 > nodes** on top of the merged 8-contract spine (#931). The authority is
 > [`docs/roadmap/mission-complete/README.md`](docs/roadmap/mission-complete/README.md);
-> the live, claimable node roster is **GitHub issues** (`label:node`) — one per
-> remaining node with its full spec, on the ideal flow (claim → PR → central audit →
-> merge); **bugs are `label:bug`**. `docs/roadmap/mission-complete/LEDGER.md` is
+> the live roster is **GitHub issues**, typed `bug` or `enhancement` and ordered by
+> native `blocked_by`/`blocks` — one issue per remaining unit of work, on the ideal
+> flow (claim → PR → central audit → merge). `docs/roadmap/mission-complete/LEDGER.md` is
 > SUPERSEDED (history of the 99 completed nodes only; do not add forward status there).
-> The orchestration playbook (wave-frozen base · barrier pre-flight · single-pass
+> The orchestration playbook (dependency-ready batches · barrier pre-flight · single-pass
 > audit · lane routing) is
 > [`docs/roadmap/mission-complete/orchestration.md`](docs/roadmap/mission-complete/orchestration.md).
 > **The apex v96/v97 narrative below is now the _acceptance test_ that runs AFTER
@@ -98,13 +98,14 @@ full autonomous loop has not yet closed end-to-end. See
 in-development to in-beta: separate operators run separate instances on their own
 machines, each driving its own apex-difficulty fixture, all filing to one shared
 GitHub issue tracker. To run your own fixture or contribute a fix to the engine,
-start here: **[`CONTRIBUTING.md`](CONTRIBUTING.md)** (claim a node/file a bug → PR →
+start here: **[`CONTRIBUTING.md`](CONTRIBUTING.md)** (claim an issue/file a bug → PR →
 central audit → merge), **[`docs/operator-guide/external-onboarding.md`](docs/operator-guide/external-onboarding.md)**
 (stand up an instance from a fresh checkout), **[`docs/operator-guide/authoring-fixtures.md`](docs/operator-guide/authoring-fixtures.md)**
 (write a new max-difficulty fixture — the link-shortener + Slack is just one
 example), and **[`docs/operator-guide/parallel-instances.md`](docs/operator-guide/parallel-instances.md)**
 (multiple instances, per-org BYOK, isolated deploy targets). The live, claimable
-node roster is GitHub issues (`label:node`); bugs are `label:bug`.
+live roster is GitHub issues, typed `bug` or `enhancement` and ordered by
+`blocked_by`/`blocks`.
 
 ## What's next (pull from `ROADMAP.md` §4, not from memory)
 
