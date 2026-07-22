@@ -1,4 +1,4 @@
-// in-2 apex proof: real HTTP -> validated requirement -> durable event -> CAS bytes.
+// in-2 runtime proof: real HTTP -> validated requirement -> durable event -> CAS bytes.
 // Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL.
 
 import { migrate, runWithOrgScope } from "@tanren/db";
@@ -25,9 +25,9 @@ const describeDb = enabled ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 const RUNTIME_ROLE = "tanren_app";
 const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
-const ORG_A = "org_in2_apex_a";
-const ORG_B = "org_in2_apex_b";
-const ORG_NEGATIVE = "org_in2_apex_negative";
+const ORG_A = "org_in2_runtime_a";
+const ORG_B = "org_in2_runtime_b";
+const ORG_NEGATIVE = "org_in2_runtime_negative";
 
 interface ValidateResponse {
   readonly ok: true;
@@ -42,7 +42,7 @@ interface ValidateResponse {
 }
 
 function dbName(): string {
-  return `tanren_in2_apex_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  return `tanren_in2_runtime_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 }
 
 function withDatabase(url: string, database: string): string {
@@ -99,7 +99,7 @@ function buildProductionWire(pool: Pool, identityStore: IdentityStore) {
   return app;
 }
 
-describeDb("integration contracts apex (in-2)", () => {
+describeDb("integration contracts runtime (in-2)", () => {
   const database = dbName();
   let ownerPool: Pool;
   let runtimePool: Pool;

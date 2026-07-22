@@ -1,29 +1,33 @@
-// The APEX e2e driver test (audit §6.8 — docs/audits/2026-06-09-apex-pre-run.md).
+// The runtime-behavior e2e driver test (audit §6.8).
 //
-// REGRESSION-PIN for the apex run: the hermetic, in-process apex driver
-// (apexE2eDriver.drive.ts `driveApex`) drives the FULL autonomy-loop proof surface against the
+// REGRESSION-PIN for the runtime behavior run: the hermetic, in-process runtime behavior driver
+// (runtimeBehaviorE2eDriver.drive.ts `driveRuntimeBehavior`) drives the FULL autonomy-loop proof surface against the
 // e2e harness's existing fakes + the engine's REAL pure decision functions, with
 // NO network / NO real creds / NO real Postgres. It therefore runs in
-// `just fast-check` — so the apex proof surface is reproducible in CI, not just
+// `just fast-check` — so the runtime behavior proof surface is reproducible in CI, not just
 // anecdotal in a credentialed live run. Each `it` asserts one autonomy-loop STAGE
 // left its real artifact; the final `it` asserts they compose into one run.
 
 import { describe, expect, it } from "vitest";
-import { driveApex } from "./apexE2eDriver.drive.js";
-import { APEX_OPERATOR_NOTES, APEX_TEMPLATE_SEED, type ApexProof } from "./apexE2eDriver.js";
+import { driveRuntimeBehavior } from "./runtimeBehaviorE2eDriver.drive.js";
+import {
+  RUNTIME_BEHAVIOR_OPERATOR_NOTES,
+  RUNTIME_BEHAVIOR_TEMPLATE_SEED,
+  type RuntimeBehaviorProof,
+} from "./runtimeBehaviorE2eDriver.js";
 
-describe("apex e2e driver — the full autonomy-loop proof surface (hermetic)", () => {
-  // One healthy apex run drives every stage; the per-stage `it`s assert its proof.
-  let proof: ApexProof;
+describe("runtime behavior e2e driver — the full autonomy-loop proof surface (hermetic)", () => {
+  // One healthy runtime behavior run drives every stage; the per-stage `it`s assert its proof.
+  let proof: RuntimeBehaviorProof;
 
-  it("drives a healthy apex run from rough operator notes (no creds, no network)", async () => {
-    expect(APEX_OPERATOR_NOTES).toMatch(/url shortener/iu);
-    proof = await driveApex();
+  it("drives a healthy runtime behavior run from rough operator notes (no creds, no network)", async () => {
+    expect(RUNTIME_BEHAVIOR_OPERATOR_NOTES).toMatch(/url shortener/iu);
+    proof = await driveRuntimeBehavior();
     expect(proof).toBeDefined();
   });
 
   it("STAGE 1 — derives from a FAKE TEMPLATE SEED (v32 runs templated), not from-scratch", () => {
-    expect(proof.templateRef).toBe(APEX_TEMPLATE_SEED.templateRef);
+    expect(proof.templateRef).toBe(RUNTIME_BEHAVIOR_TEMPLATE_SEED.templateRef);
     // The seed materializes the contract files on the greenfield base.
     expect(proof.seededFiles).toContain(".tanren/ci.yml");
     expect(proof.seededFiles).toContain("justfile");
@@ -35,7 +39,7 @@ describe("apex e2e driver — the full autonomy-loop proof surface (hermetic)", 
     expect(proof.mergedPrs.map((p) => p.specId)).toEqual(["spec_api", "spec_web", "spec_slack"]);
     for (const pr of proof.mergedPrs) {
       // A real merged PR url + a real merge commit sha (the CAS land advanced main).
-      expect(pr.prUrl).toMatch(/^https:\/\/github\.com\/cat-cave\/apex-url-shortener-v32\/pull\/\d+$/u);
+      expect(pr.prUrl).toMatch(/^https:\/\/github\.com\/cat-cave\/runtime-behavior-url-shortener-v32\/pull\/\d+$/u);
       expect(pr.mergeCommitSha).toMatch(/^sha-merged-/u);
       expect(pr.targetFileOnBase).toMatch(/^src\//u);
     }
@@ -82,7 +86,7 @@ describe("apex e2e driver — the full autonomy-loop proof surface (hermetic)", 
   });
 
   it("STAGE 6 — an injected ISSUE → triage → fix → merge re-enters the merge machinery", () => {
-    expect(proof.issueLoop.ingestedExternalId).toBe("gh-cat-cave/apex-url-shortener-v32#7");
+    expect(proof.issueLoop.ingestedExternalId).toBe("gh-cat-cave/runtime-behavior-url-shortener-v32#7");
     expect(proof.issueLoop.routedSpecId).toBe("spec_issue_fix_7");
     expect(proof.issueLoop.mergedPrUrl).toMatch(/\/pull\/\d+$/u);
   });
@@ -95,29 +99,29 @@ describe("apex e2e driver — the full autonomy-loop proof surface (hermetic)", 
     expect(proof.scheduledAudit.reEnteredSpecId).toMatch(/^spec_audit_/u);
   });
 
-  it("DORA — accumulates a deployment per merged run across the whole apex run", () => {
+  it("DORA — accumulates a deployment per merged run across the whole runtime behavior run", () => {
     // 3 derived merges + the issue-fix merge.
     expect(proof.doraDeploymentCount).toBe(4);
   });
 });
 
-describe("apex e2e driver — the budget CEILING pause (dag.budget.paused)", () => {
+describe("runtime behavior e2e driver — the budget CEILING pause (dag.budget.paused)", () => {
   it("PAUSES the run the instant real spend reaches the configured ceiling", async () => {
-    const proof = await driveApex({ budgetCeilingUsd: 50, overspend: true });
+    const proof = await driveRuntimeBehavior({ budgetCeilingUsd: 50, overspend: true });
     // shouldPauseOnBudget / isBudgetExhausted (the REAL walker predicate) trip.
     expect(proof.budget.paused).toBe(true);
     expect(proof.budget.spentUsd).toBeGreaterThanOrEqual(proof.budget.ceilingUsd);
   });
 
   it("does NOT pause a run that stays under the ceiling (no false pause)", async () => {
-    const proof = await driveApex({ budgetCeilingUsd: 50, overspend: false });
+    const proof = await driveRuntimeBehavior({ budgetCeilingUsd: 50, overspend: false });
     expect(proof.budget.paused).toBe(false);
   });
 });
 
-describe("apex e2e driver — the DORA audit-posture knob", () => {
+describe("runtime behavior e2e driver — the DORA audit-posture knob", () => {
   it("under STRICT posture a residual finding BLOCKS rather than routes", async () => {
-    const proof = await driveApex({ auditPosture: { blockReviewAt: "P3", p2p3Handling: "fix-if-idle" } });
+    const proof = await driveRuntimeBehavior({ auditPosture: { blockReviewAt: "P3", p2p3Handling: "fix-if-idle" } });
     // Strict: the merge-gate P2 blocks rather than routes.
     expect(proof.severityGate.strictBlocks).toBe(true);
     // The audit-as-findings loop still routes its residual back into the DAG (the

@@ -1,4 +1,4 @@
-// The APEX e2e driver (audit §6.8 — docs/audits/2026-06-09-apex-pre-run.md).
+// The runtime-behavior e2e driver (audit §6.8).
 //
 // This is the HERMETIC, IN-PROCESS mirror of the live tier driver
 // (tests/e2e/cases/tierProofs.e2e.ts `tierDriver`): where the live driver POSTs
@@ -8,65 +8,65 @@
 // CodeHost, the scripted deploy transport + URL probe, fake answerers) and the
 // engine's REAL pure decision functions (the cost-basis classifier, the audit-
 // posture severity gate, the budget-pause predicate, the issue-webhook mapper).
-// NO network, NO real credentials, NO real Postgres — so the apex proof surface is
+// NO network, NO real credentials, NO real Postgres — so the runtime behavior proof surface is
 // REGRESSION-PINNED in `just fast-check`, reproducible in CI, not just anecdotal
 // in a credentialed live run.
 //
-// It is the SOLE integrated proof that the apex autonomy-loop STAGES COMPOSE: each
+// It is the SOLE integrated proof that the runtime behavior autonomy-loop STAGES COMPOSE: each
 // stage's deep wiring is pinned by its own focused test (deriveProject, the
 // DagWalker, the MergeAuthority truth table, deployOnMerge, the intake pipeline,
 // the scheduled-audit re-enter); THIS driver proves they chain into one coherent
-// apex run end-to-end. The driver returns a typed PROOF object; the test asserts
+// runtime behavior run end-to-end. The driver returns a typed PROOF object; the test asserts
 // every autonomy-loop stage left its real artifact.
 //
-// This file is the PUBLIC TYPES surface: the apex SEED + operator notes, the typed
+// This file is the PUBLIC TYPES surface: the runtime behavior SEED + operator notes, the typed
 // PROOF surface (one field per autonomy-loop stage), and the driver-input knobs.
-// The stage wiring + `driveApex` itself live in apexE2eDriver.drive.ts (split to
+// The stage wiring + `driveRuntimeBehavior` itself live in runtimeBehaviorE2eDriver.drive.ts (split to
 // keep each file ≤500 lines + avoid an import cycle): the drive module imports
-// these types; the test imports the constants/types from here and `driveApex` from
+// these types; the test imports the constants/types from here and `driveRuntimeBehavior` from
 // the drive module.
 
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 
 // ---------------------------------------------------------------------------
-// The apex SEED: a fake template + the rough operator notes the operator submits.
+// The runtime-behavior seed: a fake template + the rough operator notes the operator submits.
 // v32 runs templated (audit §3.11 — the template path is THE run path), so the
 // driver derives FROM a (fake) template seed, never from-scratch.
 // ---------------------------------------------------------------------------
 
 /** A fake validated template seed — the contract-instance v32 derives onto. */
-export interface ApexTemplateSeed {
+export interface RuntimeBehaviorTemplateSeed {
   readonly templateRef: string;
   /** The contract files the seed materializes on the greenfield base (proof the seed landed). */
   readonly seededFiles: readonly string[];
 }
 
-export const APEX_TEMPLATE_SEED: ApexTemplateSeed = {
+export const RUNTIME_BEHAVIOR_TEMPLATE_SEED: RuntimeBehaviorTemplateSeed = {
   templateRef: "template/node-web-service@lts",
   seededFiles: ["justfile", ".tanren/ci.yml", "package.json"],
 };
 
-/** The rough operator notes the operator POSTs (the apex input: a few prose lines). */
-export const APEX_OPERATOR_NOTES =
+/** The rough operator notes the operator POSTs (the runtime behavior input: a few prose lines). */
+export const RUNTIME_BEHAVIOR_OPERATOR_NOTES =
   "Build a URL shortener: an API to shorten + resolve links, a tiny web UI, and a Slack bot. " +
   "Should be functional but doesn't need to be fancy.";
 
 // One spec the derive stage authors from the notes. `dependsOn` carries the DAG
 // edges the walker orders by; `target` is the deterministic marker file the merge
 // proves landed on the base branch.
-export interface ApexDerivedSpec {
+export interface RuntimeBehaviorDerivedSpec {
   readonly specId: string;
   readonly title: string;
   readonly dependsOn: readonly string[];
   readonly target: string;
   /** The role rows this spec spends on (each becomes a cost_records row). */
-  readonly roles: readonly ApexRoleSpend[];
+  readonly roles: readonly RuntimeBehaviorRoleSpend[];
 }
 
 // A single billable role call in the spec's run (writer/checker/auditor). The
 // authRef drives the REAL cost-basis classifier — proving cost rows carry the
 // right cost_basis + billing_mode for the credential the operator imported.
-export interface ApexRoleSpend {
+export interface RuntimeBehaviorRoleSpend {
   readonly role: "write" | "check" | "audit";
   readonly authRef: string;
   readonly providerCostUsd: number | null;
@@ -85,7 +85,7 @@ export interface MergedPrProof {
 
 export interface CostRowProof {
   readonly specId: string;
-  readonly role: ApexRoleSpend["role"];
+  readonly role: RuntimeBehaviorRoleSpend["role"];
   readonly costBasis: string;
   readonly billingMode: string;
   readonly realSpendUsd: number | null;
@@ -135,7 +135,7 @@ export interface ScheduledAuditProof {
   readonly reEnteredSpecId: string;
 }
 
-export interface ApexProof {
+export interface RuntimeBehaviorProof {
   readonly templateRef: string;
   readonly seededFiles: readonly string[];
   readonly derivedSpecIds: readonly string[];
@@ -156,8 +156,8 @@ export interface ApexProof {
 // per-spec spend, the injected issue/feature/audit). Defaults model a healthy run.
 // ---------------------------------------------------------------------------
 
-export interface ApexDriverInput {
-  readonly seed?: ApexTemplateSeed;
+export interface RuntimeBehaviorDriverInput {
+  readonly seed?: RuntimeBehaviorTemplateSeed;
   readonly notes?: string;
   /** The dollar ceiling the operator configured (the budget gate). */
   readonly budgetCeilingUsd?: number;
