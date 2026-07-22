@@ -1,5 +1,5 @@
 > Continuation of the integrations bucket. Section (1) ideal design lives in [`integrations.md`](./integrations.md).
-> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (2) COMPARATOR PARITY MATRIX — a table: comparator capability -> how Tanren matches it -> how Tanren EXCEEDS it
 
@@ -243,9 +243,16 @@ tanren integrations verify-evidence integration-evidence.v1.dsse.json
 
 Dashboard response types should be generated from orchestrator Zod/JSON schemas rather than hand-mirrored.
 
-## (7) APEX-PROVABILITY (which events/artifacts prove it fired live)
+## (7) Runtime-behavior provability (which events/artifacts prove it fired live)
 
-The current APEX rough notes explicitly request “when any short link crosses 100 clicks, post a celebratory message to our Slack channel.” [apex-run-playbook.md:340–359](/home/trevor/projects/tanren/docs/operator-guide/apex-run-playbook.md:340) Yet the present E2E artifact vocabulary contains no integration requirement, binding, secret projection, provider receipt, or cross-validation evidence, and its apex case is hermetic. [manifest.ts:22–38](/home/trevor/projects/tanren/tests/e2e/lib/manifest.ts:22), [manifest.ts:174–204](/home/trevor/projects/tanren/tests/e2e/lib/manifest.ts:174)
+> The general pipeline emits and asserts the following for **every behavior-gated run**;
+> an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
+
+One example apex fixture's rough notes request “when any short link crosses 100
+clicks, post a celebratory message to our Slack channel.” Yet the present E2E artifact
+vocabulary contains no integration requirement, binding, secret projection, provider
+receipt, or cross-validation evidence, and its runtime-behavior case is hermetic.
 
 A live pass must produce this correlated chain:
 
@@ -308,14 +315,14 @@ This is intentionally not a small route-wiring patch.
 
 Roughly 18–25 engineer-weeks, 15–22k production/test LOC, or 8–12 elapsed weeks with three parallel worktrees after shared contracts serialize.
 
-| Phase                     | Scope                                                                                                                        | Rough effort |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -----------: |
-| M0: contracts/model       | `IntegrationRequirementV1`, binding/env/proof contracts, migrations/RLS, control-plane writer, events, generated API schemas |       2–3 ew |
-| M1: Forge/fragments       | Requirement compiler, `deriving` lifecycle, integration fragment phase, F2 validation, `.tanren/integrations.yml`            |       3–4 ew |
-| M2: DAG/reconciler        | Capability nodes/edges, provider work queue, durable saga/claims, grant wake, progress-based retry                           |       4–5 ew |
-| M3: Slack product binding | Managed relay or separate product app, app-env materializer, vertical conformance, scoped Vault access                       |       3–5 ew |
-| M4: release lifecycle     | Transactional delivery outbox, durable post-merge DAG, bind-before-deploy, degraded/recovery state                           |       3–4 ew |
-| M5: A3/API/UI/APEX        | Live trigger/observe proof, negative controls, Control Center, artifact readers and attestation                              |       3–5 ew |
+| Phase                          | Scope                                                                                                                        | Rough effort |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | -----------: |
+| M0: contracts/model            | `IntegrationRequirementV1`, binding/env/proof contracts, migrations/RLS, control-plane writer, events, generated API schemas |       2–3 ew |
+| M1: Forge/fragments            | Requirement compiler, `deriving` lifecycle, integration fragment phase, F2 validation, `.tanren/integrations.yml`            |       3–4 ew |
+| M2: DAG/reconciler             | Capability nodes/edges, provider work queue, durable saga/claims, grant wake, progress-based retry                           |       4–5 ew |
+| M3: Slack product binding      | Managed relay or separate product app, app-env materializer, vertical conformance, scoped Vault access                       |       3–5 ew |
+| M4: release lifecycle          | Transactional delivery outbox, durable post-merge DAG, bind-before-deploy, degraded/recovery state                           |       3–4 ew |
+| M5: A3/API/UI/runtime behavior | Live trigger/observe proof, negative controls, Control Center, artifact readers and attestation                              |       3–5 ew |
 
 “MVP” is complete only when the real deployed 100-click Slack behavior is independently observed. Calling the existing provisioner from DagWalker is not an MVP.
 

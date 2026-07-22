@@ -12,6 +12,8 @@
 > **The apex v96/v97 narrative below is now the _acceptance test_ that runs AFTER
 > the nodes land — not the current work item.** Where this file and the
 > mission-complete README disagree, the README wins.
+> **Rule:** apex is a fixture-class run through the normal pipeline; NOTHING in the
+> engine may be apex-shaped or name apex (see `docs/operator-guide/apex.md`).
 
 Tanren turns specs into merged PRs — **autonomously** — through an agent workflow
 that runs each unit of work per-PR through real CI. **v0 (Phases 0–3) is built and

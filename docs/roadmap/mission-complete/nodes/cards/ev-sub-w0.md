@@ -7,7 +7,7 @@
 **Branch**: `mission/spec-freeze-w0-events`
 **Authority**: [`event-vocabulary-waves.md`](../../event-vocabulary-waves.md)
 **Purpose**: freeze exact W0 named-event strings, severities, complete strict
-payload schemas, sensitivity paths, and apex correlation so
+payload schemas, sensitivity paths, and runtime-behavior correlation so
 **EV-SUB-W0** can install catalog rows and W0 consumers can emit without
 per-node event-migration ownership.
 
@@ -82,16 +82,16 @@ events as named proof.
 
 ## Proof gates (this PR)
 
-| #   | Gate                                                                                                                                        |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | Every W0 name has exact string, severity, complete strict schema/constraints, every sensitivity path, apex correlation, and source citation |
-| F2  | Zero `blocked_collision` rows for names entering W0                                                                                         |
-| F3  | Alternatives (`derived`, `review.simulated.started`/`.verdict`) marked deferred/non-synonymous — not frozen as synonyms                     |
-| F4  | No invented names absent from freeze authority sources; no unresolved payload decision or prep-dependent definition                         |
-| P1  | Changed path set equals the two owned paths only                                                                                            |
-| P2  | Both files &lt; 500 lines                                                                                                                   |
-| P3  | `just fast-check` + `just ci` green (docs-only); root-serialized `just smoke` **pending** (sibling work owns hardcoded ports)               |
-| P4  | Local commit only; no push / no PR                                                                                                          |
+| #   | Gate                                                                                                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | Every W0 name has exact string, severity, complete strict schema/constraints, every sensitivity path, runtime-behavior correlation, and source citation |
+| F2  | Zero `blocked_collision` rows for names entering W0                                                                                                     |
+| F3  | Alternatives (`derived`, `review.simulated.started`/`.verdict`) marked deferred/non-synonymous — not frozen as synonyms                                 |
+| F4  | No invented names absent from freeze authority sources; no unresolved payload decision or prep-dependent definition                                     |
+| P1  | Changed path set equals the two owned paths only                                                                                                        |
+| P2  | Both files &lt; 500 lines                                                                                                                               |
+| P3  | `just fast-check` + `just ci` green (docs-only); root-serialized `just smoke` **pending** (sibling work owns hardcoded ports)                           |
+| P4  | Local commit only; no push / no PR                                                                                                                      |
 
 ## Authority sources inspected (read-only)
 

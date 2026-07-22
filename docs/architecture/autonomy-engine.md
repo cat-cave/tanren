@@ -518,12 +518,12 @@ autonomous-loop machinery and the F2 authoring pipeline are complete and
 hardened by regression pins. Every capability is **built and on `main`**; the bar
 is clear; it has not yet been cleared (no single run has produced: rough notes →
 merged spec → product build → planted issue auto-triaged → merged fix → live deploy
-→ a working product URL). This section describes the workload apex _forces_ and the
+→ a working product URL). This section describes the workload an apex-class fixture _forces_ and the
 bar it _must_ clear, not a cleared bar.
 
 > **Operating contract:** `docs/operator-guide/apex.md`. It is binding and
-> counterintuitive: apex tests **Tanren**, not the fixture (a disposable URL
-> shortener) and not efficiency (the target is "functional but weak", not a
+> counterintuitive: apex tests **Tanren**, not an individual fixture (for example, a
+> disposable link-shortener) and not efficiency (the target is "functional but weak", not a
 > benchmark). The driver acts as a **non-technical end user over the real
 > external surfaces only** (HTTP API + dashboard) — never hand-fixes the generated
 > repo; files real **issues into Tanren** for every defect and watches the

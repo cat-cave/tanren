@@ -1,8 +1,27 @@
 # `apex` — the test of Tanren (operator role + what's actually under test)
 
-`apex` is the one real, end-to-end run that proves **Tanren works**. Read this
-before driving it — the role it puts you in is counterintuitive, and getting it
-wrong invalidates the result. The full design (domain, DAG shape, proof
+## Doctrine
+
+**apex is a fixture-class, not a feature.** "apex" names a set of rough operator notes
+for **max-difficulty products** — a _class_, deliberately varied (not all web, not all
+Slack, not all "100-of-something") — that Tanren must build by running them through its
+**normal, general pipeline** (design → implement → native-validate → review → merge →
+deploy → observe → triage → repair → live-verify), with **no human in the inner loop**.
+Several apex fixtures run **in parallel** to flush bugs faster. **There must be NOTHING
+apex-specific in the engine** — no apex workflow, harness, proof-composition, table,
+route, correlation-id, test-driver, or comment that names "apex." The proofs an apex run
+exercises are just what the **general behavior-verification pipeline** produces for _any_
+behavior-gated project: event producers → the gate's runtime-proof bundle → MergeAuthority
+landing the exact digest → promote-same-artifact → post-merge re-proof → honest demo, plus
+its negative controls. **Definition of done:** point the finished general pipeline at an
+apex fixture; it autonomously builds the product, a planted product-level bug is
+auto-triaged, fixed, merged through the native gate, deployed, and the production symptom
+is re-verified gone. **If Tanren needs ANY apex-shaped scaffolding to pass, the proof is
+VOID** — we would have shown only that Tanren passes a rigged test, not that it builds
+max-difficulty projects generally.
+
+Read this before driving a fixture — the role it puts you in is counterintuitive, and
+getting it wrong invalidates the result. The full design (domain, DAG shape, proof
 checklist) is `docs/architecture/autonomy-engine.md` §4; this doc is the **operating
 contract for the human/orchestrator driving the run.**
 
@@ -114,7 +133,8 @@ per-spec loop?
 
 **NOT under test:**
 
-- **Whether the URL shortener works.** It is a disposable fixture. Nobody cares if
+- **Whether the link-shortener works.** It is one example apex fixture, of a class.
+  Nobody cares if
   it ships broken. It exists only to give Tanren something real, outward-facing,
   and dependency-layered to build.
 - **How efficiently Tanren reaches the goal.** This is **not** a benchmark run.
