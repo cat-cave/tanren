@@ -262,8 +262,16 @@ export function compileExecutableBehaviorPlan(input: CompileExecutablePlanInput)
   const steps = compileCitedCapabilities(spec, input.resolvedFragments ?? new Map());
   if (steps.obligations.length > 0) return { kind: "missing_fragments", obligations: steps.obligations };
 
+  // rv-26.6: a spec that declares only click interactions requires the browser surface,
+  // mirroring the api-default for http-probe-only specs.
   const requiredSurfaces: readonly RequiredSurface[] =
-    spec.requiredSurfaces.length > 0 ? spec.requiredSurfaces : spec.httpProbes.length > 0 ? ["api"] : [];
+    spec.requiredSurfaces.length > 0
+      ? spec.requiredSurfaces
+      : spec.httpProbes.length > 0
+        ? ["api"]
+        : spec.clickInteractions.length > 0
+          ? ["browser"]
+          : [];
 
   const provenance: PlanProvenance = {
     compilerVersion: EXECUTABLE_PLAN_COMPILER_VERSION,

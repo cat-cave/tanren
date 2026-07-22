@@ -7,6 +7,8 @@ import type { ExecutionMatrix, RequiredSurface } from "../../engine/contracts/ru
 import { PgFixtureLeaseAdapter } from "../../engine/verification/fixtureLease/index.js";
 import {
   AcceptanceOrchestrator,
+  BrowserAcceptanceSurfaceDriver,
+  buildPodmanBrowserClickRunner,
   HttpAcceptanceSurfaceDriver,
   PgAcceptanceEventSink,
   PgAcceptancePlanLoader,
@@ -20,6 +22,7 @@ import {
   type AcceptanceSurfaceDriver,
   type CausalEffectReader,
   type CauseSpec,
+  type ClickInteractionSpec,
   type HttpProbeSpec,
 } from "../../engine/verification/acceptance/index.js";
 import { PgCausalEffectReader } from "../../engine/verification/effectObserver/pgCausalEffectReader.js";
@@ -84,6 +87,12 @@ const httpProbeSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: canonical.optional(),
 });
+// rv-26.6: the interactive clicks the browser surface driver performs.
+const clickInteractionSchema = z.object({
+  interactionId: z.string().min(1),
+  selector: z.string().min(1),
+  clicks: z.number().int().positive(),
+});
 const exampleSchema = z.object({
   values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])),
   rowHash: digest,
@@ -112,6 +121,7 @@ const planSchema = z
     executionMatrix: matrixSchema,
     causes: z.array(causeSchema).default([]),
     httpProbes: z.array(httpProbeSchema).default([]),
+    clickInteractions: z.array(clickInteractionSchema).default([]),
   })
   .refine((plan) => plan.requiredSurfaces.length > 0 || plan.causes.length > 0, {
     message: "a plan must declare at least one required surface or one cause",
@@ -187,6 +197,7 @@ function toPlan(raw: z.infer<typeof planSchema>): AcceptancePlan {
     executionMatrix: toExecutionMatrix(raw.executionMatrix),
     causes: raw.causes as readonly CauseSpec[],
     httpProbes: raw.httpProbes as readonly HttpProbeSpec[],
+    clickInteractions: raw.clickInteractions as readonly ClickInteractionSpec[],
   };
 }
 
@@ -214,6 +225,14 @@ export function createInternalAcceptanceRunRoutes(deps: AcceptanceRunRouteDeps):
   // acceptance runs observe the deployed product instead of going inconclusive.
   const drivers: readonly AcceptanceSurfaceDriver[] = deps.drivers ?? [
     new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(deps.pool) }),
+    // rv-26.6 (apex P6): the interactive browser click driver, over the SAME deployed
+    // release URL, driving REAL clicks in the containerized Playwright chromium. A
+    // browser-surface plan's `<id>.clickCount` assertion observes a REAL confirmed count.
+    new BrowserAcceptanceSurfaceDriver({
+      resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(deps.pool),
+      runner: buildPodmanBrowserClickRunner(),
+      events: new PgAcceptanceEventSink(deps.pool),
+    }),
   ];
   const planLoader: AcceptancePlanLoader = deps.planLoader ?? new PgAcceptancePlanLoader(deps.pool);
   // rv-9: content-addressed capture store over the SP-3 CAS byte store, so a real

@@ -16,4 +16,7 @@ WORKDIR /app
 # Pin the npm package to the image's browser version so chromium + the driver match.
 RUN npm init -y >/dev/null 2>&1 && npm install playwright@1.50.0 >/dev/null 2>&1
 COPY screenshot.mjs /app/screenshot.mjs
-# The container is invoked with an explicit `node /app/screenshot.mjs` command per run.
+# rv-26.6 (apex P6): the interactive click-driver shares this image (same Playwright
+# chromium). The host `podmanBrowserClickRunner` invokes `node /app/clickDriver.mjs`.
+COPY clickDriver.mjs /app/clickDriver.mjs
+# The container is invoked with an explicit `node /app/<script>.mjs` command per run.

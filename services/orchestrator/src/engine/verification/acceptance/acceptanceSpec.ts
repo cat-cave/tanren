@@ -73,6 +73,13 @@ const httpProbeSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: canonical.optional(),
 });
+// rv-26.6 (apex P6): an interactive browser click interaction. Its confirmed-click count
+// is observed as `<interactionId>.clickCount`.
+const clickInteractionSchema = z.object({
+  interactionId: z.string().min(1),
+  selector: z.string().min(1),
+  clicks: z.number().int().positive(),
+});
 const assertionSchema = z.object({
   assertionId: z.string().min(1),
   subject: z.string().min(1),
@@ -110,6 +117,7 @@ const acceptanceSpecSchema = z.object({
   version: z.literal("v1").optional(),
   requiredSurfaces: z.array(surface).default([]),
   httpProbes: z.array(httpProbeSchema).default([]),
+  clickInteractions: z.array(clickInteractionSchema).default([]),
   assertions: z.array(assertionSchema).min(1),
   fixtures: z.array(z.unknown()).default([]),
   examples: z.array(exampleSchema).default([]),
@@ -156,12 +164,34 @@ export function parseAcceptanceSpec(behaviorRevisionId: string, acceptance: unkn
   if (!parsed.success) throw firstIssue(behaviorRevisionId, parsed.error);
   const spec = parsed.data;
 
+  // The observable-id namespace shared by http probes and browser click interactions —
+  // a direct-observation assertion subject `<id>.<selector>` binds to one of these. Ids
+  // must be unique ACROSS both so a subject resolves to exactly one observing surface.
+  const declaredObservableIds = new Set<string>();
   const declaredProbeIds = new Set<string>();
   for (const probe of spec.httpProbes) {
     if (declaredProbeIds.has(probe.probeId)) {
       throw new MalformedAcceptanceSpecError(behaviorRevisionId, `duplicate probe id ${probe.probeId}`);
     }
     declaredProbeIds.add(probe.probeId);
+    declaredObservableIds.add(probe.probeId);
+  }
+  const declaredInteractionIds = new Set<string>();
+  for (const interaction of spec.clickInteractions) {
+    if (declaredInteractionIds.has(interaction.interactionId)) {
+      throw new MalformedAcceptanceSpecError(
+        behaviorRevisionId,
+        `duplicate click interaction id ${interaction.interactionId}`,
+      );
+    }
+    if (declaredProbeIds.has(interaction.interactionId)) {
+      throw new MalformedAcceptanceSpecError(
+        behaviorRevisionId,
+        `click interaction id ${interaction.interactionId} collides with an http probe id`,
+      );
+    }
+    declaredInteractionIds.add(interaction.interactionId);
+    declaredObservableIds.add(interaction.interactionId);
   }
 
   const declaredCauseIds = new Set<string>();
@@ -199,14 +229,16 @@ export function parseAcceptanceSpec(behaviorRevisionId: string, acceptance: unkn
 
   for (const assertion of spec.assertions) {
     if (assertion.correlation === undefined) {
-      // A direct-observation assertion must reference a declared http probe via
-      // its `<probeId>.<selector>` subject so the shipped api driver can observe it.
+      // A direct-observation assertion must reference a declared observable via its
+      // `<id>.<selector>` subject — either an http probe (`<probeId>.<selector>`, rv-6)
+      // or a browser click interaction (`<interactionId>.clickCount`, rv-26.6) — so the
+      // shipped api/browser driver can observe it.
       const dot = assertion.subject.indexOf(".");
-      const probeId = dot > 0 ? assertion.subject.slice(0, dot) : "";
-      if (probeId === "" || !declaredProbeIds.has(probeId)) {
+      const observableId = dot > 0 ? assertion.subject.slice(0, dot) : "";
+      if (observableId === "" || !declaredObservableIds.has(observableId)) {
         throw new MalformedAcceptanceSpecError(
           behaviorRevisionId,
-          `assertion ${assertion.assertionId} subject "${assertion.subject}" references no declared http probe`,
+          `assertion ${assertion.assertionId} subject "${assertion.subject}" references no declared http probe or click interaction`,
         );
       }
       continue;
@@ -222,11 +254,15 @@ export function parseAcceptanceSpec(behaviorRevisionId: string, acceptance: unkn
     }
   }
 
-  const hasSurface = spec.requiredSurfaces.length > 0 || spec.httpProbes.length > 0 || spec.causes.length > 0;
+  const hasSurface =
+    spec.requiredSurfaces.length > 0 ||
+    spec.httpProbes.length > 0 ||
+    spec.clickInteractions.length > 0 ||
+    spec.causes.length > 0;
   if (!hasSurface) {
     throw new MalformedAcceptanceSpecError(
       behaviorRevisionId,
-      "spec declares no required surface, http probe, or cause",
+      "spec declares no required surface, http probe, click interaction, or cause",
     );
   }
 
