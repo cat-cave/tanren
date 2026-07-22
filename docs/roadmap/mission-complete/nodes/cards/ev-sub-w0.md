@@ -57,27 +57,27 @@ migrations, event registry, tests, nav, or screens.
 
 ## Dependency / merge map
 
-| Unit                      | Relation to this freeze                                                                                         |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| **SPEC-FREEZE-W0** (this) | Docs only; may land before or parallel with CAS-SUB; **must** land before EV-SUB-W0 freezes implementable names |
-| **CAS-SUB / 0041**        | Independent of event catalog; sole config-revision owner                                                        |
-| **EV-SUB-W0 / 0042**      | Consumes this freeze; sole additive `event_types` INSERTs for W0 names                                          |
-| **IN-2 emit + apex**      | After EV-SUB-W0; no migration; uses `integration.requirement.validated`                                         |
-| **IN-1 / 0043**           | Lifecycle tables only; **no** event catalog ownership                                                           |
-| **RV-4 / 0044**           | Coverage composite-FK / non-event schema only; event name pre-seeded by EV-SUB-W0                               |
-| **GV-1 → GV-2 → MQ-1**    | Product + emit restacks; catalog pre-seeded; **no** exclusive catalog migrations                                |
-| **GV-3 / 0045**           | Policy/gate land-identity CHECKs; not event catalog                                                             |
+| Unit                                | Relation to this freeze                                                                                         |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **SPEC-FREEZE-W0** (this)           | Docs only; may land before or parallel with CAS-SUB; **must** land before EV-SUB-W0 freezes implementable names |
+| **CAS-SUB / 0041**                  | Independent of event catalog; sole config-revision owner                                                        |
+| **EV-SUB-W0 / 0042**                | Consumes this freeze; sole additive `event_types` INSERTs for W0 names                                          |
+| **IN-2 emit + live-run validation** | After EV-SUB-W0; no migration; uses `integration.requirement.validated`                                         |
+| **IN-1 / 0043**                     | Lifecycle tables only; **no** event catalog ownership                                                           |
+| **RV-4 / 0044**                     | Coverage composite-FK / non-event schema only; event name pre-seeded by EV-SUB-W0                               |
+| **GV-1 → GV-2 → MQ-1**              | Product + emit restacks; catalog pre-seeded; **no** exclusive catalog migrations                                |
+| **GV-3 / 0045**                     | Policy/gate land-identity CHECKs; not event catalog                                                             |
 
 ## Node-credit rule
 
-| Unit                                           | Credit                                                       |
-| ---------------------------------------------- | ------------------------------------------------------------ |
-| SPEC-FREEZE-Wn (this)                          | **0**                                                        |
-| EV-SUB-Wn                                      | **0** (SP-8 substrate)                                       |
-| Consumer emit + HTTP + UI + apex (principle 8) | **1 node** when that node’s independent convergence GO holds |
+| Unit                                                                  | Credit                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------ |
+| SPEC-FREEZE-Wn (this)                                                 | **0**                                                        |
+| EV-SUB-Wn                                                             | **0** (SP-8 substrate)                                       |
+| Consumer emit + HTTP + UI + normal-flow live validation (principle 8) | **1 node** when that node’s independent convergence GO holds |
 
 Anti-patterns: counting freeze/EV-SUB as in-2/rv-4/… complete; counting
-registry without emit+apex; hand-seed without migration; generic substitute
+registry without emit + normal-flow live validation; hand-seed without migration; generic substitute
 events as named proof.
 
 ## Proof gates (this PR)
@@ -112,7 +112,7 @@ events as named proof.
 
 ## Out of scope for W0 freeze
 
-Aspirational W1+ names from bucket apex chains (full runtime behavior.\*,
+Aspirational W1+ names from bucket live-validation chains (full runtime behavior.\*,
 integrations lifecycle, merge-queue group/subset, back-half issue_loop,
 governance F1–F5 remainder, designSystem.\*). Those require later SPEC-FREEZE
 waves — never a global incomplete dump.

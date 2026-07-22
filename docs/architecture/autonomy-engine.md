@@ -8,7 +8,7 @@ autonomous issue-ingestion loop, all under live budget / DORA / visibility.
 This is an **architecture-rationale doc**, not a build plan. The autonomy engine
 (Phases 1 and 2) is **built and merged** — see `ROADMAP.md` §2 for the phase
 history and the merged surfaces. What lives here is the _why_: the principles,
-the merge-coordination model, the apex intent, and the guardrail rationale that
+the merge-coordination model, the max-difficulty fixture-validation intent, and the guardrail rationale that
 the in-code `§`-anchored comments cite. The section anchors below (§1.x, §1a,
 §1b, §1d, §2b, §2c, §2d, §3 proof 6, §8a, §8b) are stable: ~a dozen source
 comments reference them, so the anchored sections survive at this path.
@@ -476,11 +476,12 @@ analytics / insights** (timing, pass-rate, slow steps — extending the existing
 workflow-insights compute), and **queue statistics** (derived from the native
 queue's own events). These are things Tanren _acts on_, not delegates.
 
-## 3. apex — the proof
+## 3. apex — max-difficulty fixture validation
 
-<a id="s3"></a>The capstone is `apex`: a max-difficulty fixture that forces every
-capability above and proves the end-to-end claim — a clean repo becoming a
-finished, tested, deployed product **with no human in the per-spec loop**.
+<a id="s3"></a>`apex` names a class of varied max-difficulty fixtures. Running one
+through Tanren's normal project flow exercises every capability above and tests the
+end-to-end claim — a project becoming a finished, tested, deployed product **with
+no human in the per-spec loop**. No engine path is selected by the fixture class.
 
 **Proof state (honest):** the end-to-end claim is **not yet closed**. apex v32
 halted at scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11
@@ -505,7 +506,7 @@ one-concern-per-subtask sizing (v76, #731); `ActivityWatchdog` neighbor-floor wi
 to 5 for agent-class execs (v76/v77, #732); and the **v79** frontier — triage routes
 out-of-scope findings to new specs (#734), the issue-triage → new-spec insertion
 mechanic firing on real out-of-scope findings, the closest to the issue-loop half
-of the apex proof firing autonomously. The current frontier has moved past the
+of the general issue-loop claim firing autonomously during an apex trial. The current frontier has moved past the
 v49-era infra-hang class (runner-INSERT PK race + derive synchronous-wait circuit
 breaker, task #21 merged as PR #705) into the product-build loop — writer subtask
 sizing, plan stall recovery, template composition semantics, PR-enqueue timing,
@@ -522,30 +523,34 @@ merged spec → product build → planted issue auto-triaged → merged fix → 
 bar it _must_ clear, not a cleared bar.
 
 > **Operating contract:** `docs/operator-guide/apex.md`. It is binding and
-> counterintuitive: apex tests **Tanren**, not an individual fixture (for example, a
-> disposable link-shortener) and not efficiency (the target is "functional but weak", not a
-> benchmark). The driver acts as a **non-technical end user over the real
+> counterintuitive: an apex fixture tests **Tanren's general capability**, not the
+> value of the disposable product (for example, a link-shortener) and not efficiency
+> (the target is "functional but weak", not a
+> benchmark). The operator acts as a **non-technical end user over the real
 > external surfaces only** (HTTP API + dashboard) — never hand-fixes the generated
 > repo; files real **issues into Tanren** for every defect and watches the
 > triage→spec→DAG→fix→merge loop close; adds a Tanren API endpoint rather than
 > reaching inside when one is missing.
 
-What apex ships is almost nothing — that is the point: **Tanren itself** must
-build the brief, personas, behaviors, and the DAG through Forge conversation.
+What an apex fixture supplies is almost nothing — that is the point: **Tanren
+itself** must build the brief, personas, behaviors, and the DAG through the same
+Forge conversation used by any project.
 
 - **A single paragraph of rough operator notes** — _not_ a polished brief, _not_
   personas/behaviors/milestones. A core part of the evaluation is how well Tanren
   turns those high-level notes, through conversation, into real actionable
   personas / behaviors / milestones / a DAG.
 - **An empty (or near-empty) target repo** — Tanren writes everything.
-- **A hidden, growing acceptance harness** (the only "answer key") — used as the
-  benchmark `accept` tier; never shown to the building agents.
+- **Withheld fixture acceptance cases** (the only "answer key") — declared through
+  the same behavior-verification and `accept`-tier configuration available to any
+  project, never through an apex-only harness, and never shown to the building agents.
 - **Planted deficiencies** that surface only after the base works — to be filed as
   real issues that drive the ingestion → triage → spec → DAG-insert loop on real
   artifacts.
 
-**The domain — a URL shortener _with a real external integration_** (a Slack bot)
-**and a deployed web UI.** The external integration is deliberate: it forces an
+**One example domain is a URL shortener _with a real external integration_** (a
+Slack bot) **and a deployed web UI.** Other apex fixtures must vary the product,
+surface, integration, and cardinality. In this example, the external integration forces an
 external API client, secret handling for the Slack token, outbound calls, a
 behavior that cannot be unit-tested in isolation. The web UI + deploy exercises
 the **live-preview-deploy** surface and a full product slice. Structurally it
@@ -556,7 +561,8 @@ plus shared-file pressure (router/types/migrations) that forces real conflicts.
 
 ### §3 proof 6 — observability + budget
 
-<a id="proof6"></a>A single `apex` launch must demonstrate, autonomously: ideation
+<a id="proof6"></a>A normal-flow run of an apex-class fixture must demonstrate,
+autonomously: ideation
 from rough notes (real LLM); DAG derivation; autonomous DAG execution (N in
 parallel, governed concurrency, eager dependent unblock, no milestone pauses, zero
 per-spec triggers); merge coordination (never-discard in-place rebase,
@@ -565,17 +571,19 @@ intent-preserving conflict resolution, stacked dependents, the native queue +
 deficiency → real issue → triage → spec → DAG-insert → execute → merge); **native
 design** (a `DesignContract` authored from the interview, injected into the writer,
 and verified by the design oracle against the deployed web UI — §1e); and
-**observability** — the **budget ceiling enforced** (run pauses on exhaustion via
+**observability** — the **project's budget ceiling enforced** (run pauses on exhaustion via
 `dag.budget.paused`), live token usage per role, 4-source cost incl. the
 managed-mode transparent margin line, and **DORA accumulating across the many
-merged runs**. The finished product is a working, tested, deployed URL shortener
-with a web UI and a live Slack integration — every change a merged PR with full
-provenance, driven entirely over real external surfaces.
+merged runs**. The finished product is whatever the fixture notes requested; for
+the current link-shortener example, that is a working, tested, deployed URL
+shortener with a web UI and a live Slack integration. Every change is a merged PR
+with full provenance, driven entirely over real external surfaces.
 
-`apex` is then exactly the workload the benchmark tunes against: the toolkit
-varies one knob at a time (planner decomposition, gate strictness,
-cheap-models-only, checker/auditor strictness) across `apex` trials to pre-tune
-Tanren's defaults — measured, not guessed.
+The benchmark then tunes the same general project controls against a varied
+portfolio of apex-class and lower-difficulty fixtures: it varies one knob at a
+time (planner decomposition, gate strictness, cheap-models-only,
+checker/auditor strictness) to pre-tune Tanren's defaults — measured across
+different products, not guessed from one fixture.
 
 ## 8. Guardrails — "no stubs in production" + a real-resource e2e gate
 
@@ -619,5 +627,6 @@ fixtures / mock adapters entirely** (its own arch check: an e2e test importing a
 `tests/fixtures/*` mock fails). It drives the real operator flow against real
 fixtures and **asserts on real persisted artifacts** — a merged PR on GitHub, the
 implemented file on the base branch, `cost_records` rows with real basis, the DORA
-projection — never on a mocked return. `apex` is the apex e2e case. The suite is
+projection — never on a mocked return. Apex-class fixtures are the suite's
+max-difficulty cases and use that same operator flow. The suite is
 the standing, machine-checkable answer to "is Tanren real or a stubbed shell?"

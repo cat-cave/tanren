@@ -303,9 +303,10 @@ the whole time).**
 - **PR-6 — base-shift over the stack.** `baseShiftLiveSeams.ts` / `baseShiftCoordinator.ts`:
   the opener assembles the re-resolved stack locally instead of cloning `${newBaseRef}@origin`;
   `keepRun` re-points `ancestor_stack` (flag-gated). _Dep:_ PR-4.
-- **PR-7 — flip the flag default ON + apex/real-jj validation.** `WALKER_JJ_LOCAL_BASE`
-  default ON; run the realjj + walker/percolation/base-shift suites green; one apex-tier
-  live exercise. The old synthesized-ref path is now dead but still PRESENT (kill-switch).
+- **PR-7 — flip the flag default ON + real-jj and normal-flow fixture validation.** `WALKER_JJ_LOCAL_BASE`
+  default ON; run the realjj + walker/percolation/base-shift suites green; one
+  apex-class fixture live exercise through the normal operator flow. The old
+  synthesized-ref path is now dead but still PRESENT (kill-switch).
   _Dep:_ PR-5, PR-6.
 - **PR-8 — `integration_nodes` UPSERT from the dependent bootstrap (`eager_base`).** The
   bootstrap assembly UPSERTs the eager node (proof-reuse substrate); observe-only. _Dep:_ PR-7.

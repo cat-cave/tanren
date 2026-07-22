@@ -1,9 +1,11 @@
 # apex run playbook — pilot a live apex run from a fresh checkout
 
-This is the **concrete drive-from-zero runbook** for an apex trial: rebuild the
-stack from fresh `origin/main`, authenticate as a non-technical operator over the
-API, wire credentials, kick off the run from rough notes, and monitor for the next
-halt. It is the operational companion to `apex.md` (the role/contract — read that
+This is the **concrete drive-from-zero runbook** for one example apex-class fixture:
+rebuild the stack from fresh `origin/main`, authenticate as a non-technical operator
+over the API, wire credentials, submit rough notes through the normal project flow,
+and monitor for the next halt. It adds no apex workflow or harness; other fixtures
+use the same operator surfaces with different notes, integrations, and acceptance
+criteria. It is the operational companion to `apex.md` (the role/contract — read that
 FIRST, it tells you _what is under test_ and the non-negotiable "never hand-fix the
 generated repo" rule) and `operator-driven-run.md` (the general operator flow).
 
@@ -106,14 +108,14 @@ compose secret — the runner identity key is a **mounted secret file**
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 
 The autonomy posture (autonomous audit posture + lowered CI-intelligence flaky bar)
-is a per-project governed setting. Under `autonomy: "auto"` (apex's derive call)
+is a per-project governed setting. Under `autonomy: "auto"` (the normal derive call used by this fixture)
 it is **applied atomically with project creation** (task #79) — derive lands the
 review/merge axes, `AUTONOMOUS_AUDIT_POSTURE`, and
 `insightThresholds.ciInsightFlakyMinShas: 1` in the same project insert, so the
 DagWalker (which auto-claims within seconds) cannot observe a partially-configured
 project. The §2.5 governance PUT remains the operator surface for **non-auto**
-projects or for **adjusting posture later**; apex no longer needs to run it. Apex
-tests Tanren the product, not an apex-flavored variant. (historical: previously
+projects or for **adjusting posture later**; this run therefore does not need it.
+The fixture tests Tanren's normal product path, not an apex-flavored variant. (historical: previously
 `TANREN_APEX_MODE` — eradicated in #646.)
 
 Verify health before driving anything:
@@ -177,13 +179,13 @@ From here every write below uses `-b jar` (the session cookie) + `-H "X-CSRF-Tok
 
 ---
 
-## 2.5. Project governance posture — operator surface (apex skips this)
+## 2.5. Project governance posture — operator surface (not needed after `autonomy: "auto"` creation)
 
-Apex's derive (`autonomy: "auto"`, §5) atomically pre-applies the autonomous
+The normal derive request used here (`autonomy: "auto"`, §5) atomically pre-applies the autonomous
 posture at project insert — review/merge axes, `AUTONOMOUS_AUDIT_POSTURE`,
 and `insightThresholds.ciInsightFlakyMinShas: 1` — so the DagWalker (which
 auto-claims within seconds) never sees a partially-configured project (task
-#79). **Apex skips this section.** The two knobs the autonomous posture sets:
+#79). **This fixture run skips this manual adjustment.** The two knobs the autonomous posture sets:
 
 - `auditPosture: AUTONOMOUS_AUDIT_POSTURE` — P2/P3 findings route into the
   DAG, blocking findings become remediation specs, so audit→fix→merge closes
@@ -389,8 +391,8 @@ DERIVE=$(curl -s -b jar -H "X-CSRF-Token: $CSRF" -H 'content-type: application/j
       }')")
 echo "$DERIVE" | jq '{projectId, projectName, repository, bootstrap, inboxSource}'
 
-# Capture $PROJ for §6 (monitor). For apex (autonomy:"auto") no §2.5 PUT is
-# needed — derive already applied the autonomous posture atomically.
+# Capture $PROJ for §6 (monitor). For any project derived with autonomy:"auto",
+# no §2.5 PUT is needed — derive already applied the posture atomically.
 PROJ=$(jq -r '.projectId' <<<"$DERIVE")
 echo "PROJ=$PROJ"
 ```
@@ -407,8 +409,9 @@ progress; fixed-point halts loud (`FragmentAuthoringFailedError` → HTTP `409
 fragment_authoring_failed`). PR-F #693 collapsed the prior
 `engine/templates/creation/` meta-flow + `template.*` event vocabulary into
 this single fragment-only path; **no from-scratch-into-a-project path, no
-silent skip. Do NOT pre-seed the org `fragments` table** — apex MUST exercise
-F2 end-to-end. Watch `fragment.authoring.{started,succeeded,failed}`, NOT the
+silent skip. Do NOT pre-seed the org `fragments` table** — this fixture MUST
+exercise the normal F2 path end-to-end. Watch
+`fragment.authoring.{started,succeeded,failed}`, NOT the
 removed `template.selection.*` / `template.creation.*` events.
 
 ### 5b-postlude. The autonomous posture is already on the project (no §2.5 PUT needed)
@@ -416,8 +419,9 @@ removed `template.selection.*` / `template.creation.*` events.
 Once derive succeeds you have `$PROJ`. Because `autonomy: "auto"` derive lands
 `auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`
 atomically with project creation (task #79), the audit-posture preflight passes
-on the very first scaffold run with no operator intervention. **Skip §2.5 for an
-apex run** — it remains the operator surface for non-auto projects or for
+on the very first scaffold run with no operator intervention. **Skip §2.5 when a
+project was created with `autonomy: "auto"`, as this fixture is** — it remains the
+operator surface for non-auto projects or for
 adjusting posture later. If you ever drive derive with a non-auto autonomy and
 later want to flip it, that is when §2.5 is the right tool.
 
@@ -520,8 +524,8 @@ neighbor-floor widened to 5 for agent-class execs (v76/v77, #732); pnpm
 bootstrap non-interactive with `CI=true` (v71/v78, #733); and — the freshest —
 **triage routing out-of-scope findings to new specs** (v79, #734): the
 issue-triage → new-spec insertion mechanic firing on real out-of-scope findings.
-That is the closest observed firing of the issue-loop half of the apex proof
-to date.
+That is the closest observed firing of the issue-loop half of the general
+end-to-end claim during an apex trial to date.
 
 **The v79-era frontier was then HARDENED (2026-07-05 → 2026-07-07)** by 34
 PRs (#738–#768) that closed every Codex-critic / round-3 / RA1 / RA2

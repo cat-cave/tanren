@@ -1,7 +1,7 @@
 # Tanren owns design — a native, domain-general design subsystem
 
 > ⛔ **FROZEN — superseded; live design work is the ds-0..8 bucket in `docs/roadmap/mission-complete/nodes/design.md`.** Status: **subsystem CORE built, merged, and live-wired into the spec loop;
-> remaining work is dogfood + apex + templates (WS-D5..D8).** The foundation
+> remaining work is dogfood + live fixture validation + templates (WS-D5..D8).** The foundation
 > workstreams are done on `main`: **WS-D1** (the `DesignContract` entity, #596),
 > **WS-D2** (writer injection, #598), **WS-D3** (design agent + design phase,
 > #599), and **WS-D4** (the domain-aware design oracle, #597) — now **wired
@@ -48,8 +48,8 @@
 > seam wired in #602. The **full verify→re-drive loop has not yet closed
 > on a real deployed product** — no run has reached deploy → oracle
 > verification → merged design-driven rework in one autonomous pass. The
-> remaining step is a complete apex run that carries a real `designContract`
-> through to deployment and oracle verification (WS-D8).
+> remaining step is a normal-flow apex-class fixture run carrying a real `designContract`
+> through deployment and oracle verification (WS-D8).
 >
 > **Documented gap (Wave D4 tradeoff):** with `design_contracts.mode`,
 > `deriveDesignContract` only persists on `from_scratch`. Scaffold specs
@@ -60,10 +60,9 @@
 >
 > The remaining plan below — **WS-D5..D8** — is what is left. WS-D5 is **assessed
 > as SUBSUMED** by the domain-general D1/D3/D4 implementation (verdict + evidence
-> in its entry); **WS-D7 (dogfood)** and **WS-D8 (apex integration)** are the
-> headline remaining work. It does **not** block or halt the current apex
-> fixture — but once a live run carries a real contract, design becomes an added
-> requirement of apex (WS-D8).
+> in its entry); **WS-D7 (dogfood)** and **WS-D8 (live fixture validation)** are the
+> headline remaining work. It does **not** block the current apex fixture, whose
+> ordinary project requirements include a design contract for the general pipeline to validate live (WS-D8).
 
 ## The north star (the why)
 
@@ -280,16 +279,15 @@ hand-done `tanren-hi-fidelity/` bundle. Until Tanren can design itself through i
 own subsystem, the subsystem is not done (the same dogfooding bar the rest of the
 platform is held to — see `docs/roadmap/dogfooding.md`).
 
-## Apex integration (unblocked — close the live loop)
+## Apex-class fixture validation (unblocked — close the live loop)
 
 WS-D1..D4 are testable; the gate (WS-D8) is satisfied. The design-phase
 elaboration first ran live in apex v45/v46 (and again in v47-v49); trials since
-have advanced past the derive halt into the product-build loop. **Design is an
-added requirement of the apex fixture**: the built product must carry a real
-`DesignContract` and pass the design oracle. The apex bar **gains a design
-dimension** — the deployed product is judged on behavior AND design fidelity
-against its own contract. The remaining validation step is a complete apex run
-where the oracle verifies the built product (see WS-D8).
+have advanced past the derive halt into the product-build loop. The fixture's
+ordinary project requirements include a real `DesignContract`; the general design
+oracle must evaluate it just as it would for any design-governed project. The
+remaining validation step is a normal-flow run of an apex-class fixture where the
+oracle verifies the built product (see WS-D8).
 
 ## e2e readiness — the design loop is wired + closes (first live elaboration exercised in apex v45/v46 — and again in v47-v49)
 
@@ -353,7 +351,7 @@ two LLM seams (the design **agent** and the oracle **answerer**), which return c
   **loud-gap detection** floor, which surfaces + re-drives the gap, not the silent
   auto-re-author.
 
-**Exact preconditions for an apex run to exercise design meaningfully:**
+**Exact preconditions for any live project run to exercise design meaningfully:**
 
 1. **Capture a COMPLETE persona/behavior set up front.** The design phase runs **once at
    derive**, so its `behaviorRefs` are the derive-time behavior set. Behaviors added later
@@ -362,14 +360,15 @@ two LLM seams (the design **agent** and the oracle **answerer**), which return c
    set in the interview before derive.
 2. **The run must carry `context.orgId`.** `designOracleSeam` (`plannerRunSeams.ts`)
    only wires the oracle when the run has an org — a no-org run silently **skips** design
-   verification (it cannot resolve the entity graph). Confirm apex runs carry `orgId`
-   (they do: apex runs are org-scoped). Same scope gate governs the writer-injection side
+   verification (it cannot resolve the entity graph). Confirm the run carries `orgId`;
+   apex-class fixtures do because they use the normal org-scoped project flow. The same
+   scope gate governs the writer-injection side
    (`loadDesignContextBlock` returns `undefined` for `unscopedPlatform`).
 3. **A real `DesignContract` MUST be captured, or derive fails loud.** Greenfield derive
    requires the design step to capture a contract; an absent one is a loud
    `MissingDesignContractError` (#600), never a silent no-op that would disable the whole
    subsystem. A genuinely design-light project still declares an explicit minimal
-   contract. The apex intake must capture a design contract (even a minimal one).
+   contract. Normal project intake must capture a design contract (even a minimal one).
 
 ## Actionable workstreams (the landable plan)
 
@@ -453,9 +452,10 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
 - **WS-D7 — dogfood.** Regenerate **Tanren's own `DesignContract` + dashboard
   hi-fi natively**, replacing the hand-done `tanren-hi-fidelity/` bundle. _(Depends
   on WS-D1..D4, ideally WS-D6.)_
-- **WS-D8 — apex integration (HEADLINE remaining work — close the live loop).**
-  Add the **design dimension** to the apex fixture's requirements — the built product
-  must carry a real `DesignContract` and pass the design oracle. D1..D4 are testable
+- **WS-D8 — apex-class fixture validation (HEADLINE remaining work — close the live loop).**
+  Require the fixture, through normal project intake, to declare a real
+  `DesignContract`; the same general design oracle used by any design-governed project
+  must pass it. D1..D4 are testable
   (the gate above), so this is unblocked. **Live state (updated 2026-07-04):** the
   design-phase elaboration first ran live in apex v45/v46 (and again in v47-v49);
   the interview captures a real contract and threads it into the writer prompt
@@ -471,8 +471,8 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
   / PR #734), each closer to but not yet at the deploy leg. The **full
   verify→re-drive loop has not yet closed** on a real deployed product — no run
   has yet reached deploy → oracle verification → merged design-driven rework in
-  one autonomous pass. The remaining validation step is a complete apex run that
-  carries a real `designContract` through to deployment and oracle verification.
+  one autonomous pass. The remaining validation step is a normal-flow apex-class
+  fixture run carrying a real `designContract` through deployment and oracle verification.
   _(Gated on WS-D1..D4 being testable — satisfied; deploy-leg blockers cleared.)_
 
 ## Where this fits

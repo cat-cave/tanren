@@ -3,7 +3,7 @@
 # Capstone: legacy & backwards-compat path collapse
 
 **The final work item of the mission-complete build — runs AFTER all 142 consumer
-nodes merge, immediately BEFORE the apex-v97 acceptance trial.** It is the most
+nodes merge, immediately BEFORE the v97 normal-flow run of an apex-class fixture.** It is the most
 destructive pass in the whole program, and it is only safe _because_ it runs last, on a
 fully-built engine, against the real-Postgres smoke + RLS suites as ground truth.
 
@@ -16,13 +16,14 @@ bug into a green build. CLAUDE.md's doctrine is explicit ("Clean-replace, never
 cosplay… DELETE superseded code/tables outright — a green gate must mean the NEW path
 runs end-to-end, not that a shim kept the old one alive"). The 142-node build necessarily
 accreted transitional scaffolding while nodes landed in parallel. This capstone removes
-it — collapsing to "only the real, latest, and correct implementation" — so the apex-v97
-acceptance trial runs against an engine with no latent false-greens.
+it — collapsing to "only the real, latest, and correct implementation" — so the v97
+apex-class fixture runs through the normal engine with no latent false-greens.
 
-It runs **now** (post-142, pre-apex) because: (a) the schema truth is only final once the
+It runs **now** (post-142, before the next fixture run) because: (a) the schema truth is only final once the
 last migration slot is claimed; (b) the V-type deletions touch contracts many nodes
 build against, so they must wait until those nodes exist; (c) the point of the collapse
-is to harden the engine that apex will test — doing it earlier would just re-accrete.
+is to harden the general engine before max-difficulty fixture validation — doing it
+earlier would just re-accrete.
 
 ## The survey (grounded on `main`, non-test)
 
@@ -74,5 +75,5 @@ fail-loud.
 Same four-part bar as every node (orchestration §3): merged with green hosted CI +
 up-to-date-with-`main`; provable; callable; visible — plus the capstone-specific proof
 that the collapse **weakened nothing**: zero-diff schema, all RLS smoke green, and a
-fail-loud test for every removed fallback. Only then does the engine enter the apex-v97
-acceptance trial.
+fail-loud test for every removed fallback. Only then does the normal engine run the
+v97 apex-class fixture acceptance case.

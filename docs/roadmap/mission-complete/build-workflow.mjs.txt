@@ -1,13 +1,13 @@
 export const meta = {
   name: "tanren-mission-complete",
   description:
-    "Build Tanren toward mission-complete from the integrated 142-node DAG: freeze the 8 spine contracts (judge-panel drafts + a single sol integration audit), build the spine in worktrees, fan out consumer MVP nodes as reviewed gated branches, and design the v97 apex vertical. Routes sol for the 2 large audits, codex for production authoring, grok/glm for the many light verifies. No auto-merge to main.",
+    "Build Tanren toward mission-complete from the integrated 142-node DAG: freeze the 8 spine contracts (judge-panel drafts + a single sol integration audit), build the spine in worktrees, fan out consumer MVP nodes as reviewed gated branches, and design a v97 normal-flow acceptance run against one apex-class fixture. Routes sol for the 2 large audits, codex for production authoring, grok/glm for the many light verifies. No auto-merge to main.",
   phases: [
     { title: "Wave 0 · Spine design" },
     { title: "Wave 0 · Integration audit", model: "sol" },
     { title: "Wave 1 · Spine build" },
     { title: "Wave 2 · Consumer MVP" },
-    { title: "Wave 3 · Apex vertical", model: "sol" },
+    { title: "Wave 3 · Normal-flow fixture acceptance", model: "sol" },
   ],
 };
 
@@ -310,7 +310,7 @@ function buildPrompt(kind, c) {
   return `${R.codex}
 Build ${ref} into Tanren. You are in an ISOLATED WORKTREE off the latest origin/main. ${isSpine ? "The 8 spine contracts were just frozen + integration-audited — implement THIS contract to its frozen interface + conformance suite." : "The spine contracts are FROZEN + MERGED to main — build against them, do not re-invent them."}
 ${CLEAN}
-YOU OWN CORRECTNESS: drive codex to author, but after each codex pass VALIDATE it YOURSELF — does it actually compile, does the gate GENUINELY pass, does it really implement the node with the deletions (no stub, no fake-green)? If not, shell BACK to codex with the specific failures and REPEAT until it is genuinely green. Never fake green or pass through unverified codex output. Read the pitch spec for full data-model/validation/HTTP/UI/apex-proof detail. Implement the code + conformance/unit tests + your migration (${isSpine ? "your assigned spine slot" : "next free feature slot 0040+"}; clean CREATE + DROP-old-outright, NO backfill/compat). DELETE every superseded code path this replaces. Files under 500 lines, org-scoped RLS on tenant tables, adapters-behind-contracts. Run the gate: \`just affected-typecheck\` + \`just affected-test\` (\`just fast-check\` if broad); do NOT run the full slow suite unless small.
+YOU OWN CORRECTNESS: drive codex to author, but after each codex pass VALIDATE it YOURSELF — does it actually compile, does the gate GENUINELY pass, does it really implement the node with the deletions (no stub, no fake-green)? If not, shell BACK to codex with the specific failures and REPEAT until it is genuinely green. Never fake green or pass through unverified codex output. Read the pitch spec for full data-model/validation/HTTP/UI/live-run-proof detail. Implement the code + conformance/unit tests + your migration (${isSpine ? "your assigned spine slot" : "next free feature slot 0040+"}; clean CREATE + DROP-old-outright, NO backfill/compat). DELETE every superseded code path this replaces. Files under 500 lines, org-scoped RLS on tenant tables, adapters-behind-contracts. Run the gate: \`just affected-typecheck\` + \`just affected-test\` (\`just fast-check\` if broad); do NOT run the full slow suite unless small.
 THEN PUBLISH FOR REVIEW: commit to a descriptive branch, \`git push -u origin <branch>\`, and open a PR to main — \`gh pr create --repo cat-cave/tanren --base main --title "${isSpine ? "spine/" + c.id : c.b + "/" + c.id}: <concise>" --body "<what + why, the node it implements, the clean-replace deletions>"\` (use the repo's commit trailers). DO NOT MERGE — that is the human review gate. Report the branch, the PR URL, files touched, deletions made, and an HONEST gate status (green/red/partial). Never fake green.`;
 }
 function verifyPrompt(c) {
@@ -348,19 +348,19 @@ if (PHASE === "consumers") {
   const consGreen = consumerBuilt.filter((x) => x && x.gate === "green" && x.verify && x.verify.verdict === "pass");
   log(`Consumer MVP: ${consGreen.length}/${CONSUMER.length} green+verified PRs opened against main.`);
 
-  phase("Wave 3 · Apex vertical");
-  const apex = await agent(
+  phase("Wave 3 · Normal-flow fixture acceptance");
+  const fixtureAcceptance = await agent(
     `${R.sol}
-Design the v97 whole-architecture APEX vertical that proves the freshly-built engine: notes → build → deploy → the 100-click→100-Slack-message + rendered-confirmation POSITIVE run, plus the negative controls (assertion sensitivity, queue member-bisection, cosmetic-fix blocked by post-deploy symptom verification, cross-tenant denied, proof-replay rejected). Exercise the spine live (behavior revisions → executable tests → gate → MergeAuthorityV2 → deploy → per-behavior demo → post-deploy re-proof) over ONLY the public HTTP + dashboard surfaces. Read ${PITCH}/tanren-integrated-plan.html §apex-proof and rv-26. Output the concrete apex run spec: fixture notes, the exact events to assert, the negative-control matrix, and the go/no-go acceptance. This is the acceptance test for the whole program.`,
-    { label: "sol:apex-design", phase: "Wave 3 · Apex vertical", effort: "high" },
+Design a v97 acceptance run that sends one example apex-class fixture through the NORMAL public operator flow: notes → build → deploy → the fixture's 100-click→100-Slack-message + rendered-confirmation POSITIVE case, plus the negative controls (assertion sensitivity, queue member-bisection, cosmetic-fix blocked by post-deploy symptom verification, cross-tenant denied, proof-replay rejected). Exercise the general spine live (behavior revisions → executable tests → gate → MergeAuthorityV2 → deploy → per-behavior demo → post-deploy re-proof) over ONLY the public HTTP + dashboard surfaces. Do not design an apex workflow, harness, correlation scheme, or vertical; the link-shortener is one replaceable fixture and future runs must use different products and behaviors. Read ${PITCH}/tanren-integrated-plan.html §apex-proof and rv-26. Output the fixture notes, the exact general-pipeline events to assert, the negative-control matrix, and the go/no-go acceptance. This is one max-difficulty acceptance case for the whole program.`,
+    { label: "sol:fixture-acceptance-design", phase: "Wave 3 · Normal-flow fixture acceptance", effort: "high" },
   );
   log(
-    "CONSUMER PHASE COMPLETE — consumer MVP PRs opened against main; apex vertical designed. Review + merge the PRs.",
+    "CONSUMER PHASE COMPLETE — consumer MVP PRs opened against main; normal-flow fixture acceptance designed. Review + merge the PRs.",
   );
   return {
     phase: "consumers",
     consumer: { total: CONSUMER.length, greenVerified: consGreen.length, prs: consumerBuilt.filter(Boolean) },
-    apexSpec: apex,
+    fixtureAcceptanceSpec: fixtureAcceptance,
   };
 }
 

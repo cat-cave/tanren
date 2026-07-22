@@ -301,11 +301,11 @@ LLM-authored); only the `justfile` + the new `mise.toml`/`flake.nix` are lifecyc
 All phases below **landed** (see the status header for the per-phase code anchors);
 the plan is retained as the as-built sequence and rationale.
 
-- **P0 — Neutral runner + mise (unblocked apex).** Strip the project toolchain from
+- **P0 — Neutral runner + mise (general project execution; apex v33 exposed the gap).** Strip the project toolchain from
   `runner/Dockerfile`; add `mise` + a warm common baseline; keep the harness. Scaffold
   materializes a `mise.toml` from the lifecycle; bootstrap becomes `mise install &&
 <project install>` in user space (kills the corepack/`/usr/bin` EACCES). _This alone
-  lets apex proceed._
+  lets any project with a detected toolchain proceed through the normal flow._
 - **P1 — `upgrade` verb + version-change-as-DAG-node (§4.5).** `CiConfigV1` + skeleton +
   `justfile` `upgrade` target + the forced-upgrade policy; the autonomous generator that
   turns a CVE/freshness/forced-upgrade into a DAG node routed through the existing
@@ -323,7 +323,8 @@ the plan is retained as the as-built sequence and rationale.
 - **P5 — Nix escape-hatch tier.** flake detection → nix2container + attic; the long tail.
 - **P6 — Code-template ↔ environment reference.** Wire the pairing; channels.
 
-P0 is the apex unblock and is independently shippable; P1–P6 deepen toward the full model.
+P0 is the general toolchain unblock first exposed by apex v33 and is independently
+shippable; P1–P6 deepen toward the full model.
 
 ## 8. Decisions to confirm before building
 

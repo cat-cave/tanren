@@ -80,13 +80,13 @@ factory intentionally imports no EventStore or authority implementation.
 
 ## Collision and non-synonym decisions
 
-| Existing or prospective name                                             | Decision                                                       |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `fragment.authoring.*`                                                   | Template F2 only; forbidden for IN-7 emit or apex substitution |
-| `integration.author.*`                                                   | Prospective IN-7 family namespace; not frozen here             |
-| `designFragment.authoring.*`, `verification.author.*`, `policy.author.*` | Sibling family namespaces; never aliases for IN-7              |
-| `integration.requirement.validated`                                      | Frozen IN-2 persisted validate-HTTP fact; unrelated            |
-| `integration.requirement.derived`                                        | Deferred compiler fact; unrelated                              |
+| Existing or prospective name                                             | Decision                                                           |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `fragment.authoring.*`                                                   | Template F2 only; forbidden for IN-7 emit or live-run substitution |
+| `integration.author.*`                                                   | Prospective IN-7 family namespace; not frozen here                 |
+| `designFragment.authoring.*`, `verification.author.*`, `policy.author.*` | Sibling family namespaces; never aliases for IN-7                  |
+| `integration.requirement.validated`                                      | Frozen IN-2 persisted validate-HTTP fact; unrelated                |
+| `integration.requirement.derived`                                        | Deferred compiler fact; unrelated                                  |
 
 ## Handoff
 

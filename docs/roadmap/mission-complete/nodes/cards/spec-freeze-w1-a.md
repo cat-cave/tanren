@@ -34,7 +34,7 @@ zero node credit.
 merged PREP (credit 0)
   -> SPEC-FREEZE-W1-A (this docs-only unit; credit 0)
   -> EV-SUB-W1-A (registry/seed/migration; credit 0)
-  -> IN-7 producer + HTTP + UI + live apex proof (node credit)
+  -> IN-7 producer + HTTP + UI + normal-flow live-run proof (node credit)
 ```
 
 No IN-1 lifecycle table or SP-2 kernel implementation is required to freeze
@@ -79,7 +79,7 @@ If those accepted semantics move without a new GO audit, the freeze must stop.
   Success requires persistence, passed whole-batch compose, and no retraction;
   post-batch failure requires retraction before emit.
 - `fragment.authoring.*` is template F2 only and is never an IN-7 synonym,
-  alias, producer event, or apex substitute.
+  alias, producer event, or substitute for normal-flow live validation.
 - No automatic EventStore idempotency or row/event same-transaction claim is
   frozen. Breaking payload changes require a later explicit freeze protocol,
   never a silent reshape.

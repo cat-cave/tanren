@@ -44,7 +44,8 @@ It ships the three **tier proofs** (easy / medium / hard → a merged PR) as the
 active cases, and declares **per-capability placeholders** that grow as the
 autonomy engine lands: real-LLM ideation → a real DAG; the walker driving a
 multi-spec DAG to merged PRs with no per-spec trigger; a real conflict resolved
-intent-preserved; a real issue ingest → triage → merged spec; and `apex`. Each
+intent-preserved; a real issue ingest → triage → merged spec; and a configured
+apex-class fixture through the same harness and operator flow. Each
 case declares the **real persisted artifacts** it asserts on; the harness
 (`tests/e2e/lib/harness.ts`) reads those artifacts (Postgres rows via the
 `@tanren/db` public entry, the GitHub PR/contents API) and fails the case if any
