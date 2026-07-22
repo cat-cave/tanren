@@ -4,8 +4,10 @@
 > **mission-complete build** — finishing the strengthened engine's **142 consumer
 > nodes** on top of the merged 8-contract spine (#931). The authority is
 > [`docs/roadmap/mission-complete/README.md`](docs/roadmap/mission-complete/README.md);
-> live node status is the single ledger
-> [`docs/roadmap/mission-complete/LEDGER.md`](docs/roadmap/mission-complete/LEDGER.md).
+> the live, claimable node roster is **GitHub issues** (`label:node`) — one per
+> remaining node with its full spec, on the ideal flow (claim → PR → central audit →
+> merge). `docs/roadmap/mission-complete/LEDGER.md` is SUPERSEDED (history of the 99
+> completed nodes only; do not add forward status there).
 > The orchestration playbook (wave-frozen base · barrier pre-flight · single-pass
 > audit · lane routing) is
 > [`docs/roadmap/mission-complete/orchestration.md`](docs/roadmap/mission-complete/orchestration.md).
