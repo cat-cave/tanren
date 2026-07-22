@@ -37,6 +37,10 @@ export class InMemoryBatchChecker implements BatchChecker {
   /** Every entry-set checked, in order (the spec-id lists) — the bisect probe trace. */
   readonly checked: string[][] = [];
   private readonly failSpecs = new Set<string>();
+  private readonly interactionFailures: Array<{
+    specIds: readonly string[];
+    behaviorFailure?: NonNullable<Extract<BatchCheckVerdict, { result: "fail" }>["behaviorFailure"]>;
+  }> = [];
   private readonly conflictSpecs = new Set<string>();
   /** Specs that report a BASE conflict (a single PR dirty against `default_branch`). */
   private readonly baseConflictSpecs = new Set<string>();
@@ -51,6 +55,13 @@ export class InMemoryBatchChecker implements BatchChecker {
 
   failWhenContains(specId: string): void {
     this.failSpecs.add(specId);
+  }
+  /** Fail only when every listed member is present (a real interaction signal). */
+  failWhenAllPresent(
+    specIds: readonly string[],
+    behaviorFailure?: NonNullable<Extract<BatchCheckVerdict, { result: "fail" }>["behaviorFailure"]>,
+  ): void {
+    this.interactionFailures.push({ specIds: [...specIds], ...(behaviorFailure !== undefined && { behaviorFailure }) });
   }
   conflictWhenContains(specId: string): void {
     this.conflictSpecs.add(specId);
@@ -132,6 +143,16 @@ export class InMemoryBatchChecker implements BatchChecker {
     if (bad !== undefined) {
       return { result: "fail", message: `bad interaction with ${bad}` };
     }
+    const interaction = this.interactionFailures.find(({ specIds: required }) =>
+      required.every((id) => specIds.includes(id)),
+    );
+    if (interaction !== undefined) {
+      return {
+        result: "fail",
+        message: `bad interaction with ${interaction.specIds.join(",")}`,
+        ...(interaction.behaviorFailure !== undefined && { behaviorFailure: interaction.behaviorFailure }),
+      };
+    }
     return {
       result: "pass",
       integrationBranch: `tanren/batch/${specIds.at(-1) ?? "base"}`,
@@ -143,13 +164,13 @@ export class InMemoryBatchChecker implements BatchChecker {
 /** A recording batch-event emitter — captures every merge.batch.* event. */
 export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
   readonly events: Array<{
-    type: "checking" | "passed" | "bisecting" | "culprit" | "infra_blocked";
+    type: "checking" | "passed" | "bisecting" | "culprit_set_identified" | "behavior_failed" | "infra_blocked";
     specIds?: string[];
-    culpritSpecId?: string;
+    culpritSpecIds?: string[];
+    groupId?: string;
     capped?: boolean;
     eligibleCount?: number;
     maxBatchSize?: number;
-    checks?: number;
     message?: string;
     attempts?: number;
     terminal?: boolean;
@@ -180,8 +201,38 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
     this.events.push({ type: "bisecting", specIds: input.batch.map((e) => e.specId) });
   }
   // eslint-disable-next-line @typescript-eslint/require-await
-  async emitCulprit(input: { culprit: MergeQueueEntry; checks: number }): Promise<void> {
-    this.events.push({ type: "culprit", culpritSpecId: input.culprit.specId, checks: input.checks });
+  async emitCulpritSetIdentified(input: {
+    batch: ReadonlyArray<MergeQueueEntry>;
+    groupId: string;
+    culpritMembers: ReadonlyArray<MergeQueueEntry>;
+  }): Promise<void> {
+    this.events.push({
+      type: "culprit_set_identified",
+      specIds: input.batch.map((e) => e.specId),
+      culpritSpecIds: input.culpritMembers.map((m) => m.specId),
+      groupId: input.groupId,
+    });
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitBehaviorFailed(input: {
+    batch: ReadonlyArray<MergeQueueEntry>;
+    groupId: string;
+    behaviorRevisionId: string;
+    verdictId: string;
+    outcome:
+      | "passed"
+      | "failed_product"
+      | "failed_verification_contract"
+      | "failed_visual"
+      | "inconclusive_infrastructure"
+      | "inconclusive_external"
+      | "cancelled_superseded";
+  }): Promise<void> {
+    this.events.push({
+      type: "behavior_failed",
+      specIds: input.batch.map((e) => e.specId),
+      groupId: input.groupId,
+    });
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async emitInfraBlocked(input: {

@@ -149,15 +149,20 @@ function orderBatchTopologically(batch: MergeQueueEntry[], batchSpecIds: Set<str
 
 /**
  * The result of bisecting a failed batch. `culpritIndex` is the position (in the
- * batch's DAG order) of the SINGLE PR whose inclusion flips the check from pass to
- * fail — the offending PR. `innocentPrefix` is the batch entries BEFORE the culprit
- * (they pass together WITHOUT it, so they are provably innocent and may proceed).
- * `checks` is the count of sub-batch checks the bisect performed (bounded by
- * `O(log n)` — surfaced for the termination assertion + cost stats).
+ * batch's DAG order) of the prefix witness. `culpritMembers` is the actual
+ * solver result: a singleton for a monotonic member failure or a 1-minimal
+ * interaction set after subset reduction. `innocentPrefix` is usable only for
+ * the singleton prefix case. `checks` is the count of sub-batch checks.
  */
 export interface BisectResult {
   culpritIndex: number;
   culprit: MergeQueueEntry;
+  /**
+   * The actual 1-minimal failing set returned by the solver. This is a singleton
+   * for a member-local regression and contains every member of an interaction
+   * failure; consumers must not substitute the checked batch for this set.
+   */
+  culpritMembers: MergeQueueEntry[];
   innocentPrefix: MergeQueueEntry[];
   checks: number;
 }
@@ -217,7 +222,62 @@ export async function bisectCulprit(
   if (culprit === undefined) {
     throw new Error(`bisect produced an out-of-range culprit index ${lo} for batch of ${batch.length}`);
   }
-  return { culpritIndex: lo, culprit, innocentPrefix: batch.slice(0, lo), checks };
+  return { culpritIndex: lo, culprit, culpritMembers: [culprit], innocentPrefix: batch.slice(0, lo), checks };
+}
+
+/**
+ * Reduce a known-failing candidate to a 1-minimal failing subset. This is the
+ * non-monotonic fallback for a batch where no isolated member reproduces the
+ * failure (for example, two independently-green changes that fail together).
+ * It returns only members that the checker actually proved necessary; it never
+ * reports the whole batch merely because the whole batch was the initial input.
+ */
+export async function reduceFailingSubset(
+  candidates: ReadonlyArray<MergeQueueEntry>,
+  checkSubset: (entries: ReadonlyArray<MergeQueueEntry>) => Promise<"pass" | "fail">,
+): Promise<{ culpritMembers: MergeQueueEntry[]; checks: number }> {
+  if (candidates.length === 0) throw new Error("reduceFailingSubset called on an empty batch");
+  let current = [...candidates];
+  let partitions = 2;
+  let checks = 0;
+
+  while (current.length >= 2) {
+    const chunkSize = Math.ceil(current.length / partitions);
+    const chunks: MergeQueueEntry[][] = [];
+    for (let start = 0; start < current.length; start += chunkSize) {
+      chunks.push(current.slice(start, start + chunkSize));
+    }
+    let reduced: MergeQueueEntry[] | undefined;
+    for (const chunk of chunks) {
+      checks += 1;
+      if ((await checkSubset(chunk)) === "fail") {
+        reduced = chunk;
+        partitions = 2;
+        break;
+      }
+    }
+    if (reduced !== undefined) {
+      current = reduced;
+      continue;
+    }
+    for (const chunk of chunks) {
+      const complement = current.filter((entry) => !chunk.includes(entry));
+      if (complement.length === 0) continue;
+      checks += 1;
+      if ((await checkSubset(complement)) === "fail") {
+        reduced = complement;
+        partitions = Math.max(partitions - 1, 2);
+        break;
+      }
+    }
+    if (reduced !== undefined) {
+      current = reduced;
+      continue;
+    }
+    if (partitions >= current.length) break;
+    partitions = Math.min(current.length, partitions * 2);
+  }
+  return { culpritMembers: current, checks };
 }
 
 // ---- The batch-gate rework router (the integrated-tree gate-fail self-heal) ----
@@ -294,6 +354,14 @@ export interface BatchAuthorityBinding {
 }
 
 /** The outcome of speculatively integrating + CI-checking a set of entries. */
+export type BatchBehaviorFailure = {
+  /** Coordinates minted by the behavior verifier that actually failed. */
+  groupId: string;
+  behaviorRevisionId: string;
+  verdictId: string;
+  outcome: "failed_product" | "failed_verification_contract" | "failed_visual";
+};
+
 export type BatchCheckVerdict =
   // The prospective merged state (default_branch + the entries, merged in order)
   // integrated cleanly AND its CI/gate is green — safe to merge as a unit.
@@ -308,7 +376,7 @@ export type BatchCheckVerdict =
       authorityBinding?: BatchAuthorityBinding;
     }
   // The prospective merged state's CI/gate FAILED (a bad interaction) — do NOT merge.
-  | { result: "fail"; message: string }
+  | { result: "fail"; message: string; behaviorFailure?: BatchBehaviorFailure }
   // The speculative INTEGRATION itself conflicted — `conflictBetween` names the pair.
   //   - `conflictsWithBase: false` (a SPEC-vs-SPEC conflict — two queued entries conflict
   //     with each other) is treated like a fail for bisect: the offending entry is

@@ -41,6 +41,10 @@ class BatchCheckerPool {
             ? rows([{ run_id: "run_mq12", spec_id: "spec_mq12", branch: "tanren/spec_mq12" }])
             : rows([]);
         }
+        if (statement.includes("FROM behavior_verification_runs")) {
+          return rows([{ id: "behavior_run_passing", status: "completed" }]);
+        }
+        if (statement.includes("FROM behavior_verdicts")) return rows([]);
         if (statement.includes("FROM quarantined_tests")) return rows([]);
         throw new Error(`unexpected query: ${statement}`);
       },
@@ -107,6 +111,27 @@ describe("PgBatchChecker mq-12 credential and policy boundaries", () => {
       result: "pass",
       integrationBranch: "",
     });
+  });
+
+  it("does not throw or produce a behavior failure for a completed passing batch behavior run", async () => {
+    // Exercise the production caller, not just the resolver: a completed run with
+    // no decisive failed verdict is the ordinary passing-batch case. Its optional
+    // coordinate must be absent, so it cannot become a false behavior_failed event.
+    const batchChecker = checker(new BatchCheckerPool());
+    const resolveBatchBehaviorFailure = (
+      batchChecker as unknown as {
+        resolveBatchBehaviorFailure: (
+          orgId: string,
+          entries: ReadonlyArray<{ readonly runId: string; readonly specId: string; readonly branch: string }>,
+        ) => Promise<unknown>;
+      }
+    ).resolveBatchBehaviorFailure;
+
+    await expect(
+      resolveBatchBehaviorFailure.call(batchChecker, "org_mq12", [
+        { runId: "run_mq12", specId: "spec_mq12", branch: "tanren/spec_mq12" },
+      ]),
+    ).resolves.toBeNull();
   });
 
   it("propagates an unreadable default-branch ref after resolving only the project-bound credential", async () => {

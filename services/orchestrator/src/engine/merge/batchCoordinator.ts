@@ -37,6 +37,9 @@ import { createLogger } from "../observability/logger.js";
 import { BatchBisector } from "./batchBisector.js";
 import { buildEagerIntegrationBeamPlanner, type EagerIntegrationBeamPlanner } from "./eagerIntegrationBeamPlanner.js";
 import type { IntegrationGraphScheduler } from "./integrationGraphScheduler.js";
+import type { BatchMergeEventEmitter } from "./batchMergeEventEmitter.js";
+export type { BatchMergeEventEmitter } from "./batchMergeEventEmitter.js";
+import { authorityDerivedId } from "./authoritySignalIdentity.js";
 export { DEFAULT_MAX_BATCH_SIZE };
 export { buildEagerIntegrationBeamPlanner };
 // Re-exported off this coordinator-builder barrel so the composition root
@@ -51,31 +54,6 @@ const PENDING_RECHECK_MS = 15_000;
 // grant-parked. NOT a give-up cap — it re-drives (idempotently, one timer/project via
 // the subscriber) until the grant covers and the unit re-admits, or the row leaves.
 const PARKED_GRANT_RECHECK_MS = 30_000;
-
-export interface BatchMergeEventEmitter {
-  emitChecking(input: {
-    projectId: string;
-    batch: ReadonlyArray<MergeQueueEntry>;
-    formation: BatchFormation;
-    maxBatchSize: number;
-  }): Promise<void>;
-  emitPassed(input: {
-    projectId: string;
-    batch: ReadonlyArray<MergeQueueEntry>;
-    integrationBranch: string;
-  }): Promise<void>;
-  emitBisecting(input: { projectId: string; batch: ReadonlyArray<MergeQueueEntry>; message: string }): Promise<void>;
-  emitCulprit(input: { projectId: string; culprit: MergeQueueEntry; checks: number; message: string }): Promise<void>;
-  emitInfraBlocked(input: {
-    projectId: string;
-    batch: ReadonlyArray<MergeQueueEntry>;
-    message: string;
-    attempts: number;
-    terminal?: boolean;
-    consecutiveHolds?: number;
-    kind?: "missing_required_credential" | "ambiguous_merge_state";
-  }): Promise<void>;
-}
 
 export interface BatchMergeCoordinatorDeps {
   queue: MergeQueueModel;
@@ -255,6 +233,16 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       const isGateFail = verdict.result === "fail";
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
+      // These IDs come only from the behavior verifier's failing verdict. A
+      // gate-only failure has no behavior coordinate, so it must not fabricate
+      // one just to populate the apex proof stream.
+      if (verdict.result === "fail" && verdict.behaviorFailure !== undefined) {
+        await this.deps.batchEvents.emitBehaviorFailed({
+          projectId,
+          batch: current.batch,
+          ...verdict.behaviorFailure,
+        });
+      }
 
       const bisect = await this.bisector.bisectBatch(projectId, current.batch);
       if (bisect === "pending") {
@@ -272,13 +260,31 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      const { culprit, innocentPrefix, checks } = bisect;
-      await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
+      const { culprit, culpritMembers, innocentPrefix } = bisect;
+      // The payload is the solver output, never the batch or an inferred proxy.
+      // A behavior failure supplies its verifier-minted group; gate/conflict
+      // failures use a stable batch coordinate solely because they have no
+      // behavior proof group to carry.
+      const groupId =
+        verdict.result === "fail" && verdict.behaviorFailure !== undefined
+          ? verdict.behaviorFailure.groupId
+          : authorityDerivedId("mqgrp", {
+              members: current.batch.map((e) => ({ specId: e.specId, runId: e.runId })),
+              projectId,
+            });
+      await this.deps.batchEvents.emitCulpritSetIdentified({
+        projectId,
+        batch: current.batch,
+        groupId,
+        culpritMembers,
+      });
 
       if (!isGateFail) {
-        // Prefix first; incomplete prefix stops before culprit drive.
+        // Prefix-first conflict recovery is valid only for the monotonic
+        // singleton case. An interaction set has no individually-safe culprit
+        // drive, so leave its innocent remainder for the re-formed batch.
         let prefixMergedSpecId: string | undefined;
-        if (innocentPrefix.length > 0) {
+        if (culpritMembers.length === 1 && innocentPrefix.length > 0) {
           const prefixResult = await this.mergeBatch(projectId, innocentPrefix, queueDepth);
           if (prefixResult.mergedSpecId !== innocentPrefix.at(-1)?.specId) return prefixResult;
           prefixMergedSpecId = prefixResult.mergedSpecId;
@@ -291,18 +297,20 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return settled;
       }
 
-      const gateSettled = await settleBisectCulprit(
-        this.deps,
-        projectId,
-        culprit,
-        isGateFail,
-        verdict.message,
-        failMessage,
-      );
-      if (gateSettled === "retained") {
-        return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: 3000 };
+      for (const culpritMember of culpritMembers) {
+        const gateSettled = await settleBisectCulprit(
+          this.deps,
+          projectId,
+          culpritMember,
+          isGateFail,
+          verdict.message,
+          failMessage,
+        );
+        if (gateSettled === "retained") {
+          return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: 3000 };
+        }
+        excludedSpecIds.add(culpritMember.specId);
       }
-      excludedSpecIds.add(culprit.specId);
 
       // RE-FORM without the culprit (reload so it is gone + a newly-eligible entry can join), re-check next loop.
       const refreshed = await this.deps.queue.loadSnapshot(projectId);

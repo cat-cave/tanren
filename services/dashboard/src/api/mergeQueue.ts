@@ -86,7 +86,6 @@ export interface QueueStats {
   batchPassRate: number | null;
   batchesBisected: number;
   culpritsIsolated: number;
-  bisectChecksPerformed: number;
 
   // dequeues without merging, by reason
   dequeues: {

@@ -10,8 +10,8 @@
 //                             the entry leaving the queue = time-in-queue end).
 //   - merge.dequeued        → an entry left WITHOUT merging (also a queue exit),
 //                             tallied by reason.
-//   - merge.batch.{checking,passed,bisecting,culprit} → batch pass-rate +
-//                             bisect / culprit counts.
+//   - merge.batch.{checking,passed,bisecting,culprit_set_identified} → batch
+//                             pass-rate + bisect / culprit counts.
 //   - spec_dependencies     → the DAG, for the deepest stack among queued specs.
 
 import type pg from "pg";
@@ -28,7 +28,7 @@ export interface QueueEvent {
     | "merge.batch.checking"
     | "merge.batch.passed"
     | "merge.batch.bisecting"
-    | "merge.batch.culprit";
+    | "merge.batch.culprit_set_identified";
   ts: Date;
   /** The spec the event concerns (entry events carry one); null for batch events. */
   specId: string | null;
@@ -36,8 +36,12 @@ export interface QueueEvent {
   queueDepth: number | null;
   /** merge.dequeued carries the reason. */
   dequeueReason: "conflict" | "blocked" | "failed" | "superseded" | null;
-  /** merge.batch.culprit carries the number of sub-batch checks performed. */
-  bisectChecks: number | null;
+  /**
+   * `merge.batch.culprit_set_identified` carries the EXACT culprit member set
+   * (`culpritMemberIds`); its length is the number of culprits this bisect
+   * identified. Null for non-culprit events.
+   */
+  culpritMemberCount: number | null;
 }
 
 /** A directed dependency edge: `fromSpecId` depends on `toSpecId`. */
@@ -111,9 +115,11 @@ export function deriveQueueStats(inputs: QueueStatsInputs, options: DeriveQueueO
   const batchesChecked = events.filter((e) => e.eventType === "merge.batch.checking").length;
   const batchesPassed = events.filter((e) => e.eventType === "merge.batch.passed").length;
   const batchesBisected = events.filter((e) => e.eventType === "merge.batch.bisecting").length;
-  const culpritEvents = events.filter((e) => e.eventType === "merge.batch.culprit");
-  const culpritsIsolated = culpritEvents.length;
-  const bisectChecksPerformed = culpritEvents.reduce((sum, e) => sum + (e.bisectChecks ?? 0), 0);
+  const culpritEvents = events.filter((e) => e.eventType === "merge.batch.culprit_set_identified");
+  // rv-26.3: a bisect can identify a >1 culprit set (ddmin/QuickXPlain on a
+  // split interaction failure) — count individual culprits, not events, so a
+  // 2-member culprit set contributes 2 to the total.
+  const culpritsIsolated = culpritEvents.reduce((sum, e) => sum + (e.culpritMemberCount ?? 0), 0);
   const batchPassRate = batchesChecked === 0 ? null : batchesPassed / batchesChecked;
 
   // --- dequeues by reason ---------------------------------------------------
@@ -145,7 +151,6 @@ export function deriveQueueStats(inputs: QueueStatsInputs, options: DeriveQueueO
     batchPassRate,
     batchesBisected,
     culpritsIsolated,
-    bisectChecksPerformed,
     dequeues,
     maxStackDepth,
     computedAt: options.windowEnd.toISOString(),
@@ -212,7 +217,7 @@ const QUEUE_EVENT_TYPES = [
   "merge.batch.checking",
   "merge.batch.passed",
   "merge.batch.bisecting",
-  "merge.batch.culprit",
+  "merge.batch.culprit_set_identified",
 ] as const;
 
 /**
@@ -259,7 +264,7 @@ export function normalizeQueueEvent(row: QueueEventQueryRow): QueueEvent {
   const payload = (row.payload ?? {}) as {
     queueDepth?: unknown;
     reason?: unknown;
-    checks?: unknown;
+    culpritMemberIds?: unknown;
     specId?: unknown;
   };
   const dequeueReason =
@@ -269,8 +274,9 @@ export function normalizeQueueEvent(row: QueueEventQueryRow): QueueEvent {
     payload.reason === "superseded"
       ? payload.reason
       : null;
-  // batch.culprit carries its own specId in payload (the events row spec_id may
-  // be null for batch events); prefer the row spec_id, fall back to payload.
+  // batch.culprit_set_identified may stamp the row spec_id with the head
+  // culprit; the payload `culpritMemberIds` is the EXACT set (the count comes
+  // from its length). Prefer the row spec_id, fall back to payload specId.
   const specId = row.spec_id ?? (typeof payload.specId === "string" ? payload.specId : null);
   return {
     eventType: row.event_type as QueueEvent["eventType"],
@@ -278,6 +284,9 @@ export function normalizeQueueEvent(row: QueueEventQueryRow): QueueEvent {
     specId,
     queueDepth: typeof payload.queueDepth === "number" ? payload.queueDepth : null,
     dequeueReason,
-    bisectChecks: typeof payload.checks === "number" ? payload.checks : null,
+    culpritMemberCount:
+      Array.isArray(payload.culpritMemberIds) && payload.culpritMemberIds.every((id) => typeof id === "string")
+        ? payload.culpritMemberIds.length
+        : null,
   };
 }

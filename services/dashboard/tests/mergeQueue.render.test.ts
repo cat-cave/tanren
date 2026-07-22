@@ -78,7 +78,6 @@ const STATS_FULL = {
   batchPassRate: 0.8,
   batchesBisected: 2,
   culpritsIsolated: 2,
-  bisectChecksPerformed: 5,
   dequeues: { conflict: 1, blocked: 0, failed: 1, superseded: 0 },
   maxStackDepth: 4,
   computedAt: "2026-05-28T00:00:00.000Z",
@@ -116,7 +115,6 @@ const STATS_EMPTY = {
   batchPassRate: null,
   batchesBisected: 0,
   culpritsIsolated: 0,
-  bisectChecksPerformed: 0,
   dequeues: { conflict: 0, blocked: 0, failed: 0, superseded: 0 },
   maxStackDepth: null,
 };

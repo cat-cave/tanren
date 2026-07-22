@@ -81,13 +81,13 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     seed(h, "spec_d");
     h.checker.failWhenContains("spec_c");
     const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
-    const culpritSpy = vi.spyOn(h.batchEvents, "emitCulprit");
+    const culpritSpy = vi.spyOn(h.batchEvents, "emitCulpritSetIdentified");
 
     await h.coordinator.coordinate(PROJECT);
 
     // The culprit is isolated to EXACTLY spec_c.
-    const culprit = h.batchEvents.events.find((e) => e.type === "culprit");
-    expect(culprit?.culpritSpecId).toBe("spec_c");
+    const culprit = h.batchEvents.events.find((e) => e.type === "culprit_set_identified");
+    expect(culprit?.culpritSpecIds).toEqual(["spec_c"]);
     // THE FIX: the GATE-fail culprit is routed back to the WRITER for rework (carrying the
     // batch gate's failing output as steering) — NOT stranded / dequeued-without-rework.
     expect(h.gateRework.routed.map((r) => r.specId)).toEqual(["spec_c"]);

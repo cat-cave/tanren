@@ -1,4 +1,9 @@
-import { type BatchCheckVerdict, type BatchChecker, bisectCulprit } from "../contracts/batchMergeCoordinator.js";
+import {
+  type BatchCheckVerdict,
+  type BatchChecker,
+  bisectCulprit,
+  reduceFailingSubset,
+} from "../contracts/batchMergeCoordinator.js";
 import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
@@ -36,7 +41,11 @@ export class BatchBisector {
     }
   }
 
-  /** Binary-search failed batch for the single culprit (pending/infra hold without blame). */
+  /**
+   * Isolate the actual failing set. Prefix bisection is retained for monotonic
+   * single-member failures; when its member does not fail alone, ddmin reduces
+   * the real failing batch to a 1-minimal interaction set.
+   */
   async bisectBatch(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
@@ -46,20 +55,32 @@ export class BatchBisector {
     | { kind: "infra"; message: string; cause?: "missing_required_credential" }
   > {
     try {
-      return await bisectCulprit(batch, async (prefixLength) => {
-        const v = await this.checkEntries(projectId, batch.slice(0, prefixLength));
+      const check = async (entries: ReadonlyArray<MergeQueueEntry>) => {
+        const v = await this.checkEntries(projectId, entries);
         if (v.result === "pending") {
-          throw new BatchCheckStillPendingError(`sub-batch CI still pending (prefix length ${prefixLength})`);
+          throw new BatchCheckStillPendingError(`sub-batch CI still pending (${entries.length} entries)`);
         }
         if (v.result === "infra-error") {
           throw new BatchCheckInfraError(
-            `sub-batch check could not run (prefix length ${prefixLength}): ${v.message}`,
+            `sub-batch check could not run (${entries.length} entries): ${v.message}`,
             v.retriable,
             v.kind,
           );
         }
         return v.result === "pass" ? "pass" : "fail";
-      });
+      };
+      const prefix = await bisectCulprit(batch, (prefixLength) => check(batch.slice(0, prefixLength)));
+      // A real singleton reproduction is the cheap monotonic case. Otherwise
+      // the prefix boundary was only a witness, not a culprit: reduce the
+      // original failing set and carry that exact solver result upstream.
+      if ((await check([prefix.culprit])) === "fail") return prefix;
+      const reduced = await reduceFailingSubset(batch, check);
+      return {
+        ...prefix,
+        culprit: reduced.culpritMembers[0]!,
+        culpritMembers: reduced.culpritMembers,
+        checks: prefix.checks + 1 + reduced.checks,
+      };
     } catch (error) {
       if (error instanceof BatchCheckStillPendingError) return "pending";
       if (error instanceof BatchCheckInfraError) {
