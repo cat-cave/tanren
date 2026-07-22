@@ -81,7 +81,8 @@ const envObjectSchema = z.object({
   // Opt-in to fly's NON-merge-reflecting static-image deploy ("0"/"1", default
   // "0" = refuse). Fly releases a static image and ignores the merged source, so
   // it cannot prove "the live product reflects this merge"; the flyDeployProvisioner
-  // fails LOUD unless this is "1" (apex must use `deploy.vercel`).
+  // fails LOUD unless this is "1"; verification deployments should use a
+  // merge-reflecting deploy provisioner.
   TANREN_ALLOW_FLY_STATIC_DEPLOY: emptyToUndefined(boolFlagSchema.default("0")),
 });
 
