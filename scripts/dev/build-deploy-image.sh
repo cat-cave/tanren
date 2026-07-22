@@ -40,6 +40,12 @@ fi
 
 IMAGE_REF="registry.fly.io/${APP}:${SHA}"
 
+# Keep Fly registry credentials private to this build. A shared Docker config has
+# one registry.fly.io entry, so concurrent deploys with different org tokens can
+# otherwise overwrite the credential an in-flight push needs.
+export DOCKER_CONFIG="$(mktemp -d)"
+trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
+
 echo "[build-deploy-image] app            : ${APP}"
 echo "[build-deploy-image] sha            : ${SHA}"
 echo "[build-deploy-image] context        : ${CONTEXT}"
