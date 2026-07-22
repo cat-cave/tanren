@@ -17,6 +17,7 @@ import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerif
 import type { GateProofBundleInput, GateProofBundleSealer } from "../src/engine/merge/gateProofBundleTypes.js";
 
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
+const REAL_RUNTIME_BINDING = { planSetHash: parseDigest(`sha256:${"d".repeat(64)}`), requiredBehaviorRevisionCount: 7 };
 
 class FakeGateBundles implements GateProofBundleSealer {
   private readonly bundles = new Map<string, GateProofBundleV2>();
@@ -59,6 +60,7 @@ class FakeGateBundles implements GateProofBundleSealer {
             ]
           : []),
       ],
+      ...(this.includeRuntimeBehavior ? { runtimeBehaviorBindings: [REAL_RUNTIME_BINDING] } : {}),
       gateVerdict: input.nativeCi.verdict,
     };
     const key = bundleKey(input);
@@ -291,7 +293,7 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     });
   });
 
-  it("a fresh seal with a behavior-proof section emits bound, never reused", async () => {
+  it("a fresh seal emits real runtime behavior coordinates, never reused", async () => {
     const store = new FakeNodeStore();
     store.gateBundles.includeRuntimeBehavior = true;
     const events = new RecordingEventStore();
@@ -303,7 +305,7 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     await expect(driveBatchThroughNode(FACTS, deps(store, events, gate))).resolves.toMatchObject({ result: "pass" });
     expect(events.appended).toContainEqual({
       eventType: "gate.behavior_proof.bound",
-      payload: expect.objectContaining({ requiredBehaviorRevisionCount: 1 }),
+      payload: expect.objectContaining(REAL_RUNTIME_BINDING),
     });
     expect(events.appended.some((event) => event.eventType === "integration.proof.reused")).toBe(false);
   });
@@ -491,9 +493,7 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     }));
     const driven = deps(store, new RecordingEventStore(), gate);
     driven.resolveFragmentEvidence = async () => ({ kind: "fallback", reason: "selector_set_mismatch" });
-
     const verdict = await driveBatchThroughNode(FACTS, driven);
-
     expect(verdict).toEqual({ result: "fail", message: "unselected changed test failed" });
     expect(gate).toHaveBeenCalledTimes(1);
   });

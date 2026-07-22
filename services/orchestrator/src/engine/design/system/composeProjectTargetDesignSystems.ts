@@ -38,6 +38,7 @@ import { readLatestDesignRenderVerdict } from "../render/designRenderVerdictStor
 import type { ArtifactStore } from "./artifactStore.js";
 import {
   type DesignContractV2,
+  designRenderContractClauseRefs,
   designContractV2Digest,
   migrateDesignContractV1ToV2,
   withDerivedDesiredSurfaces,
@@ -288,7 +289,9 @@ export async function composeProjectTargetDesignSystems(
       designSystemId,
       releaseId,
       artifactId: webOutcome.artifactId,
+      artifactDigest: webOutcome.artifactDigest,
       contractDigest,
+      contractClauseRefs: designRenderContractClauseRefs(contractV2),
       plainReleaseDigest: plainDigest,
       polishedReleaseDigest: polishedDigest,
       fragmentLineage: compositionContext.fragmentLineage,
@@ -349,7 +352,9 @@ async function reverifyPublishedDesignRenderIfStale(
     designSystemId: existing.designSystemId,
     releaseId: existing.releaseId,
     artifactId: existing.artifactId,
+    artifactDigest: await readArtifactDigest(deps.pool, input.orgId, existing.artifactId),
     contractDigest,
+    contractClauseRefs: designRenderContractClauseRefs(contractV2),
     plainReleaseDigest: plainReleaseDigest(),
     polishedReleaseDigest: polishedReleaseDigest(contractDigest, []),
     fragmentLineage: [],
@@ -359,5 +364,18 @@ async function reverifyPublishedDesignRenderIfStale(
     adapter,
     materialized,
     profile,
+  });
+}
+
+async function readArtifactDigest(pool: pg.Pool, orgId: string, artifactId: string): Promise<string> {
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const row = (
+      await client.query<{ digest: string }>(`SELECT digest FROM design_artifacts WHERE org_id = $1 AND id = $2`, [
+        orgId,
+        artifactId,
+      ])
+    ).rows[0];
+    if (row === undefined) throw new Error(`published web artifact '${artifactId}' has no immutable digest`);
+    return row.digest;
   });
 }

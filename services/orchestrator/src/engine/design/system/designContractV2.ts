@@ -295,6 +295,22 @@ export function designContractV2Digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(body, "utf8").digest("hex")}`;
 }
 
+/**
+ * Content coordinates for the contract clauses the render verifier actually reads.
+ * These are clause digests, never aliases for the whole-contract digest.
+ */
+export function designRenderContractClauseRefs(contract: DesignContractV2): readonly string[] {
+  return [
+    designContractClauseDigest("accessibilityPosture", contract.accessibilityPosture),
+    designContractClauseDigest("visualVerification", contract.visualVerification),
+  ];
+}
+
+function designContractClauseDigest(path: string, value: unknown): string {
+  const body = JSON.stringify(["tanren.design-contract-clause.v1", path, value]);
+  return `sha256:${createHash("sha256").update(body, "utf8").digest("hex")}`;
+}
+
 /** Serialize a contract to a plain jsonb object (round-trip is identity by construction). */
 export function designContractV2ToJson(contract: DesignContractV2): Record<string, unknown> {
   return normalizeDesignContractV2(contract) as Record<string, unknown>;

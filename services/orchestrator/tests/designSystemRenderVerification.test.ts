@@ -33,6 +33,7 @@ class InMemoryContentStore implements CasByteStore {
 }
 
 const ORG_ID = "org_ds4_verify";
+const EVENTS = { append: async () => {} };
 
 function realCatalogAdapter(): WebDesignTargetAdapter {
   return new WebDesignTargetAdapter({
@@ -72,6 +73,8 @@ describe("verifyComposedDesignSystemRender — the production render+judge pass"
     const { build, scenarios } = await realBuildAndScenarios();
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_ds4_verify",
+      eventStore: EVENTS,
       cas: new InMemoryContentStore(),
       build,
       scenarios,
@@ -92,6 +95,8 @@ describe("verifyComposedDesignSystemRender — the production render+judge pass"
     const cas = new InMemoryContentStore();
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_ds4_verify",
+      eventStore: EVENTS,
       cas,
       build,
       scenarios,
@@ -127,6 +132,8 @@ describe("verifyComposedDesignSystemRender — the production render+judge pass"
     ];
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_ds4_verify",
+      eventStore: EVENTS,
       cas: new InMemoryContentStore(),
       build,
       scenarios,
@@ -142,6 +149,8 @@ describe("verifyComposedDesignSystemRender — the production render+judge pass"
     const { build, scenarios } = await realBuildAndScenarios();
     const verification = await verifyComposedDesignSystemRender({
       orgId: ORG_ID,
+      projectId: "project_ds4_verify",
+      eventStore: EVENTS,
       cas: new InMemoryContentStore(),
       build,
       scenarios,

@@ -45,9 +45,9 @@ export interface RenderableComponentBuild {
 
 export interface DesignSystemRenderVerificationInput {
   readonly orgId: string;
-  readonly projectId?: string;
+  readonly projectId: string;
   /** Canonical event sink; production compose supplies an RLS-scoped PgEventStore. */
-  readonly eventStore?: EventStore;
+  readonly eventStore: EventStore;
   readonly cas: CasByteStore;
   /** The built web artifact (catalog + component source files) to render from. */
   readonly build: RenderableComponentBuild;
@@ -114,7 +114,7 @@ export async function verifyComposedDesignSystemRender(
 
       const capture = await harness.capture({
         orgId: input.orgId,
-        ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+        projectId: input.projectId,
         scenario,
         componentSource: new TextDecoder().decode(file.bytes),
         componentExportName: pascalCase(component.key),

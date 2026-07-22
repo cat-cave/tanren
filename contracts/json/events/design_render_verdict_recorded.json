@@ -2,28 +2,60 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "behaviorRevisionId": {
-      "maxLength": 256,
-      "minLength": 1,
-      "type": "string"
-    },
-    "checkpointId": {
-      "maxLength": 256,
-      "minLength": 1,
-      "type": "string"
-    },
-    "verdict": {
+    "a11yOutcome": {
       "enum": [
         "passed",
-        "failed"
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "artifactDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contractClauseRefs": {
+      "items": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "contractDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "pixelOutcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "renderVerificationId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "semanticOutcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "unknown"
       ],
       "type": "string"
     }
   },
   "required": [
-    "behaviorRevisionId",
-    "checkpointId",
-    "verdict"
+    "renderVerificationId",
+    "artifactDigest",
+    "pixelOutcome",
+    "semanticOutcome",
+    "a11yOutcome",
+    "contractDigest",
+    "contractClauseRefs"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.design.render.verdict_recorded"

@@ -189,7 +189,9 @@ export const DesignRenderVerdictRecordedPayload = z
     pixelOutcome: RenderVerdict,
     semanticOutcome: RenderVerdict,
     a11yOutcome: RenderVerdict,
-    contractClauseRefs: z.array(Sha256Digest).min(1).max(256),
+    /** Whole-contract coordinate; deliberately distinct from clause-level references. */
+    contractDigest: Sha256Digest,
+    contractClauseRefs: z.array(Sha256Digest).max(256),
   })
   .strict();
 

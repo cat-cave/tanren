@@ -37,6 +37,7 @@ class InMemoryContentStore implements CasByteStore {
 
 const ORG_ID = "org_ds4";
 const DESIGN_CONTRACT_VERSION = "dcv_1";
+const EVENTS = { append: async () => {} };
 
 function realCatalogAdapter(): WebDesignTargetAdapter {
   return new WebDesignTargetAdapter({
@@ -81,11 +82,12 @@ async function firstButtonScenario(): Promise<DesignRenderScenario> {
 describe("BrowserFreeRenderCaptureHarness", () => {
   it("renders the REAL ds-2 Button via React SSR and stores real DOM + a11y capture bytes in CAS", async () => {
     const cas = new InMemoryContentStore();
-    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    const harness = new BrowserFreeRenderCaptureHarness(cas, EVENTS);
     const scenario = await firstButtonScenario();
 
     const outcome = await harness.capture({
       orgId: ORG_ID,
+      projectId: "project_ds4",
       scenario,
       componentSource: realButtonSource(),
       componentExportName: "Button",
@@ -159,6 +161,20 @@ describe("BrowserFreeRenderCaptureHarness", () => {
     expect(outcome.reason.length).toBeGreaterThan(0);
     // Fail-closed: nothing was written to CAS.
     expect(cas.rows.size).toBe(0);
+  });
+
+  it("FAILS LOUD: a completed capture without the required event sink or project id cannot soft-skip its event", async () => {
+    const cas = new InMemoryContentStore();
+    const harness = new BrowserFreeRenderCaptureHarness(cas);
+    await expect(
+      harness.capture({
+        orgId: ORG_ID,
+        scenario: await firstButtonScenario(),
+        componentSource: realButtonSource(),
+        componentExportName: "Button",
+        designContractVersion: DESIGN_CONTRACT_VERSION,
+      }),
+    ).rejects.toThrow("required event sink or project id");
   });
 
   it("FAIL-CLOSED: a component that throws while rendering → render_failed(render)", async () => {

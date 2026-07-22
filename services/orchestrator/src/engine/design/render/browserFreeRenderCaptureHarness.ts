@@ -75,7 +75,10 @@ export class BrowserFreeRenderCaptureHarness {
       { kind: "dom_snapshot", evidenceKind: "dom", casRef: domRef },
       { kind: "a11y_audit", evidenceKind: "a11y_tree", casRef: a11yRef },
     ];
-    if (this.events !== undefined && request.projectId !== undefined) {
+    if (this.events === undefined || request.projectId === undefined) {
+      throw new Error("design render capture completed without its required event sink or project id");
+    }
+    {
       const renderId = contentDigestOf(
         encoder.encode(JSON.stringify([scenario.scenarioKey, designContractVersion, domRef.digest, a11yRef.digest])),
       );

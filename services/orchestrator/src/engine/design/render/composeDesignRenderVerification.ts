@@ -27,7 +27,11 @@ export interface VerifyAndRecordDesignRenderInput {
   readonly designSystemId: string;
   readonly releaseId: string;
   readonly artifactId: string;
+  /** Exact persisted manifest digest of the web artifact this pass renders. */
+  readonly artifactDigest: string;
   readonly contractDigest: string;
+  /** Per-clause content coordinates for the clauses this verification actually evaluates. */
+  readonly contractClauseRefs: readonly string[];
   readonly plainReleaseDigest: string;
   readonly polishedReleaseDigest: string;
   readonly fragmentLineage: readonly string[];
@@ -114,12 +118,13 @@ export async function verifyAndRecordDesignRender(input: VerifyAndRecordDesignRe
     eventType: "design.render.verdict_recorded",
     payload: {
       renderVerificationId,
-      artifactDigest: input.contractDigest,
+      artifactDigest: input.artifactDigest,
       pixelOutcome: renderOutcome(verification, "pixel"),
-      semanticOutcome: renderOutcome(verification, "semantic"),
+      // No semantic checkpoint exists in this pass. Do not infer one from the aggregate.
+      semanticOutcome: "unknown",
       a11yOutcome: renderOutcome(verification, "a11y"),
-      // The immutable contract digest is the exact clause-set coordinate this run judged.
-      contractClauseRefs: [input.contractDigest],
+      contractDigest: input.contractDigest,
+      contractClauseRefs: [...input.contractClauseRefs],
     },
   });
 }
@@ -131,10 +136,7 @@ function renderOutcome(
   const checkpoints = verification.checkpoints.filter((checkpoint) =>
     kind === "pixel" ? checkpoint.checkpointId.endsWith("::pixel") : !checkpoint.checkpointId.endsWith("::pixel"),
   );
-  if (kind === "semantic") {
-    if (verification.outcome === "passed") return "passed";
-    return verification.outcome === "failed_visual" ? "failed" : "unknown";
-  }
+  if (kind === "semantic") return "unknown";
   if (checkpoints.length === 0 || checkpoints.some((checkpoint) => checkpoint.verdict === "unknown")) return "unknown";
   return checkpoints.every((checkpoint) => checkpoint.verdict === "passed") ? "passed" : "failed";
 }

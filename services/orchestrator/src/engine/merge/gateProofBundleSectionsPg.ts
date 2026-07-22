@@ -2,7 +2,12 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ProofSubstrate, ProofUnitDraft } from "../contracts/cas.js";
 import { contentDigestOf, parseDigest } from "../contracts/cas.js";
-import type { GateSectionVerdict, NativeCiBody, RuntimeBehaviorBody } from "../contracts/gateProof.js";
+import type {
+  GateSectionVerdict,
+  NativeCiBody,
+  RuntimeBehaviorBinding,
+  RuntimeBehaviorBody,
+} from "../contracts/gateProof.js";
 import { NativeCiBodySchema, RuntimeBehaviorBodySchema } from "../contracts/gateProof.js";
 import type { BehaviorVerdictOutcome, FlakeState } from "../contracts/runtimeVerificationAdapters.js";
 import { mapVerdictOutcomeToProofVerdict } from "../contracts/runtimeVerificationAdapters.js";
@@ -23,6 +28,7 @@ type QueryClient = Pick<pg.PoolClient, "query">;
 export interface GateSectionDraft extends RequiredGateSection {
   readonly draft: ProofUnitDraft;
   readonly verdict: GateSectionVerdict["verdict"];
+  readonly runtimeBehaviorBinding?: RuntimeBehaviorBinding;
 }
 
 /** Resolve only actual member requirements; no absent behavior/design proof is assumed green. */
@@ -136,6 +142,10 @@ async function runtimeBehaviorDraft(
       subjectId: runtimeSubject(memberRunId),
       verdict,
       draft: { kind: "runtime_behavior", verdict, subjectId: runtimeSubject(memberRunId), body },
+      runtimeBehaviorBinding: {
+        planSetHash: parseDigest(body.runtimeBehaviorContextHash),
+        requiredBehaviorRevisionCount: body.requiredBehaviorRevisionCount,
+      },
     };
   });
 }

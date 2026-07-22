@@ -20,7 +20,8 @@
     "verdict": {
       "enum": [
         "passed",
-        "failed"
+        "failed",
+        "unknown"
       ],
       "type": "string"
     }

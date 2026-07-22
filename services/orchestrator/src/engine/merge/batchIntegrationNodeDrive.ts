@@ -299,12 +299,7 @@ async function verdictForIntegrated(
         verdict: bundle.gateVerdict,
       },
     });
-    const behaviorSections = bundle.sections.filter((section) => section.kind === "runtime_behavior");
-    if (behaviorSections.length > 0) {
-      const planSetHash = behaviorSections.flatMap((section) => section.unitDigests).sort()[0];
-      if (planSetHash === undefined) {
-        throw new Error("sealed runtime behavior section has no proof-unit digest");
-      }
+    for (const binding of bundle.runtimeBehaviorBindings ?? []) {
       await deps.eventStore.append({
         orgId: facts.orgId,
         projectId: facts.projectId,
@@ -312,8 +307,8 @@ async function verdictForIntegrated(
         payload: {
           integrationNodeId: node.nodeId,
           gateProofBundleDigest: bundle.proofBundleDigest,
-          requiredBehaviorRevisionCount: behaviorSections.length,
-          planSetHash,
+          requiredBehaviorRevisionCount: binding.requiredBehaviorRevisionCount,
+          planSetHash: binding.planSetHash,
         },
       });
     }
