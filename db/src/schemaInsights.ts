@@ -165,9 +165,13 @@ export const ciTestResults = pgTable(
       name: "ci_test_results_behavior_run_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.behaviorAttemptId],
-      foreignColumns: [behaviorVerificationAttemptsReference.orgId, behaviorVerificationAttemptsReference.id],
-      name: "ci_test_results_behavior_attempt_fk",
+      columns: [table.orgId, table.behaviorVerificationRunId, table.behaviorAttemptId],
+      foreignColumns: [
+        behaviorVerificationAttemptsReference.orgId,
+        behaviorVerificationAttemptsReference.runId,
+        behaviorVerificationAttemptsReference.id,
+      ],
+      name: "ci_test_results_behavior_attempt_run_fk",
     }),
   ],
 );

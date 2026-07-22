@@ -209,41 +209,57 @@ export async function writeCiCompatibilityProjection(
   input: RecordAttemptInput,
 ): Promise<void> {
   validateAttemptInput(attemptId, input);
-  const outcome = normalizeAttemptForCi(input.outcome);
-  const projectionId = `behavior:${input.orgId}:${attemptId}`;
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO ci_test_results
        (id, project_id, org_id, test_id, file, suite, head_sha, source_kind, run_id,
         behavior_verification_run_id, behavior_attempt_id, attempt, outcome, duration_ms,
         retries, observed_at)
-     SELECT $1, a.project_id, a.org_id,
+     SELECT 'behavior:' || a.org_id || ':' || a.id, a.project_id, a.org_id,
             'behavior:' || a.behavior_revision_id || ':' || a.example_hash || ':' || a.matrix_hash,
             NULL, 'runtime-behavior', r.prepared_head_sha, 'behavior_verification', r.run_id,
-            r.id, a.id, 1, $4,
+            r.id, a.id, 1,
+            CASE a.outcome
+              WHEN 'passed' THEN 'passed'
+              WHEN 'failed_product' THEN 'failed'
+              WHEN 'failed_verification_contract' THEN 'failed'
+              WHEN 'failed_visual' THEN 'failed'
+              WHEN 'inconclusive_infrastructure' THEN 'error'
+              WHEN 'inconclusive_external' THEN 'error'
+              WHEN 'cancelled_superseded' THEN 'skipped'
+            END,
             CASE WHEN a.finished_at IS NULL THEN NULL
                  ELSE floor(extract(epoch FROM (a.finished_at - a.started_at)) * 1000)::integer END,
             0, coalesce(a.finished_at, a.started_at)
        FROM behavior_verification_attempts a
        JOIN behavior_verification_runs r
          ON r.org_id = a.org_id AND r.project_id = a.project_id AND r.id = a.run_id
-      WHERE a.org_id = $2 AND a.id = $3 AND a.project_id = $5
+      WHERE a.org_id = $1 AND a.id = $2
      ON CONFLICT (org_id, behavior_attempt_id)
        WHERE source_kind = 'behavior_verification'
      DO NOTHING
      RETURNING id`,
-    [projectionId, input.orgId, attemptId, outcome, input.projectId],
+    [input.orgId, attemptId],
   );
   if ((inserted.rowCount ?? 0) === 1) return;
 
   const replay = await client.query<{ matches: unknown }>(
-    `SELECT c.id = $1
+    `SELECT c.id = 'behavior:' || a.org_id || ':' || a.id
             AND c.project_id = a.project_id
             AND c.test_id = 'behavior:' || a.behavior_revision_id || ':' || a.example_hash || ':' || a.matrix_hash
             AND c.file IS NULL AND c.suite = 'runtime-behavior'
             AND c.head_sha = r.prepared_head_sha AND c.source_kind = 'behavior_verification'
             AND c.run_id IS NOT DISTINCT FROM r.run_id
             AND c.behavior_verification_run_id = r.id AND c.behavior_attempt_id = a.id
-            AND c.attempt = 1 AND c.outcome = $4
+            AND c.attempt = 1
+            AND c.outcome = CASE a.outcome
+              WHEN 'passed' THEN 'passed'
+              WHEN 'failed_product' THEN 'failed'
+              WHEN 'failed_verification_contract' THEN 'failed'
+              WHEN 'failed_visual' THEN 'failed'
+              WHEN 'inconclusive_infrastructure' THEN 'error'
+              WHEN 'inconclusive_external' THEN 'error'
+              WHEN 'cancelled_superseded' THEN 'skipped'
+            END
             AND c.duration_ms IS NOT DISTINCT FROM
                 CASE WHEN a.finished_at IS NULL THEN NULL
                      ELSE floor(extract(epoch FROM (a.finished_at - a.started_at)) * 1000)::integer END
@@ -255,8 +271,8 @@ export async function writeCiCompatibilityProjection(
        JOIN ci_test_results c
          ON c.org_id = a.org_id AND c.behavior_attempt_id = a.id
         AND c.source_kind = 'behavior_verification'
-      WHERE a.org_id = $2 AND a.id = $3 AND a.project_id = $5`,
-    [projectionId, input.orgId, attemptId, outcome, input.projectId],
+      WHERE a.org_id = $1 AND a.id = $2`,
+    [input.orgId, attemptId],
   );
   const row = replay.rows[0];
   if (row === undefined) {

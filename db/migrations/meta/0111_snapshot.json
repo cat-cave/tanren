@@ -1116,16 +1116,18 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "ci_test_results_behavior_attempt_fk": {
-          "name": "ci_test_results_behavior_attempt_fk",
+        "ci_test_results_behavior_attempt_run_fk": {
+          "name": "ci_test_results_behavior_attempt_run_fk",
           "tableFrom": "ci_test_results",
           "tableTo": "behavior_verification_attempts",
           "columnsFrom": [
             "org_id",
+            "behavior_verification_run_id",
             "behavior_attempt_id"
           ],
           "columnsTo": [
             "org_id",
+            "run_id",
             "id"
           ],
           "onDelete": "no action",

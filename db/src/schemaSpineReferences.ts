@@ -90,6 +90,7 @@ export const behaviorVerificationRunsReference = pgTable(
 /** Reference-only runtime-verification attempt identity (migration 0037). */
 export const behaviorVerificationAttemptsReference = pgTable("behavior_verification_attempts", {
   orgId: text("org_id").notNull(),
+  runId: text("run_id").notNull(),
   id: text("id").notNull(),
 });
 

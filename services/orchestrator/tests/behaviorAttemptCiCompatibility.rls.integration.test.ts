@@ -214,7 +214,7 @@ describeDb("rv-20 behavior-attempt CI compatibility projection — real Postgres
   let app: Pool;
   let store: PgAcceptanceRunStore;
   const postInput = attempt(POST_RUN, "passed");
-  const manualInput = attempt(MANUAL_RUN, "inconclusive_external");
+  const manualInput = attempt(MANUAL_RUN, "failed_product");
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -265,7 +265,7 @@ describeDb("rv-20 behavior-attempt CI compatibility projection — real Postgres
     await store.recordAttemptedVerdict({
       plan: plan(MANUAL_RUN),
       attempt: manualInput,
-      verdict: verdict(MANUAL_RUN, "inconclusive_external"),
+      verdict: verdict(MANUAL_RUN, "failed_product"),
     });
     await store.completeRun({ orgId: ORG, runId: POST_RUN, status: "completed" });
     await store.completeRun({ orgId: ORG, runId: MANUAL_RUN, status: "completed" });
@@ -303,7 +303,7 @@ describeDb("rv-20 behavior-attempt CI compatibility projection — real Postgres
         source_kind: "behavior_verification",
         behavior_verification_run_id: MANUAL_RUN,
         behavior_attempt_id: MANUAL_ATTEMPT,
-        outcome: "error",
+        outcome: "failed",
         duration_ms: 1250,
       },
       {
@@ -379,7 +379,35 @@ describeDb("rv-20 behavior-attempt CI compatibility projection — real Postgres
     ).resolves.toEqual({ complete: true, kind: "complete", runId: POST_RUN, requiredBehaviorRevisionCount: 1 });
   });
 
-  it("REQUIRED NEGATIVE CONTROL — deleted compat row -> ci_compat_projection_missing; foreign-org row rejected by RLS/FK; idempotency conflict fails loud", async () => {
+  it("REQUIRED NEGATIVE CONTROL — caller cannot green-wash a failed attempt and tampering flips completeness red", async () => {
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query("DELETE FROM ci_test_results WHERE org_id = $1 AND behavior_attempt_id = $2", [ORG, MANUAL_ATTEMPT]),
+    );
+    await runWithOrgScope(app, ORG, (client) =>
+      writeCiCompatibilityProjection(client, MANUAL_ATTEMPT, { ...manualInput, outcome: "passed" }),
+    );
+    const callerIndependent = await runWithOrgScope(app, ORG, (client) =>
+      client.query("SELECT outcome FROM ci_test_results WHERE behavior_attempt_id = $1", [MANUAL_ATTEMPT]),
+    );
+    expect(callerIndependent.rows).toEqual([{ outcome: "failed" }]);
+
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query("UPDATE ci_test_results SET outcome = 'failed' WHERE behavior_attempt_id = $1", [POST_ATTEMPT]),
+    );
+    await expect(
+      new PgAcceptanceCompletenessChecker(app).check({
+        orgId: ORG,
+        projectId: PROJECT,
+        releaseInstanceId: RELEASE,
+        promotedArtifactDigest: ARTIFACT,
+      }),
+    ).resolves.toEqual({ complete: false, failure: "ci_compat_projection_missing" });
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query("UPDATE ci_test_results SET outcome = 'passed' WHERE behavior_attempt_id = $1", [POST_ATTEMPT]),
+    );
+  });
+
+  it("deleted compat row is incomplete; cross-org and cross-run projection links are rejected; DB-derived idempotency conflicts fail loud", async () => {
     await runWithOrgScope(app, ORG, (client) =>
       client.query("DELETE FROM ci_test_results WHERE org_id = $1 AND behavior_attempt_id = $2", [ORG, POST_ATTEMPT]),
     );
@@ -411,9 +439,22 @@ describeDb("rv-20 behavior-attempt CI compatibility projection — real Postgres
 
     await expect(
       runWithOrgScope(app, ORG, (client) =>
-        writeCiCompatibilityProjection(client, POST_ATTEMPT, { ...postInput, outcome: "failed_visual" }),
+        client.query("UPDATE ci_test_results SET behavior_verification_run_id = $1 WHERE behavior_attempt_id = $2", [
+          MANUAL_RUN,
+          POST_ATTEMPT,
+        ]),
       ),
+    ).rejects.toMatchObject({ code: "23503" });
+
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query("UPDATE ci_test_results SET outcome = 'failed' WHERE behavior_attempt_id = $1", [POST_ATTEMPT]),
+    );
+    await expect(
+      runWithOrgScope(app, ORG, (client) => writeCiCompatibilityProjection(client, POST_ATTEMPT, postInput)),
     ).rejects.toBeInstanceOf(CiCompatibilityProjectionConflictError);
+    await runWithOrgScope(app, ORG, (client) =>
+      client.query("UPDATE ci_test_results SET outcome = 'passed' WHERE behavior_attempt_id = $1", [POST_ATTEMPT]),
+    );
     const immutable = await runWithOrgScope(app, ORG, (client) =>
       client.query("SELECT outcome FROM ci_test_results WHERE behavior_attempt_id = $1", [POST_ATTEMPT]),
     );

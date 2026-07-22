@@ -76,7 +76,7 @@ describe("acceptance completeness invariant", () => {
     });
   });
 
-  it("blocks when any direct behavior-attempt compatibility projection is missing", async () => {
+  it("blocks when any direct behavior-attempt compatibility projection is missing or fails field fidelity", async () => {
     await expect(checker({ 8: [{ attempt_count: 2, projection_count: 1 }] }).check(input)).resolves.toEqual({
       complete: false,
       failure: "ci_compat_projection_missing",
