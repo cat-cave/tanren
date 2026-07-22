@@ -305,7 +305,7 @@ export async function resolveLandTimeBehaviorFailure(
         [orgId, runId],
       )
     ).rows[0];
-    if (run === undefined || decodeRunStatus(run.status) !== "completed") return undefined;
+    if (run === undefined || decodeRunStatus(run.status) !== "completed") return void 0;
     const failure = (
       await client.query<{ id: string; behavior_revision_id: string; outcome: string }>(
         `SELECT id, behavior_revision_id, outcome
@@ -316,7 +316,7 @@ export async function resolveLandTimeBehaviorFailure(
         [orgId, run.id],
       )
     ).rows[0];
-    if (failure === undefined) return undefined;
+    if (failure === undefined) return void 0;
     const outcome = failure.outcome as BehaviorFailureCoordinate["outcome"];
     if (!DECISIVE_FAILURES.has(outcome))
       throw new TypeError(`behavior failure has an unknown outcome: ${failure.outcome}`);
