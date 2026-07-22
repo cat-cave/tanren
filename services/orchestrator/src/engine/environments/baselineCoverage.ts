@@ -14,7 +14,7 @@
 // toolchain ⊆ baseline resolves straight to the golden base; the JIT env-image BUILD
 // fires ONLY when the toolchain is NOT covered (an off-baseline VERSION — node 18 vs
 // the baseline 24 — or an off-baseline TOOL — rust/bun the baseline never warmed).
-// This keeps apex-style baseline projects (node + pnpm, a subset of the baseline)
+// This keeps baseline-subset projects (node + pnpm, a subset of the baseline)
 // from ever triggering a build.
 //
 // VERSION-SPEC SEMANTICS — the baseline declares LOOSE MAJORS (`node = "24"`,

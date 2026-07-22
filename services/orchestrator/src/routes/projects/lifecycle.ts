@@ -1,4 +1,4 @@
-// The project LIFECYCLE surface (apex.md "missing endpoint → add it"): the
+// The project LIFECYCLE surface (missing endpoint → add it): the
 // supported way an operator PAUSES a project and resumes it later.
 //
 //   POST /:orgId/projects/:projectId/archive

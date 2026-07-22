@@ -98,7 +98,7 @@ export interface RetryUntilConvergedInput<TResult> {
    * (`done`/`progress`/`escalate`). A caller opts in to emit a `*.retrying` structured
    * log line or metric that lets an operator see WHICH retries are happening — critical
    * for the loop-STAGE callers (writer/plan/checker/auditor stall recovery, deploy
-   * verify) that visibly stall the DAG during apex.
+   * verify) that visibly stall the DAG during an autonomous run.
    *
    * OPTIONAL by design: existing callers keep working with NO change — the primitive
    * emits nothing itself. Never mutates loop state; a throw or rejection propagates

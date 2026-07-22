@@ -83,7 +83,7 @@ export interface ForgeConversationContext {
   runId: string | null;
   // Results of any read tools the engine has run so far in THIS exchange.
   toolResults: ReadonlyArray<ForgeToolResult>;
-  // TERMINAL pass (apex pre-run §7.10): set on the engine's last re-ask after the
+  // TERMINAL pass: set on the engine's last re-ask after the
   // tool-round budget is spent. The prompt then tells the model it MUST finalize NOW
   // and stops offering read tools — so a budget-spent re-ask doesn't burn another
   // round requesting tools it can no longer run. Absent/false on a normal round.

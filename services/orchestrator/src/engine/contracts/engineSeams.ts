@@ -15,7 +15,7 @@
 
 /**
  * One item ingested from an issue source, reduced to what the planner reasons over.
- * Provider-neutral: a GitHub issue, a Slack thread, an email, or an apex operator
+ * Provider-neutral: a GitHub issue, a Slack thread, an email, or an operator
  * note all map onto this. Mirrors the existing inbox `IngestedItem` shape (Wave-2
  * aligns the inbox connector onto this contract — it is NOT a new parallel type).
  */

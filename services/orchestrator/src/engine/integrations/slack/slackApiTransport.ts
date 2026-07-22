@@ -7,7 +7,7 @@
 // SecretStore — the token never lands in a provisioned artifact in the clear).
 //
 // Plane A ONLY: this is the transport for Tanren's OWN Slack notification
-// provisioning (the Forge interaction plane). The apex product's own Slack bot is
+// provisioning (the Forge interaction plane). The built product's own Slack bot is
 // Plane B (the built product's app environment) and is provisioned separately.
 //
 // TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING — task #32,

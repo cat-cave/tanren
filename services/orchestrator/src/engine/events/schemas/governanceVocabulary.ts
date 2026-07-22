@@ -4,7 +4,7 @@ import { z } from "zod";
 //
 // The typed, versioned event names the immutable-policy-revision authority + its
 // deterministic compiler emit, frozen here from the governance spec
-// (docs/roadmap/mission-complete/nodes/governance.md §7 apex-provability). A barrier
+// (docs/roadmap/mission-complete/nodes/governance.md §7 provability). A barrier
 // pre-flight owns the freeze so the gv-7 consumer touches zero shared vocabulary.
 //
 // Payload discipline: payloads carry revision IDs, project IDs, revision/schema

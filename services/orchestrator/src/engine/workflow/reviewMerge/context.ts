@@ -297,7 +297,7 @@ export function computeMergePolicyIdentity(config: ProjectConfigV1): string {
 /**
  * The ADDITIVE belt-and-suspenders logins Tanren's own pushes carry — the default
  * bot login plus any operator-configured `governanceTanrenLogins` (optional; empty
- * by default — the apex path needs ZERO config). The AUTHORITATIVE login is the one
+ * by default — the default path needs ZERO config). The AUTHORITATIVE login is the one
  * the merge stage resolves from the active credential (`resolveActorIdentity`) and
  * merges into the identity set at `evaluatePosture`. The old bogus `app/<appId>`
  * entry is GONE — it was never a real GitHub login (the App bot login is

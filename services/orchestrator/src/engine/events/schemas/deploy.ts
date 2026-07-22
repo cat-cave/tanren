@@ -205,7 +205,7 @@ export type DeployManualConfirmedPayload = z.infer<typeof DeployManualConfirmedP
 // be ACCUMULATING machines. This is the apex-v96 fragmentation class made LOUD +
 // DURABLE: a single-instance product's file store fragments across accumulated
 // machines, presenting as a false "persistence broken" PRODUCT symptom — but the root
-// cause is INFRA (a reap blip), not product code. Emitting this event makes an apex
+// cause is INFRA (a reap blip), not product code. Emitting this event makes an autonomous run
 // halt from accumulation attributable to infra rather than blamed on the product.
 // The deploy itself STILL SUCCEEDS (reap is best-effort, non-fatal) — this event is
 // the visible, durable breadcrumb, and the durable Fly-machine reconciler sweep

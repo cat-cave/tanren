@@ -16,7 +16,7 @@
 // the runner; only resolved,
 // git-compatible refs are exported for the host — `exportCleanGitRef` REFUSES a
 // ref that still carries an unresolved conflict. This directly closes the live
-// apex stall (a merge-queue conflict the resolver never engaged) by making
+// autonomous-run stall (a merge-queue conflict the resolver never engaged) by making
 // "work is never discarded" a property of the core, not a hoped-for behavior.
 
 import type { Finding } from "./findings.js";

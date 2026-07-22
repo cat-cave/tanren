@@ -1,5 +1,5 @@
 // The human-in-the-loop resolution of a `needs_attention` escalation (the operator
-// API gap the live apex run surfaced). When a spec exhausts its bounded re-enqueue
+// API gap a live run surfaced). When a spec exhausts its bounded re-enqueue
 // budget (the NEVER-STRAND reconciler) or hits a genuinely irreconcilable merge
 // conflict, it parks at the terminal `needs_attention` status — freeing the DAG slot
 // but blocking its dependents. There is no AUTO exit: a human must DECIDE how to

@@ -31,7 +31,7 @@ export type P2P3Handling = "fix-if-idle" | "route-to-dag";
  * is `blockReviewAt: 'P3'` (block on anything, even P3); velocity is
  * `blockReviewAt: 'P1'` (only P0/P1 block) with `p2p3Handling: 'route-to-dag'`.
  *
- * `autonomousRemediation` is the AUTONOMOUS-RUN knob (apex doctrine): when true, a
+ * `autonomousRemediation` is the AUTONOMOUS-RUN knob: when true, a
  * BLOCKING finding (≥ `blockReviewAt`) does NOT merely PARK at needs_attention — it
  * ALSO becomes a REMEDIATION DAG spec, so the scheduled-audit loop CLOSES as
  * "audit → finding → fix → merge" with no operator. The block still holds for the
@@ -65,7 +65,7 @@ export interface AuditPostureDecision {
   fixInPlace: Finding[];
   /**
    * The BLOCKING findings (≥ `blockReviewAt`) to ALSO turn into remediation DAG
-   * specs. Non-empty ONLY under `autonomousRemediation: true` — an autonomous/apex
+   * specs. Non-empty ONLY under `autonomousRemediation: true` — an autonomous
    * run remediates a blocking defect by re-entering it as fix-it work rather than
    * leaving it parked. Empty under the balanced default (a blocking finding parks
    * for a human). The block boolean is UNCHANGED either way (the current spec still
@@ -99,7 +99,7 @@ export function decideFromFindings(findings: ReadonlyArray<Finding>, posture: Au
   const route = posture.p2p3Handling === "route-to-dag" ? residual : [];
   const fixInPlace = posture.p2p3Handling === "fix-if-idle" ? residual : [];
   // AUTONOMOUS REMEDIATION: a blocking finding also becomes a remediation DAG spec
-  // (so an autonomous/apex run fixes it, not parks it). The block stays true — the
+  // (so an autonomous run fixes it, not parks it). The block stays true — the
   // current spec is still fail-closed; the remediation is the additional fix-it work.
   const remediate = posture.autonomousRemediation === true ? blocking : [];
   return { block: blocking.length > 0, route, fixInPlace, remediate };

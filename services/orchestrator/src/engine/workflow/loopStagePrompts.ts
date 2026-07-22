@@ -221,7 +221,7 @@ export interface DemoRunPromptInput {
 // (explicit P0–P3) for whatever genuinely did not work. Distinct from the checker
 // (per-task completeness) and the auditor (quality). Findings-only, no verdict.
 //
-// HONESTY (apex pre-run §7.6): the demo answerer runs in a READ-ONLY sandbox — it
+// HONESTY: the demo answerer runs in a READ-ONLY sandbox — it
 // CANNOT start a server, run the app, or perform live I/O. So the prompt no longer
 // mandates the impossible "exercise the app". It asks for STATIC read-only probing
 // (read the diff + sources + tests + entrypoints and reason about whether the flow

@@ -43,7 +43,7 @@ export interface RefineRunnerImageForEnvInput {
 /**
  * Refine the run's resolved runner image via JIT env-image creation. A no-op when the
  * project declared no toolchain OR the toolchain is a baseline-subset (the golden
- * base already serves it — apex-style node+pnpm lands here). An OFF-baseline
+ * base already serves it — baseline-subset node+pnpm lands here). An OFF-baseline
  * toolchain routes through the P4 resolver to build→validate→publish a real env
  * image, then overrides `context.runnerImage` to seed from it.
  *
