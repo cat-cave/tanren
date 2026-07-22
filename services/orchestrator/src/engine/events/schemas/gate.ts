@@ -107,7 +107,7 @@ export const GateFailedPayload = z
 // (lint/typecheck) exited nonzero. The step's failure is RECORDED here as a
 // warning but does NOT block — the tier keeps running and the gate stays passing.
 // This makes the real first-pass quality issue visible on the timeline without
-// stalling a functional-but-weak autonomous build (the apex doctrine). Build/test
+// stalling a functional-but-weak autonomous build. Build/test
 // failures still emit `gate.failed` and block.
 export const GateAdvisoryFailedPayload = z
   .object({

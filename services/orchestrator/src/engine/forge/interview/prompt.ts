@@ -25,10 +25,10 @@ const EX_PYTHON = GOLDEN_BASELINE_TOOLCHAIN["python"] ?? "3.14";
 
 export function buildInterviewPrompt(context: InterviewAnswererContext): string {
   // Compact (not pretty-printed) capture JSON: the pretty form ~doubles the token
-  // cost of the growing capture for zero model benefit (apex pre-run §7.8).
+  // cost of the growing capture for zero model benefit.
   const captureJson = JSON.stringify(context.capture);
   return [
-    // STATIC-FIRST (apex pre-run §7.8): the goal + architecture + lifecycle-pinning
+    // STATIC-FIRST: the goal + architecture + lifecycle-pinning
     // instructions are INVARIANT across rounds, so they form the prompt prefix and
     // stay cache-stable. The variable tail (round number, operator answer, capture)
     // comes LAST so a per-round change never invalidates the cached static prefix.

@@ -41,7 +41,7 @@ const MISE_CONFIG_REL_PATH = "mise.toml";
 // INTERACTIVE shell hook (a `mise()` shim function + a `_mise_hook` precmd/chpwd hook)
 // whose PATH update fires only on an interactive prompt or a `cd` — NOT immediately for
 // the non-interactive `bash -c "<prelude>; <command>"` we run over SSH, so a bare
-// `pnpm` would not be found (the observed apex failure: `mise install` provisions
+// `pnpm` would not be found (the observed failure: `mise install` provisions
 // node+pnpm fine, then `pnpm install` dies with `sh: pnpm: not found`, exit 127). The
 // hook-mode output is also full of bash-only syntax (`__MISE_FLAGS=()` arrays,
 // `declare -f`, `[[ … ]]`), so under a non-bash project shell (e.g. a `just` recipe run

@@ -9,7 +9,7 @@
 //      the metadata write the discovery path issues.
 //   2. The grounding spec LIST — `(spec_id, title, status)` for a project, that
 //      the discovery/intake answerers read to ground a classification against the
-//      project's existing DAG. BOUNDED (apex pre-run §7.5): active specs first,
+//      project's existing DAG. BOUNDED: active specs first,
 //      then the most-recent terminal ones, capped — never the unbounded full list.
 //
 // Both read/write the same client the caller hands in (the org-scope carrier),
@@ -63,7 +63,7 @@ export const DiscoveryStore = {
    * The project's existing specs (id/title/status) — the grounding list the
    * discovery/intake/triage answerers read for dedupe + placement.
    *
-   * BOUNDED (apex pre-run §7.5): a long-lived project accumulates hundreds of merged
+   * BOUNDED: a long-lived project accumulates hundreds of merged
    * specs; rendering EVERY one (title-ordered, no LIMIT) bloats every grounding prompt
    * unboundedly. So we surface the specs that matter for dedupe/placement — the
    * ACTIVE (non-terminal) specs FIRST, then the most-recent terminal ones — capped at

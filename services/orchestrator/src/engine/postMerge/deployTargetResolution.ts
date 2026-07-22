@@ -1,5 +1,5 @@
 // Deploy-intent resolution for deploy-on-merge — the THREE-WAY distinction that
-// replaces the old "undefined ⇒ silently skip" no-op (pre-apex Fix-C):
+// replaces the old "undefined ⇒ silently skip" no-op (pre-hardening Fix-C):
 //   • CONFIGURED — the project config carries a complete (provider + appId) deploy
 //     target ⇒ the deploy fires.
 //   • NONE — the project configures no deploy AND its org links no deploy-capable

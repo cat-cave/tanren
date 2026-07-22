@@ -228,7 +228,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     return handleBudgetPut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
   });
 
-  // The dedicated GOVERNANCE surface (apex.md "missing endpoint → add it"): a
+  // The dedicated GOVERNANCE surface (missing endpoint → add it): a
   // discoverable read + update for the three settings that decide whether the
   // autonomous DagWalker can advance a project (reviewPolicy / mergeIntegration /
   // governancePosture) — the supported way to flip an existing project to

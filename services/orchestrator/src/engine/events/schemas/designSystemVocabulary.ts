@@ -3,7 +3,7 @@ import { z } from "zod";
 // ds-0 mission-complete DESIGN-SYSTEM event vocabulary FREEZE (SP-8 barrier).
 //
 // The registered event schemas the executable design-system engine emits, frozen
-// here EXACTLY from the design bucket's "APEX-PROVABILITY" table (§7 of
+// here EXACTLY from the design bucket's provability table (§7 of
 // docs/roadmap/mission-complete/nodes/design-engine-surfaces-phasing-risks.md).
 // ds-0 owns its own wave, so it freezes the whole design vocabulary in one PR;
 // downstream nodes (ds-3 authoring, ds-4 render/oracle, ds-5 binding, ds-6

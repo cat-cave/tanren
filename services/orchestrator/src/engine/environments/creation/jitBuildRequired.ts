@@ -9,7 +9,7 @@
 // than a legible config error ("configure the registry"). H1 finding #4.
 //
 // The check is symmetric with `refineRunnerImageForEnv`: a NO-toolchain / EMPTY /
-// BASELINE-SUBSET toolchain is fine (the golden base already serves it — apex-style
+// BASELINE-SUBSET toolchain is fine (the golden base already serves it — a
 // node+pnpm lands here and never needs JIT). Only an OFF-baseline toolchain (a
 // baseline-tool at a different version, or a tool the baseline never warmed) with
 // no registry configured throws.
@@ -55,7 +55,7 @@ export class JitBuildRequiredError extends Error {
  * (empty / baseline-subset) OR (b) has a configured `TANREN_ENV_REGISTRY` to build
  * against. Throws `JitBuildRequiredError` when an off-baseline toolchain would have
  * silently degraded to the golden base. A no-op for a covered toolchain — never a
- * false positive on the apex-style node+pnpm path.
+ * false positive on the baseline-subset node+pnpm path.
  *
  * The default reads `TANREN_ENV_REGISTRY` via `jitEnvRegistryConfigured` — the same
  * source `buildEnvCreationFromEnv` reads at boot, so the two are guaranteed in sync.
@@ -72,7 +72,7 @@ export function assertJitAvailableForToolchain(
     return;
   }
   // Baseline-subset toolchain ⇒ the golden base already serves it (SHORT-CIRCUIT).
-  // apex-style node+pnpm lands here — never triggers a build, never needs JIT.
+  // Baseline-subset node+pnpm lands here — never triggers a build, never needs JIT.
   if (toolchainCoveredByGoldenBaseline(toolchain)) {
     return;
   }

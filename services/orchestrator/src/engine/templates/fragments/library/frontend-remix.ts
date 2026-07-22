@@ -5,7 +5,7 @@
 // is expressed via `dependsOn` so the library load-order resolver throws on the
 // bad combination at registry time, not at runtime.
 //
-// Why Remix as a fragment: apex's captured operator notes commonly say
+// Why Remix as a fragment: captured operator notes commonly say
 // "ts/pnpm + Remix + PostgreSQL + Fly". Without this fragment, that lifecycle
 // has no resolvable frontend slot and `selectFragmentConfig` returns a
 // `missing-fragments` decision that triggers a per-fragment authoring run for

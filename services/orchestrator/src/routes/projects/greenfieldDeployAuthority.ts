@@ -41,7 +41,7 @@ function notLinked(orgId: string, providerKind: DeployProviderKind): NotLinkedRe
     capability: "deploy",
     providerKind,
     message:
-      `link ${providerKind} at the org level first — greenfield/apex creation requires a real ` +
+      `link ${providerKind} at the org level first — greenfield creation requires a real ` +
       `deploy target, but org ${orgId} has no active ${providerKind} control grant.`,
     linkAffordance: { kind: "org_integration_link", providerKind, orgId },
   };
