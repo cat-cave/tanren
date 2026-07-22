@@ -3,13 +3,13 @@
 This guide is for a contributor who wants to give Tanren a **new hard product to
 build** so that more people, on more machines, can flush more engine bugs in
 parallel. Read it before you invent a fixture — the single most important rule
-(a fixture is *never* engine code) is easy to break by accident.
+(a fixture is _never_ engine code) is easy to break by accident.
 
 If you have never driven Tanren before, read
 [`apex.md`](./apex.md) first (the operator role — it is counterintuitive) and
 [`apex-run-playbook.md`](./apex-run-playbook.md) second (the mechanical
 drive-from-zero steps). This document sits alongside them: it does not tell you
-how to *run* a fixture, it tells you how to *author* one.
+how to _run_ a fixture, it tells you how to _author_ one.
 
 ---
 
@@ -42,7 +42,7 @@ bugs faster than re-running the same one.
 This is the rule that keeps the whole exercise honest:
 
 - **A fixture is not engine code.** Nothing about a fixture may be hard-coded,
-  documented, or custom-built *inside Tanren*. There is no "apex workflow," no
+  documented, or custom-built _inside Tanren_. There is no "apex workflow," no
   "apex harness," no "apex mode," no fixture-specific branch, magic constant, or
   product name baked into `services/orchestrator`. (The one historical
   `TANREN_APEX_MODE` env flag was deliberately eradicated in #646 precisely
@@ -54,21 +54,21 @@ This is the rule that keeps the whole exercise honest:
   [templating doctrine](../roadmap/templating-system.md)). A fixture must
   exercise that real path, not skip it.
 - **A fixture is not checked into this repo.** The rough notes live in the
-  *operator's* run (or a personal notes file); they are an *input* you type into
+  _operator's_ run (or a personal notes file); they are an _input_ you type into
   the interview, not a file the engine reads. (Do not confuse apex fixtures with
   the `fixtures/` directory in this repo — those are seed repos for the separate
   [tanren-method benchmark](../roadmap/tanren-method-benchmark.md), a different
   program.)
 
 **Why this rule matters.** apex exists to prove Tanren can autonomously build a
-*max-difficulty* project through its **normal, general** flow. If Tanren needed
+_max-difficulty_ project through its **normal, general** flow. If Tanren needed
 anything apex-shaped to pass, the proof would be void — we would have shown only
 that it can pass a rigged test, not that it builds hard projects generally.
 
 ### The corollary: a fixture that needs an engine change is a bug report
 
-If you sit down to author a fixture and discover you *cannot* express it, or it
-*cannot* run, without changing the engine — a missing operator API endpoint, an
+If you sit down to author a fixture and discover you _cannot_ express it, or it
+_cannot_ run, without changing the engine — a missing operator API endpoint, an
 unsupported deploy provider, an integration with no adapter — **that is an engine
 gap, not a fixture to special-case.** File it as a GitHub issue (`label:bug` or a
 node), fix it as one CI-gated PR through the normal contribution flow, and then
@@ -78,14 +78,14 @@ product would build" is apex being defeated.
 
 ---
 
-## What makes a *good* max-difficulty fixture
+## What makes a _good_ max-difficulty fixture
 
 These are **properties that stress the engine**, described generally — they are
 not a checklist baked into any code, and no two fixtures need to hit them the
 same way. Aim for a product that naturally exercises as many as possible:
 
 - **A real, external deploy target.** The product must end up live on the
-  internet, not just on a laptop — deploy is a *creation dependency*, not an
+  internet, not just on a laptop — deploy is a _creation dependency_, not an
   afterthought (see [`apex.md`](./apex.md) "Deploy is a creation dependency" and
   [`deploy.md`](./deploy.md)). This forces the provision → build → deploy →
   reachable-URL path to actually fire. A product with no plausible deploy story
@@ -95,7 +95,7 @@ same way. Aim for a product that naturally exercises as many as possible:
   provider, an object store). This exercises credential import, provisioning, and
   the notification/integration seams — and it is where a lot of real bugs hide.
 - **A verifiable runtime behavior.** There must be some observable thing the
-  built product *does* that you can check without reading its code — a page that
+  built product _does_ that you can check without reading its code — a page that
   returns data, a message that arrives, a file that appears, an exit code. This
   is what lets you (as a non-technical operator) tell "it works" from "it's
   broken" the way a real user would.
@@ -104,7 +104,7 @@ same way. Aim for a product that naturally exercises as many as possible:
   under a notifier). Layers create a multi-spec DAG with real dependencies, which
   is what the walker and the merge queue exist to coordinate.
 - **A plantable bug for the self-healing loop.** There should be a natural place
-  to introduce a *symptom* — a real defect a user would notice — so you can test
+  to introduce a _symptom_ — a real defect a user would notice — so you can test
   the back half: file the symptom as an issue into Tanren, then watch it
   auto-triage → spec → DAG-insert → fix → merge → re-verify. Word the plant as a
   **symptom, never a diagnosis** ("the confirmation email never arrives," not
@@ -112,10 +112,10 @@ same way. Aim for a product that naturally exercises as many as possible:
 - **A non-technical operator can describe it.** If expressing the product forces
   you to name frameworks, databases, or CI tools, it is too technical — that is
   the operator handing Tanren the answers, which bypasses exactly what is under
-  test. Good notes talk about *what the product does for a person*, never *how*.
+  test. Good notes talk about _what the product does for a person_, never _how_.
 
 **Diversity beats polish.** A rough, weird, only-half-thought-out product that is
-*different* from the existing fixtures is more valuable than a beautifully
+_different_ from the existing fixtures is more valuable than a beautifully
 specified clone of the link-shortener. The goal for this phase is breadth of
 engine coverage, not a portfolio of pretty demos.
 
@@ -128,7 +128,7 @@ and the **credentials/targets** the product needs.
 
 ### The rough notes
 
-Write two-to-four short paragraphs *as the product owner*, in the voice
+Write two-to-four short paragraphs _as the product owner_, in the voice
 [`apex.md`](./apex.md) demands: what the thing is, who uses it, what "working"
 looks like, and where it should live once built. Do not write specs, name
 technologies, or answer as an engineer. You do not need to write the whole thing
@@ -191,7 +191,7 @@ and invent your own.
 > hand. Success is: a non-technical teammate runs one command and their mess of
 > photos comes out tidy and shared."
 
-*Why it's good:* a CLI (no web surface at all), a real cloud-storage integration,
+_Why it's good:_ a CLI (no web surface at all), a real cloud-storage integration,
 a real release/distribution "deploy" target, a chat notification, and an obvious
 plantable symptom ("the chat note never fires after big uploads").
 
@@ -206,7 +206,7 @@ plantable symptom ("the chat note never fires after big uploads").
 > not on my machine. Success is: I stop having to build the spreadsheet by hand
 > and I trust the digest enough to forward it."
 
-*Why it's good:* a headless scheduled service (stresses the deploy path for a
+_Why it's good:_ a headless scheduled service (stresses the deploy path for a
 non-request-driven workload), an external data source, an object-store output, an
 email integration, an error-path behavior to verify, and a natural symptom ("the
 digest arrived but the totals are for the wrong day").
@@ -222,7 +222,7 @@ digest arrived but the totals are for the wrong day").
 > expensive. Success is: the room stays monitored without anyone watching a
 > screen, and the on-call text is fast and trustworthy."
 
-*Why it's good:* an ingest endpoint (not a human-facing UI), a real deploy target
+_Why it's good:_ an ingest endpoint (not a human-facing UI), a real deploy target
 the sensors must reach, an SMS integration, a stateful time-window behavior that
 is genuinely verifiable, and a rich symptom surface ("the alert texts even when
 the room is fine" / "the silence reply doesn't stop the pings").
