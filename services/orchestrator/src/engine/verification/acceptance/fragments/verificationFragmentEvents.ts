@@ -49,7 +49,8 @@ export type VerificationFragmentAuthoringEvent =
         readonly capability: VerificationFragmentKind;
         readonly fragmentId: string;
         readonly fragmentVersion: string;
-        readonly negativeControlPassed: boolean;
+        /** Present only when F2 measured this control for this fragment. */
+        readonly negativeControlPassed?: boolean;
       };
     }
   | { readonly kind: "none" };
@@ -84,10 +85,8 @@ export function createVerificationFragmentAuthoringEventFactory(): AuthoringEven
             capability: validated.fragmentKind,
             fragmentId: truncateId(validated.fragmentId),
             fragmentVersion: validated.version,
-            // A valid fragment is accepted only after the validator's rejecting
-            // arms have checked the same draft contract; this records that real
-            // validation result, not an authorer self-report.
-            negativeControlPassed: true,
+            // F2 currently reports only valid/rejected, not a separate measured
+            // negative-control signal. Do not infer one from acceptance.
           },
         };
       }

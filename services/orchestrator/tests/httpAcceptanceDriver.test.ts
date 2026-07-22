@@ -185,9 +185,15 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.outcome).toBe("passed");
     expect(behavior.executedAssertionCount).toBe(3);
     expect(behavior.passedAssertionCount).toBe(3);
-    expect(events.events.filter((event) => event.eventType === "behavior.action.observed")).toMatchObject([
-      { payload: { behaviorRevisionId: "br_http_rv6", actionId: "p1", surface: "api" } },
-    ]);
+    const observedActions = events.events.filter((event) => event.eventType === "behavior.action.observed");
+    // There are three real driver observations (one per observed assertion), so
+    // there are exactly three action facts — this is not the one planned probe.
+    expect(observedActions).toHaveLength(3);
+    for (const event of observedActions) {
+      expect(event).toMatchObject({
+        payload: { behaviorRevisionId: "br_http_rv6", shardId: "plan_http_rv6:0", actionId: "p1", surface: "api" },
+      });
+    }
   });
 
   it("DECISIVE: a wrong response (500) fails the status assertion — failed_product, never passed", async () => {
@@ -229,6 +235,14 @@ describe("HttpAcceptanceSurfaceDriver — real HTTP observations, no fabrication
     expect(behavior.outcome).not.toBe("passed");
     expect(behavior.outcome).toBe("failed_verification_contract");
     expect(behavior.executedAssertionCount).toBe(0);
+  });
+
+  it("emits no action.observed when the real driver returned no observations, despite a planned probe", async () => {
+    const { events } = await runWith(
+      baseUrl,
+      plan("/health", [{ assertionId: "a1", subject: "p1.unknown", comparisonOperator: "equals", expected: null }]),
+    );
+    expect(events.events.filter((event) => event.eventType === "behavior.action.observed")).toHaveLength(0);
   });
 
   it("DECISIVE: not_equals / not_contains on a genuinely-absent field never pass (absent ≠ observed)", async () => {

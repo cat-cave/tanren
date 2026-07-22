@@ -101,7 +101,10 @@ export const BehaviorFragmentValidatedPayload = z
     capability: FragmentCapability,
     fragmentId: Id,
     fragmentVersion: z.string().min(1).max(128),
-    negativeControlPassed: z.boolean(),
+    // F2 validation currently returns only a valid/rejected verdict. Until it
+    // also returns a measured negative-control result, its absence is honest;
+    // a successful validation is not evidence that a negative control passed.
+    negativeControlPassed: z.boolean().optional(),
   })
   .strict();
 

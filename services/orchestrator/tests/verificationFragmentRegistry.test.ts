@@ -21,9 +21,11 @@ import type {
 import {
   VERIFICATION_FRAGMENT_CONTRACT_VERSION,
   compileAndBindAcceptancePlan,
+  buildVerificationFragmentValidator,
   createVerificationFragmentAuthoringEventFactory,
   toCapabilityFragmentRef,
   VerificationFragmentAuthoringFailedError,
+  VerificationFragmentEventSinkRequiredError,
   type PlanCapabilityAuthoring,
   type PresentVerificationCapability,
   type ValidatedVerificationFragment,
@@ -124,14 +126,54 @@ function recordedEvents(): { readonly sink: AcceptanceEventSink; readonly events
   };
 }
 
+const silentEvents: AcceptanceEventSink = { async append(): Promise<void> {} };
+
 describe("rv-3 verification-fragment registry + F2 authoring", () => {
+  it("marks fragment-validation negative control unknown when F2 did not measure one", async () => {
+    const spec: VerificationFragmentSpecV1 = { capabilityKey: "seed_user", fragmentKind: "fixture", surface: "api" };
+    const verdict = await buildVerificationFragmentValidator().validate({
+      request: { context: { orgId: "org1", projectId: "proj1", behaviorRevisionId: "br_1" } },
+      spec,
+      draft: validDraft(spec),
+    });
+    if (verdict.kind !== "valid") throw new Error("fixture draft must be valid");
+    const event = createVerificationFragmentAuthoringEventFactory().build({
+      request: { context: { orgId: "org1", projectId: "proj1", behaviorRevisionId: "br_1" } },
+      lifecycle: { point: "succeeded", unitId: "fixture:seed_user", attempts: 1, validated: verdict.validated },
+    });
+    if (event.kind !== "emit" || event.eventType !== "behavior.fragment.validated") {
+      throw new Error("expected a fragment validated event");
+    }
+    expect(event.payload.negativeControlPassed).toBeUndefined();
+    expect("negativeControlPassed" in event.payload).toBe(false);
+  });
+
+  it("fails loud with a typed error when a compilation emit path has no sink", async () => {
+    const store = new InMemoryStore();
+    await expect(
+      compileAndBindAcceptancePlan({
+        revision: REVISION,
+        orgId: "org1",
+        projectId: "proj1",
+        store,
+        events: undefined as never,
+      }),
+    ).rejects.toBeInstanceOf(VerificationFragmentEventSinkRequiredError);
+  });
+
   it("resolves a REGISTERED fragment and binds it into the plan (no authoring)", async () => {
     const store = new InMemoryStore();
     // Pre-register the cited capability directly through the store seam.
     const spec: VerificationFragmentSpecV1 = { capabilityKey: "seed_user", fragmentKind: "fixture", surface: "api" };
     await runAuthoringOnce(store, spec);
 
-    const plan = await compileAndBindAcceptancePlan({ revision: REVISION, orgId: "org1", projectId: "proj1", store });
+    const plan = await compileAndBindAcceptancePlan({
+      revision: REVISION,
+      orgId: "org1",
+      projectId: "proj1",
+      store,
+      events: silentEvents,
+    });
     expect(plan.capabilityFragments).toHaveLength(1);
     expect(store.bindCalls).toHaveLength(1);
     expect(store.bindCalls[0]?.bindings[0]?.stepId).toBe("f1");
@@ -146,6 +188,7 @@ describe("rv-3 verification-fragment registry + F2 authoring", () => {
       orgId: "org1",
       projectId: "proj1",
       store,
+      events: silentEvents,
       authoring: authoring(store, fixtureAuthorer(author)),
     });
     expect(author).toHaveBeenCalledTimes(1);
@@ -165,6 +208,7 @@ describe("rv-3 verification-fragment registry + F2 authoring", () => {
         orgId: "org1",
         projectId: "proj1",
         store,
+        events: silentEvents,
         authoring: authoring(store, wrong),
       }),
     ).rejects.toBeInstanceOf(VerificationFragmentAuthoringFailedError);
@@ -175,7 +219,13 @@ describe("rv-3 verification-fragment registry + F2 authoring", () => {
   it("HALTS LOUD when a cited fragment is missing and NO authoring seam is configured", async () => {
     const store = new InMemoryStore();
     await expect(
-      compileAndBindAcceptancePlan({ revision: REVISION, orgId: "org1", projectId: "proj1", store }),
+      compileAndBindAcceptancePlan({
+        revision: REVISION,
+        orgId: "org1",
+        projectId: "proj1",
+        store,
+        events: silentEvents,
+      }),
     ).rejects.toBeInstanceOf(VerificationFragmentAuthoringFailedError);
   });
 
@@ -186,6 +236,7 @@ describe("rv-3 verification-fragment registry + F2 authoring", () => {
       orgId: "org1",
       projectId: "proj1",
       store,
+      events: silentEvents,
     });
     expect(plan.capabilityFragments).toBeUndefined();
     expect(store.bindCalls).toHaveLength(0);
