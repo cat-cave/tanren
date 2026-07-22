@@ -127,6 +127,10 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // both non-secret, defaulted knobs read when the containerized screenshot runner
   // is constructed (same point-of-use posture as the env/Fly build config above).
   "services/orchestrator/src/engine/design/render/podmanScreenshotRunner.ts",
+  // rv-26.6 (apex P6) browser click runner point-of-use config: the SAME non-secret
+  // defaulted knobs (TANREN_PODMAN_BIN + TANREN_DS4_RENDER_IMAGE) read when the
+  // containerized click runner is constructed — same posture as the screenshot runner.
+  "services/orchestrator/src/engine/verification/acceptance/podmanBrowserClickRunner.ts",
   // ── allocator boot ─────────────────────────────────────────────────────────
   // main.ts: the BYPASSRLS system DB URL pool selection.
   "services/allocator/src/main.ts",

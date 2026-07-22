@@ -19,7 +19,13 @@
 import { parseDigest } from "../../contracts/cas.js";
 import { parseBehaviorRevisionId, parsePersonaRevisionId } from "../../contracts/behaviorRevision.js";
 import type { AssertionExpression, ExecutableBehaviorPlanV1 } from "../../contracts/runtimeVerificationPlan.js";
-import type { AcceptanceAssertion, AcceptancePlan, HttpProbeSpec, PlanCapabilityFragment } from "./orchestrator.js";
+import type {
+  AcceptanceAssertion,
+  AcceptancePlan,
+  ClickInteractionSpec,
+  HttpProbeSpec,
+  PlanCapabilityFragment,
+} from "./orchestrator.js";
 import type { CauseSpec, EffectCorrelation } from "./causalCorrelation.js";
 import { parseAcceptanceSpec, type AcceptanceSpecV1 } from "./acceptanceSpec.js";
 import { compileExecutableBehaviorPlan } from "./executablePlanCompiler.js";
@@ -86,6 +92,13 @@ export function toAcceptancePlan(plan: ExecutableBehaviorPlanV1, spec: Acceptanc
     ...(probe.body === undefined ? {} : { body: probe.body }),
   }));
 
+  // rv-26.6: project the browser click interactions the browser surface driver drives.
+  const clickInteractions: readonly ClickInteractionSpec[] = spec.clickInteractions.map((interaction) => ({
+    interactionId: interaction.interactionId,
+    selector: interaction.selector,
+    clicks: interaction.clicks,
+  }));
+
   // rv-3: surface the resolved capability fragment refs (fixture/action/cleanup
   // steps) so a downstream runtime can drive them from their registry version.
   const capabilityFragments: readonly PlanCapabilityFragment[] = [
@@ -105,6 +118,7 @@ export function toAcceptancePlan(plan: ExecutableBehaviorPlanV1, spec: Acceptanc
     executionMatrix: plan.executionMatrix,
     causes: spec.causes as readonly CauseSpec[],
     httpProbes,
+    ...(clickInteractions.length === 0 ? {} : { clickInteractions }),
     ...(spec.visualVerification === undefined ? {} : { visualVerification: spec.visualVerification }),
   };
 }

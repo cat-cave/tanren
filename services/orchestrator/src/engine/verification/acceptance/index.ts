@@ -12,6 +12,11 @@ export * from "./renderCaptureStage.js";
 export * from "./orchestrator.js";
 export * from "./httpDriver.js";
 export * from "./httpCauseDriver.js";
+// rv-26.6 (apex P6): the interactive browser click driver + its runtime seam.
+export * from "./browserClickRunner.js";
+export * from "./browserDriver.js";
+export * from "./playwrightBrowserClickRunner.js";
+export * from "./podmanBrowserClickRunner.js";
 export * from "./executablePlanCompiler.js";
 export * from "./planLoader.js";
 export * from "./pgAcceptancePlanLoader.js";

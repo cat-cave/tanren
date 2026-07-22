@@ -51,6 +51,19 @@ export interface HttpProbeSpec {
   readonly body?: CanonicalBody;
 }
 
+/**
+ * rv-26.6 (apex P6): one interactive browser interaction the `browser` surface driver
+ * performs — `clicks` REAL clicks on `selector` in the deployed dashboard. Its observed
+ * confirmed-click count feeds an assertion whose subject is `<interactionId>.clickCount`
+ * (e.g. `notify.clickCount` equals 100). Each confirmed click also emits one
+ * `behavior.action.observed` event keyed by `interactionId`.
+ */
+export interface ClickInteractionSpec {
+  readonly interactionId: string;
+  readonly selector: string;
+  readonly clicks: number;
+}
+
 /** rv-3: one verification-capability fragment resolved + bound into a plan step. */
 export interface PlanCapabilityFragment {
   readonly stepKind: "fixture" | "action" | "cleanup";
@@ -75,6 +88,8 @@ export interface AcceptancePlan {
   readonly causes?: readonly CauseSpec[];
   /** rv-6: the HTTP requests the api surface driver fires to observe subjects. */
   readonly httpProbes?: readonly HttpProbeSpec[];
+  /** rv-26.6: the interactive clicks the `browser` surface driver performs to observe `<id>.clickCount`. */
+  readonly clickInteractions?: readonly ClickInteractionSpec[];
   /**
    * rv-13 A4: when `required`, the behavior ALSO demands a passing rendered-visual
    * (ds-4 design-render a11y) verdict for the project — folded fail-closed as a
