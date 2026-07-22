@@ -33,7 +33,11 @@ const FragmentCapability = z.enum([
   "artifact_capture",
 ]);
 const Surface = z.enum(["browser", "api", "cli", "package", "app_channel", "external_integration", "mobile"]);
-const VerdictOutcome = z.enum([
+// The outcome of a behavior verdict (rv-25 runtime vocabulary freeze). Public so
+// the merge-batch producer of `merge.batch.behavior_failed` can type its input
+// against the SAME frozen enum the registered payload schema admits — no
+// hand-maintained duplicate that could drift from the schema.
+export const VerdictOutcome = z.enum([
   "passed",
   "failed_product",
   "failed_verification_contract",
@@ -42,6 +46,7 @@ const VerdictOutcome = z.enum([
   "inconclusive_external",
   "cancelled_superseded",
 ]);
+export type VerdictOutcome = z.infer<typeof VerdictOutcome>;
 const FlakeState = z.enum(["stable", "suspected", "confirmed", "quarantined_fragment"]);
 const RenderVerdict = z.enum(["passed", "failed", "unknown"]);
 const ProofVerdict = z.enum(["passed", "failed", "unknown"]);

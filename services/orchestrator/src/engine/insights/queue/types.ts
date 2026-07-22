@@ -48,10 +48,12 @@ export const QueueStats = z
     batchPassRate: z.number().min(0).max(1).nullable(),
     /** Batches that failed their check and were bisected (merge.batch.bisecting). */
     batchesBisected: z.number().int().nonnegative(),
-    /** Offending PRs isolated by bisect (merge.batch.culprit). */
+    /**
+     * Total offending PRs isolated by bisect — the sum of `culpritMemberIds.length`
+     * across `merge.batch.culprit_set_identified` events (a bisect can identify a
+     * >1 culprit set when ddmin/QuickXPlain splits an interaction failure).
+     */
     culpritsIsolated: z.number().int().nonnegative(),
-    /** Total speculative sub-batch checks the bisects performed (sum of `checks`). */
-    bisectChecksPerformed: z.number().int().nonnegative(),
 
     // --- dequeues ------------------------------------------------------------
     /** Dequeues without merging, broken down by reason. */

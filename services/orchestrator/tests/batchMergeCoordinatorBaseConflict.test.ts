@@ -82,7 +82,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     // markDequeued was never called with the conflict reason; no false-blame culprit event.
     expect(dequeueSpy).not.toHaveBeenCalledWith(expect.anything(), "conflict");
-    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
+    expect(h.batchEvents.events.some((e) => e.type === "culprit_set_identified")).toBe(false);
     expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(false);
   });
 
@@ -103,7 +103,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     ]);
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("needs_attention");
-    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
+    expect(h.batchEvents.events.some((e) => e.type === "culprit_set_identified")).toBe(false);
   });
 
   it("a recoverable conflict drive outcome dequeues recoverably (resolver re-readies the run) — still NOT a bisect", async () => {
@@ -203,7 +203,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     await h.coordinator.coordinate(PROJECT);
 
     expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(true);
-    expect(h.batchEvents.events.find((e) => e.type === "culprit")?.culpritSpecId).toBe("spec_b");
+    expect(h.batchEvents.events.find((e) => e.type === "culprit_set_identified")?.culpritSpecIds).toEqual(["spec_b"]);
     // Culprit is DRIVEN (never a silent forever-dequeue without resolver).
     expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
     expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_a");

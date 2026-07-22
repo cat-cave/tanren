@@ -32,11 +32,15 @@ export interface EventTypeSeedRow {
 // `job.dead_lettered` is the attempt-cap dead-letter removed by the
 // timeout-eradication doctrine; `task.cancelled` is referenced by the live
 // `events_task_terminal_unique` partial-index predicate but was never emitted
-// through the typed append API. Severities are cosmetic here (these are not
-// emitted) but kept honest: failure/exhaustion arms `warn`, the rest `info`.
+// through the typed append API. `merge.batch.culprit` was renamed to
+// `merge.batch.culprit_set_identified` (rv-26.3 — the culprit is a SET, the
+// ddmin/QuickXPlain result, not a single member); retained so historical rows
+// don't violate the FK. Severities are cosmetic here (these are not emitted) but
+// kept honest: failure/exhaustion arms `warn`, the rest `info`.
 /** @public */
 export const RETAINED_HISTORICAL_EVENTS: readonly EventTypeSeedRow[] = [
   { name: "job.dead_lettered", defaultSeverity: "warn" },
+  { name: "merge.batch.culprit", defaultSeverity: "info" },
   { name: "task.cancelled", defaultSeverity: "info" },
   { name: "template.build.recovered", defaultSeverity: "info" },
   { name: "template.build.recovery_exhausted", defaultSeverity: "warn" },

@@ -126,9 +126,13 @@ export const MergeQueueInfraBlockedPayload = z
 //                             every batch entry in DAG order (no re-surprises).
 //   - merge.batch.bisecting → the batch check FAILED; the coordinator is binary-
 //                             searching the batch to isolate the offending PR.
-//   - merge.batch.culprit   → bisect isolated the single offending PR; it is dequeued
-//                             to a RECOVERABLE outcome (routed to re-execution, NOT
-//                             dropped) + the innocent remainder is re-checked.
+//   - merge.batch.culprit_set_identified (rv-25 runtime vocabulary) → bisection
+//                             isolated the culprit SET (ddmin/QuickXPlain minimal
+//                             failing subset); each member is dequeued to a
+//                             recoverable outcome (re-execution, NOT dropped) and
+//                             the innocent remainder is re-checked. The schema
+//                             lives in runtimeVocabulary.ts (the runtime
+//                             behavior-proof vocabulary freeze).
 
 /** The batch member shape echoed on the batch events (the PRs in the batch). */
 const BatchMember = z
@@ -208,20 +212,10 @@ export const MergeBatchInfraBlockedPayload = z
   })
   .strict();
 
-export const MergeBatchCulpritPayload = z
-  .object({
-    integration: MergeIntegrationMode,
-    /** The spec whose PR bisect isolated as the offending interaction. */
-    specId: z.string(),
-    /** The run id of the culprit (routed to the recoverable re-execution dequeue). */
-    runId: z.string(),
-    prNumber: z.number().int(),
-    /** The number of speculative sub-batch checks the bisect performed (O(log n)). */
-    checks: z.number().int().nonnegative(),
-    /** The human-readable detail (the offending interaction). */
-    message: z.string(),
-  })
-  .strict();
+// merge.batch.culprit_set_identified lives in runtimeVocabulary.ts (rv-25 freeze);
+// the legacy singular `merge.batch.culprit` schema was removed (clean-replace)
+// and the name retained in `RETAINED_HISTORICAL_EVENTS` so historical rows
+// don't violate the `events.event_type` FK.
 
 // merge.batch.gate_rework_routed → the batch check's GATE/CI failed on the prospective
 // MERGED state (an integration-only failure — code that passed its OWN branch gates but

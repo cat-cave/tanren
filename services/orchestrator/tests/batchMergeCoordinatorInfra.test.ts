@@ -80,7 +80,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.queue.statusOf("run_spec_b")).toBe("queued");
     // markDequeued was NEVER called; no culprit/dequeue event fired.
     expect(dequeueSpy).not.toHaveBeenCalled();
-    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
+    expect(h.batchEvents.events.some((e) => e.type === "culprit_set_identified")).toBe(false);
     expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
     // The LOUD infra_blocked event fired with the telemetry attempt count.
     const blocked = h.batchEvents.events.find((e) => e.type === "infra_blocked");
@@ -270,7 +270,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     // routed to writer rework — NOT the recoverable-conflict dequeue.
     expect(dq?.reason).toBe("superseded");
     expect(h.gateRework.routed.map((r) => r.specId)).toEqual(["spec_b"]);
-    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(true);
+    expect(h.batchEvents.events.some((e) => e.type === "culprit_set_identified")).toBe(true);
     // No infra hold on a genuine failure.
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
   });

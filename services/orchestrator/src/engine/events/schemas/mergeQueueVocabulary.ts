@@ -1,7 +1,6 @@
 import {
   MergeBatchBisectingPayload,
   MergeBatchCheckingPayload,
-  MergeBatchCulpritPayload,
   MergeBatchGateReworkRoutedPayload,
   MergeBatchInfraBlockedPayload,
   MergeBatchPassedPayload,
@@ -21,7 +20,6 @@ export const mergeQueueEventRegistry = {
   "merge.batch.checking": MergeBatchCheckingPayload,
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
-  "merge.batch.culprit": MergeBatchCulpritPayload,
   "merge.batch.gate_rework_routed": MergeBatchGateReworkRoutedPayload,
   "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,

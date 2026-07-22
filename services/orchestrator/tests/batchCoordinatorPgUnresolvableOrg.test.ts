@@ -216,20 +216,20 @@ describe("PgBatchMergeEventEmitter — unresolvable-project-org fails LOUD (task
     expect(line["reason"]).toBe("unresolvable_project_org");
   });
 
-  it("emitCulprit with a NULL org logs at ERROR with the culprit eventKind", async () => {
+  it("emitCulpritSetIdentified with a NULL org logs at ERROR with the culprit_set_identified eventKind", async () => {
     pool.scriptedProjectOrgId = null;
 
-    await emitter.emitCulprit({
+    await emitter.emitCulpritSetIdentified({
       projectId: "proj_null_org",
-      culprit: entry(),
-      checks: 3,
-      message: "bisect isolated culprit",
+      batch: [entry()],
+      groupId: "mqgrp_test",
+      culpritMembers: [entry()],
     });
 
     expect(writer.appends).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const line = parseLogLine(errorSpy.mock.calls[0]![0] as string);
-    expect(line["eventKind"]).toBe("merge.batch.culprit");
+    expect(line["eventKind"]).toBe("merge.batch.culprit_set_identified");
     expect(line["reason"]).toBe("unresolvable_project_org");
   });
 

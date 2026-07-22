@@ -153,8 +153,20 @@ function candidateSignalMatches(row: QueueRow, event: EventRow, includeSpecOnlyS
     (eventPrUrl !== null && eventPrUrl === row.prUrl) ||
     (eventPrNumber !== null && eventPrNumber === row.prNumber) ||
     membersMatch(row, event.payload["members"]) ||
+    culpritMemberIdsMatch(row, event.payload["culpritMemberIds"]) ||
     (includeSpecOnlySignals && isSpecOnlySignal(event.eventType) && event.specId === row.specId)
   );
+}
+
+/**
+ * `merge.batch.culprit_set_identified` carries the EXACT culprit set as
+ * `culpritMemberIds` (an array of spec ids). A row whose spec id appears in
+ * that set was named a culprit — its recovery MUST be suppressed (a non-head
+ * culprit's spec id is NOT in the event envelope, only in this payload field).
+ */
+function culpritMemberIdsMatch(row: QueueRow, value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((id) => stringValue(id) === row.specId);
 }
 
 function isSuppressingSignal(event: EventRow): boolean {
@@ -164,7 +176,7 @@ function isSuppressingSignal(event: EventRow): boolean {
   return [
     "merge.completed",
     "merge.queue.infra_blocked",
-    "merge.batch.culprit",
+    "merge.batch.culprit_set_identified",
     "dag.spec.needs_attention",
     "dag.spec.percolation_replan",
     "merge.conflict.replan_routed",

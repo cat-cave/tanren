@@ -20,7 +20,8 @@ function recordingEmitter(): BatchMergeEventEmitter & { blocked: Array<{ termina
     emitChecking: async () => {},
     emitPassed: async () => {},
     emitBisecting: async () => {},
-    emitCulprit: async () => {},
+    emitCulpritSetIdentified: async () => {},
+    emitBehaviorFailed: async () => {},
     emitInfraBlocked: async (input) => void blocked.push({ terminal: input.terminal }),
   };
 }

@@ -1,9 +1,10 @@
 // The pg-backed batch-event emitter for the BatchMergeCoordinator (autonomy-engine.md
 // §2d — speculative batch-check + bisect). Resolves the project's org, then writes
 // each merge.batch.* event through the org-scoped PgEventStore (the single
-// event-writer seam). The events carry the batch composition + cap stats + the bisect
-// culprit so the timeline shows the batch decision; the culprit event carries the
-// run/spec so the recoverable re-execution dequeue links back.
+// event-writer seam). The events carry the batch composition + cap stats + the
+// bisect culprit set so the timeline shows the batch decision; the culprit event
+// carries the exact culprit SET (`culprit_set_identified`, rv-25 runtime vocabulary)
+// so the recoverable re-execution dequeue links back.
 
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -12,6 +13,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { BatchFormation } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { createLogger } from "../observability/logger.js";
+import type { VerdictOutcome } from "../events/schemas/runtimeVocabulary.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 
 const log = createLogger("batch-merge-event-emitter");
@@ -164,26 +166,68 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     );
   }
 
-  async emitCulprit(input: {
+  async emitCulpritSetIdentified(input: {
     projectId: string;
-    culprit: MergeQueueEntry;
-    checks: number;
-    message: string;
+    batch: ReadonlyArray<MergeQueueEntry>;
+    groupId: string;
+    culpritMembers: ReadonlyArray<MergeQueueEntry>;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, "merge.batch.culprit", (store, orgId) =>
+    // rv-26.3: the canonical event is `merge.batch.culprit_set_identified`
+    // (rv-25 runtime vocabulary). `culpritMemberIds` is the EXACT culprit set
+    // the bisection/minimal-failing-subset solver identified — verbatim from
+    // the caller, no coercion. The registered Zod schema
+    // (`MergeBatchCulpritSetIdentifiedPayload`) admits a non-empty set
+    // (`min(1).max(256)`); the event-store append parses through it, so an
+    // empty set fail-closes at the schema gate rather than emitting a
+    // vacuous culprit.
+    //
+    // The envelope stamps the first culprit's runId/specId so the recoverable
+    // re-execution dequeue (the same path the legacy `merge.batch.culprit`
+    // fed) still links back; the SET itself is the payload.
+    const head = input.culpritMembers[0];
+    await this.withScopedStore(input.projectId, "merge.batch.culprit_set_identified", (store, orgId) =>
       store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
+        ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
         orgId,
-        eventType: "merge.batch.culprit",
+        eventType: "merge.batch.culprit_set_identified",
         payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
-          runId: input.culprit.runId,
-          prNumber: input.culprit.prNumber,
-          checks: input.checks,
-          message: input.message,
+          groupId: input.groupId,
+          culpritMemberIds: input.culpritMembers.map((m) => m.specId),
+        },
+      }),
+    );
+  }
+
+  async emitBehaviorFailed(input: {
+    projectId: string;
+    batch: ReadonlyArray<MergeQueueEntry>;
+    groupId: string;
+    behaviorRevisionId: string;
+    verdictId: string;
+    outcome: VerdictOutcome;
+  }): Promise<void> {
+    // rv-26.3: producer for `merge.batch.behavior_failed` (rv-25 runtime
+    // vocabulary). Fires when a batch's behavior verification fails — the
+    // failure that triggers bisection. The payload carries the runtime
+    // behavior-proof coordinate (`groupId` / `behaviorRevisionId` /
+    // `verdictId` / `outcome`); the envelope stamps the batch head so the
+    // timeline links the failure to the run that owns it. The registered Zod
+    // schema (`MergeBatchBehaviorFailedPayload`) is `.strict()` — an
+    // absent/blank coordinate fail-closes at the schema gate, never a
+    // silent coercion.
+    const head = input.batch[0];
+    await this.withScopedStore(input.projectId, "merge.batch.behavior_failed", (store, orgId) =>
+      store.append({
+        ...(head !== undefined && { runId: head.runId, specId: head.specId }),
+        projectId: input.projectId,
+        orgId,
+        eventType: "merge.batch.behavior_failed",
+        payload: {
+          groupId: input.groupId,
+          behaviorRevisionId: input.behaviorRevisionId,
+          verdictId: input.verdictId,
+          outcome: input.outcome,
         },
       }),
     );

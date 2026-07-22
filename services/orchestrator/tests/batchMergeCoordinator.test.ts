@@ -119,11 +119,41 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
 
     await h.coordinator.coordinate(PROJECT);
 
-    const culprits = h.batchEvents.events.filter((e) => e.type === "culprit").map((e) => e.culpritSpecId);
+    const culpritEvents = h.batchEvents.events.filter((e) => e.type === "culprit_set_identified");
+    const culprits = culpritEvents.flatMap((e) => e.culpritSpecIds ?? []);
     expect(culprits).toEqual(["spec_b"]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+  });
+
+  it("NEGATIVE CONTROL: behavior failure emits its failing batch and the exact two-member ddmin set", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    // Neither member fails alone. The solver must reduce the real failed batch
+    // to this pair, rather than publishing a prefix witness or whole batch.
+    h.checker.failWhenAllPresent(["spec_a", "spec_c"], {
+      groupId: "group_behavior_1",
+      behaviorRevisionId: "behavior_revision_1",
+      verdictId: "verdict_1",
+      outcome: "failed_product",
+    });
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.batchEvents.events).toContainEqual({
+      type: "behavior_failed",
+      specIds: ["spec_a", "spec_b", "spec_c"],
+      groupId: "group_behavior_1",
+    });
+    expect(h.batchEvents.events).toContainEqual({
+      type: "culprit_set_identified",
+      specIds: ["spec_a", "spec_b", "spec_c"],
+      culpritSpecIds: ["spec_a", "spec_c"],
+      groupId: "group_behavior_1",
+    });
   });
 
   it("a failed-check batch NEVER merges to default_branch (no entry merges before a passing state)", async () => {
@@ -208,7 +238,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(result.mergedSpecId).toBeUndefined();
     expect(h.queue.statusOf("run_spec_a")).toBe("queued");
     expect(h.queue.statusOf("run_spec_b")).toBe("queued");
-    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
+    expect(h.batchEvents.events.some((e) => e.type === "culprit_set_identified")).toBe(false);
   });
 
   it("Bug B: a pending verdict returns a hold WITH retryAfterMs (default 15000 when no settle remainder)", async () => {

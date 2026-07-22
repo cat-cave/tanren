@@ -29,7 +29,7 @@ function e(eventType: QueueEvent["eventType"], tsMs: number, extra: Partial<Queu
     specId: extra.specId ?? null,
     queueDepth: extra.queueDepth ?? null,
     dequeueReason: extra.dequeueReason ?? null,
-    bisectChecks: extra.bisectChecks ?? null,
+    culpritMemberCount: extra.culpritMemberCount ?? null,
   };
 }
 
@@ -78,14 +78,16 @@ describe("deriveQueueStats — batch / bisect", () => {
       e("merge.batch.passed", 1000),
       e("merge.batch.checking", 2000),
       e("merge.batch.bisecting", 3000),
-      e("merge.batch.culprit", 4000, { specId: "s9", bisectChecks: 2 }),
+      // A 2-member culprit set: ddmin/QuickXPlain split an interaction failure.
+      e("merge.batch.culprit_set_identified", 4000, { specId: "s9", culpritMemberCount: 2 }),
     ]);
     expect(stats.batchesChecked).toBe(2);
     expect(stats.batchesPassed).toBe(1);
     expect(stats.batchPassRate).toBeCloseTo(0.5);
     expect(stats.batchesBisected).toBe(1);
-    expect(stats.culpritsIsolated).toBe(1);
-    expect(stats.bisectChecksPerformed).toBe(2);
+    // The 2-member set contributes BOTH culprits to the total (rv-26.3 — count
+    // individual culprits, not events, so a multi-member set is fully accounted).
+    expect(stats.culpritsIsolated).toBe(2);
   });
 
   it("null batch pass-rate when no batches were checked", () => {
@@ -138,7 +140,7 @@ describe("deriveQueueStats — stack depth (DAG-derived)", () => {
 });
 
 describe("normalizeQueueEvent — raw row → reducer event", () => {
-  it("extracts queueDepth / reason / checks / specId from payload", () => {
+  it("extracts queueDepth / reason / culpritMemberCount / specId from payload", () => {
     expect(
       normalizeQueueEvent({
         event_type: "merge.queue.advanced",
@@ -150,11 +152,14 @@ describe("normalizeQueueEvent — raw row → reducer event", () => {
 
     expect(
       normalizeQueueEvent({
-        event_type: "merge.batch.culprit",
+        event_type: "merge.batch.culprit_set_identified",
         spec_id: null,
-        payload: { specId: "s9", checks: 3 },
+        payload: { groupId: "mqgrp_x", culpritMemberIds: ["s9", "s10"] },
         ts: new Date(0),
       }),
-    ).toMatchObject({ eventType: "merge.batch.culprit", specId: "s9", bisectChecks: 3 });
+    ).toMatchObject({
+      eventType: "merge.batch.culprit_set_identified",
+      culpritMemberCount: 2,
+    });
   });
 });
