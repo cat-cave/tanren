@@ -76,7 +76,7 @@ describeDb("rv-19 post-merge re-proof + rollback — real Postgres end-to-end", 
     coordinator = new PostMergeReproofCoordinator({
       pool: app,
       completenessChecker: {
-        check: async () => ({ complete: true, runId: "fixture", requiredBehaviorRevisionCount: 1 }),
+        check: async () => ({ complete: true, kind: "complete", runId: "fixture", requiredBehaviorRevisionCount: 1 }),
       },
     });
   }, 60_000);
