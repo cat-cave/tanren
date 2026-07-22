@@ -101,7 +101,7 @@ export function assertProjectCreateConfigAllowed(
   if (raw["greenfield"] === true || config.greenfield) {
     throw new ProjectConfigWriteRejectedError({
       error: "manual_greenfield_project_config",
-      message: "greenfield/apex project config must be created through the provisioned greenfield or onboarding flow",
+      message: "greenfield project config must be created through the provisioned greenfield or onboarding flow",
       fields: ["greenfield"],
     });
   }

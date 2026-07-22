@@ -333,7 +333,7 @@ export const MergePartitionReleasedPayload = z
 
 // mq-10 — the autonomous-repair router's decision on an isolated member. EVERY routing
 // emits `merge.repair.routed` (the exhaustive decision record); a `respec` ALSO emits
-// `merge.member.respec_routed` (the apex-proof chain's event) carrying the RespecPacketV1
+// `merge.member.respec_routed` (the behavior-proof chain's event) carrying the RespecPacketV1
 // lineage. `disposition` is exhaustive + fail-closed: an unclassifiable failure routes to
 // `blocked_needs_attention`, never a silent drop.
 export const MergeRepairRoutedPayload = z

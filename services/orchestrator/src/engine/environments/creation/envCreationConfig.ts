@@ -13,7 +13,7 @@
 // GATED: the JIT-build path is OFF unless a registry is configured
 // (`TANREN_ENV_REGISTRY`). Off ⇒ `undefined` ⇒ the executor's env-refinement seam
 // FAILS LOUD for an off-baseline toolchain (`JitBuildRequiredError`), never a silent
-// golden-base degrade. A baseline-subset toolchain (apex-style node+pnpm) still
+// golden-base degrade. A baseline-subset toolchain (node+pnpm) still
 // resolves to the golden base without JIT — it does not need a build. This closes
 // H1 finding #4: an off-baseline toolchain without a configured registry used to
 // silently seed from the golden base, presenting as a mysterious runtime failure

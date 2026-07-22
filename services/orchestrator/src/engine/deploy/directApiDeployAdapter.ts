@@ -370,7 +370,7 @@ export class DirectApiDeployAdapter implements DeployAdapter {
    * an auth gate, so the server answering 401/403 PROVES it is up and serving. We treat
    * those as reachable (the provider returned the deployment is live; the gate is in
    * front). To smoke-check the BEHAVIOR behind the gate, disable deployment protection
-   * on the deploy target (see the apex operator guide). Any OTHER non-2xx/3xx is a hard
+   * on the deploy target (see the operator guide). Any OTHER non-2xx/3xx is a hard
    * fail (a READY deployment whose URL does not actually serve).
    */
   private async smokeCheck(

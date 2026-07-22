@@ -65,7 +65,7 @@ export type StageFailureKind =
  * subtaskCost helpers RE-RAISE it as this typed wrapper class so the finalize
  * guard's classifier maps it deterministically to `failureKind: "cost_record_failed"`
  * — rather than landing in the fail-closed `crashed` default that swallows the
- * mid-stage cost-recorder family in apex tier-1.
+ * mid-stage cost-recorder family in the autonomous tier.
  */
 export class CostRecordError extends Error {
   override readonly cause?: unknown;

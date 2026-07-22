@@ -8,7 +8,7 @@
 //
 // WHY (the gap it closes): before this, the post-merge production re-verification did NOT
 // persist a real behavior verdict — rv-19's re-proof used the bh-10 SYMPTOM stage, and the
-// proof-backed demo (rv-18) persisted only for the DEMO. So apex's "production symptom
+// proof-backed demo (rv-18) persisted only for the DEMO. So the run's "production symptom
 // re-verified gone" was not yet a persisted PRODUCTION behavior verdict, and there was no
 // persisted `passed`→`failed` regression signal. This lane records BOTH:
 //   1. the real, coverage-gated production behavior verdict (append-only, immutable), and

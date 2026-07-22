@@ -245,7 +245,7 @@ export const ProjectConfigV1 = z
     // against it, recording a `purpose='pre_merge'` blocking behavior verdict the
     // land-time `resolveLandTimeBehaviorGate` consumes — a failing/inconclusive behavior
     // then BLOCKS the merge fail-closed. Default FALSE: this adds a real preview deploy
-    // (cost + time) per gate, and apex's back-half is already covered by the POST-merge
+    // (cost + time) per gate, and the post-merge stages are already covered by the POST-merge
     // re-proof (rv-19), so pre-merge behavior gating is an ADDITIONAL safety layer, not
     // the critical path. When false the merge stage behaves exactly as before (no preview
     // deploy, the land-time behavior gate stays `not_applicable`) — a genuine zero-cost
@@ -270,7 +270,7 @@ export const ProjectConfigV1 = z
     // MERGE-SAFETY (self-identity): OPTIONAL extra GitHub logins to treat as Tanren's
     // own pushes in the external-change gate, ADDITIVE to the default bot login + the
     // login resolved live from the active credential (`resolveActorIdentity`). The
-    // apex path needs ZERO config — this is only for orgs that push via MULTIPLE
+    // The default path needs ZERO config — this is only for orgs that push via MULTIPLE
     // identities (e.g. several admin PATs). Optional: absent ⇒ only the default set
     // (bot login + live-resolved credential login) applies.
     governanceTanrenLogins: z.array(z.string().min(1)).optional(),
@@ -398,7 +398,7 @@ export const ProjectConfigV1 = z
     // toolchain resolved to (see `ProjectEnvironmentRef`, environment-management.md
     // §6/§7 P3). Recorded by the per-project env-resolution at the image seam so the
     // decision is OBSERVABLE. Optional: absent ⇒ the project declared no toolchain
-    // (no env_key — the golden-base path, the apex default).
+    // (no env_key — the golden-base default path).
     environmentRef: ProjectEnvironmentRef.optional(),
   })
   .strict();
