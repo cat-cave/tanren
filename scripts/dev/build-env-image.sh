@@ -46,7 +46,11 @@ PUSH="${PUSH:-0}"
 # the full env_key still keys the registry ROW (the orchestrator stores the full key).
 ENV_TAG="env-${ENV_KEY:0:32}"
 IMAGE_REF="${REGISTRY}/${IMAGE_NAME}:${ENV_TAG}"
-CACHE_REF="${REGISTRY}/${IMAGE_NAME}:buildcache"
+# Keep BuildKit state as isolated as the content-keyed output image. This prevents
+# concurrent off-baseline builds from sharing a cache manifest or builder instance.
+BUILD_ID="${ENV_KEY:0:32}"
+CACHE_REF="${REGISTRY}/${IMAGE_NAME}:buildcache-${BUILD_ID}"
+BUILDER="tanren-env-${BUILD_ID}"
 
 echo "[build-env-image] repo            : ${REPO_ROOT}"
 echo "[build-env-image] golden base     : ${GOLDEN_BASE_IMAGE}"
@@ -59,8 +63,16 @@ echo "[build-env-image] push            : ${PUSH}"
 # project's mise.toml into the shared mise dir as its GLOBAL config, and runs `mise
 # trust && mise install` AS the `tanren` user (uid 1000) so the off-baseline toolchain
 # is baked into the SAME shared mise dir the baseline warmed (the §3 Layer 3 delta).
+BUILDKITD_CONFIG=""
 BUILD_CTX="$(mktemp -d -t tanren-env-build.XXXXXX)"
-trap 'rm -rf "$BUILD_CTX"' EXIT
+cleanup() {
+  # This builder is created only for this content-keyed build. Never select it as
+  # the global default, and remove only this invocation's builder on exit.
+  docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
+  rm -rf "$BUILD_CTX"
+  [ -z "$BUILDKITD_CONFIG" ] || rm -f "$BUILDKITD_CONFIG"
+}
+trap cleanup EXIT
 cp "$MISE_TOML_PATH" "$BUILD_CTX/mise.toml"
 # Write the Dockerfile from a QUOTED heredoc (everything literal — the `\` line
 # continuations + the `${TANREN_MISE_*}` refs that must reach the BUILD shell, NOT this
@@ -95,24 +107,21 @@ sed -i "s|@GOLDEN_BASE@|${GOLDEN_BASE_IMAGE}|g" "$BUILD_CTX/Dockerfile"
 # insecure-registry config (the dev registry:2 serves plain HTTP, which BuildKit
 # refuses by default). Only an http-style local host needs the insecure config; a real
 # CI registry is HTTPS and needs neither.
-BUILDER="tanren-env"
 REGISTRY_HOST="${REGISTRY%%/*}"
 BUILDKITD_CONFIG="$(mktemp -t tanren-env-buildkitd.XXXXXX.toml)"
-trap 'rm -rf "$BUILD_CTX"; rm -f "$BUILDKITD_CONFIG"' EXIT
 cat > "$BUILDKITD_CONFIG" <<EOF
 [registry."${REGISTRY_HOST}"]
   http = true
   insecure = true
 EOF
 
-docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
 echo "[build-env-image] creating buildx builder '${BUILDER}' (docker-container driver, network=host)"
 docker buildx create \
   --name "$BUILDER" \
   --driver docker-container \
   --driver-opt network=host \
   --buildkitd-config "$BUILDKITD_CONFIG" \
-  --use >/dev/null
+  >/dev/null
 
 OUTPUT_ARGS=()
 CACHE_TO_ARGS=()
