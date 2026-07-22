@@ -1,3 +1,4 @@
+// cspell:ignore ixture
 // no-fixture-mode-branching (project-config-is-the-source-of-truth, BINDING): Tanren
 // MUST NOT branch on a validation fixture. The autonomy knobs (audit posture,
 // CI-intelligence thresholds, notification readiness) are governed settings on the
