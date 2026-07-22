@@ -1,7 +1,11 @@
 // JJ-local integration materializes the prospective head, evaluates the native gate via
 // immutable proof units, and is the sole batch-verdict consultation of integration nodes.
 
-import type { BatchAuthorityBinding, BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
+import type {
+  BatchAuthorityBinding,
+  BatchBehaviorFailure,
+  BatchCheckVerdict,
+} from "../contracts/batchMergeCoordinator.js";
 import type { CiConfigV1 } from "../ci/index.js";
 import type { IntegrationNode, IntegrationNodeMember, ProofReuseKeyInput } from "../contracts/integrationNodes.js";
 import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
@@ -66,6 +70,9 @@ export interface GateBatchResult {
 
 export type GateBatchWorkspace = (live: LiveJjWorkspace) => Promise<GateBatchResult>;
 
+/** Reads an already-persisted, verifier-minted behavior failure for this batch. */
+export type ResolveBatchBehaviorFailure = () => Promise<BatchBehaviorFailure | undefined>;
+
 /** The production F2 evidence lookup runs immediately before proof-graph evaluation. */
 export interface BatchFragmentEvidenceRequest {
   readonly orgId: string;
@@ -114,6 +121,8 @@ export interface BatchNodeDriveDeps {
   jjWorkspaceDeps: LiveJjWorkspaceDeps;
   resolveConfig: ResolveBatchGateConfig;
   gate: GateBatchWorkspace;
+  /** Production PgBatchChecker wires the persisted pre-merge behavior-verdict reader here. */
+  resolveBehaviorFailure?: ResolveBatchBehaviorFailure;
   /** Optional only for direct unit seams; production PgBatchChecker always wires it. */
   resolveFragmentEvidence?: ResolveBatchFragmentEvidence;
   captureFragmentEvidence?: CaptureBatchFragmentEvidence;
@@ -201,6 +210,19 @@ async function verdictForIntegrated(
     },
   });
   const node = await deps.nodes.findByMemberKey(facts.orgId, memberKeyForNode(integrated.baseSha, members));
+
+  // A decisive pre-merge behavior verdict is a real batch failure, independent
+  // of native CI/proof reuse. Check it on every integrated batch, including a
+  // reusable CI proof: a cached green CI proof must never mask a verifier-minted
+  // failed_product/failed_visual/failed_verification_contract verdict.
+  const behaviorFailure = await deps.resolveBehaviorFailure?.();
+  if (behaviorFailure !== undefined) {
+    return {
+      result: "fail",
+      message: `batch behavior verification failed for ${behaviorFailure.behaviorRevisionId}`,
+      behaviorFailure,
+    };
+  }
 
   // Fail-closed: an unreadable node OR an unreadable config ⇒ RECOMPUTE (run the gate),
   // never reuse on uncertainty. With no config there is no sound key either, so the gate

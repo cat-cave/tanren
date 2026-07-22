@@ -22,7 +22,11 @@
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMergeCoordinator.js";
+import {
+  type BatchBehaviorFailure,
+  type BatchCheckVerdict,
+  type BatchChecker,
+} from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import {
@@ -42,6 +46,7 @@ import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { batchFragmentEvidenceWiring, driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
+import { resolveLandTimeBehaviorFailure } from "./behaviorLandGate.js";
 import {
   batchNodeGate,
   batchNodeResolveConfig,
@@ -50,6 +55,7 @@ import {
 } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
+// eslint-disable-next-line import/max-dependencies -- the production batch checker owns these integration seams.
 import { activeQuarantineVersion, loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
 export { buildBatchProofSubstrate } from "./batchGateProofProduction.js";
 
@@ -294,6 +300,11 @@ export class PgBatchChecker implements BatchChecker {
           },
           resolveConfig: batchNodeResolveConfig(gateDeps),
           gate: batchNodeGate(gateDeps),
+          // The live batch checker consults the same persisted pre-merge behavior
+          // verdicts that block land. A decisive failed verdict becomes the
+          // BatchCheckVerdict's verifier-minted coordinate, so the coordinator's
+          // bisection event is reachable without any test-only field injection.
+          resolveBehaviorFailure: async () => (await this.resolveBatchBehaviorFailure(orgId, ordered)) ?? undefined,
           // mq-12 live trigger: every jj-local batch resolves its composed F2
           // evidence immediately before proof-unit evaluation. This adapter only
           // reads typed data; `batchNodeGate` remains the sole executable authority.
@@ -324,6 +335,24 @@ export class PgBatchChecker implements BatchChecker {
       }
       return verdict;
     });
+  }
+
+  private async resolveBatchBehaviorFailure(
+    orgId: string,
+    entries: ReadonlyArray<IntegrationAncestor & { readonly runId: string }>,
+  ): Promise<BatchBehaviorFailure | null> {
+    for (const entry of entries) {
+      const failure = await resolveLandTimeBehaviorFailure(this.deps.pool, orgId, entry.runId);
+      if (failure !== undefined) {
+        return {
+          groupId: failure.verificationRunId,
+          behaviorRevisionId: failure.behaviorRevisionId,
+          verdictId: failure.verdictId,
+          outcome: failure.outcome,
+        };
+      }
+    }
+    return null;
   }
 
   private async loadProject(client: pg.PoolClient, projectId: string): Promise<BatchProjectRow> {

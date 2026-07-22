@@ -68,6 +68,21 @@ export type BehaviorLandGate =
   | { readonly kind: "failed"; readonly behaviorRevisionId: string; readonly outcome: BehaviorVerdictOutcome }
   | { readonly kind: "inconclusive"; readonly reason: string };
 
+/**
+ * The durable coordinate of a decisive behavior failure.  `verificationRunId` is
+ * the verifier-minted group for the failing run; it is intentionally not derived
+ * from a queue batch or a caller supplied label.
+ */
+export interface BehaviorFailureCoordinate {
+  readonly verificationRunId: string;
+  readonly behaviorRevisionId: string;
+  readonly verdictId: string;
+  readonly outcome: Extract<
+    BehaviorVerdictOutcome,
+    "failed_product" | "failed_verification_contract" | "failed_visual"
+  >;
+}
+
 /** A completed pre-merge verification run's status, or the reason it is not yet decisive. */
 export type BehaviorRunStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
 
@@ -265,6 +280,52 @@ export async function resolveLandTimeBehaviorGate(
       status,
       verdictRows.map((row) => decodeVerdictRow(row)),
     );
+  });
+}
+
+/**
+ * Read the exact persisted decisive failure for a merge run's latest pre-merge
+ * verification. This is the event-facing twin of `resolveLandTimeBehaviorGate`:
+ * it returns a coordinate only for a real blocking behavior verdict, never for a
+ * missing, pending, inconclusive, or synthesized queue failure.
+ */
+export async function resolveLandTimeBehaviorFailure(
+  pool: pg.Pool,
+  orgId: string,
+  runId: string,
+  withOrgScope?: OrgScope,
+): Promise<BehaviorFailureCoordinate | null> {
+  const scope: OrgScope = withOrgScope ?? ((org, operation) => runWithOrgScope(pool, org, operation));
+  return scope(orgId, async (client) => {
+    const run = (
+      await client.query<{ id: string; status: string }>(
+        `SELECT id, status FROM behavior_verification_runs
+          WHERE org_id = $1 AND run_id = $2 AND purpose = 'pre_merge'
+          ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [orgId, runId],
+      )
+    ).rows[0];
+    if (run === undefined || decodeRunStatus(run.status) !== "completed") return null;
+    const failure = (
+      await client.query<{ id: string; behavior_revision_id: string; outcome: string }>(
+        `SELECT id, behavior_revision_id, outcome
+           FROM behavior_verdicts
+          WHERE org_id = $1 AND run_id = $2 AND gate_effect = 'blocking'
+            AND outcome IN ('failed_product', 'failed_verification_contract', 'failed_visual')
+          ORDER BY id ASC LIMIT 1`,
+        [orgId, run.id],
+      )
+    ).rows[0];
+    if (failure === undefined) return null;
+    const outcome = failure.outcome as BehaviorFailureCoordinate["outcome"];
+    if (!DECISIVE_FAILURES.has(outcome))
+      throw new TypeError(`behavior failure has an unknown outcome: ${failure.outcome}`);
+    return {
+      verificationRunId: run.id,
+      behaviorRevisionId: failure.behavior_revision_id,
+      verdictId: failure.id,
+      outcome,
+    };
   });
 }
 
