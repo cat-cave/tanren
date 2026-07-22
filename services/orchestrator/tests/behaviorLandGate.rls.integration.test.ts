@@ -10,6 +10,11 @@ import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveLandTimeBehaviorGate } from "../src/engine/merge/behaviorLandGate.js";
+import { PgAcceptanceCompletenessChecker } from "../src/engine/verification/acceptance/completenessInvariant.js";
+import {
+  PostMergeReproofBindingError,
+  PostMergeReproofCoordinator,
+} from "../src/engine/verification/postMergeReproof/coordinator.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -276,6 +281,58 @@ describeDb("resolveLandTimeBehaviorGate — org-scoped land-time read", () => {
     await seedMergeRun(owner, "run_empty");
     await seedPreMergeVerification(app, "run_empty", "completed");
     expect((await resolveLandTimeBehaviorGate(app, ORG, "run_empty")).kind).toBe("inconclusive");
+  });
+
+  it("REAL APEX BINDING — release.integration_node_id = runId with a bound pre-merge run blocks before promote", async () => {
+    // This deliberately does NOT join release_instances through integration_nodes.members:
+    // production deploy-on-merge stores the merge run id directly in integration_node_id.
+    const runId = "run_real_apex";
+    await seedMergeRun(owner, runId);
+    await seedPreMergeVerification(app, runId, "completed");
+    await owner.query(
+      `INSERT INTO release_instances
+         (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref,
+          artifact_digest, integration_node_id, url, state)
+       VALUES ($1, 'release_real_apex', $2, 'fixture', 'fixture', 'production', 'deploy_real_apex',
+               'main', $3, $4, 'https://example.invalid/real-apex', 'live')`,
+      [ORG, PROJECT, CAS, runId],
+    );
+    const input = {
+      orgId: ORG,
+      projectId: PROJECT,
+      releaseInstanceId: "release_real_apex",
+      promotedArtifactDigest: CAS,
+    };
+    await expect(new PgAcceptanceCompletenessChecker(app).check(input)).resolves.toEqual({
+      complete: false,
+      failure: "missing_required_behaviors",
+    });
+
+    const coordinator = new PostMergeReproofCoordinator({ pool: app });
+    await expect(
+      coordinator.settle({
+        orgId: ORG,
+        projectId: PROJECT,
+        releaseInstanceId: "release_real_apex",
+        result: {
+          proofGrade: "active_causal",
+          verificationRunId: "vrun_real_apex",
+          assertionIds: [],
+          evidenceRefs: [],
+          outcome: "passed",
+          classification: "product_resolved",
+        },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: PostMergeReproofBindingError.name,
+        message: "acceptance completeness blocks promotion: missing_required_behaviors",
+      }),
+    );
+    const promotions = await runWithOrgScope(app, ORG, (client) =>
+      client.query("SELECT id FROM events WHERE org_id = $1 AND event_type = 'deployment.promoted'", [ORG]),
+    );
+    expect(promotions.rows).toHaveLength(0);
   });
 
   it("(fix #3) a quarantined failed_product STILL blocks (a self-asserted quarantine bit never launders a failure)", async () => {

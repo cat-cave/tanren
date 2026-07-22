@@ -1,10 +1,12 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { findLatestPreMergeBehaviorRun } from "../../merge/behaviorLandGate.js";
 
 type QueryClient = Pick<pg.PoolClient, "query">;
 type OrgScope = <T>(orgId: string, operation: (client: QueryClient) => Promise<T>) => Promise<T>;
 
 export type AcceptanceCompletenessFailure =
+  | "missing_release_binding"
   | "missing_required_behaviors"
   | "missing_or_ambiguous_acceptance_run"
   | "plan_set_mismatch"
@@ -57,27 +59,23 @@ export async function checkInScope(
   client: QueryClient,
   input: AcceptanceCompletenessInput,
 ): Promise<AcceptanceCompletenessResult> {
-  // Reuse the behavior-land gate's applicability signal: a `pre_merge` verification
-  // run bound to one of this integration node's merge members means behavior proof
-  // was required. Its absence is a genuine plain-promotion `not_applicable`, never a
-  // vacuous acceptance pass. Once present, every following check remains fail-closed,
-  // including an empty required-behavior binding.
-  const requirement = await client.query<{ required: unknown }>(
-    `SELECT EXISTS (
-       SELECT 1
-         FROM release_instances ri
-         JOIN integration_nodes n
-           ON n.org_id = ri.org_id AND n.project_id = ri.project_id AND n.node_id = ri.integration_node_id
-         JOIN LATERAL jsonb_array_elements(n.members) member ON true
-         JOIN behavior_verification_runs r
-           ON r.org_id = ri.org_id AND r.project_id = ri.project_id
-          AND r.run_id = member ->> 'runId' AND r.purpose = 'pre_merge'
-        WHERE ri.org_id = $1 AND ri.project_id = $2 AND ri.id = $3
-          AND ri.integration_node_id IS NOT NULL AND ri.artifact_digest = $4
-     ) AS required`,
+  // Deploy-on-merge binds production `release_instances.integration_node_id` directly
+  // to the merge `runId` (not an `integration_nodes.node_id`). Reuse the exact
+  // behavior-land requirement predicate over that key; a missing release/binding is
+  // ambiguous and therefore blocks, while only a definite absence of that pre-merge
+  // binding may skip completeness.
+  const releaseRows = await client.query<{ integration_node_id: unknown }>(
+    `SELECT integration_node_id
+       FROM release_instances
+      WHERE org_id = $1 AND project_id = $2 AND id = $3 AND artifact_digest = $4`,
     [input.orgId, input.projectId, input.releaseInstanceId, input.promotedArtifactDigest],
   );
-  if (!boolean(requirement.rows[0]?.required)) return { complete: true, kind: "not_applicable" };
+  const release = releaseRows.rows[0];
+  if (release === undefined || typeof release.integration_node_id !== "string" || release.integration_node_id === "") {
+    return { complete: false, failure: "missing_release_binding" };
+  }
+  const preMergeRun = await findLatestPreMergeBehaviorRun(client, input.orgId, release.integration_node_id);
+  if (preMergeRun === undefined) return { complete: true, kind: "not_applicable" };
 
   const requiredRows = await client.query<{ behavior_revision_id: unknown }>(
     `SELECT rb.behavior_revision_id
@@ -180,11 +178,6 @@ function integer(value: unknown): number {
   if (typeof value === "number" && Number.isInteger(value)) return value;
   if (typeof value === "string" && /^-?\d+$/u.test(value)) return Number(value);
   throw new TypeError("database count must be an integer");
-}
-function boolean(value: unknown): boolean {
-  if (value === true) return true;
-  if (value === false) return false;
-  throw new TypeError("database required flag must be boolean");
 }
 function positiveInt(value: unknown): boolean {
   try {
