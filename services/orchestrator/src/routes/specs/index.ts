@@ -194,7 +194,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
   });
 
   // The human-in-the-loop resolution of a `needs_attention` escalation (the operator
-  // API gap the live apex run surfaced). When a spec exhausts its retry budget it parks
+  // API gap a live run surfaced). When a spec exhausts its retry budget it parks
   // at the terminal `needs_attention` status, blocking its dependents — and there is no
   // AUTO exit (the escalation discipline: a human must DECIDE how to unblock it). Once
   // the operator has ADDRESSED the underlying blocker (e.g. fixed a platform bug) this
@@ -227,7 +227,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     }
   });
 
-  // The operator cancel-spec/cancel-run control (the §4 fix-soon leftover the apex
+  // The operator cancel-spec/cancel-run control (the §4 fix-soon leftover the
   // pre-run audit surfaced — a human-drivable control the operator API lacked). An
   // operator who decides a spec should NOT proceed (a mis-scoped spec, a dead-end run
   // burning credits) cancels it cleanly: the spec (and its active run) transitions to

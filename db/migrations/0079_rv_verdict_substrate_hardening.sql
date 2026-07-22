@@ -1,4 +1,4 @@
--- rv-substrate hardening (#1043, #1065). Closes apex-critical false-green and
+-- rv-substrate hardening (#1043, #1065). Closes autonomous-run-critical false-green and
 -- tamper gaps in the runtime-verification verdict ledger:
 --   Defect A (#1043): a passed verdict must have executed >= required assertions.
 --   Defect B (#1065 F4): a passed verdict must require at least one assertion.

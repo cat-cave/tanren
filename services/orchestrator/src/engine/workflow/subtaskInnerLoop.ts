@@ -432,7 +432,7 @@ function describeEvidenceReason(
   }
 }
 
-// The captured stdout/stderr tail of the step that failed the gate (apex pre-run §7.4):
+// The captured stdout/stderr tail of the step that failed the gate:
 // the gate runner already captured up to 4KB of the failing step's combined output in
 // `outputTail`. This is the ACTUAL error message (the failing fmt/lint/type/test output,
 // e.g. prettier naming the unformatted files + "Run Prettier with --write to fix") and

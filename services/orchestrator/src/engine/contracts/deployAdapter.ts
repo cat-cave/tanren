@@ -7,7 +7,7 @@
 // fails LOUD) and then SMOKE-CHECKS the resolved URL is HTTP-reachable. This makes
 // "a deploy happened" PROVEN, not merely triggered.
 //
-// SCOPE: this port covers the full set of deploy adapter CLASSES — the apex-relevant
+// SCOPE: this port covers the full set of deploy adapter CLASSES — the generally relevant
 // `direct_api` (Vercel/Fly), plus `pulumi` (IaC stack up/refresh), `package_release`
 // (publish to a package registry), `mobile_release` (submit to an app-distribution
 // channel), and `manual_external` (operator-attested out-of-band delivery). It carries

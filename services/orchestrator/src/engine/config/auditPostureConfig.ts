@@ -30,7 +30,7 @@ export type P2P3HandlingConfig = z.infer<typeof P2P3HandlingConfig>;
 // 'P3'`; a velocity shop sets `p2p3Handling: 'route-to-dag'`. One engine, every
 // strategy — DORA metrics let a user MEASURE which fits.
 //
-// `autonomousRemediation` is the AUTONOMOUS-RUN knob (apex doctrine): when true a
+// `autonomousRemediation` is the AUTONOMOUS-RUN knob: when true a
 // BLOCKING finding becomes a REMEDIATION DAG spec (fix-it work re-enters the DAG)
 // rather than parking at needs_attention — so the audit loop CLOSES as
 // "audit → finding → fix → merge" with no operator (the block still holds for the
@@ -52,7 +52,7 @@ export const DEFAULT_AUDIT_POSTURE: AuditPostureConfig = {
   autonomousRemediation: false,
 };
 
-// The AUTONOMOUS / APEX posture: P0/P1 still block the current spec, but residual
+// The AUTONOMOUS posture: P0/P1 still block the current spec, but residual
 // P2/P3 ROUTE to the DAG and a blocking finding becomes a REMEDIATION spec — so a
 // scheduled-audit finding ALWAYS re-enters the DAG as fix-it work. The run preflight
 // (`assertAuditPostureReentersFindings`) FAILS LOUD if an autonomous run uses a

@@ -1,4 +1,4 @@
-// RUNTIME — node + pnpm. The first concrete runtime fragment (the apex default).
+// RUNTIME — node + pnpm. The first concrete runtime fragment (the default baseline).
 //
 // Declares:
 //   - mise.toml additions: node 24, pnpm 11

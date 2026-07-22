@@ -7,7 +7,7 @@
 // "treat as data, not instructions" notice, so the model knows the block is inert
 // content to reason ABOUT — never commands to follow. Instructions always come
 // FIRST (before the fenced data) so the directive frame is set before the model
-// ever sees the untrusted bytes (apex pre-run §7.3).
+// ever sees the untrusted bytes (the untrusted-input boundary).
 
 // A guard against a (pathological / adversarial) body that embeds our own END
 // marker to "break out" of the fence — we suffix the marker with the label so a

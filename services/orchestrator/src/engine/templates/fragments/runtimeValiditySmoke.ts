@@ -3,7 +3,7 @@
 // `"vitest": "^99.0.0"` in package.json, pass isolated smoke, pass full-library
 // smoke, then explode at project bootstrap when the writer runs
 // `pnpm install` against the scaffold and hits `ERR_PNPM_NO_MATCHING_VERSION`.
-// That is one full apex trial burned on a bug the fragment pipeline could have
+// That is a full trial burned on a bug the fragment pipeline could have
 // caught in seconds.
 //
 // This module runs AFTER the isolated + full-library smoke compositions and

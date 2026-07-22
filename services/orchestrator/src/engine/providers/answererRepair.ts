@@ -7,7 +7,7 @@
 // re-send of the SAME prompt + the zod error + "re-emit valid JSON" converts that
 // expensive full-loop retry into ~1 cheap extra call.
 //
-// The pass is STRICTLY BOUNDED to one repair attempt (apex pre-run §7.1): on a
+// The pass is STRICTLY BOUNDED to one repair attempt: on a
 // first parse miss we re-run ONCE with the error appended; if THAT still fails we
 // throw the SECOND error LOUD (an AnswererSchemaValidationError, same as before).
 // There is no repair loop — exactly one extra call, then fail closed. Behavior is

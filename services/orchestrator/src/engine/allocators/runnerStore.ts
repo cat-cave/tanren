@@ -24,7 +24,7 @@ export interface ClaimRunnerInput {
    * Forge ideation runner whose `runId` is a synthetic, non-`runs` handle). This
    * was previously derived in-statement from `(SELECT org_id FROM runs WHERE
    * run_id = $runId)`, which returns NULL for that runless handle and made the
-   * org-scoped INSERT violate the `runners` WITH CHECK policy (the apex onboarding
+   * org-scoped INSERT violate the `runners` WITH CHECK policy (the standard onboarding
    * interview 500'd here). `null` is the EXPLICIT system / null-org job case (the
    * worker's system scope / BYPASSRLS), NOT a missing value.
    */

@@ -464,7 +464,7 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     writerObservable,
     appendEvent,
   );
-  // LOOP 3 — AUDIT-POSTURE PREFLIGHT. For an AUTONOMOUS run (the `lenient` apex tier —
+  // LOOP 3 — AUDIT-POSTURE PREFLIGHT. For an AUTONOMOUS run (the `lenient` tier —
   // functional-but-weak autonomous build, no operator in the loop), assert the
   // resolved `auditPosture` RE-ENTERS scheduled-audit findings into the DAG (residual
   // routes/fixes AND blocking findings become remediation specs). A posture that would

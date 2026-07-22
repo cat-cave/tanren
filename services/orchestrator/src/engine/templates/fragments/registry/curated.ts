@@ -25,7 +25,7 @@ import type { CuratedTemplate } from "./index.js";
 
 /**
  * The TypeScript / pnpm + React Router + Prisma + PostgreSQL + Fly.io entry — the
- * apex live-validation default. Every selected fragment is registered in the
+ * live-validation default. Every selected fragment is registered in the
  * production `loadFragmentLibrary()` (see `library/index.ts`); the composer assembles
  * a complete, green-CI repo deterministically.
  */
@@ -64,7 +64,7 @@ const RUBY_BUNDLER_FLY: CuratedTemplate = {
 };
 
 /**
- * The TypeScript / pnpm + Remix + Prisma + PostgreSQL + Fly.io entry — apex's most
+ * The TypeScript / pnpm + Remix + Prisma + PostgreSQL + Fly.io entry — the most
  * commonly captured "ts/pnpm + Remix + Postgres + Fly" lifecycle. Wires the
  * frontend-remix fragment with the postgres-prisma DB fragment.
  */
