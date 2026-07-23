@@ -63,14 +63,12 @@ export async function seedMq2Tenant(input: {
   for (const member of members) {
     await owner.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, $1, $1, 'in_flight')
-       ON CONFLICT (org_id, spec_id) DO NOTHING`,
+       VALUES ($1, $2, $3, $1, $1, 'in_flight')`,
       [member.specId, projectId, orgId],
     );
     await owner.query(
       `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-       VALUES ($1, $2, $3, $4, 'cli', $5, 'running')
-       ON CONFLICT (org_id, spec_id) DO NOTHING`,
+       VALUES ($1, $2, $3, $4, 'cli', $5, 'running')`,
       [member.runId, member.specId, projectId, orgId, member.branch],
     );
   }
