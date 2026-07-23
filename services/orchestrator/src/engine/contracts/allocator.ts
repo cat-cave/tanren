@@ -183,6 +183,18 @@ export interface Allocator {
    * kind list.
    */
   readonly taxonomy: AllocatorTaxonomy;
+  /**
+   * True when THIS allocator enforces its own `maxConcurrent` pool cap atomically
+   * in a SHARED store (the `runners` table), so the cap coordinates across every
+   * orchestrator process — not just this one. The {@link AllocatorRouter} then
+   * SKIPS its in-memory per-process counter for this kind and lets the allocator's
+   * cross-process reservation be the sole authority (the router's local count is
+   * per-process and would double-book across processes — #1254 hazard C). Absent /
+   * false ⇒ the router applies its own in-memory cap (the pre-#1254 behaviour,
+   * still correct for a single process / the cloud kinds that provision fresh
+   * resources rather than lease a shared pool).
+   */
+  readonly enforcesOwnPoolCap?: boolean;
   allocate(request: AllocationRequest): Promise<RunnerAllocation>;
   /**
    * Release the runner. `reason` is best-effort metadata for the allocator's
