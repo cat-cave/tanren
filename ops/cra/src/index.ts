@@ -50,7 +50,13 @@ export { resolveCraPaths, type CraPaths } from "./paths.js";
 export { pollOnce, type PollOnceResult } from "./pollOnce.js";
 export { reviewOnce, type ReviewOnceDeps, type ReviewOnceInput, type ReviewOnceResult } from "./reviewOnce.js";
 export { buildReviewMarker, bodyMatchesMarker, type ReviewMarkerKey } from "./reviewMarker.js";
-export { triage, type NormalizedFinding, type ReviewVerdict, type TriageResult } from "./triage.js";
+export {
+  triage,
+  type NormalizedFinding,
+  type ReviewVerdict,
+  type SupervisorEvidence,
+  type TriageResult,
+} from "./triage.js";
 export { SingletonLease } from "./singleton.js";
 export { PrStateStore } from "./stateStore.js";
 export {

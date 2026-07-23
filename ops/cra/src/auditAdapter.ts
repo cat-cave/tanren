@@ -17,9 +17,13 @@ export class ModelUnreachableError extends AuditFailure {}
 export interface ControlVerification {
   readonly id: string;
   readonly mandatory: boolean;
-  // Independently CONFIRMED by re-running the control in the isolated runner and
-  // observing a rejection (non-zero exit). Inspected-only mandatory controls, or
-  // ones that never executed, are not confirmed and become a P0 gap in triage.
+  // The worker's declared control kind, carried through so triage can force P0 on
+  // ANY unconfirmed EXECUTED control (a fail-open is a fail-open, mandatory or not).
+  readonly kind: "executed" | "inspected";
+  // Independently CONFIRMED only when the supervisor itself re-ran a real command in
+  // the isolated runner and saw a NON-ZERO exit (the bad input was rejected). The
+  // worker's own `rejected` field is never trusted. Inspected-only controls, missing/
+  // trivial commands, exit-0 (accepted), or a throwing re-run are NOT confirmed.
   readonly confirmed: boolean;
   readonly detail: string;
 }
@@ -139,42 +143,42 @@ export class AuditAdapter {
   }
 
   private async verifyControl(control: NegativeControl, worktree: VerifiedWorktree): Promise<ControlVerification> {
-    if (control.kind !== "executed" || control.command === null) {
+    const base = { id: control.id, mandatory: control.mandatory, kind: control.kind } as const;
+    if (control.kind !== "executed") {
+      return { ...base, confirmed: false, detail: "control is inspected-only; not independently executed" };
+    }
+    const command = control.command;
+    if (command === null || command.executable.trim().length === 0) {
+      return { ...base, confirmed: false, detail: "executed control has no runnable command to re-verify" };
+    }
+    const basename = command.executable.split("/").at(-1) ?? command.executable;
+    if (TRIVIAL_EXECUTABLES.has(basename)) {
+      // `true`/`false`/`:` exit deterministically regardless of input, so they can
+      // neither exercise nor reject a real boundary: never a valid confirmation.
       return {
-        id: control.id,
-        mandatory: control.mandatory,
+        ...base,
         confirmed: false,
-        detail: "control is inspected-only; not independently executed",
+        detail: `control command '${command.executable}' does not exercise the boundary`,
       };
     }
     try {
-      const result = await this.runner.run(worktree, {
-        executable: control.command.executable,
-        args: control.command.args,
-      });
-      // A negative control feeds a bad input that MUST be rejected: a non-zero
-      // exit is the rejection. A zero exit means the boundary accepted bad input.
+      const result = await this.runner.run(worktree, { executable: command.executable, args: command.args });
+      // A negative control feeds a bad input that MUST be rejected: a non-zero exit is
+      // the rejection. A zero exit means the boundary ACCEPTED bad input (a fail-open).
       if (result.exitCode === 0) {
         return {
-          id: control.id,
-          mandatory: control.mandatory,
+          ...base,
           confirmed: false,
           detail: "control command exited 0: the boundary accepted a bad input that must be rejected",
         };
       }
-      return {
-        id: control.id,
-        mandatory: control.mandatory,
-        confirmed: true,
-        detail: `control rejected with exit ${result.exitCode}`,
-      };
+      return { ...base, confirmed: true, detail: `control rejected with exit ${result.exitCode}` };
     } catch (error) {
-      return {
-        id: control.id,
-        mandatory: control.mandatory,
-        confirmed: false,
-        detail: `control could not be executed: ${(error as Error).message}`,
-      };
+      return { ...base, confirmed: false, detail: `control could not be executed: ${(error as Error).message}` };
     }
   }
 }
+
+// Executables that exit deterministically and so can never confirm that a real
+// boundary rejected a bad input.
+const TRIVIAL_EXECUTABLES: ReadonlySet<string> = new Set(["true", "false", ":"]);

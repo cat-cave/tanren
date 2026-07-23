@@ -112,7 +112,7 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     report: verified.report,
   });
 
-  const triaged = triage(verified);
+  const triaged = triage(verified, { diff: input.context.evidence.diff });
   for (const finding of triaged.findings) {
     await emit(deps, correlationId, now, {
       type: "finding",

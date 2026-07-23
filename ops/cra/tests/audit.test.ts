@@ -61,7 +61,13 @@ describe("cross-model audit adapter", () => {
       verifiedWorktree(),
     );
     expect(verified.controlVerifications).toEqual([
-      { id: "malformed-report", mandatory: true, confirmed: true, detail: "control rejected with exit 1" },
+      {
+        id: "malformed-report",
+        mandatory: true,
+        kind: "executed",
+        confirmed: true,
+        detail: "control rejected with exit 1",
+      },
     ]);
     expect(verified.independence.confirmed).toBe(true);
   });
@@ -92,6 +98,68 @@ describe("cross-model audit adapter", () => {
       verifiedWorktree(),
     );
     expect(verified.controlVerifications[0]?.confirmed).toBe(false);
+  });
+
+  it("does NOT confirm an executed control with a null command (never trust the worker's rejected field)", async () => {
+    const report = validReport({
+      negativeControls: [
+        {
+          id: "no-command",
+          description: "worker claims rejection but supplies no command",
+          mandatory: false,
+          kind: "executed",
+          command: null,
+          expectedRejection: "non-zero exit",
+          observedResult: "exit 1",
+          rejected: true,
+          evidenceRef: "worker.log",
+        },
+      ],
+    });
+    const verified = await new AuditAdapter(
+      testConfig(),
+      rejectingRunner,
+      workerExecutor(JSON.stringify(report)),
+    ).audit(auditContext(), verifiedWorktree());
+    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
+  });
+
+  it("does NOT confirm a trivial executable that cannot exercise a boundary", async () => {
+    const report = validReport({
+      negativeControls: [
+        {
+          id: "trivial",
+          description: "a /bin/true that always exits 0",
+          mandatory: false,
+          kind: "executed",
+          command: { executable: "/bin/false", args: [] },
+          expectedRejection: "non-zero exit",
+          observedResult: "exit 1",
+          rejected: true,
+          evidenceRef: "worker.log",
+        },
+      ],
+    });
+    const verified = await new AuditAdapter(
+      testConfig(),
+      rejectingRunner,
+      workerExecutor(JSON.stringify(report)),
+    ).audit(auditContext(), verifiedWorktree());
+    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
+  });
+
+  it("does NOT confirm a control whose isolated re-run throws", async () => {
+    const throwingRunner = {
+      run: async () => {
+        throw new Error("container failed to start");
+      },
+    };
+    const verified = await new AuditAdapter(
+      testConfig(),
+      throwingRunner,
+      workerExecutor(JSON.stringify(validReport())),
+    ).audit(auditContext(), verifiedWorktree());
+    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
   });
 
   it("fails closed on a non-JSON worker response", async () => {

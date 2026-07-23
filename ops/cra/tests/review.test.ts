@@ -36,33 +36,40 @@ afterEach(async () => {
 });
 
 const verifiedBase = {
-  controlVerifications: [{ id: "malformed-report", mandatory: true, confirmed: true, detail: "rejected" }],
+  controlVerifications: [
+    { id: "malformed-report", mandatory: true, kind: "executed", confirmed: true, detail: "rejected" },
+  ],
   independence: { confirmed: true, reason: "cross-model" },
   headSha: firstSha,
   baseSha: secondSha,
   rubricVersion: "2026-07-22",
 } as const;
 
+const noDiff = { diff: "" };
+
 describe("official GitHub review poster", () => {
   it("posts exactly one review bound to the audited head with inline + summary findings", async () => {
     const executor = ghSpy("CHANGES_REQUESTED");
-    const requestChanges = triage({
-      ...verifiedBase,
-      report: validReport({
-        findings: [
-          {
-            id: "loc",
-            title: "boundary check missing",
-            body: "add the guard",
-            category: "correctness",
-            concerns: "acceptance",
-            suggestedSeverity: "P0",
-            fixDirection: null,
-            evidence: { path: "src/x.ts", line: 12, side: "RIGHT", commandRef: null, detail: "here" },
-          },
-        ],
-      }),
-    });
+    const requestChanges = triage(
+      {
+        ...verifiedBase,
+        report: validReport({
+          findings: [
+            {
+              id: "loc",
+              title: "boundary check missing",
+              body: "add the guard",
+              category: "correctness",
+              concerns: "acceptance",
+              suggestedSeverity: "P0",
+              fixDirection: null,
+              evidence: { path: "src/x.ts", line: 12, side: "RIGHT", commandRef: null, detail: "here" },
+            },
+          ],
+        }),
+      },
+      noDiff,
+    );
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
       requestChanges,
@@ -92,7 +99,7 @@ describe("official GitHub review poster", () => {
     ];
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
-      triage({ ...verifiedBase, report: validReport() }),
+      triage({ ...verifiedBase, report: validReport() }, noDiff),
       existing,
     );
     expect(result).toMatchObject({ posted: false, reviewId: 4242 });
