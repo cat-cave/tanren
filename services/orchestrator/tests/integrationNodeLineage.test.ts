@@ -91,4 +91,27 @@ describe("gv-17 integration node member lineage (pure)", () => {
     ]);
     expect(lineage.invalidationCause).toBe("ancestor_landed");
   });
+
+  it("omits compatibility node ids so base_shift_operations FK cannot fail (negative control)", () => {
+    const lineage = buildBaseShiftLineage({
+      dependent: { runId: "run_dep", specId: "spec_dep", branch: "feat-dep" } as never,
+      newBaseSha: "b".repeat(40),
+      priorNodes: [
+        {
+          nodeId: "inode_compat_run_dep",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          ref: "local",
+          purpose: "eager_base",
+          members: [],
+          memberKey: "k",
+          gateConfigHash: "",
+          policyVersion: "",
+          affectedFingerprint: "",
+          status: "building",
+        },
+      ],
+    });
+    expect(lineage.nodeId).toBeUndefined();
+  });
 });

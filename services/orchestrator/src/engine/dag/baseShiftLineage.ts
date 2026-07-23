@@ -43,8 +43,11 @@ export function buildBaseShiftLineage(input: {
     input.newBaseSha,
     toMembers.map((m) => m.headSha),
   );
+  // Compatibility read-model ids (`inode_compat_*`) are not rows in integration_nodes;
+  // recording them would trip base_shift_operations_node_fk and fail the restack emit.
+  const persistedNodeId = prior !== undefined && !prior.nodeId.startsWith("inode_compat_") ? prior.nodeId : undefined;
   return {
-    ...(prior !== undefined && { nodeId: prior.nodeId }),
+    ...(persistedNodeId !== undefined && { nodeId: persistedNodeId }),
     ...(input.ancestorSpecId !== undefined && { ancestorSpecId: input.ancestorSpecId }),
     fromBaseSha,
     fromMemberKey,

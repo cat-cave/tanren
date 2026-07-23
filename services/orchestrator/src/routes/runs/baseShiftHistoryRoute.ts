@@ -1,6 +1,7 @@
 // gv-17: GET .../runs/:runId/base-shift-history — before/after member vectors
 // and invalidation causes for every durable restack on a dependent run.
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -66,6 +67,17 @@ export function registerBaseShiftHistoryRoute(app: Hono<ActorContextEnv>, option
     if (denial !== undefined) return denial;
 
     const store = new PgBaseShiftOperationStore(options.pool);
+    // Fail closed: only surface history when the run is in the path's project+org.
+    const owned = await runWithOrgScope(options.pool, orgId, async (client) => {
+      const result = await client.query<{ run_id: string }>(
+        `SELECT run_id FROM runs WHERE run_id = $1 AND project_id = $2`,
+        [runId, projectId],
+      );
+      return result.rows[0] !== undefined;
+    });
+    if (!owned) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
     const operations = await store.listForDependentRun(orgId, runId);
     const view = BaseShiftHistoryView.parse({
       missionNodeId: "gv-17",
