@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ async function git(cwd: string, args: readonly string[], env?: NodeJS.ProcessEnv
   return result.stdout.trim();
 }
 
-async function gitFixture() {
+async function gitFixture(options: { readonly maliciousFilter?: boolean } = {}) {
   const root = await mkdtemp(resolve(tmpdir(), "cra-git-"));
   roots.push(root);
   const source = resolve(root, "source");
@@ -37,6 +37,16 @@ async function gitFixture() {
   };
   await git(source, ["add", "tracked.txt"], gitEnv);
   await git(source, ["commit", "-m", "fixture"], gitEnv);
+  if (options.maliciousFilter === true) {
+    await writeFile(
+      resolve(source, ".gitattributes"),
+      ["payload.txt filter=host-smudge", "lfs-payload.txt filter=lfs", ""].join("\n"),
+    );
+    await writeFile(resolve(source, "payload.txt"), "untrusted payload\n");
+    await writeFile(resolve(source, "lfs-payload.txt"), "untrusted LFS payload\n");
+    await git(source, ["add", ".gitattributes", "payload.txt", "lfs-payload.txt"], gitEnv);
+    await git(source, ["commit", "-m", "malicious filter fixture"], gitEnv);
+  }
   const sha = await git(source, ["rev-parse", "HEAD"]);
   await git(source, ["remote", "add", "origin", remote]);
   await git(source, ["push", "origin", `HEAD:refs/pull/7/head`]);
@@ -56,6 +66,24 @@ describe("untrusted worktree isolation", () => {
     expect(await git(worktree.path, ["symbolic-ref", "-q", "HEAD"]).catch(() => "detached")).toBe("detached");
     await fixture.manager.cleanup(worktree);
     await expect(readFile(resolve(worktree.path, "tracked.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not run a host-configured smudge filter from an untrusted PR tree", async () => {
+    const fixture = await gitFixture({ maliciousFilter: true });
+    const customMarker = resolve(fixture.root, "custom-host-command-ran");
+    const lfsMarker = resolve(fixture.root, "lfs-host-command-ran");
+    await git(fixture.supervisor, ["config", "filter.host-smudge.smudge", `sh -c 'touch "${customMarker}"; cat'`]);
+    await git(fixture.supervisor, ["config", "filter.host-smudge.required", "true"]);
+    await git(fixture.supervisor, ["config", "filter.lfs.smudge", `sh -c 'touch "${lfsMarker}"; cat'`]);
+    await git(fixture.supervisor, ["config", "filter.lfs.required", "true"]);
+
+    const worktree = await fixture.manager.create(7, fixture.sha);
+
+    await expect(access(customMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(lfsMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(resolve(worktree.path, "payload.txt"), "utf8")).resolves.toBe("untrusted payload\n");
+    await expect(readFile(resolve(worktree.path, "lfs-payload.txt"), "utf8")).resolves.toBe("untrusted LFS payload\n");
+    await fixture.manager.cleanup(worktree);
   });
 
   it("rejects an adversarial advertised SHA before exposing a worktree", async () => {
