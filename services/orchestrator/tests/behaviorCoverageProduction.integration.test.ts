@@ -355,8 +355,10 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
     await blocker.query("SELECT pg_advisory_lock($1)", [ADVISORY_KEY]);
     const diff = new DiffSubstrate();
     const materialize = buildCoverageAuthorityReadyNodeMaterializer(appPool);
+    const concurrentBase = nodeInput("8".repeat(40), "9".repeat(40), "c".repeat(40), "d".repeat(40));
     const input = {
-      ...nodeInput("8".repeat(40), "9".repeat(40), "c".repeat(40), "d".repeat(40)),
+      ...concurrentBase,
+      members: concurrentBase.members.map((m) => ({ ...m, runId: "run_rv4_concurrent" })),
       workspace: { ssh: diff, target, workspacePath: "/workspace/rv4-concurrent" },
     };
     const pending = materialize(input);
