@@ -34,6 +34,7 @@ import {
   recordReplanContext,
   repointRunAncestorStack,
 } from "./percolationWrites.js";
+import { PgBaseShiftOperationStore } from "./baseShiftOperationsPg.js";
 import { PgRecoveryRouteSettler, type RecoveryRouteSettler } from "../merge/recoveryRouteSettlement.js";
 
 /**
@@ -126,10 +127,14 @@ export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
  * events).
  */
 export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
+  private readonly shifts: PgBaseShiftOperationStore;
+
   constructor(
     private readonly pool: pg.Pool,
     private readonly runStateWriter: RunStateWriter,
-  ) {}
+  ) {
+    this.shifts = new PgBaseShiftOperationStore(pool);
+  }
 
   async emitRebase(input: {
     projectId: string;
@@ -140,10 +145,56 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
     headSha: string;
     rebaseConflicted: boolean;
     decision: RebaseDecision;
+    lineage?: {
+      orgId: string;
+      nodeId?: string;
+      ancestorSpecId?: string;
+      fromBaseSha: string;
+      fromMemberKey: string;
+      toMemberKey: string;
+      fromMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      toMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      invalidationCause?:
+        | "ancestor_landed"
+        | "base_moved"
+        | "member_head_moved"
+        | "stack_restack"
+        | "policy_changed"
+        | "proof_stale";
+    };
   }): Promise<void> {
     // Org-scoped, plane-aware append (the helper routes through the control plane when
     // a writer is wired); `held` never reaches here (it throws before the emit).
     if (input.decision === "held") return;
     await appendIntegrationRebaseEvent(this.pool, input, this.runStateWriter);
+    // gv-17: durable before/after member vectors for every settled restack.
+    if (input.lineage !== undefined) {
+      await this.shifts.record({
+        orgId: input.lineage.orgId,
+        projectId: input.projectId,
+        ...(input.lineage.nodeId !== undefined && { nodeId: input.lineage.nodeId }),
+        dependentRunId: input.runId,
+        dependentSpecId: input.specId,
+        ...(input.lineage.ancestorSpecId !== undefined && { ancestorSpecId: input.lineage.ancestorSpecId }),
+        fromBaseSha: input.lineage.fromBaseSha,
+        toBaseSha: input.newBaseSha,
+        fromMemberKey: input.lineage.fromMemberKey,
+        toMemberKey: input.lineage.toMemberKey,
+        fromMembers: input.lineage.fromMembers,
+        toMembers: input.lineage.toMembers,
+        decision: input.decision,
+        invalidationCause: input.lineage.invalidationCause ?? "stack_restack",
+      });
+    }
   }
 }

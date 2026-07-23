@@ -28,12 +28,19 @@ import {
   specs,
   users,
 } from "./schemaCore.js";
-import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
+import {
+  baseShiftOperations,
+  integrationNodeMembers,
+  integrationNodes,
+  integrationProofs,
+} from "./schemaIntegrationNodes.js";
 import { gateProofBundles, gateProofBundleSections } from "./schemaGateProofBundles.js";
 import { events } from "./schemaEvents.js";
 import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
 export {
   enumCheck,
+  baseShiftOperations,
+  integrationNodeMembers,
   integrationNodes,
   integrationProofs,
   gateProofBundles,
