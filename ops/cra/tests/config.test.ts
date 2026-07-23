@@ -49,6 +49,15 @@ describe("CRA configuration and paths", () => {
     expect(loaded.paths.stateRoot).toBe(resolve(value.root, "state/tanren-cra/cat-cave-tanren"));
     expect(loaded.paths.stateRoot.startsWith(value.repositoryRoot)).toBe(false);
     expect(loaded.config.commands.gh).toBe("gh");
+    expect(loaded.config.mode).toBe("shadow");
+  });
+
+  it("rejects any rollout mode outside shadow, review, and merge", async () => {
+    const value = await fixture();
+    await writeFile(value.configPath, JSON.stringify({ ...value.config, mode: "permissive" }));
+    await expect(
+      loadConfig(value.configPath, { HOME: value.root, XDG_STATE_HOME: resolve(value.root, "state") }),
+    ).rejects.toThrow("Invalid option");
   });
 
   it("rejects a private key exposed to group or other users", async () => {

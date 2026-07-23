@@ -1,44 +1,171 @@
-# Central Review Authority foundation
+# Central Review Authority local service
 
-This package is workstation operations tooling, not part of the Tanren engine. It currently implements the CRA-01 through CRA-04 foundation: bounded `poll-once`, typed configuration and GitHub App identity verification, lock-protected durable state, read-only GitHub discovery, verified detached worktrees, and disposable execution of PR-controlled commands.
+<!-- cspell:ignore journalctl -->
 
-Copy `config.example.json` to `${XDG_CONFIG_HOME:-$HOME/.config}/tanren-cra/config.json`, replace every operator-specific value, and keep the GitHub App PEM outside the repository with mode `0600`. Then run:
+The CRA is transitional workstation operations tooling for `cat-cave/tanren`.
+It is outside the Tanren engine and imports no engine code. One bounded poll
+discovers open PRs, audits selected heads serially in verified throwaway
+worktrees, triages findings, performs only the writes allowed by the configured
+rollout mode, supervises abandonment, cleans up, and exits. The long-running
+service repeats that bounded operation every 60 seconds plus configured jitter.
+
+## Rollout modes
+
+`mode` is required operational policy and has exactly three values:
+
+- `shadow`: reads GitHub and runs the isolated audit, but the review dependency is
+  a local draft writer with no token or GitHub gateway. Drafts land under
+  `${XDG_STATE_HOME:-$HOME/.local/state}/tanren-cra/cat-cave-tanren/drafts/`.
+  There are no GitHub writes, including reviews, comments, issues, abandonment,
+  or merge.
+- `review`: posts one marker-deduplicated official review, routes deduplicated
+  P2/P3 issues, and runs reminder/abandonment writes. Its staged dependency type
+  has no merge callback, so the merge path is unreachable.
+- `merge`: uses the same official review path and may call the merge authority.
+  That authority performs three fresh stable authorization reads, denies every
+  false/missing/unknown prerequisite, and uses the audited-head SHA as GitHub's
+  compare-and-swap merge argument. P2/P3 routing happens only after a verified
+  merge.
+
+Promotion is deliberate: edit `mode` from `shadow` to `review`, observe it, then
+to `merge`. The last completed mode is stored per PR, so promotion invalidates a
+lower-stage completion even when the head and rubric did not change. There is no
+permissive or bypass mode. A missing identity, permission, required check,
+ruleset, audit artifact, sandbox, issue link, current base, or read-after-write
+confirmation causes delay or failure; it never weakens a guard.
+
+## Install
+
+Prerequisites are Node/pnpm, `gh`, Git, `flock`, a local OCI runtime and the
+configured audit-worker CLI. Build from the trusted CRA branch, then install a
+local symlink:
 
 ```sh
-corepack pnpm --filter @tanren/cra poll-once
+corepack pnpm --filter @tanren/cra build
+install -d -m 0700 "$HOME/.local/bin" "$HOME/.config/tanren-cra/credentials" \
+  "$HOME/.local/state/tanren-cra"
+ln -sfn "$PWD/ops/cra/dist/main.js" "$HOME/.local/bin/tanren-cra"
+install -m 0600 ops/cra/config.example.json "$HOME/.config/tanren-cra/config.json"
 ```
 
-`TANREN_CRA_CONFIG` may name a different absolute config path. Relative repository, key, and worktree paths are resolved relative to the config file, but the key, state root, and worktree root are rejected if they resolve inside the repository. Mutable state is always derived from XDG state as `${XDG_STATE_HOME:-$HOME/.local/state}/tanren-cra/<owner>-<repo>`; no state-directory override exists.
+Replace every operator-specific value in the config. Repository, key, worktree,
+and config paths must be absolute after resolution. CRA rejects its mutable
+state, private key, or throwaway worktrees if they are inside the repository.
 
-The installation token is minted for each poll from the owner-only App key. CRA verifies `viewer.login` against `github.expectedLogin` before discovery. Discovery invokes only `gh api graphql` queries and cannot issue repository mutations.
+Install the primary user service:
 
-PR records use sibling temporary files, file and directory synchronization, and atomic rename while the singleton lease is held. A torn JSONL tail is truncated on recovery; corruption before the final record is rejected. Audit artifacts add a rubric-version directory beneath the design's documented PR/head hierarchy:
-
-```text
-audits/<pr>/<head-sha>/<rubric-version>/report.json
+```sh
+install -D -m 0644 ops/cra/systemd/tanren-cra.service \
+  "$HOME/.config/systemd/user/tanren-cra.service"
+systemctl --user daemon-reload
+systemctl --user enable --now tanren-cra.service
+loginctl enable-linger "$USER"
+systemctl --user status tanren-cra.service
+journalctl --user -u tanren-cra.service -f
 ```
 
-That extra segment resolves the design's otherwise ambiguous requirement that artifacts be immutable per PR/head/rubric tuple while allowing a rubric change to re-audit an unchanged head.
+On a machine without user systemd, edit the absolute paths in
+`cron/tanren-cra.crontab` and install it with `crontab`. Do not enable cron while
+the user service is enabled. Both entry points use the same non-blocking
+`supervisor.lock`, so accidental overlap cannot double-review or double-merge.
 
-The isolated runner uses a configured local container image. It mounts the verified worktree read-only at `/input`, copies it to an ephemeral `/work` tmpfs, disables networking, drops capabilities, enables `no-new-privileges`, applies CPU/memory/PID and wall-clock limits, exposes no host home, state directory, credentials, or container socket, and forcibly removes the container after every result.
+For a manual bounded verification:
 
-## Deep adversarial audit + official review (CRA-05, CRA-06)
+```sh
+tanren-cra poll-once "$HOME/.config/tanren-cra/config.json"
+```
 
-The `audit` config block names the cross-model audit worker CLI (`command`, `args`, `modelFamily`) — a different model family from any contributor and from the supervisor, like the grok gate used to build this repo. For each selected head the adapter serializes the audit context (linked issue + acceptance + required negative control, PR body, complete diff, deletion statistics, standards, and CI check evidence) to the worker's stdin, strips the GitHub installation token from the worker's environment, and requires strict JSON on stdout. The report is validated against a strict schema; a malformed, truncated, or head-mismatched report is a fail-closed audit failure, never an empty finding set.
+Success emits one JSON `DAILY_STATUS` record containing mode, open/oldest PRs,
+heads awaiting audit, blocked and abandonment counts, merges, P0-P3 counts, and
+follow-up issue IDs. Every poll and decision also goes to durable JSONL events.
+Failures write an `error` event where state is available, print to stderr, invoke
+the configured loud local notifier (the default is `logger` to journald/syslog),
+and exit nonzero so systemd restarts and records the failure. Notification
+failure is itself printed and remains a nonzero service failure.
 
-**Trust boundary — the crux.** The audit worker AUTHORS its report, so every field it controls is spoofable. The report is therefore **advisory judgment only: it can ADD P0-P3 findings, but it can never confirm, clear, or suppress a gate.** The supervisor **assembles its own ground truth in-package** (`GroundTruthAssembler`) and never accepts it from a caller — if any input cannot be assembled it **fails closed** (no APPROVE on a partial bundle). What the supervisor assembles itself:
+## GitHub App credentials and identity
 
-- the real **unified diff** (`git diff base...head`) and the real **worktree tree** (`git ls-files`);
-- the real **required-check contexts** from GitHub **branch protection** plus the real **head check states**.
+Create or install the workstation GitHub App as the sole normal review/merge
+identity. The expected actor is `trevor-workstation[bot]`. Grant only:
 
-Every gate is computed from that ground truth, never from a worker field:
+- repository metadata: read;
+- checks/statuses: read;
+- pull requests: read/write;
+- issues: read/write;
+- contents: read/write for squash merge.
 
-- **Deletions** — from the real diff, counting text hunks, **binary deletions**, and **renames at any similarity**. Attribution is **pre-image for deletions, post-image for additions**: a renamed file's deleted lines are classified by its OLD path, so a partial rename out of the test tree (`tests/gate.test.ts → src/gate.ts` at 80%) can't launder a gutted test's lines as live. A rename whose source is a test path but destination is not is a **test-file removal at any similarity**. test-vs-live is **path-segment** based (not substring, so `contests/` is not a test dir). Any net test deletion or removed test file blocks; net live deletion ≥ `audit.deletionGate.liveLineThreshold` (default 100) or any binary/100%-rename removal of a live file blocks. The worker's `deletionAccounting` is **ignored** — mq-16 cannot be self-cleared.
-- **CI checks** — every branch-protection required context must be present and **SUCCESS**; missing / pending / **SKIPPED** / **NEUTRAL** / any non-SUCCESS blocks. An **empty** required set fails closed (not "all clear"). The worker's `unresolvedChecks` is never consulted.
-- **Negative control / verification** — a worker-supplied command can NEVER confirm anything (an `env false` wrapper cannot be tied to the PR's boundary). The supervisor runs exactly ONE **trusted, config-sourced** command (`audit.verificationCommand`, the PR's own gate) in the CRA-04 sandbox; a **vacuous/no-op** command (`true`/`false`/`:`) is rejected as unrun. Fail → P1; could-not-run/vacuous → P0. The worker may only self-incriminate: a mandatory control it reports as not-rejected is an admitted fail-open (P0).
-- **Acceptance** — a satisfied claim is cleared ONLY when the trusted verification passed AND the evidence cites a **real repo-relative test file** that both exists in the tree and is **changed by this PR** (a bare suffix token like `"see t.ts"` or `"just looks good"` never clears it). An unmet or unprovable claim is P0.
-- **Independence** — computed from PR provenance; an unconfirmable cross-model check on an agent-authored PR is P0.
+Put the App private key at the configured `github.privateKeyPath`, outside the
+repository, owned by the CRA user, mode `0600`, and never in an environment
+variable. Configure the numeric App and installation IDs. Model credentials stay
+in the workstation credential store used by the audit CLI; CRA strips `GH_TOKEN`
+and `GITHUB_TOKEN` from the audit worker. Each poll mints a short-lived
+installation token and verifies the viewer login before any write-capable object
+is constructed.
 
-Any P0/P1 (advisory or supervisor-computed) yields `REQUEST_CHANGES`; only P2/P3 (or none) yields `APPROVE`.
+## Branch protection and rulesets
 
-Exactly one official review is posted for the audited head SHA (`POST /repos/<owner>/<repo>/pulls/<n>/reviews` with `commit_id` bound to the audited head, inline comments for locatable findings, others summarized with evidence). Every review body carries a stable `<!-- tanren-cra:v1 pr=<n> head=<sha> rubric=<version> -->` marker; the poster scans existing bot reviews for a matching marker first, so a re-poll of the same head never posts a duplicate. The disposition is persisted in the foundation state store.
+Protect `main` with all repository-required check contexts and require the branch
+to be current and conflict-free. Grant normal merge capability only to the
+installed CRA App; contributors and their tokens must not self-merge. Do not add
+an alternate automation bypass actor. If both legacy branch protection and
+rulesets declare checks, CRA unions them and requires every context to be present,
+completed, and successful. Confirm the setup in `shadow`, then `review`, before
+selecting `merge`.
+
+The merge authority additionally verifies the exact source issue and closed
+dependencies, current CRA marker/review/rubric/artifact, stable PR body/history
+and ruleset versions, app identity and permissions, held singleton, durable state,
+and read-after-write health. `BEHIND`, `UNKNOWN`, skipped/neutral/missing checks,
+pagination, rate-limit uncertainty, or any API/schema error denies merge.
+
+## Recovery and exactly-once behavior
+
+State records and drafts use synchronized atomic replacement; audit reports are
+immutable per PR/head/rubric. At poll start CRA removes interrupted temporary
+state siblings, repairs only a torn final JSONL record, and reclaims only its
+validated `pr-<number>-<sha12>` worktrees and `refs/cra/*` refs while holding the
+singleton lease. An `in_progress` or failed audit is selected again.
+
+Local state is not the sole idempotency key. Reviews carry the stable
+`tanren-cra:v1` marker and follow-up issues carry `CRA-Finding`; restart reconciles
+an accepted remote review instead of posting it again. A verified merge is persisted
+before issue routing. If the process then crashes, the next poll enters
+post-merge routing recovery and never calls the merge path; issue markers and
+dependency read-before-write prevent duplicates.
+
+## Disable and break glass
+
+Normal disable:
+
+```sh
+systemctl --user disable --now tanren-cra.service
+crontab -l  # remove the CRA fallback line if it was installed
+```
+
+Verify no process holds the repository's
+`${XDG_STATE_HOME:-$HOME/.local/state}/tanren-cra/cat-cave-tanren/supervisor.lock`
+before incident work. Preserve state and audit logs.
+
+Break glass is incident response, never a second merge lane:
+
+1. Disable both service and cron and record the incident/reason on the PR.
+2. Run the same trusted audit and every required gate manually against the exact
+   head, confirming the source issue/dependencies and current base.
+3. Use the maintainer's documented ruleset emergency authority, squash with an
+   explicit head-SHA check, record the resulting commit, and reconcile issue
+   closure.
+4. Record why CRA could not perform the action, repair that failure, return first
+   to `shadow`, and re-promote through `review` before restoring `merge`.
+
+Never change mode or a ruleset to a weaker guard as a break-glass shortcut.
+
+## Retirement toward Tanren-in-Tanren
+
+This package is removed surface-by-surface once Tanren's corresponding native
+capability is beta-stable and apex fixtures prove it: issue intake replaces the
+GitHub roster, the autonomy engine replaces contributor worktrees,
+`MergeAuthority` plus behavior verification replaces audit/triage, the native
+intelligent merge queue replaces the external squash authority, and
+`DeployAdapter` plus self-update replaces manual release. During cutover, disable
+CRA first and prove the native owner is the sole authority before deleting local
+state, App permissions, service/cron assets, and finally `ops/cra/`.

@@ -13,7 +13,7 @@ import type { NormalizedFinding } from "./triage.js";
 export interface ApprovedPostReviewDeps {
   readonly mergeGateway: MergeAuthorityGateway;
   readonly issueGateway: FindingIssueGateway;
-  readonly stateStore: PrStateStore;
+  readonly stateStore: Pick<PrStateStore, "write">;
   readonly recorder: MergeAuthorityRecorder;
 }
 

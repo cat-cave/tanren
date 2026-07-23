@@ -8,6 +8,7 @@ export interface CraPaths {
   readonly prsDirectory: string;
   readonly auditsDirectory: string;
   readonly eventsDirectory: string;
+  readonly draftsDirectory: string;
 }
 
 function xdgRoot(env: NodeJS.ProcessEnv, variable: "XDG_CONFIG_HOME" | "XDG_STATE_HOME", fallback: string): string {
@@ -37,6 +38,7 @@ export function resolveCraPaths(repository: string, env: NodeJS.ProcessEnv = pro
     prsDirectory: resolve(stateRoot, "prs"),
     auditsDirectory: resolve(stateRoot, "audits"),
     eventsDirectory: resolve(stateRoot, "events"),
+    draftsDirectory: resolve(stateRoot, "drafts"),
   };
 }
 

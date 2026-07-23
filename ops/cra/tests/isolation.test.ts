@@ -68,6 +68,15 @@ describe("untrusted worktree isolation", () => {
     await expect(readFile(resolve(worktree.path, "tracked.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reclaims a crash-left worktree and detached ref on restart", async () => {
+    const fixture = await gitFixture();
+    const worktree = await fixture.manager.create(7, fixture.sha);
+    expect(await git(fixture.supervisor, ["show-ref", "--verify", worktree.ref])).toContain(fixture.sha);
+    await fixture.manager.recover();
+    await expect(access(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(git(fixture.supervisor, ["show-ref", "--verify", worktree.ref])).rejects.toThrow("git exited");
+  });
+
   it("does not run a host-configured smudge filter from an untrusted PR tree", async () => {
     const fixture = await gitFixture({ maliciousFilter: true });
     const customMarker = resolve(fixture.root, "custom-host-command-ran");

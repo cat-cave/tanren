@@ -2,6 +2,7 @@ import type { CraConfig } from "../src/config.js";
 
 export function testConfig(overrides: Partial<CraConfig> = {}): CraConfig {
   const base: CraConfig = {
+    mode: "shadow",
     repository: "cat-cave/tanren",
     repositoryRoot: "/tmp/cra-repository",
     baseBranch: "main",
@@ -30,6 +31,10 @@ export function testConfig(overrides: Partial<CraConfig> = {}): CraConfig {
       deletionGate: { liveLineThreshold: 200 },
     },
     timing: { pollSeconds: 60, jitterSeconds: 10, inactivityDays: 7, reminderDays: [3, 6] },
+    notification: {
+      command: "logger",
+      args: ["--stderr", "--priority", "user.err", "--tag", "tanren-cra"],
+    },
   };
   return { ...base, ...overrides };
 }

@@ -1,0 +1,3 @@
+# Cron fallback for machines without user systemd. Replace "operator" and paths.
+# poll-once takes the same nonblocking supervisor.lock as the systemd service.
+* * * * * /home/operator/.local/bin/tanren-cra poll-once /home/operator/.config/tanren-cra/config.json >>/home/operator/.local/state/tanren-cra/cron.log 2>&1

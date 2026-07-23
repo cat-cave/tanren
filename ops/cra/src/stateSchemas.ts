@@ -2,6 +2,30 @@ import { z } from "zod";
 
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const isoDateSchema = z.iso.datetime({ offset: true });
+const normalizedFindingSchema = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  category: z.enum([
+    "completion",
+    "regression_deletion",
+    "correctness",
+    "security",
+    "standards",
+    "operability",
+    "betterment",
+    "process",
+  ]),
+  severity: z.enum(["P0", "P1", "P2", "P3"]),
+  locatable: z.boolean(),
+  path: z.string().nullable(),
+  line: z.number().int().positive().nullable(),
+  side: z.enum(["LEFT", "RIGHT"]).nullable(),
+  evidence: z.string(),
+  forced: z.boolean(),
+  concerns: z.enum(["acceptance", "new_work"]),
+  fixDirection: z.string().nullable(),
+});
 
 export const retryStateSchema = z.strictObject({
   attempts: z.number().int().nonnegative(),
@@ -30,6 +54,8 @@ export const prStateSchema = z.strictObject({
     .default([]),
   abandonmentReason: z.enum(["findings", "inactivity"]).nullable().default(null),
   auditStatus: z.enum(["idle", "in_progress", "completed", "failed"]),
+  lastCompletedMode: z.enum(["shadow", "review", "merge"]).nullable().default(null),
+  reviewFindings: z.array(normalizedFindingSchema).default([]),
 });
 
 export type PrState = z.infer<typeof prStateSchema>;
