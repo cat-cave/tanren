@@ -12,7 +12,7 @@ import { OnbStyles } from "../styles.js";
 import { ArrivalStep } from "./ArrivalStep.js";
 import { DerivedDagStep } from "./DerivedDagStep.js";
 import { GreenfieldStyles } from "./greenfieldStyles.js";
-import { InterviewStep } from "./InterviewStep.js";
+import { InterviewStep, type DeployOption } from "./InterviewStep.js";
 
 const STEPS: Array<{ l: string; e: string }> = [
   { l: "say what", e: "we're building" },
@@ -31,6 +31,10 @@ export interface GreenfieldBodyProps {
     priorAnswer: string;
     capture: InterviewCapture;
     complete: boolean;
+    /** Derive-form prefill/validation (only meaningful once `complete`). */
+    ownerDefault?: string;
+    ownerError?: string;
+    deployOptions?: DeployOption[];
   };
   // Steps 2 + 3 (post-derive): the live derived graph + project.
   derived?: {
@@ -90,6 +94,9 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
             capture={props.interview.capture}
             complete={props.interview.complete}
             csrfToken={props.csrfToken}
+            ownerDefault={props.interview.ownerDefault}
+            ownerError={props.interview.ownerError}
+            deployOptions={props.interview.deployOptions}
           />
         )}
         {props.step === 2 && props.derived !== undefined && (

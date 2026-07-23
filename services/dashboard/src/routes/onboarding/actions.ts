@@ -13,6 +13,7 @@ import type { Context, Hono } from "hono";
 import { clientDepsFor } from "../../api/clientDeps.js";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
+import { AiProviderClient, AI_PROVIDER_KINDS, type AiProviderKind } from "../../api/aiProviderClient.js";
 import type { ShellDeps } from "../../app/mountShell.js";
 
 async function clientFor(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
@@ -25,6 +26,10 @@ async function clientFor(c: Context, deps: ShellDeps): Promise<OrchestratorClien
 async function firstOrgId(client: OrchestratorClient): Promise<string | undefined> {
   const orgs = await client.listOrgs();
   return orgs[0]?.id;
+}
+
+function isAiProvider(value: string): value is AiProviderKind {
+  return (AI_PROVIDER_KINDS as readonly string[]).includes(value);
 }
 
 function redirectTo(c: Context, path: string, notice?: string): Response {
@@ -94,6 +99,41 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       body: { ref, token },
     });
     return redirectTo(c, "/onboarding/credentials", result.ok ? `saved ${label}` : "save failed");
+  });
+
+  // ── connect AI provider (run default) ─────────────────────────────────────
+  // Storing a key never made it the run default; this proxies to the typed
+  // ai-provider route with `makeDefault` so the connected provider is
+  // cost-classified AND wired as the org's default LLM (providerMode → byok).
+  app.post("/onboarding/ai-provider/connect", async (c) => {
+    const client = new AiProviderClient(await clientDepsFor(c, deps));
+    const orgId = await firstOrgId(await clientFor(c, deps));
+    const form = await c.req.parseBody();
+    const providerRaw = formField(form, "provider");
+    const apiKey = formField(form, "apiKey");
+    const authJson = formField(form, "authJson");
+    // Checkbox: present only when checked. Default the run-default ON — the whole
+    // reason to connect here is to make it resolve for runs.
+    const makeDefault = formField(form, "makeDefault", "true") !== "false";
+    if (orgId === undefined || !isAiProvider(providerRaw)) {
+      return redirectTo(c, "/onboarding/credentials", "pick a provider");
+    }
+    // Codex delivers a ChatGPT auth bundle; the api-key providers a raw token.
+    const secret = providerRaw === "codex" ? { authJson } : { apiKey };
+    if ((providerRaw === "codex" ? authJson : apiKey) === "") {
+      return redirectTo(
+        c,
+        "/onboarding/credentials",
+        providerRaw === "codex" ? "codex needs auth.json" : "enter an api key",
+      );
+    }
+    const result = await client.connect(orgId, { provider: providerRaw, ...secret, makeDefault });
+    if (!result.ok) {
+      return redirectTo(c, "/onboarding/credentials", result.error ?? "connect failed");
+    }
+    const notice =
+      result.body?.isDefault === true ? `connected ${providerRaw} · run default` : `connected ${providerRaw}`;
+    return redirectTo(c, "/onboarding/credentials", notice);
   });
 
   app.post("/onboarding/credentials/delete", async (c) => {

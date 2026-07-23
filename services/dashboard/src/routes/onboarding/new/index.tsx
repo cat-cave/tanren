@@ -29,7 +29,14 @@ import { clientDepsFor } from "../../../api/clientDeps.js";
 import { formField } from "../../formField.js";
 import { OnboardingNewClient } from "../../../api/onboardingNewClient.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
-import { emptyCapture, type InterviewCapture } from "../../../api/onboardingNewTypes.js";
+import { IntegrationsClient } from "../../../api/integrationsClient.js";
+import {
+  emptyCapture,
+  type DeriveAutonomy,
+  type DeriveDeployInput,
+  type InterviewCapture,
+} from "../../../api/onboardingNewTypes.js";
+import type { DeployOption } from "../../../components/onboarding/new/InterviewStep.js";
 import { getProjectDag, type ProjectDag } from "../../../api/projectDag.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../../app/mountShell.js";
 import type { ShellContext } from "../../../app/shell.js";
@@ -54,6 +61,57 @@ function parseCapture(raw: unknown): InterviewCapture {
   } catch {
     return emptyCapture();
   }
+}
+
+/** The derive form's prefill + linked-deploy options, resolved per request. */
+interface DerivePrep {
+  ownerDefault: string;
+  deployOptions: DeployOption[];
+}
+
+const SUPPORTED_DEPLOY_KINDS = new Set(["deploy.vercel", "deploy.flyio"]);
+
+/**
+ * Resolve the derive form's prefill: the GitHub `owner` defaults to the org
+ * login (the account the App is installed on) and the deploy select is populated
+ * from the org's LINKED deploy integrations (a grant carries both connection +
+ * grant ids so the server's paired-field refinement is satisfied). Failure to
+ * read integrations degrades to no options — deploy is optional, so the derive
+ * still succeeds; it never blocks or fabricates a connection.
+ */
+async function buildDerivePrep(c: Context, ctx: ShellContext, deps: ShellDeps): Promise<DerivePrep> {
+  const ownerDefault = ctx.org?.login ?? "";
+  const client = new IntegrationsClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
+  const list = ctx.org === undefined ? undefined : await client.list(ctx.org.id);
+  const deployOptions: DeployOption[] = [];
+  for (const grant of list?.integrations ?? []) {
+    if (!SUPPORTED_DEPLOY_KINDS.has(grant.providerKind) || grant.grantId === undefined) continue;
+    deployOptions.push({
+      value: `${grant.providerKind}::${grant.connectionId}::${grant.grantId}`,
+      label: `${grant.providerKind} · ${grant.displayName}`,
+    });
+  }
+  return { ownerDefault, deployOptions };
+}
+
+/** Parse the derive form's `deploy` select value (`kind::connectionId::grantId`). */
+function parseDeploy(raw: string): DeriveDeployInput | undefined {
+  if (raw === "") return undefined;
+  const [providerKind, connectionId, grantId] = raw.split("::");
+  if (providerKind !== "deploy.vercel" && providerKind !== "deploy.flyio") return undefined;
+  return {
+    providerKind,
+    ...(connectionId === undefined || connectionId === "" ? {} : { connectionId }),
+    ...(grantId === undefined || grantId === "" ? {} : { grantId }),
+  };
+}
+
+/** Parse the derive form's `autonomy` select value (defaults to `auto`). */
+function parseAutonomy(raw: string): DeriveAutonomy {
+  return raw === "simulated" || raw === "human" ? raw : "auto";
 }
 
 function noOrgBody(error?: string, csrfToken?: string) {
@@ -130,7 +188,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
       return handleRound(c, ctx, deps, form);
     }
     if (step === 2) {
-      return handleDerive(c, ctx, deps, parseCapture(form["capture"]));
+      return handleDerive(c, ctx, deps, form);
     }
     // step 3 advance: the projectId rode forward on the derived-summary form.
     const projectId = formField(form, "projectId");
@@ -152,6 +210,10 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
   const answer = formField(form, "answer");
   const capture = parseCapture(form["capture"]);
   const { result } = await (await writeNewClient(c, deps)).round(orgId, { round, answer, capture });
+  const complete = result?.complete ?? false;
+  // Only pay for the integrations read once the interview is actually ready to
+  // derive (that is the only render where the owner/deploy form is shown).
+  const prep = complete ? await buildDerivePrep(c, ctx, deps) : undefined;
   return renderShell(
     c,
     ctx,
@@ -165,7 +227,8 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
         suggestions: result?.suggestions ?? [],
         priorAnswer: answer,
         capture: result?.capture ?? capture,
-        complete: result?.complete ?? false,
+        complete,
+        ...(prep === undefined ? {} : { ownerDefault: prep.ownerDefault, deployOptions: prep.deployOptions }),
       }}
       error={result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
       csrfToken={ctx.csrfToken}
@@ -173,32 +236,80 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
   );
 }
 
-async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, capture: InterviewCapture) {
+async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgId = ctx.org!.id;
-  const { ok, result } = await (await writeNewClient(c, deps)).derive(orgId, { capture });
+  const capture = parseCapture(form["capture"]);
+  const owner = formField(form, "owner").trim();
+  const autonomy = parseAutonomy(formField(form, "autonomy"));
+  const deploy = parseDeploy(formField(form, "deploy"));
+
+  // FIELD-LEVEL VALIDATION: the orchestrator's strict `DeriveBody` REQUIRES a
+  // non-empty `owner`. Guard it here so an omitted owner surfaces as an inline
+  // form error on the completed interview step — never a raw 400 from a doomed
+  // derive call.
+  if (owner === "") {
+    const prep = await buildDerivePrep(c, ctx, deps);
+    return renderCompleteRetry(c, ctx, capture, {
+      ownerError: "enter the github owner for the new repo before deriving.",
+      ownerDefault: prep.ownerDefault,
+      deployOptions: prep.deployOptions,
+    });
+  }
+
+  const { ok, result } = await (
+    await writeNewClient(c, deps)
+  ).derive(orgId, {
+    capture,
+    owner,
+    autonomy,
+    ...(deploy === undefined ? {} : { deploy }),
+  });
   if (!ok || result === undefined) {
-    // Re-render step 1's completed state so the operator can retry the derive.
-    return renderShell(
-      c,
-      ctx,
-      { title: "tanren · new project" },
-      <GreenfieldBody
-        step={1}
-        interview={{
-          round: 14,
-          totalRounds: 14,
-          say: "Derive failed — try again.",
-          suggestions: [],
-          priorAnswer: "",
-          capture,
-          complete: true,
-        }}
-        error="could not derive the spec dag — try again."
-        csrfToken={ctx.csrfToken}
-      />,
-    );
+    // Re-render step 1's completed state so the operator can retry the derive,
+    // preserving the owner/deploy they entered.
+    const prep = await buildDerivePrep(c, ctx, deps);
+    return renderCompleteRetry(c, ctx, capture, {
+      error: "could not derive the spec dag — try again.",
+      ownerDefault: owner === "" ? prep.ownerDefault : owner,
+      deployOptions: prep.deployOptions,
+    });
   }
   return renderDerivedStep(c, ctx, deps, 2, result.projectId, result.projectName);
+}
+
+// Re-render the completed interview step (the derive form) — the single retry
+// surface for both a validation miss and a failed derive.
+function renderCompleteRetry(
+  c: Context,
+  ctx: ShellContext,
+  capture: InterviewCapture,
+  opts: { error?: string; ownerError?: string; ownerDefault: string; deployOptions: DeployOption[] },
+) {
+  return renderShell(
+    c,
+    ctx,
+    { title: "tanren · new project" },
+    <GreenfieldBody
+      step={1}
+      interview={{
+        round: 14,
+        totalRounds: 14,
+        say:
+          opts.ownerError === undefined
+            ? "Derive failed — try again."
+            : "Almost there — confirm the repo owner, then derive.",
+        suggestions: [],
+        priorAnswer: "",
+        capture,
+        complete: true,
+        ownerDefault: opts.ownerDefault,
+        ...(opts.ownerError === undefined ? {} : { ownerError: opts.ownerError }),
+        deployOptions: opts.deployOptions,
+      }}
+      error={opts.error}
+      csrfToken={ctx.csrfToken}
+    />,
+  );
 }
 
 // Fetch the live derived DAG for the project and render step 2 or 3.
