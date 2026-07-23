@@ -71,6 +71,8 @@ export { DisposableCommandRunner, type IsolatedCommand } from "./isolatedRunner.
 export { OfficialReviewPoster, type OfficialReviewResult } from "./officialReview.js";
 export { resolveCraPaths, type CraPaths } from "./paths.js";
 export { pollOnce, type PollOnceResult } from "./pollOnce.js";
+export { FailureNotifier, runBoundedPoll, serve } from "./service.js";
+export { runStagedCandidate, type StagedCandidateInput, type StagedCandidateResult } from "./stagedRollout.js";
 export {
   runApprovedPostReview,
   type ApprovedPostReviewDeps,

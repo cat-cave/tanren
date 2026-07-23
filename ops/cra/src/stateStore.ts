@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CraPaths } from "./paths.js";
 import { atomicWriteFile, ensurePrivateDirectory, removeTemporarySiblings } from "./filesystem.js";
@@ -17,7 +17,19 @@ export class PrStateStore {
     await ensurePrivateDirectory(this.paths.prsDirectory);
     await ensurePrivateDirectory(this.paths.auditsDirectory);
     await ensurePrivateDirectory(this.paths.eventsDirectory);
+    await ensurePrivateDirectory(this.paths.draftsDirectory);
     await removeTemporarySiblings(this.paths.prsDirectory);
+  }
+
+  public async list(): Promise<PrState[]> {
+    const entries = await readdir(this.paths.prsDirectory, { withFileTypes: true });
+    const states: PrState[] = [];
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isFile() || !/^\d+\.json$/u.test(entry.name)) continue;
+      const state = await this.read(Number.parseInt(entry.name.slice(0, -5), 10));
+      if (state !== undefined) states.push(state);
+    }
+    return states;
   }
 
   public async read(pr: number): Promise<PrState | undefined> {

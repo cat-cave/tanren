@@ -1,0 +1,21 @@
+[Unit]
+Description=Tanren Central Review Authority
+Documentation=https://github.com/cat-cave/tanren/blob/main/ops/cra/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tanren-cra serve %h/.config/tanren-cra/config.json
+Restart=on-failure
+RestartSec=15s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=default.target

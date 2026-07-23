@@ -208,4 +208,41 @@ describe("reviewOnce fail-closed pipeline", () => {
     expect(gh).toHaveBeenCalledOnce();
     await lease.release();
   });
+
+  it("promotes an immutable shadow audit to an official review without rerunning the model", async () => {
+    const { paths, lease, stateStore } = await stateFixture(roots);
+    const shadowDeps = reviewDeps(paths, lease, ghSpy("APPROVED"), JSON.stringify(validReport()), stubAssembler());
+    const shadow = await reviewOnce(
+      {
+        ...shadowDeps,
+        poster: {
+          post: async (_key, triaged) => ({
+            posted: false,
+            reviewId: null,
+            verdict: triaged.verdict,
+          }),
+        },
+      },
+      {
+        state: initialState(),
+        context: auditContext(),
+        worktree: verifiedWorktree(),
+        existingReviews: [],
+        now: "2026-07-22T12:00:00.000Z",
+      },
+    );
+    const promotedInput = { ...shadow.state, lastCompletedMode: "shadow" as const };
+    await stateStore.write(promotedInput);
+    const gh = ghSpy("APPROVED");
+    const promoted = await reviewOnce(reviewDeps(paths, lease, gh, "model must not run again", stubAssembler()), {
+      state: promotedInput,
+      context: auditContext(),
+      worktree: verifiedWorktree(),
+      existingReviews: [],
+      now: "2026-07-23T12:00:00.000Z",
+    });
+    expect(promoted).toMatchObject({ blocked: false, posted: true, reviewId: 5001, verdict: "APPROVE" });
+    expect(gh).toHaveBeenCalledOnce();
+    await lease.release();
+  });
 });

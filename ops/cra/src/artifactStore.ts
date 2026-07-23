@@ -24,9 +24,10 @@ export class AuditArtifactStore {
     const path = this.pathFor(value.pr, value.headSha, value.rubricVersion, "report.json");
     const contents = `${JSON.stringify(value, null, 2)}\n`;
     if (!(await immutableWriteFile(path, contents))) {
-      const existing = await readFile(path, "utf8");
-      if (existing !== contents)
-        throw new Error(`immutable audit artifact already exists with different content: ${path}`);
+      const existing = auditArtifactSchema.parse(JSON.parse(await readFile(path, "utf8")));
+      const sameEvidence =
+        JSON.stringify({ ...existing, createdAt: null }) === JSON.stringify({ ...value, createdAt: null });
+      if (!sameEvidence) throw new Error(`immutable audit artifact already exists with different content: ${path}`);
     }
   }
 

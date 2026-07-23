@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CraConfig } from "./config.js";
 import { ensurePrivateDirectory } from "./filesystem.js";
@@ -35,6 +35,31 @@ export class WorktreeManager {
     private readonly config: CraConfig,
     private readonly executor: CommandExecutor = execute,
   ) {}
+
+  // Called only while the process-wide lease is held. A prior SIGKILL can leave
+  // either the directory, Git worktree registration, or detached ref behind.
+  public async recover(): Promise<void> {
+    await ensurePrivateDirectory(this.config.isolation.worktreeRoot);
+    const entries = await readdir(this.config.isolation.worktreeRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      const match = /^pr-(\d+)-([0-9a-f]{12})$/u.exec(entry.name);
+      if (match === null) continue;
+      const path = resolve(this.config.isolation.worktreeRoot, entry.name);
+      await this.gitResult(["worktree", "remove", "--force", path], 60_000);
+      await rm(path, { recursive: true, force: true });
+    }
+    const refs = await this.gitResult(["for-each-ref", "--format=%(refname)", "refs/cra/"], 30_000);
+    if (refs.exitCode !== 0) throw new Error(`failed to enumerate stale CRA refs: ${refs.stderr.trim()}`);
+    for (const ref of refs.stdout.split("\n").filter((value) => value.length > 0)) {
+      if (!/^refs\/cra\/pr-\d+-[0-9a-f]{12}$/u.test(ref)) {
+        throw new Error(`unexpected ref below refs/cra/: ${ref}`);
+      }
+      const deleted = await this.gitResult(["update-ref", "-d", ref], 30_000);
+      if (deleted.exitCode !== 0) throw new Error(`failed to reclaim stale CRA ref ${ref}`);
+    }
+    const pruned = await this.gitResult(["worktree", "prune", "--expire", "now"], 30_000);
+    if (pruned.exitCode !== 0) throw new Error(`failed to prune stale worktree metadata: ${pruned.stderr.trim()}`);
+  }
 
   public async create(pr: number, advertisedHeadSha: string): Promise<VerifiedWorktree> {
     if (!Number.isSafeInteger(pr) || pr <= 0) throw new Error(`invalid PR number: ${pr}`);

@@ -1,4 +1,5 @@
 {
+  "mode": "shadow",
   "repository": "cat-cave/tanren",
   "repositoryRoot": "/home/operator/src/tanren",
   "baseBranch": "main",
@@ -19,5 +20,15 @@
     "modelFamily": "grok",
     "verificationCommand": { "executable": "just", "args": ["fast-check"] },
     "deletionGate": { "liveLineThreshold": 100 }
+  },
+  "timing": {
+    "pollSeconds": 60,
+    "jitterSeconds": 10,
+    "inactivityDays": 7,
+    "reminderDays": [3, 6]
+  },
+  "notification": {
+    "command": "logger",
+    "args": ["--stderr", "--priority", "user.err", "--tag", "tanren-cra"]
   }
 }

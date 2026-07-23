@@ -1,6 +1,7 @@
 import { lstat, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { CRA_RUBRIC } from "./auditRubric.js";
 import { assertOutsideRepository, resolveCraPaths, type CraPaths } from "./paths.js";
 
 const commandSchema = z
@@ -10,6 +11,7 @@ const commandSchema = z
 const durationSchema = z.number().int().positive();
 
 export const craConfigSchema = z.strictObject({
+  mode: z.enum(["shadow", "review", "merge"]).default("shadow"),
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
   repositoryRoot: z.string().min(1),
   baseBranch: z.string().min(1).default("main"),
@@ -81,6 +83,15 @@ export const craConfigSchema = z.strictObject({
       reminderDays: z.tuple([durationSchema, durationSchema]).default([3, 6]),
     })
     .default({ pollSeconds: 60, jitterSeconds: 10, inactivityDays: 7, reminderDays: [3, 6] }),
+  notification: z
+    .strictObject({
+      command: commandSchema.default("logger"),
+      args: z.array(commandSchema).default(["--stderr", "--priority", "user.err", "--tag", "tanren-cra"]),
+    })
+    .default({
+      command: "logger",
+      args: ["--stderr", "--priority", "user.err", "--tag", "tanren-cra"],
+    }),
 });
 
 export type CraConfig = z.infer<typeof craConfigSchema>;
@@ -115,6 +126,11 @@ export async function loadConfig(configFile?: string, env: NodeJS.ProcessEnv = p
     github: { ...config.github, privateKeyPath },
     isolation: { ...config.isolation, worktreeRoot },
   });
+  if (resolved.rubricVersion !== CRA_RUBRIC.version) {
+    throw new Error(
+      `configured rubric ${resolved.rubricVersion} does not match implemented rubric ${CRA_RUBRIC.version}`,
+    );
+  }
   const paths = resolveCraPaths(resolved.repository, { ...env, TANREN_CRA_CONFIG: initialPath });
   assertOutsideRepository(paths.stateRoot, repositoryRoot, "CRA state");
   assertOutsideRepository(privateKeyPath, repositoryRoot, "GitHub App private key");

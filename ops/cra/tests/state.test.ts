@@ -44,6 +44,8 @@ function prState(): PrState {
     reminderDaysSent: [],
     abandonmentReason: null,
     auditStatus: "completed",
+    lastCompletedMode: null,
+    reviewFindings: [],
   };
 }
 

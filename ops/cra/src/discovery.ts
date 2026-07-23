@@ -245,6 +245,7 @@ export function selectReviewCandidates(
   pullRequests: readonly DiscoveredPullRequest[],
   states: ReadonlyMap<number, PrState>,
   rubricVersion: string,
+  mode?: CraConfig["mode"],
 ): DiscoveredPullRequest[] {
   return pullRequests.filter((pr) => {
     if (pr.isDraft) return false;
@@ -253,6 +254,8 @@ export function selectReviewCandidates(
       state === undefined ||
       state.lastReviewedHeadSha !== pr.headSha ||
       state.rubricVersion !== rubricVersion ||
+      (mode !== undefined && state.lastCompletedMode !== mode) ||
+      state.disposition === "changes_requested" ||
       state.auditStatus === "in_progress" ||
       state.auditStatus === "failed"
     );

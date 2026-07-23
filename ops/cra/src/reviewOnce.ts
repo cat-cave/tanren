@@ -7,11 +7,10 @@ import type { CraConfig } from "./config.js";
 import type { DiscoveredReview } from "./discovery.js";
 import type { EventLog } from "./eventLog.js";
 import { GroundTruthAssemblyError, type GroundTruthAssembler } from "./groundTruth.js";
-import type { OfficialReviewPoster } from "./officialReview.js";
 import { bodyMatchesMarker } from "./reviewMarker.js";
 import type { PrStateStore } from "./stateStore.js";
 import type { PrState } from "./stateSchemas.js";
-import { triage, type ReviewVerdict } from "./triage.js";
+import { triage, type NormalizedFinding, type ReviewVerdict, type TriageResult } from "./triage.js";
 import type { VerifiedWorktree } from "./worktree.js";
 
 export interface ReviewOnceDeps {
@@ -21,10 +20,18 @@ export interface ReviewOnceDeps {
   // Assembles the supervisor's OWN ground truth (real diff/tree from git, real
   // required-check set + head states from GitHub) — never accepted from the caller.
   readonly assembler: GroundTruthAssembler;
-  readonly poster: OfficialReviewPoster;
+  readonly poster: ReviewPoster;
   readonly stateStore: PrStateStore;
   readonly artifactStore: AuditArtifactStore;
   readonly events: EventLog;
+}
+
+export interface ReviewPoster {
+  post(
+    key: { readonly pr: number; readonly headSha: string; readonly rubricVersion: string },
+    triage: TriageResult,
+    existingReviews: readonly DiscoveredReview[],
+  ): Promise<{ readonly posted: boolean; readonly reviewId: number | null; readonly verdict: ReviewVerdict }>;
 }
 
 export interface ReviewOnceInput {
@@ -44,6 +51,7 @@ export interface ReviewOnceResult {
   readonly reviewId: number | null;
   readonly state: PrState;
   readonly reason: string | null;
+  readonly findings: readonly NormalizedFinding[];
 }
 
 // One audit + review disposition for a single PR head. Fail-closed throughout: a
@@ -65,13 +73,83 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     (review) => review.author === config.github.expectedLogin && bodyMatchesMarker(review.body, markerKey),
   );
   if (already !== undefined) {
+    const verdict =
+      already.state === "APPROVED" ? "APPROVE" : already.state === "CHANGES_REQUESTED" ? "REQUEST_CHANGES" : null;
+    if (verdict === null || already.databaseId === null) {
+      return {
+        blocked: true,
+        verdict: null,
+        posted: false,
+        reviewId: null,
+        state: input.state,
+        reason: "existing marked review has an unconfirmable disposition",
+        findings: [],
+      };
+    }
+    // Crash recovery: GitHub may have accepted the review immediately before the
+    // local atomic state write. Reconcile from the remote marker instead of
+    // posting again or leaving the head permanently pending.
+    const recoveredState: PrState = {
+      ...input.state,
+      lastSeenHeadSha: headSha,
+      lastReviewedHeadSha: headSha,
+      lastReviewedBaseSha: input.context.baseSha,
+      auditedIssueNumber: input.context.evidence.issue.number,
+      rubricVersion: config.rubricVersion,
+      reviewId: already.databaseId,
+      disposition:
+        input.state.disposition === "merged" ? "merged" : verdict === "APPROVE" ? "approved" : "changes_requested",
+      awaitingAuthorSince: verdict === "REQUEST_CHANGES" ? (input.state.awaitingAuthorSince ?? now) : null,
+      retry: { attempts: 0, nextAttemptAt: null, lastError: null },
+      auditStatus: "completed",
+    };
+    await deps.stateStore.write(recoveredState);
     return {
       blocked: false,
-      verdict: null,
+      verdict,
       posted: false,
       reviewId: already.databaseId,
-      state: input.state,
+      state: recoveredState,
       reason: "already reviewed for this head",
+      findings: recoveredState.reviewFindings,
+    };
+  }
+
+  const promotesShadowAudit =
+    input.state.lastCompletedMode === "shadow" &&
+    input.state.reviewId === null &&
+    input.state.lastReviewedHeadSha === headSha &&
+    input.state.lastReviewedBaseSha === input.context.baseSha &&
+    input.state.rubricVersion === input.context.rubricVersion &&
+    input.state.auditStatus === "completed" &&
+    (input.state.disposition === "approved" || input.state.disposition === "changes_requested");
+  if (promotesShadowAudit) {
+    // Promotion consumes the immutable, supervisor-triaged shadow result. It must
+    // not ask a nondeterministic model to recreate an artifact for the same
+    // PR/head/rubric tuple.
+    await deps.artifactStore.readReport(pr, headSha, input.context.rubricVersion);
+    const findings = input.state.reviewFindings;
+    const counts = { P0: 0, P1: 0, P2: 0, P3: 0 };
+    for (const finding of findings) counts[finding.severity] += 1;
+    const verdict: ReviewVerdict = input.state.disposition === "approved" ? "APPROVE" : "REQUEST_CHANGES";
+    const review = await deps.poster.post(markerKey, { verdict, findings, counts }, input.existingReviews);
+    if (review.reviewId === null) throw new Error("rollout promotion did not produce an official review id");
+    const promotedState: PrState = { ...input.state, reviewId: review.reviewId };
+    await deps.stateStore.write(promotedState);
+    await emit(deps, correlationId, now, {
+      type: "review",
+      pr,
+      headSha,
+      detail: { verdict, posted: review.posted, reviewId: review.reviewId, counts, promotedFrom: "shadow" },
+    });
+    return {
+      blocked: false,
+      verdict,
+      posted: review.posted,
+      reviewId: review.reviewId,
+      state: promotedState,
+      reason: null,
+      findings,
     };
   }
 
@@ -104,7 +182,7 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
       durationMs: Date.now() - started,
       detail: { outcome: "failed", reason },
     });
-    return { blocked: true, verdict: null, posted: false, reviewId: null, state: blockedState, reason };
+    return { blocked: true, verdict: null, posted: false, reviewId: null, state: blockedState, reason, findings: [] };
   }
 
   await deps.artifactStore.writeReport({
@@ -146,7 +224,7 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
       durationMs: Date.now() - started,
       detail: { outcome: "failed", reason },
     });
-    return { blocked: true, verdict: null, posted: false, reviewId: null, state: blockedState, reason };
+    return { blocked: true, verdict: null, posted: false, reviewId: null, state: blockedState, reason, findings: [] };
   }
 
   const triaged = triage(verified, evidence);
@@ -187,6 +265,7 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     abandonmentReason: null,
     retry: { attempts: 0, nextAttemptAt: null, lastError: null },
     auditStatus: "completed",
+    reviewFindings: [...triaged.findings],
   };
   await deps.stateStore.write(nextState);
   await emit(deps, correlationId, now, {
@@ -204,6 +283,7 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     reviewId: review.reviewId,
     state: nextState,
     reason: null,
+    findings: triaged.findings,
   };
 }
 
