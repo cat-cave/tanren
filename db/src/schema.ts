@@ -49,6 +49,7 @@ export {
   users,
   events,
 };
+export { runners } from "./schemaRunners.js";
 export { mergeEagerBeams } from "./schemaEagerBeams.js";
 export { mergeRuntimeOutcomes } from "./schemaMergeRuntimeOutcomes.js";
 export { mergeQueueCommands, mergeQueuePolicies, mergeQueueWindows } from "./schemaQueuePolicy.js";
@@ -158,29 +159,6 @@ export const costRecords = pgTable(
       sql`(${table.runId} IS NOT NULL) <> (${table.issueLoopId} IS NOT NULL)`,
     ),
   ],
-);
-export const runners = pgTable(
-  "runners",
-  {
-    runnerId: text("runner_id").primaryKey(),
-    runId: text("run_id").references(() => runs.runId),
-    projectId: text("project_id").references(() => projects.projectId),
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    allocator: text("allocator").notNull(),
-    status: text("status").notNull(),
-    sshHost: text("ssh_host").notNull(),
-    sshPort: integer("ssh_port").notNull(),
-    hostKeyFingerprint: text("host_key_fingerprint").notNull(),
-    imageSha: text("image_sha").notNull(),
-    containerId: text("container_id"),
-    hcloudServerId: text("hcloud_server_id"),
-    providerMetadata: jsonb("provider_metadata"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    releasedAt: timestamp("released_at", { withTimezone: true }),
-  },
-  (table) => [index("runners_org_id").on(table.orgId)],
 );
 
 export const rateLimitObservations = pgTable("rate_limit_observations", {

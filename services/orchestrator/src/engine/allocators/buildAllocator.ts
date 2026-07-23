@@ -92,14 +92,21 @@ function buildSidecar(runners: RunnerStore): SidecarHttpAllocator {
   });
 }
 
-function buildManualSsh(runners: RunnerStore): ManualSshAllocator {
+function buildManualSsh(runners: PgRunnerStore, maxConcurrent?: number): ManualSshAllocator {
   const raw = env("TANREN_MANUAL_SSH_HOSTS");
   if (raw === undefined) {
     throw new Error("manual_ssh allocator requires TANREN_MANUAL_SSH_HOSTS (JSON array of hosts)");
   }
   // Strict decode (Codex r4 §2): a bad host shape / blank field / out-of-range port
   // fails LOUD here at construction, never a cryptic later allocation/SSH failure.
-  return new ManualSshAllocator({ hosts: parseManualSshHosts(raw), runners });
+  // `runners` (PgRunnerStore) doubles as the shared-store lease seam (#1254): the
+  // manual pool's host busy-tracking + `maxConcurrent` cap live on the `runners`
+  // table so they coordinate across orchestrator processes.
+  return new ManualSshAllocator({
+    hosts: parseManualSshHosts(raw),
+    leases: runners,
+    ...(maxConcurrent !== undefined && { maxConcurrent }),
+  });
 }
 
 async function buildHetzner(runners: RunnerStore, secrets: SecretStore): Promise<HetznerAllocator> {
@@ -272,11 +279,13 @@ async function buildKubernetes(runners: RunnerStore, secrets: SecretStore): Prom
  * over the enum with NO `default` fallthrough, so an unknown kind can NEVER
  * silently degrade to the sidecar allocator.
  */
-async function buildSingle(kind: AllocatorKind, runners: RunnerStore, secrets: SecretStore): Promise<Allocator> {
+async function buildSingle(kind: AllocatorKind, runners: PgRunnerStore, secrets: SecretStore): Promise<Allocator> {
   switch (kind) {
     case "static":
       return buildStatic(runners);
     case "manual_ssh":
+      // Single-allocator path (no router): no pool policy, so the cap is bounded
+      // only by the configured host count (the partial unique index).
       return buildManualSsh(runners);
     case "hetzner":
       return buildHetzner(runners, secrets);
@@ -306,7 +315,7 @@ async function buildSingle(kind: AllocatorKind, runners: RunnerStore, secrets: S
  * stubs (their credentials are never loaded).
  */
 async function buildRegistry(
-  runners: RunnerStore,
+  runners: PgRunnerStore,
   secrets: SecretStore,
   config: AllocatorRoutingConfig,
 ): Promise<AllocatorRegistry> {
@@ -323,7 +332,9 @@ async function buildRegistry(
       case "sidecar":
         return buildSidecar(runners);
       case "manual_ssh":
-        return usedKinds.has("manual_ssh") ? buildManualSsh(runners) : new UnconfiguredAllocator("manual_ssh");
+        return usedKinds.has("manual_ssh")
+          ? buildManualSsh(runners, config.pools.manual_ssh?.maxConcurrent)
+          : new UnconfiguredAllocator("manual_ssh");
       case "hetzner":
         return usedKinds.has("hetzner") ? buildHetzner(runners, secrets) : new UnconfiguredAllocator("hetzner");
       case "digitalocean":
