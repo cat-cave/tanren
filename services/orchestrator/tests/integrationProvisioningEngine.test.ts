@@ -30,7 +30,6 @@ const ORG = "org_int_1";
 const PROJECT = "proj_int_1";
 const ACTOR = { kind: "operator", id: "user_a" } as const;
 const TOKEN_REF = "org/org_int_1/sentry/token/g/1";
-
 // The exact `inbox_sources_kind_check` set (migration 0024). The stub pool below
 // enforces it so a provisioner emitting a CHECK-violating inbox kind (the capability-onboarding
 // blocking bug) FAILS the persistence test instead of silently passing.
