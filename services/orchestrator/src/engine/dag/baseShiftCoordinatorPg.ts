@@ -33,6 +33,7 @@ import {
   recordPercolationPending,
   recordReplanContext,
   repointRunAncestorStack,
+  resolveProjectOrg,
 } from "./percolationWrites.js";
 import { PgBaseShiftOperationStore } from "./baseShiftOperationsPg.js";
 import { PgRecoveryRouteSettler, type RecoveryRouteSettler } from "../merge/recoveryRouteSettlement.js";
@@ -146,7 +147,7 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
     rebaseConflicted: boolean;
     decision: RebaseDecision;
     lineage?: {
-      orgId: string;
+      orgId?: string;
       nodeId?: string;
       ancestorSpecId?: string;
       fromBaseSha: string;
@@ -179,8 +180,12 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
     await appendIntegrationRebaseEvent(this.pool, input, this.runStateWriter);
     // gv-17: durable before/after member vectors for every settled restack.
     if (input.lineage !== undefined) {
+      const orgId = input.lineage.orgId ?? (await resolveProjectOrg(this.pool, input.projectId));
+      if (orgId === null) {
+        throw new Error(`project ${input.projectId} has no org for base_shift_operations`);
+      }
       await this.shifts.record({
-        orgId: input.lineage.orgId,
+        orgId,
         projectId: input.projectId,
         ...(input.lineage.nodeId !== undefined && { nodeId: input.lineage.nodeId }),
         dependentRunId: input.runId,

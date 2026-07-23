@@ -8,6 +8,7 @@ import type {
   DurableConflictRecoverySettlement,
 } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
+import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
 import { rebaseDecisionFromRecovery, settleBaseShiftRecovery } from "./baseShiftRecovery.js";
+import { emitBaseShiftRebase } from "./baseShiftEmit.js";
 
 const log = createLogger("base-shift");
 
@@ -208,12 +210,12 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     reviewVerdict?: "changes_requested";
   }): Promise<BaseShiftRebaseOutcome> {
     const { projectId, dependent } = input;
-    // (a) Load the affected integration_nodes (S0). Observe-only today — it does NOT
-    //     branch control flow; it makes the shift's node context inspectable + is the
-    //     substrate Wave 3 keys proof reuse on. A read failure is non-fatal (logged).
-    await this.deps.nodes.nodesForDependent({ projectId, dependent }).catch((error: unknown) => {
+    // (a) Load the affected integration_nodes BEFORE the restack — the before-vector for
+    //     gv-17 base_shift_operations history. A read failure is non-fatal (logged) and
+    //     yields an empty before-vector rather than dropping the shift.
+    const priorNodes = await this.deps.nodes.nodesForDependent({ projectId, dependent }).catch((error: unknown) => {
       log.warn("integration-node read failed (non-fatal)", { specId: dependent.specId }, error);
-      return [];
+      return [] as IntegrationNode[];
     });
 
     // (b) Rebase the dependent's EXISTING branch onto the shifted base — the run/branch
@@ -230,7 +232,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (rebase.outcome === "clean") {
-      return this.settleClean({ ...input, branch: opened.branch, newBaseSha: opened.newBaseSha, rebase });
+      return this.settleClean({
+        ...input,
+        branch: opened.branch,
+        newBaseSha: opened.newBaseSha,
+        rebase,
+        priorNodes,
+      });
     }
     // A conflicted rebase: jj recorded the conflict IN the commit (the work survived).
     // `RebaseResult` is a single interface (not a discriminated union), so re-narrow it
@@ -242,6 +250,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       branch: opened.branch,
       newBaseSha: opened.newBaseSha,
       rebase: conflicted,
+      priorNodes,
     });
   }
 
@@ -278,6 +287,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     toSha: string;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult;
+    priorNodes: ReadonlyArray<IntegrationNode>;
   }): Promise<BaseShiftRebaseOutcome> {
     const result = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
     if (result.verdict === "passed") {
@@ -309,6 +319,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     toSha: string;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult & { outcome: "conflicted" };
+    priorNodes: ReadonlyArray<IntegrationNode>;
   }): Promise<BaseShiftRebaseOutcome> {
     let resolution: ConflictResolution;
     try {
@@ -474,19 +485,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       branch: string;
       newBaseSha: string;
       rebase: RebaseResult;
+      ancestorStack?: AncestorStack;
+      ancestorSpecId?: string;
+      priorNodes?: ReadonlyArray<IntegrationNode>;
     },
     rebaseConflicted: boolean,
     decision: RebaseDecision,
   ): Promise<void> {
-    await this.deps.events.emitRebase({
-      projectId: input.projectId,
-      specId: input.dependent.specId,
-      runId: input.dependent.runId,
-      branch: input.branch,
-      newBaseSha: input.newBaseSha,
-      headSha: input.rebase.headSha,
-      rebaseConflicted,
-      decision,
-    });
+    await emitBaseShiftRebase(this.deps.events, input, rebaseConflicted, decision);
   }
 }

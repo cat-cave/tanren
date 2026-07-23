@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { memberKey, type IntegrationNodeMember } from "../src/engine/contracts/integrationNodes.js";
+import { buildBaseShiftLineage } from "../src/engine/dag/baseShiftLineage.js";
 import {
   decodeMembersStrict,
   MemberLineageDivergenceError,
@@ -59,5 +60,35 @@ describe("gv-17 integration node member lineage (pure)", () => {
     );
     expect(reorderedKey).not.toBe(key);
     expect(sameOrderedMembers(ordered, reordered)).toBe(false);
+  });
+
+  it("production emit always attaches before/after vectors from prior nodes + stack", () => {
+    const lineage = buildBaseShiftLineage({
+      dependent: { runId: "run_dep", specId: "spec_dep", branch: "feat-dep" } as never,
+      newBaseSha: "b".repeat(40),
+      ancestorSpecId: "spec_a",
+      ancestorStack: [{ specId: "spec_b", runId: "run_b", branch: "feat-b", headSha: "2".repeat(40) }],
+      priorNodes: [
+        {
+          nodeId: "inode_1",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          ref: "local",
+          purpose: "eager_base",
+          members: [{ specId: "spec_a", runId: "run_a", branch: "feat-a", headSha: "1".repeat(40) }],
+          memberKey: "prior_key",
+          gateConfigHash: "",
+          policyVersion: "",
+          affectedFingerprint: "",
+          status: "building",
+        },
+      ],
+    });
+    expect(lineage.nodeId).toBe("inode_1");
+    expect(lineage.fromMembers).toHaveLength(1);
+    expect(lineage.toMembers).toEqual([
+      { specId: "spec_b", runId: "run_b", branch: "feat-b", headSha: "2".repeat(40) },
+    ]);
+    expect(lineage.invalidationCause).toBe("ancestor_landed");
   });
 });
