@@ -139,5 +139,37 @@ export interface BaseShiftEventEmitter {
     headSha: string;
     rebaseConflicted: boolean;
     decision: RebaseDecision;
+    /**
+     * gv-17 optional lineage snapshot. When present, the pg emitter durably
+     * records a `base_shift_operations` row with before/after member vectors.
+     * Absent on pure in-memory fakes that only assert the event was emitted.
+     */
+    lineage?: {
+      orgId: string;
+      nodeId?: string;
+      ancestorSpecId?: string;
+      fromBaseSha: string;
+      fromMemberKey: string;
+      toMemberKey: string;
+      fromMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      toMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      invalidationCause?:
+        | "ancestor_landed"
+        | "base_moved"
+        | "member_head_moved"
+        | "stack_restack"
+        | "policy_changed"
+        | "proof_stale";
+    };
   }): Promise<void>;
 }

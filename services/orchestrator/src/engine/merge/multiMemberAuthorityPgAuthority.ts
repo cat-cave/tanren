@@ -137,8 +137,18 @@ export class PgExactBatchBindingRevalidator implements LandBindingRevalidator {
       return invalid("authority received a different subject/envelope object");
     }
     const { binding } = this.deps;
-    const [node, exactGateProof, quarantineVersion, decisionSignals] = await Promise.all([
-      this.deps.nodes.findByMemberKey(this.deps.orgId, binding.memberSetHash),
+    let node;
+    try {
+      node = await this.deps.nodes.findByMemberKey(this.deps.orgId, binding.memberSetHash);
+    } catch (error) {
+      // gv-17: tampered/reordered/deleted member rows fail closed — never land.
+      return invalid(
+        error instanceof Error
+          ? `member lineage invalid: ${error.message}`
+          : "member lineage invalid: integration node members diverged",
+      );
+    }
+    const [exactGateProof, quarantineVersion, decisionSignals] = await Promise.all([
       this.deps.verifyGateProof(),
       this.deps.readQuarantineVersion(),
       this.deps.readDecisionSignals(),

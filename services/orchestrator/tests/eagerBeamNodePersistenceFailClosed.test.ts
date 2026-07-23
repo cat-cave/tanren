@@ -14,6 +14,14 @@ const MEMBER_SHA = "b".repeat(40);
 
 class RecordingClient {
   public readonly queries: Array<{ sql: string; params: unknown[] }> = [];
+  private memberRows: Array<{
+    ordinal: number;
+    spec_id: string;
+    run_id: string;
+    branch: string;
+    head_sha: string;
+    included: boolean;
+  }> = [];
 
   public constructor(
     private readonly orgId: string | null,
@@ -30,6 +38,27 @@ class RecordingClient {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ node_id: "inode_eager" }], rowCount: 1 };
     }
+    if (sql.includes("DELETE FROM integration_node_members")) {
+      this.memberRows = [];
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("INSERT INTO integration_node_members")) {
+      this.memberRows.push({
+        ordinal: params[3] as number,
+        spec_id: params[4] as string,
+        run_id: params[5] as string,
+        branch: params[6] as string,
+        head_sha: params[7] as string,
+        included: true,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("FROM integration_node_members")) {
+      return {
+        rows: [...this.memberRows].sort((a, b) => a.ordinal - b.ordinal),
+        rowCount: this.memberRows.length,
+      };
+    }
     return { rows: [], rowCount: 1 };
   }
 }
@@ -39,6 +68,14 @@ class ModelPool {
   public proofRow: unknown = undefined;
   public projectOrg: string | null = "org_eager";
   public speculativeRows: unknown[] = [];
+  public memberRows: Array<{
+    ordinal: number;
+    spec_id: string;
+    run_id: string;
+    branch: string;
+    head_sha: string;
+    included: boolean;
+  }> = [];
 
   public async connect(): Promise<this> {
     return this;
@@ -46,7 +83,7 @@ class ModelPool {
 
   public release(): void {}
 
-  public async query(sql: string): Promise<{ rows: unknown[]; rowCount: number }> {
+  public async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.includes("SELECT org_id FROM projects"))
       return this.projectOrg === null
         ? { rows: [], rowCount: 0 }
@@ -54,6 +91,27 @@ class ModelPool {
     if (sql.includes("SELECT node_id, base_branch"))
       return this.nodeRow === undefined ? { rows: [], rowCount: 0 } : { rows: [this.nodeRow], rowCount: 1 };
     if (sql.includes("INSERT INTO integration_nodes")) return { rows: [{ node_id: "inode_eager" }], rowCount: 1 };
+    if (sql.includes("DELETE FROM integration_node_members")) {
+      this.memberRows = [];
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("INSERT INTO integration_node_members")) {
+      this.memberRows.push({
+        ordinal: params[3] as number,
+        spec_id: params[4] as string,
+        run_id: params[5] as string,
+        branch: params[6] as string,
+        head_sha: params[7] as string,
+        included: true,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("FROM integration_node_members")) {
+      return {
+        rows: [...this.memberRows].sort((a, b) => a.ordinal - b.ordinal),
+        rowCount: this.memberRows.length,
+      };
+    }
     if (sql.includes("INSERT INTO integration_proofs")) return { rows: [], rowCount: 1 };
     if (sql.includes("SELECT node_id, verdict FROM integration_proofs"))
       return this.proofRow === undefined ? { rows: [], rowCount: 0 } : { rows: [this.proofRow], rowCount: 1 };
@@ -141,16 +199,17 @@ describe("EAGER integration-node persistence fail closed", () => {
     ).rejects.toThrow("hold was not durably recorded");
   });
 
-  it("decodes only complete persisted members and preserves exact proof lookup boundaries", async () => {
+  it("fail-closed: partial/corrupt members diverge; exact rows + JSON agree for proof lookup", async () => {
     const pool = new ModelPool();
     const model = new PgIntegrationNodeModel(pool.asPgPool());
+    const completeMember = { specId: "spec", runId: "run", branch: "branch", headSha: MEMBER_SHA };
     const completeRow = {
       node_id: "inode_eager",
       base_branch: "main",
       base_sha: BASE_SHA,
       ref: "tanren-local-eager",
       purpose: "eager_beam",
-      members: [null, { specId: "partial" }, { specId: "spec", runId: "run", branch: "branch", headSha: MEMBER_SHA }],
+      members: [completeMember],
       member_key: memberKey(BASE_SHA, [MEMBER_SHA]),
       gate_config_hash: "gate",
       policy_version: "policy.v1",
@@ -160,13 +219,33 @@ describe("EAGER integration-node persistence fail closed", () => {
       status: "building",
     };
     pool.nodeRow = completeRow;
+    pool.memberRows = [
+      {
+        ordinal: 0,
+        spec_id: completeMember.specId,
+        run_id: completeMember.runId,
+        branch: completeMember.branch,
+        head_sha: completeMember.headSha,
+        included: true,
+      },
+    ];
 
-    await expect(model.findByMemberKey("org_eager", "member_key")).resolves.toMatchObject({
+    await expect(model.findByMemberKey("org_eager", completeRow.member_key)).resolves.toMatchObject({
       purpose: "eager_beam",
-      members: [{ specId: "spec", runId: "run", branch: "branch", headSha: MEMBER_SHA }],
+      members: [completeMember],
     });
+    // gv-17: partial/corrupt JSON is a loud divergence, not a silent empty vector.
+    pool.nodeRow = {
+      ...completeRow,
+      members: [null, { specId: "partial" }, completeMember],
+    };
+    await expect(model.findByMemberKey("org_eager", completeRow.member_key)).rejects.toThrow(
+      /member lineage diverged/u,
+    );
     pool.nodeRow = { ...completeRow, members: "corrupt-jsonb-members" };
-    await expect(model.findByMemberKey("org_eager", "member_key")).resolves.toMatchObject({ members: [] });
+    await expect(model.findByMemberKey("org_eager", completeRow.member_key)).rejects.toThrow(
+      /member lineage diverged/u,
+    );
 
     await expect(
       model.upsertNode({

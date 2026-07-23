@@ -1,12 +1,10 @@
 // The pg-backed `integration_nodes` persistence model (tanren-owns-the-engine.md
-// §3 — the ONE unified run model). Wave 2 / Slice S0 is OBSERVE-ONLY: this model is
-// written and drives NO control flow. It exists so the never-discard rebase + the
-// proof-reuse cache (Wave 3) have a durable substrate, and so the §8 guardrail holds
-// — the old speculative/percolation state migrates through an EXPLICIT compatibility
-// read-model (`projectRunRowToNode` below), never silent abandonment.
+// §3 — the ONE unified run model). gv-17 promotes this from observe-only JSON to
+// authoritative lineage: every UPSERT dual-writes ordered `integration_node_members`
+// rows, computes `member_key` from those rows, and reads reject JSON/row divergence.
 //
 // Three responsibilities:
-//   1. UPSERT a node + record/lookup a proof (insert/update + lookup by memberKey).
+//   1. UPSERT a node + dual-write ordered members + record/lookup a proof.
 //   2. The compatibility READ-MODEL: project an existing run row into the FROZEN
 //      `IntegrationNode` shape — so a reader can see the OLD run model AS the new
 //      one without a backfill, the explicit-read-model half of the §8 guardrail.
@@ -16,7 +14,7 @@
 //
 // Every tenant query is org-scoped (the run-create hook reuses the caller's already
 // org-scoped client; the pool-based helpers open their OWN `runWithOrgScope`). RLS
-// is fail-closed (migration 0007): a query off the scoped client sees ZERO rows.
+// is fail-closed (FORCE + org policy): a query off the scoped client sees ZERO rows.
 // Missing-org is a LOUD throw — NEVER an empty-on-missing-org fallback.
 
 import { randomUUID } from "node:crypto";
@@ -35,12 +33,19 @@ import {
 } from "../contracts/integrationNodes.js";
 import { oneOf } from "../data/pgRows.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
+import {
+  loadAuthoritativeMembers,
+  MemberLineageDivergenceError,
+  replaceIntegrationNodeMembers,
+} from "./integrationNodeLineage.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("integration-nodes");
 
 /** Anything that can run a query — a pool or an already-checked-out scoped client. */
 export type QueryRunner = Pick<pg.PoolClient, "query">;
+
+export { MemberLineageDivergenceError };
 
 /** The fields the run-create hook supplies to UPSERT a node (observe-only). */
 export interface IntegrationNodeUpsert {
@@ -77,40 +82,15 @@ interface IntegrationNodeRow {
   status: string;
 }
 
-/** Decode the persisted `members` jsonb into the typed ordered member array. */
-function decodeMembers(value: unknown): IntegrationNodeMember[] {
-  if (!Array.isArray(value)) return [];
-  const out: IntegrationNodeMember[] = [];
-  for (const m of value) {
-    if (m === null || typeof m !== "object") continue;
-    // Read each jsonb field through a Reflect probe (narrows off `object` without an
-    // unsafe `as Record<…>` assertion); a non-string drops the member, fail-quiet on
-    // a shape mismatch as before — this decode tolerates a partial/legacy member.
-    const specId = Reflect.get(m, "specId");
-    const runId = Reflect.get(m, "runId");
-    const branch = Reflect.get(m, "branch");
-    const headSha = Reflect.get(m, "headSha");
-    if (
-      typeof specId === "string" &&
-      typeof runId === "string" &&
-      typeof branch === "string" &&
-      typeof headSha === "string"
-    ) {
-      out.push({ specId, runId, branch, headSha });
-    }
-  }
-  return out;
-}
-
-/** Map a persisted row into the FROZEN `IntegrationNode` shape. */
-function rowToNode(row: IntegrationNodeRow): IntegrationNode {
+/** Map a persisted row + authoritative members into the FROZEN `IntegrationNode` shape. */
+function rowToNode(row: IntegrationNodeRow, members: ReadonlyArray<IntegrationNodeMember>): IntegrationNode {
   return {
     nodeId: row.node_id,
     baseBranch: row.base_branch,
     baseSha: row.base_sha,
     ref: row.ref,
     purpose: oneOf(row.purpose, INTEGRATION_NODE_PURPOSES, "integration_nodes.purpose"),
-    members: decodeMembers(row.members),
+    members,
     memberKey: row.member_key,
     gateConfigHash: row.gate_config_hash,
     policyVersion: row.policy_version,
@@ -133,6 +113,7 @@ export async function upsertIntegrationNodeOnClient(
   client: QueryRunner,
   input: IntegrationNodeUpsert,
 ): Promise<string> {
+  // member_key is computed from ordered head SHAs — never trusted from the caller.
   const orderedShas = input.members.map((m) => m.headSha);
   const key = memberKey(input.baseSha, orderedShas);
   const nodeId = `inode_${randomUUID()}`;
@@ -187,6 +168,20 @@ export async function upsertIntegrationNodeOnClient(
   if (persistedNodeId === undefined) {
     throw new Error(`integration node member identity collides outside project ${input.projectId}`);
   }
+  // Authoritative member vector: dual-write rows, then re-read to reject any
+  // mid-write divergence before the outer transaction commits.
+  await replaceIntegrationNodeMembers(client, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    nodeId: persistedNodeId,
+    members: input.members,
+  });
+  await loadAuthoritativeMembers(client, {
+    nodeId: persistedNodeId,
+    baseSha: input.baseSha,
+    memberKey: key,
+    membersJson: input.members,
+  });
   return persistedNodeId;
 }
 
@@ -203,7 +198,11 @@ export class PgIntegrationNodeModel {
     return runWithOrgScope(this.pool, input.orgId, (client) => upsertIntegrationNodeOnClient(client, input));
   }
 
-  /** Look up a node by its (org, member_key); `undefined` if none. */
+  /**
+   * Look up a node by its (org, member_key); `undefined` if none.
+   * Fail-closed: JSON/row/member_key divergence throws {@link MemberLineageDivergenceError}
+   * so land revalidation cannot treat a tampered vector as ready.
+   */
   async findByMemberKey(orgId: string, key: string): Promise<IntegrationNode | undefined> {
     return runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<IntegrationNodeRow>(
@@ -215,7 +214,46 @@ export class PgIntegrationNodeModel {
         [key],
       );
       const row = result.rows[0];
-      return row === undefined ? undefined : rowToNode(row);
+      return row === undefined
+        ? undefined
+        : rowToNode(
+            row,
+            await loadAuthoritativeMembers(client, {
+              nodeId: row.node_id,
+              baseSha: row.base_sha,
+              memberKey: row.member_key,
+              membersJson: row.members,
+            }),
+          );
+    });
+  }
+
+  /**
+   * Look up a node by id under org scope. Same fail-closed lineage check as
+   * {@link findByMemberKey}.
+   */
+  async findByNodeId(orgId: string, nodeId: string): Promise<IntegrationNode | undefined> {
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<IntegrationNodeRow>(
+        `SELECT node_id, base_branch, base_sha, ref, purpose, members, member_key,
+                gate_config_hash, policy_version, affected_fingerprint, head_sha,
+                tree_hash, status
+           FROM integration_nodes
+          WHERE node_id = $1`,
+        [nodeId],
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? undefined
+        : rowToNode(
+            row,
+            await loadAuthoritativeMembers(client, {
+              nodeId: row.node_id,
+              baseSha: row.base_sha,
+              memberKey: row.member_key,
+              membersJson: row.members,
+            }),
+          );
     });
   }
 
