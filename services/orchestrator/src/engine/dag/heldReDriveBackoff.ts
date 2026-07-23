@@ -161,7 +161,7 @@ export class HeldReDriveBackoff {
    * BOUNDED-MAP EVICTION (leak fix, issue #1072 F1). Drop every entry that belongs to
    * `projectId` whose spec is NOT in `liveSpecIds` — the set of the project's specs that
    * still need spacing (per the caller: specs whose DAG snapshot phase is `pending` /
-   * `in_flight` — i.e. `specs.status` is still re-plannable). A spec that reached a terminal
+   * `in_flight` — i.e. `specs.status` is still open / non-terminal). A spec that reached a terminal
    * DAG phase (`done`/merged, or a terminal spec-status like halted/cancelled/needs_attention)
    * or was DELETED, or a project that went non-active (empty live set), frees its entry, so the
    * map is bounded by live in-flight speculation, never by the cumulative count of specs the
