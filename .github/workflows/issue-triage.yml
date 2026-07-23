@@ -1,0 +1,21 @@
+name: issue triage
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: node scripts/ci/issue-triage.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
