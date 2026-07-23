@@ -21,6 +21,7 @@ export function testConfig(overrides: Partial<CraConfig> = {}): CraConfig {
       cpus: 1,
       pidsLimit: 64,
     },
+    audit: { command: "cra-audit-worker", args: [], modelFamily: "grok", timeoutMs: 30_000 },
     timing: { pollSeconds: 60, jitterSeconds: 10, inactivityDays: 7, reminderDays: [3, 6] },
   };
   return { ...base, ...overrides };

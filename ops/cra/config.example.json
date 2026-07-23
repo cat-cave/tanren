@@ -12,5 +12,10 @@
   "isolation": {
     "worktreeRoot": "/scratch/worktrees/tanren/cra",
     "image": "tanren-cra-audit:latest"
+  },
+  "audit": {
+    "command": "tanren-cra-audit",
+    "args": [],
+    "modelFamily": "grok"
   }
 }

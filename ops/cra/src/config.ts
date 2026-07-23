@@ -39,6 +39,19 @@ export const craConfigSchema = z.strictObject({
     cpus: z.number().positive().max(64).default(2),
     pidsLimit: z.number().int().positive().max(4096).default(512),
   }),
+  // The deep adversarial audit worker is a CROSS-MODEL external CLI (like the grok
+  // gate used to build this repo): a different model family from any contributor
+  // and from the supervisor. It receives the structured audit context on stdin and
+  // must emit the strict audit report on stdout. `modelFamily` is the audit worker's
+  // own family and is checked against a known contributor family for independence.
+  audit: z
+    .strictObject({
+      command: commandSchema.default("tanren-cra-audit"),
+      args: z.array(commandSchema).default([]),
+      modelFamily: z.string().min(1).default("grok"),
+      timeoutMs: durationSchema.default(1_800_000),
+    })
+    .default({ command: "tanren-cra-audit", args: [], modelFamily: "grok", timeoutMs: 1_800_000 }),
   timing: z
     .strictObject({
       pollSeconds: durationSchema.default(60),
