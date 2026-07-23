@@ -160,13 +160,17 @@ export class HeldReDriveBackoff {
   /**
    * BOUNDED-MAP EVICTION (leak fix, issue #1072 F1). Drop every entry that belongs to
    * `projectId` whose spec is NOT in `liveSpecIds` — the set of the project's specs that
-   * still need spacing (per the caller: specs present in the fresh lifecycle projection and
-   * not yet terminal). A spec that MERGED / BLOCKED / was DELETED, or a project that went
-   * non-active (empty live set), frees its entry, so the map is bounded by live in-flight
-   * speculation, never by the cumulative count of specs the long-lived worker ever drove.
+   * still need spacing (per the caller: specs whose DAG snapshot phase is `pending` /
+   * `in_flight` — i.e. `specs.status` is still re-plannable). A spec that reached a terminal
+   * DAG phase (`done`/merged, or a terminal spec-status like halted/cancelled/needs_attention)
+   * or was DELETED, or a project that went non-active (empty live set), frees its entry, so the
+   * map is bounded by live in-flight speculation, never by the cumulative count of specs the
+   * long-lived worker ever drove.
    *
-   * Eviction is LIFECYCLE-driven, never wall-clock: entries leave only when their spec's
-   * lifecycle says the spec no longer speculates (progress-based, timeout-eradication safe).
+   * Eviction is DAG-PHASE / spec-status driven, never wall-clock, and never the lifecycle
+   * ladder (an OPEN spec with a halted latest run is lifecycle=`blocked` but DAG phase
+   * `pending`, so it is RETAINED — see issue #1072): entries leave only when the spec's DAG
+   * phase says it no longer speculates (progress-based, timeout-eradication safe).
    * Only THIS project's entries are considered — another project's live entries (or the
    * percolation instance's project-less entries) are untouched. Returns the count evicted
    * (for observability logging).
