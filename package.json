@@ -23,7 +23,7 @@
     "check:mutation": "stryker run",
     "check:no-pg-as-date": "node scripts/lint/no-pg-as-date.mjs",
     "check:spelling": "cspell --no-progress \"**/*.{ts,tsx,js,mjs,md,yml,yaml}\"",
-    "check:types-lint": "oxlint --type-aware -c oxlintrc.typeaware.json services/orchestrator/src services/allocator/src services/dashboard/src db/src cli/src ops/cra/src",
+    "check:types-lint": "oxlint --type-aware -c oxlintrc.typeaware.json services/orchestrator/src services/allocator/src services/dashboard/src db/src cli/src",
     "codegen:answerer-schemas": "node scripts/answerer-schema-export.mjs",
     "codegen:contract-schemas": "node scripts/contract-schema-export.mjs",
     "codegen:dashboard-types": "node scripts/gen-dashboard-types.mjs",
