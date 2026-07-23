@@ -13,6 +13,8 @@ import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { CredentialRecord, DoctorReport, NotificationDelivery, NotificationMatrix } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
+import { AiProviderClient } from "../../api/aiProviderClient.js";
+import { AiProviderBody } from "../../components/onboarding/AiProviderBody.js";
 import { CredentialsBody } from "../../components/onboarding/CredentialsBody.js";
 import { NotificationsBody } from "../../components/onboarding/NotificationsBody.js";
 import { OrgWizardBody } from "../../components/onboarding/OrgWizardBody.js";
@@ -123,10 +125,15 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     const ctx = await loadShellContext(c, deps, {});
     const client = clientFor(c, deps);
     const orgId = ctx.org?.id;
+    const aiProviderClient = new AiProviderClient({
+      orchestratorUrl: deps.orchestratorUrl,
+      cookieHeader: c.req.header("cookie"),
+    });
     const [orgCredentials, myCredentials] = await Promise.all([
       orgId === undefined ? Promise.resolve<CredentialRecord[]>([]) : client.listOrgCredentials(orgId),
       client.listMyCredentials(),
     ]);
+    const aiProviders = orgId === undefined ? undefined : await aiProviderClient.list(orgId);
     return renderShell(
       c,
       ctx,
@@ -145,6 +152,12 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               </div>
             </div>
           </div>
+          <AiProviderBody
+            providerMode={aiProviders?.providerMode}
+            providers={aiProviders?.providers}
+            notice={noticeOf(c)}
+            csrfToken={ctx.csrfToken}
+          />
           <CredentialsBody
             orgCredentials={orgCredentials}
             myCredentials={myCredentials}
