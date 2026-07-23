@@ -1,0 +1,23 @@
+{
+  "name": "@tanren/cra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tanren-cra": "./dist/main.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/main.js",
+    "poll-once": "tsx src/main.ts poll-once",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
+}

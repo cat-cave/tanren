@@ -1,0 +1,90 @@
+import { lstat, readFile, stat } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { z } from "zod";
+import { assertOutsideRepository, resolveCraPaths, type CraPaths } from "./paths.js";
+
+const commandSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes("\0"), "command contains NUL");
+const durationSchema = z.number().int().positive();
+
+export const craConfigSchema = z.strictObject({
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
+  repositoryRoot: z.string().min(1),
+  baseBranch: z.string().min(1).default("main"),
+  rubricVersion: z.string().min(1),
+  github: z.strictObject({
+    appId: z.number().int().positive(),
+    installationId: z.number().int().positive(),
+    expectedLogin: z.string().min(1).default("trevor-workstation[bot]"),
+    privateKeyPath: z.string().min(1),
+  }),
+  commands: z
+    .strictObject({
+      gh: commandSchema.default("gh"),
+      git: commandSchema.default("git"),
+      flock: commandSchema.default("flock"),
+      containerRuntime: commandSchema.default("docker"),
+    })
+    .default({ gh: "gh", git: "git", flock: "flock", containerRuntime: "docker" }),
+  isolation: z.strictObject({
+    worktreeRoot: z.string().min(1).default("/scratch/worktrees/tanren/cra"),
+    image: z.string().min(1),
+    timeoutMs: durationSchema.default(900_000),
+    memory: z
+      .string()
+      .regex(/^\d+[bkmg]$/iu)
+      .default("4g"),
+    cpus: z.number().positive().max(64).default(2),
+    pidsLimit: z.number().int().positive().max(4096).default(512),
+  }),
+  timing: z
+    .strictObject({
+      pollSeconds: durationSchema.default(60),
+      jitterSeconds: z.number().int().nonnegative().default(10),
+      inactivityDays: durationSchema.default(7),
+      reminderDays: z.tuple([durationSchema, durationSchema]).default([3, 6]),
+    })
+    .default({ pollSeconds: 60, jitterSeconds: 10, inactivityDays: 7, reminderDays: [3, 6] }),
+});
+
+export type CraConfig = z.infer<typeof craConfigSchema>;
+
+export interface LoadedConfig {
+  readonly config: CraConfig;
+  readonly paths: CraPaths;
+}
+
+async function assertOwnerOnlyRegularFile(path: string, description: string): Promise<void> {
+  const linkInfo = await lstat(path);
+  if (!linkInfo.isFile() || linkInfo.isSymbolicLink())
+    throw new Error(`${description} must be a regular non-symlink file`);
+  const info = await stat(path);
+  if ((info.mode & 0o077) !== 0) throw new Error(`${description} must not grant group or other permissions`);
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error(`${description} must be owned by the CRA user`);
+  }
+}
+
+export async function loadConfig(configFile?: string, env: NodeJS.ProcessEnv = process.env): Promise<LoadedConfig> {
+  const initialPath = configFile ?? resolveCraPaths("cat-cave/tanren", env).configFile;
+  if (!isAbsolute(initialPath)) throw new Error("config path must be absolute");
+  const raw: unknown = JSON.parse(await readFile(initialPath, "utf8"));
+  const config = craConfigSchema.parse(raw);
+  const repositoryRoot = resolve(dirname(initialPath), config.repositoryRoot);
+  const privateKeyPath = resolve(dirname(initialPath), config.github.privateKeyPath);
+  const worktreeRoot = resolve(dirname(initialPath), config.isolation.worktreeRoot);
+  const resolved = craConfigSchema.parse({
+    ...config,
+    repositoryRoot,
+    github: { ...config.github, privateKeyPath },
+    isolation: { ...config.isolation, worktreeRoot },
+  });
+  const paths = resolveCraPaths(resolved.repository, { ...env, TANREN_CRA_CONFIG: initialPath });
+  assertOutsideRepository(paths.stateRoot, repositoryRoot, "CRA state");
+  assertOutsideRepository(privateKeyPath, repositoryRoot, "GitHub App private key");
+  assertOutsideRepository(worktreeRoot, repositoryRoot, "throwaway worktrees");
+  await assertOwnerOnlyRegularFile(privateKeyPath, "GitHub App private key");
+  return { config: resolved, paths };
+}
