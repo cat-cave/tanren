@@ -143,6 +143,26 @@ describe("cross-model audit adapter", () => {
     expect(verified.sandbox).toMatchObject({ ran: true, passed: false });
   });
 
+  it("rejects a vacuous/no-op verification command (`true`) as unrun — never a vacuous pass", async () => {
+    const calls: IsolatedCommand[] = [];
+    const spyRunner: IsolatedControlRunner = {
+      run: async (_worktree: VerifiedWorktree, command: IsolatedCommand): Promise<CommandResult> => {
+        calls.push(command);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    };
+    const config = testConfig({
+      audit: { ...testConfig().audit, verificationCommand: { executable: "true", args: [] } },
+    });
+    const verified = await new AuditAdapter(config, spyRunner, workerExecutor(JSON.stringify(validReport()))).audit(
+      auditContext(),
+      verifiedWorktree(),
+    );
+    expect(verified.sandbox).toMatchObject({ ran: false, passed: false });
+    // The vacuous command is never even executed.
+    expect(calls).toEqual([]);
+  });
+
   it("fails closed on a non-JSON worker response", async () => {
     const executor = workerExecutor("not json at all");
     await expect(

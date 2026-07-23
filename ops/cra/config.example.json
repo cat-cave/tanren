@@ -18,6 +18,6 @@
     "args": [],
     "modelFamily": "grok",
     "verificationCommand": { "executable": "just", "args": ["fast-check"] },
-    "deletionGate": { "liveLineThreshold": 200 }
+    "deletionGate": { "liveLineThreshold": 100 }
   }
 }

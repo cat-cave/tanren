@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { AuditAdapter, type IsolatedControlRunner } from "../src/auditAdapter.js";
 import { AuditArtifactStore } from "../src/artifactStore.js";
 import { EventLog } from "../src/eventLog.js";
+import type { GroundTruthAssembler } from "../src/groundTruth.js";
 import { OfficialReviewPoster } from "../src/officialReview.js";
 import { resolveCraPaths, type CraPaths } from "../src/paths.js";
 import type { CommandExecutor } from "../src/process.js";
@@ -45,6 +46,7 @@ export function reviewDeps(
   lease: SingletonLease,
   ghExecutor: CommandExecutor,
   workerStdout: string,
+  assembler: GroundTruthAssembler,
   workerExit = 0,
 ) {
   const workerExecutor: CommandExecutor = async () => ({ stdout: workerStdout, stderr: "", exitCode: workerExit });
@@ -52,6 +54,7 @@ export function reviewDeps(
     config: testConfig(),
     actor: "trevor-workstation[bot]",
     adapter: new AuditAdapter(testConfig(), passingRunner, workerExecutor),
+    assembler,
     poster: new OfficialReviewPoster(testConfig(), "token", ghExecutor),
     stateStore: new PrStateStore(paths, lease),
     artifactStore: new AuditArtifactStore(paths, lease),

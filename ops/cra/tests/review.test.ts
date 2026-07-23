@@ -6,7 +6,14 @@ import { reviewOnce } from "../src/reviewOnce.js";
 import { triage } from "../src/triage.js";
 import type { PrState } from "../src/stateSchemas.js";
 import { firstSha, secondSha, testConfig } from "./helpers.js";
-import { auditContext, cleanGroundTruth, validReport, verifiedWorktree } from "./auditFixtures.js";
+import {
+  auditContext,
+  cleanEvidence,
+  stubAssembler,
+  throwingAssembler,
+  validReport,
+  verifiedWorktree,
+} from "./auditFixtures.js";
 import { ghSpy, reviewDeps, reviewMarkerKey, stateFixture } from "./reviewHelpers.js";
 
 const roots: string[] = [];
@@ -43,7 +50,7 @@ const verifiedBase = {
   rubricVersion: "2026-07-22",
 } as const;
 
-const cleanEvidence = { ...cleanGroundTruth(), liveDeletionThreshold: 200 };
+const evidence = cleanEvidence();
 
 describe("official GitHub review poster", () => {
   it("posts exactly one review bound to the audited head with inline + summary findings", async () => {
@@ -66,7 +73,7 @@ describe("official GitHub review poster", () => {
           ],
         }),
       },
-      cleanEvidence,
+      evidence,
     );
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
@@ -97,7 +104,7 @@ describe("official GitHub review poster", () => {
     ];
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
-      triage({ ...verifiedBase, report: validReport() }, cleanEvidence),
+      triage({ ...verifiedBase, report: validReport() }, evidence),
       existing,
     );
     expect(result).toMatchObject({ posted: false, reviewId: 4242 });
@@ -109,12 +116,11 @@ describe("reviewOnce fail-closed pipeline", () => {
   it("audits a clean PR, posts an APPROVE review, and persists the approved disposition", async () => {
     const { paths, lease, stateStore } = await stateFixture(roots);
     const gh = ghSpy("APPROVED");
-    const result = await reviewOnce(reviewDeps(paths, lease, gh, JSON.stringify(validReport())), {
+    const result = await reviewOnce(reviewDeps(paths, lease, gh, JSON.stringify(validReport()), stubAssembler()), {
       state: initialState(),
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
-      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(result).toMatchObject({ blocked: false, verdict: "APPROVE", posted: true, reviewId: 5001 });
@@ -126,12 +132,11 @@ describe("reviewOnce fail-closed pipeline", () => {
   it("fails closed on a malformed report: no review posted, disposition error", async () => {
     const { paths, lease, stateStore } = await stateFixture(roots);
     const gh = ghSpy("APPROVED");
-    const result = await reviewOnce(reviewDeps(paths, lease, gh, "this is not json"), {
+    const result = await reviewOnce(reviewDeps(paths, lease, gh, "this is not json", stubAssembler()), {
       state: initialState(),
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
-      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(result.blocked).toBe(true);
@@ -143,16 +148,33 @@ describe("reviewOnce fail-closed pipeline", () => {
     await lease.release();
   });
 
+  it("fails closed when the supervisor cannot assemble its own ground truth (no APPROVE on partial evidence)", async () => {
+    const { paths, lease, stateStore } = await stateFixture(roots);
+    const gh = ghSpy("APPROVED");
+    const deps = reviewDeps(paths, lease, gh, JSON.stringify(validReport()), throwingAssembler("git diff failed"));
+    const result = await reviewOnce(deps, {
+      state: initialState(),
+      context: auditContext(),
+      worktree: verifiedWorktree(),
+      existingReviews: [],
+      now: "2026-07-22T12:00:00.000Z",
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.verdict).toBeNull();
+    expect(gh).not.toHaveBeenCalled();
+    expect((await stateStore.read(1240))?.disposition).toBe("error");
+    await lease.release();
+  });
+
   it("does not post a second review when re-polled on the same head (idempotent)", async () => {
     const { paths, lease } = await stateFixture(roots);
     const gh = ghSpy("APPROVED");
-    const deps = reviewDeps(paths, lease, gh, JSON.stringify(validReport()));
+    const deps = reviewDeps(paths, lease, gh, JSON.stringify(validReport()), stubAssembler());
     const first = await reviewOnce(deps, {
       state: initialState(),
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
-      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(first.posted).toBe(true);
@@ -170,7 +192,6 @@ describe("reviewOnce fail-closed pipeline", () => {
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [priorReview],
-      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T13:00:00.000Z",
     });
     expect(second.posted).toBe(false);

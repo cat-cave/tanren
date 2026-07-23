@@ -63,7 +63,7 @@ export const craConfigSchema = z.strictObject({
       // regression blocks).
       deletionGate: z
         .strictObject({ liveLineThreshold: z.number().int().positive() })
-        .default({ liveLineThreshold: 200 }),
+        .default({ liveLineThreshold: 100 }),
     })
     .default({
       command: "tanren-cra-audit",
@@ -71,7 +71,7 @@ export const craConfigSchema = z.strictObject({
       modelFamily: "grok",
       timeoutMs: 1_800_000,
       verificationCommand: { executable: "just", args: ["fast-check"] },
-      deletionGate: { liveLineThreshold: 200 },
+      deletionGate: { liveLineThreshold: 100 },
     }),
   timing: z
     .strictObject({

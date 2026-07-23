@@ -2,14 +2,18 @@ import type { IsolatedControlRunner } from "../src/auditAdapter.js";
 import { buildAuditContext, type AuditContext, type AuditContextInput } from "../src/auditContext.js";
 import type { AuditReport } from "../src/auditReport.js";
 import type { DiscoveredCheck, DiscoveredPullRequest } from "../src/discovery.js";
+import { GroundTruthAssemblyError, type GroundTruthAssembler } from "../src/groundTruth.js";
 import type { CommandResult } from "../src/process.js";
-import type { GroundTruthInput } from "../src/reviewOnce.js";
+import type { SupervisorEvidence } from "../src/triage.js";
 import type { VerifiedWorktree } from "../src/worktree.js";
 import { firstSha, secondSha } from "./helpers.js";
 
-// A cited file the supervisor can locate in the tree, so a clean acceptance trace
-// resolves. `just looks good`-style prose does NOT resolve.
-export const knownFiles = ["ops/cra/src/auditAdapter.ts", "ops/cra/tests/audit.test.ts"];
+// The cited acceptance test the supervisor can locate AND that the PR changes.
+export const acceptanceTestFile = "ops/cra/tests/audit.test.ts";
+export const knownFiles = ["ops/cra/src/auditAdapter.ts", acceptanceTestFile];
+
+// A clean diff that adds a line to the acceptance test file (no deletions).
+export const cleanDiff = `diff --git a/${acceptanceTestFile} b/${acceptanceTestFile}\n--- a/${acceptanceTestFile}\n+++ b/${acceptanceTestFile}\n+it("new", () => {});\n`;
 
 export function discoveredPullRequest(overrides: Partial<DiscoveredPullRequest> = {}): DiscoveredPullRequest {
   return {
@@ -43,7 +47,7 @@ export function auditContextInput(overrides: Partial<AuditContextInput> = {}): A
       requiredNegativeControl: "A report missing executed negative controls is rejected.",
       blockers: [],
     },
-    diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n",
+    diff: cleanDiff,
     deletionStats: [],
     checks: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS", kind: "check_run" }],
     standards: "Repository standards.",
@@ -63,19 +67,34 @@ export function verifiedWorktree(): VerifiedWorktree {
 
 const passingCheck: DiscoveredCheck = { name: "ci", status: "COMPLETED", conclusion: "SUCCESS", kind: "check_run" };
 
-// Supervisor-computed ground truth for a clean PR: a no-deletion diff, a passing
-// required check, and a tree containing the cited acceptance file.
-export function cleanGroundTruth(overrides: Partial<GroundTruthInput> = {}): GroundTruthInput {
+// The supervisor-assembled ground truth for a clean PR: a no-deletion diff that
+// changes the acceptance test, the real tree, a required "ci" context, and a passing
+// "ci" check.
+export function cleanEvidence(overrides: Partial<SupervisorEvidence> = {}): SupervisorEvidence {
   return {
-    diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n",
-    requiredChecks: [passingCheck],
+    diff: cleanDiff,
     knownFiles: [...knownFiles],
+    requiredContexts: ["ci"],
+    actualChecks: [passingCheck],
+    liveDeletionThreshold: 100,
     ...overrides,
   };
 }
 
-// A well-formed advisory report: acceptance satisfied and CITING a locatable file, no
-// findings, one mandatory executed control the worker reports as rejecting.
+export function stubAssembler(evidence: SupervisorEvidence = cleanEvidence()): GroundTruthAssembler {
+  return { assemble: async (): Promise<SupervisorEvidence> => evidence };
+}
+
+export function throwingAssembler(message = "git ls-files failed"): GroundTruthAssembler {
+  return {
+    assemble: async (): Promise<SupervisorEvidence> => {
+      throw new GroundTruthAssemblyError(message);
+    },
+  };
+}
+
+// A well-formed advisory report: acceptance satisfied and CITING the real changed
+// test file, no findings, one mandatory executed control the worker reports rejecting.
 export function validReport(overrides: Partial<AuditReport> = {}): AuditReport {
   return {
     rubricVersion: "2026-07-22",
@@ -86,7 +105,7 @@ export function validReport(overrides: Partial<AuditReport> = {}): AuditReport {
       {
         statement: "A well-formed PR yields a valid strict report.",
         satisfied: true,
-        evidence: "covered by ops/cra/tests/audit.test.ts",
+        evidence: `covered by ${acceptanceTestFile}`,
       },
     ],
     deletionAccounting: [],

@@ -49,6 +49,10 @@ export interface VerifiedAuditReport {
   readonly rubricVersion: string;
 }
 
+// No-op executables that prove nothing about the PR and so can never constitute a
+// real verification.
+const VACUOUS_VERIFICATION: ReadonlySet<string> = new Set(["true", "false", ":"]);
+
 // The worker receives model credentials from the operator's own environment but
 // must never receive the CRA GitHub installation token: strip both GitHub token
 // variables so a compromised/coerced worker cannot act as the merge identity.
@@ -139,6 +143,16 @@ export class AuditAdapter {
   // confirm a gate. Its exit status is ground truth the triage gate consumes.
   private async runTrustedVerification(worktree: VerifiedWorktree): Promise<SandboxVerification> {
     const command = this.config.audit.verificationCommand;
+    const basename = command.executable.split("/").at(-1) ?? command.executable;
+    if (command.executable.trim().length === 0 || VACUOUS_VERIFICATION.has(basename)) {
+      // A no-op command (`true`/`false`/`:`) would vacuously pass or fail regardless
+      // of the PR and so proves nothing: reject it as unrun (unproven acceptance).
+      return {
+        ran: false,
+        passed: false,
+        detail: `vacuous/no-op verification command '${command.executable}' rejected`,
+      };
+    }
     try {
       const result = await this.runner.run(worktree, { executable: command.executable, args: [...command.args] });
       return {

@@ -5,31 +5,27 @@ import type { DiscoveredCheck } from "./discovery.js";
 // Supervisor-owned P0-P3 triage under the DONENESS model.
 //
 // TRUST BOUNDARY: the worker's report is ADVISORY. Its findings ADD to triage, but
-// NONE of its self-reported fields can confirm, clear, or suppress a gate. Every
-// gate-critical condition below is computed by the supervisor from GROUND TRUTH:
-//   - deletions      -> parsed from the real unified diff (worker accounting ignored)
-//   - CI checks      -> real GitHub check states (worker `unresolvedChecks` ignored)
-//   - acceptance     -> cited evidence must resolve to a real file the supervisor
-//                       can locate in the tree (worker keyword prose is not enough)
-//   - verification   -> ONE trusted, config-sourced command the supervisor ran in
-//                       the sandbox (never a worker-supplied command)
-//   - independence   -> computed from PR provenance
-// Any P0/P1 -> REQUEST_CHANGES. Only P2/P3 (or none) -> APPROVE.
+// NO worker-authored field can confirm, clear, or suppress a gate. Every gate below
+// is computed by the supervisor from GROUND TRUTH it ASSEMBLED ITSELF (see
+// GroundTruthAssembler): the real diff + tree from git, the real branch-protection
+// required-check set + head check states from GitHub, and one trusted config-sourced
+// verification command run in the sandbox. Where a condition cannot be verified the
+// rule is FAIL CLOSED. Any P0/P1 -> REQUEST_CHANGES; only P2/P3 (or none) -> APPROVE.
 
 export type ReviewVerdict = "APPROVE" | "REQUEST_CHANGES";
 
-// The GROUND TRUTH the supervisor computed itself — never derived from the worker's
-// report.
+// The GROUND TRUTH the supervisor assembled itself — never accepted from a caller.
 export interface SupervisorEvidence {
-  // The real unified diff (from git in the verified worktree).
+  // The real unified diff (git diff base...head), from the fetched worktree.
   readonly diff: string;
-  // The real required-check states fetched from GitHub (CRA-03 discovery).
-  readonly requiredChecks: readonly DiscoveredCheck[];
-  // Files the supervisor knows exist (the worktree tree and/or changed files), used
-  // to resolve acceptance citations.
+  // The real worktree tree (git ls-files) — the set of files that actually exist.
   readonly knownFiles: readonly string[];
+  // The required-check contexts from GitHub branch protection.
+  readonly requiredContexts: readonly string[];
+  // The real head check states from GitHub.
+  readonly actualChecks: readonly DiscoveredCheck[];
   // Net live-code deletion (deleted minus added live lines) at or above this many
-  // lines blocks — the supervisor's mq-16 gate. Sourced from config.audit.deletionGate.
+  // lines blocks — the supervisor's mq-16 gate. From config.audit.deletionGate.
   readonly liveDeletionThreshold: number;
 }
 
@@ -44,8 +40,6 @@ export interface NormalizedFinding {
   readonly line: number | null;
   readonly side: "LEFT" | "RIGHT" | null;
   readonly evidence: string;
-  // True when the supervisor computed/forced the severity, independent of any worker
-  // suggestion (all supervisor gate findings are forced).
   readonly forced: boolean;
 }
 
@@ -108,29 +102,27 @@ function synthesized(
   };
 }
 
-// ---- Supervisor-computed gates (cannot be cleared by the worker) ------------------
+// ---- Supervisor-computed gates (never cleared by the worker) ---------------------
 
 function synthesizeGates(verified: VerifiedAuditReport, evidence: SupervisorEvidence): NormalizedFinding[] {
+  const analysis = analyzeDiff(evidence.diff);
   return [
     ...verificationGate(verified),
-    ...deletionGate(evidence),
+    ...deletionGate(analysis, evidence.liveDeletionThreshold),
     ...checkGate(evidence),
-    ...acceptanceGate(verified, evidence),
+    ...acceptanceGate(verified, evidence, analysis),
     ...independenceGate(verified),
     ...workerAdmittedFailOpen(verified),
   ];
 }
 
-// The supervisor's own trusted verification (a config-sourced command it ran in the
-// sandbox). A run that could not happen is unproven acceptance (P0); a run that
-// failed means the PR fails its own acceptance on a clean checkout (P1).
 function verificationGate(verified: VerifiedAuditReport): NormalizedFinding[] {
   if (!verified.sandbox.ran) {
     return [
       synthesized(
         "verification-unrun",
         "Trusted acceptance verification could not run",
-        "The supervisor's trusted verification command did not complete in the sandbox, so acceptance is unproven.",
+        "The supervisor's trusted verification command did not complete in the sandbox (or was vacuous), so acceptance is unproven.",
         verified.sandbox.detail,
       ),
     ];
@@ -149,42 +141,31 @@ function verificationGate(verified: VerifiedAuditReport): NormalizedFinding[] {
   return [];
 }
 
-// Deletions are computed from the REAL diff; the worker's `deletionAccounting` is
-// ignored for the gate (it cannot suppress a deletion the diff shows). Net test-line
-// regression blocks; net live deletion at/above the configured threshold blocks.
-function deletionGate(evidence: SupervisorEvidence): NormalizedFinding[] {
-  const stats = computeDiffStats(evidence.diff);
-  let deletedTest = 0;
-  let addedTest = 0;
-  let deletedLive = 0;
-  let addedLive = 0;
-  for (const file of stats.values()) {
-    if (file.isTest) {
-      deletedTest += file.deleted;
-      addedTest += file.added;
-    } else {
-      deletedLive += file.deleted;
-      addedLive += file.added;
-    }
-  }
+// Deletions are computed from the REAL diff (text hunks, binary deletions, and 100%
+// renames). Any net test deletion or removed test file blocks; net live deletion at
+// or above threshold, or a binary/rename removal of a live file the supervisor cannot
+// line-account, blocks. The worker's deletionAccounting is never consulted.
+function deletionGate(analysis: DiffAnalysis, threshold: number): NormalizedFinding[] {
   const gaps: NormalizedFinding[] = [];
-  if (deletedTest > addedTest) {
+  const netTest = analysis.deletedTestLines - analysis.addedTestLines;
+  if (netTest > 0 || analysis.removedTestFiles.size > 0) {
     gaps.push(
       synthesized(
         "deletion-test-regression",
-        "Net test deletion (supervisor-computed)",
-        `The diff deletes ${deletedTest} test line(s) and adds only ${addedTest}: a net test-count regression. Deleting tests cannot be self-cleared by the audit worker (the mq-16 class).`,
+        "Test deletion (supervisor-computed)",
+        `The diff removes tests (net ${netTest} line(s); ${analysis.removedTestFiles.size} removed test file(s)). Deleting tests cannot be self-cleared by the worker (the mq-16 class).`,
         "computed from the PR diff",
         "P1",
       ),
     );
   }
-  if (deletedLive - addedLive >= evidence.liveDeletionThreshold) {
+  const netLive = analysis.deletedLiveLines - analysis.addedLiveLines;
+  if (netLive >= threshold || analysis.removedLiveUnmeasured.size > 0) {
     gaps.push(
       synthesized(
         "deletion-live-substantial",
-        "Substantial net live-code deletion (supervisor-computed)",
-        `The diff removes a net ${deletedLive - addedLive} live-code line(s) (>= ${evidence.liveDeletionThreshold}). Substantial deletion cannot be cleared by the worker's accounting; the worker may EXPLAIN it, but it does not lift the gate.`,
+        "Substantial or unmeasurable live-code deletion (supervisor-computed)",
+        `The diff removes a net ${netLive} live line(s) (threshold ${threshold}) plus ${analysis.removedLiveUnmeasured.size} binary/100%-rename removal(s). The worker may EXPLAIN it but cannot lift the gate.`,
         "computed from the PR diff",
         "P1",
       ),
@@ -193,26 +174,60 @@ function deletionGate(evidence: SupervisorEvidence): NormalizedFinding[] {
   return gaps;
 }
 
-// Required-check states come from GitHub (ground truth). Any non-success required
-// check blocks; the worker's `unresolvedChecks` field is not consulted.
+// Required checks come from GitHub branch protection (ground truth). Every required
+// context must be present and SUCCESS; missing / pending / SKIPPED / NEUTRAL / any
+// non-SUCCESS state blocks. An empty required set cannot mean "all clear" — it means
+// the supervisor could not confirm a CI gate, which is fail-closed.
 function checkGate(evidence: SupervisorEvidence): NormalizedFinding[] {
-  return evidence.requiredChecks
-    .filter(isBlockingCheck)
-    .map((check) =>
+  if (evidence.requiredContexts.length === 0) {
+    return [
       synthesized(
-        `check-${check.name}`,
-        "Required CI check not passing",
-        `Required check ${check.name} is ${check.status}/${check.conclusion ?? "none"} per GitHub. An audit cannot approve over a non-passing required check.`,
-        "fetched from GitHub check states",
+        "checks-unconfirmed",
+        "No required checks could be confirmed",
+        "Branch protection reported no required checks; the supervisor cannot confirm a CI gate, so it fails closed.",
+        "assembled from GitHub branch protection",
         "P1",
       ),
-    );
+    ];
+  }
+  const gaps: NormalizedFinding[] = [];
+  for (const context of evidence.requiredContexts) {
+    const check = evidence.actualChecks.find((candidate) => candidate.name === context);
+    if (check === undefined) {
+      gaps.push(
+        synthesized(
+          `check-missing-${context}`,
+          "Required CI check missing",
+          `Required check ${context} has no result on the audited head.`,
+          "assembled from GitHub check states",
+          "P1",
+        ),
+      );
+    } else if (!checkPasses(check)) {
+      gaps.push(
+        synthesized(
+          `check-${context}`,
+          "Required CI check not passing",
+          `Required check ${context} is ${check.status}/${check.conclusion ?? "none"} — not SUCCESS.`,
+          "assembled from GitHub check states",
+          "P1",
+        ),
+      );
+    }
+  }
+  return gaps;
 }
 
-// Acceptance cannot be self-cleared by the worker. An unmet trace is P0. A satisfied
-// trace must cite evidence the supervisor can resolve to a real file in the tree;
-// keyword prose ("just looks good") does not qualify.
-function acceptanceGate(verified: VerifiedAuditReport, evidence: SupervisorEvidence): NormalizedFinding[] {
+// Acceptance cannot be worker-cleared. An unmet trace is P0. A satisfied trace is
+// cleared ONLY when its evidence names a real repo-relative TEST file that exists in
+// the tree AND is part of this PR's diff — tying the claim to a real, PR-included
+// test. Keyword prose or a suffix token ("see t.ts") does not clear it.
+function acceptanceGate(
+  verified: VerifiedAuditReport,
+  evidence: SupervisorEvidence,
+  analysis: DiffAnalysis,
+): NormalizedFinding[] {
+  const knownFiles = new Set(evidence.knownFiles);
   const gaps: NormalizedFinding[] = [];
   verified.report.acceptanceTraces.forEach((trace, index) => {
     if (!trace.satisfied) {
@@ -224,12 +239,12 @@ function acceptanceGate(verified: VerifiedAuditReport, evidence: SupervisorEvide
           trace.evidence,
         ),
       );
-    } else if (!locatesRealFile(trace.evidence, evidence.knownFiles)) {
+    } else if (!citesRealChangedTest(trace.evidence, knownFiles, analysis.changedFiles)) {
       gaps.push(
         synthesized(
           `acceptance-unverifiable-${index}`,
-          "Acceptance claimed satisfied without locatable evidence",
-          `The acceptance statement "${trace.statement}" is claimed satisfied but its evidence names no file the supervisor can locate in the tree.`,
+          "Acceptance claimed satisfied without a real, PR-included test",
+          `The acceptance statement "${trace.statement}" cites no repo-relative test file that both exists in the tree and is changed by this PR; the claim is UNPROVEN.`,
           trace.evidence,
         ),
       );
@@ -250,9 +265,6 @@ function independenceGate(verified: VerifiedAuditReport): NormalizedFinding[] {
   ];
 }
 
-// The worker may only SELF-INCRIMINATE via its report: a mandatory control it itself
-// reports as not-rejected is an admitted fail-open boundary (P0). It cannot use the
-// same field to clear anything.
 function workerAdmittedFailOpen(verified: VerifiedAuditReport): NormalizedFinding[] {
   return verified.report.negativeControls
     .filter((control) => control.mandatory && !control.rejected)
@@ -276,58 +288,109 @@ export function triage(verified: VerifiedAuditReport, evidence: SupervisorEviden
 
 // ---- Ground-truth helpers --------------------------------------------------------
 
-const TEST_PATH_PATTERN = /(^|\/)(tests?|__tests__|spec)\/|[._-](test|spec)\.[a-z]+$/iu;
+const TEST_SEGMENTS: ReadonlySet<string> = new Set(["test", "tests", "__tests__", "spec", "specs", "e2e"]);
 
+// Path-SEGMENT based classification (not substring): `contests/` is not a test dir.
 function isTestPath(path: string): boolean {
-  return TEST_PATH_PATTERN.test(path);
+  const segments = path.split("/");
+  if (segments.some((segment) => TEST_SEGMENTS.has(segment.toLowerCase()))) return true;
+  const base = segments.at(-1) ?? "";
+  return /\.(test|spec)\.[a-z0-9]+$/iu.test(base);
 }
 
-function isBlockingCheck(check: DiscoveredCheck): boolean {
-  if (check.kind === "status_context") return check.status.toUpperCase() !== "SUCCESS";
-  if (check.status.toUpperCase() !== "COMPLETED") return true;
-  const conclusion = (check.conclusion ?? "").toUpperCase();
-  return conclusion !== "SUCCESS" && conclusion !== "NEUTRAL" && conclusion !== "SKIPPED";
+function checkPasses(check: DiscoveredCheck): boolean {
+  if (check.kind === "status_context") return check.status.toUpperCase() === "SUCCESS";
+  return check.status.toUpperCase() === "COMPLETED" && (check.conclusion ?? "").toUpperCase() === "SUCCESS";
 }
 
-// A satisfied-acceptance claim must NAME a file the supervisor can locate. Extract
-// filename-with-extension tokens and match them (by suffix) against the known tree.
-const FILE_TOKEN_PATTERN = /[\w][\w./-]*\.[A-Za-z]{1,6}\b/gu;
+// Repo-relative path tokens: must contain a slash AND a file extension, so a bare
+// suffix like "t.ts" is not accepted.
+const REPO_PATH_TOKEN = /[\w][\w.-]*(?:\/[\w.-]+)+\.[A-Za-z0-9]{1,6}\b/gu;
 
-function locatesRealFile(evidence: string, knownFiles: readonly string[]): boolean {
-  const tokens = evidence.match(FILE_TOKEN_PATTERN);
+function citesRealChangedTest(
+  evidence: string,
+  knownFiles: ReadonlySet<string>,
+  changedFiles: ReadonlySet<string>,
+): boolean {
+  const tokens = evidence.match(REPO_PATH_TOKEN);
   if (tokens === null) return false;
-  return tokens.some((token) =>
-    knownFiles.some((file) => file === token || file.endsWith(`/${token}`) || file.endsWith(token)),
-  );
+  return tokens.some((token) => knownFiles.has(token) && isTestPath(token) && changedFiles.has(token));
 }
 
-interface FileDelta {
-  added: number;
-  deleted: number;
-  isTest: boolean;
+interface DiffAnalysis {
+  readonly deletedTestLines: number;
+  readonly addedTestLines: number;
+  readonly deletedLiveLines: number;
+  readonly addedLiveLines: number;
+  readonly removedTestFiles: ReadonlySet<string>;
+  readonly removedLiveUnmeasured: ReadonlySet<string>;
+  readonly changedFiles: ReadonlySet<string>;
 }
 
-// Compute added/deleted line counts per file directly from the unified diff.
-function computeDiffStats(diff: string): Map<string, FileDelta> {
-  const stats = new Map<string, FileDelta>();
+// Parse the unified diff for line counts, file removals (text /dev/null, binary
+// deletions, 100% renames), and the changed-file set.
+function analyzeDiff(diff: string): DiffAnalysis {
+  let deletedTestLines = 0;
+  let addedTestLines = 0;
+  let deletedLiveLines = 0;
+  let addedLiveLines = 0;
+  const removedTestFiles = new Set<string>();
+  const removedLiveUnmeasured = new Set<string>();
+  const changedFiles = new Set<string>();
+
   let oldPath: string | null = null;
   let current: string | null = null;
+  let similarity = 0;
+
+  const markRemoved = (path: string, measured: boolean): void => {
+    changedFiles.add(path);
+    if (isTestPath(path)) removedTestFiles.add(path);
+    else if (!measured) removedLiveUnmeasured.add(path);
+  };
+
   for (const line of diff.split("\n")) {
-    if (line.startsWith("--- ")) {
-      oldPath = stripDiffPath(line.slice(4));
+    if (line.startsWith("diff --git ")) {
+      similarity = 0;
+      oldPath = null;
       current = null;
+      const match = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
+      if (match !== null) oldPath = match[1] ?? null;
+    } else if (line.startsWith("similarity index ")) {
+      similarity = Number.parseInt(line.slice("similarity index ".length), 10);
+    } else if (line.startsWith("rename from ")) {
+      const path = line.slice("rename from ".length).trim();
+      changedFiles.add(path);
+      if (similarity === 100) markRemoved(path, false);
+    } else if (line.startsWith("Binary files ")) {
+      const match = /^Binary files a\/(.+) and (.+) differ$/u.exec(line);
+      if (match !== null && match[1] !== undefined) {
+        changedFiles.add(match[1]);
+        if (match[2] === "/dev/null") markRemoved(match[1], false);
+      }
+    } else if (line.startsWith("--- ")) {
+      oldPath = stripDiffPath(line.slice(4));
     } else if (line.startsWith("+++ ")) {
-      current = stripDiffPath(line.slice(4)) ?? oldPath;
-      if (current !== null && !stats.has(current))
-        stats.set(current, { added: 0, deleted: 0, isTest: isTestPath(current) });
-    } else if (current !== null) {
-      const entry = stats.get(current);
-      if (entry === undefined) continue;
-      if (line.startsWith("-") && !line.startsWith("---")) entry.deleted += 1;
-      else if (line.startsWith("+") && !line.startsWith("+++")) entry.added += 1;
+      const newPath = stripDiffPath(line.slice(4));
+      current = newPath ?? oldPath;
+      if (current !== null) changedFiles.add(current);
+      if (newPath === null && oldPath !== null) markRemoved(oldPath, true);
+    } else if (current !== null && line.startsWith("-") && !line.startsWith("---")) {
+      if (isTestPath(current)) deletedTestLines += 1;
+      else deletedLiveLines += 1;
+    } else if (current !== null && line.startsWith("+") && !line.startsWith("+++")) {
+      if (isTestPath(current)) addedTestLines += 1;
+      else addedLiveLines += 1;
     }
   }
-  return stats;
+  return {
+    deletedTestLines,
+    addedTestLines,
+    deletedLiveLines,
+    addedLiveLines,
+    removedTestFiles,
+    removedLiveUnmeasured,
+    changedFiles,
+  };
 }
 
 function stripDiffPath(raw: string): string | null {

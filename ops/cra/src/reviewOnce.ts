@@ -6,21 +6,21 @@ import { AuditFailure } from "./auditReport.js";
 import type { CraConfig } from "./config.js";
 import type { DiscoveredReview } from "./discovery.js";
 import type { EventLog } from "./eventLog.js";
+import { GroundTruthAssemblyError, type GroundTruthAssembler } from "./groundTruth.js";
 import type { OfficialReviewPoster } from "./officialReview.js";
 import { bodyMatchesMarker } from "./reviewMarker.js";
 import type { PrStateStore } from "./stateStore.js";
 import type { PrState } from "./stateSchemas.js";
-import { triage, type ReviewVerdict, type SupervisorEvidence } from "./triage.js";
+import { triage, type ReviewVerdict } from "./triage.js";
 import type { VerifiedWorktree } from "./worktree.js";
-
-// The ground truth the supervisor computed itself, minus the config-sourced deletion
-// threshold (reviewOnce fills that from config so the caller cannot weaken the gate).
-export type GroundTruthInput = Omit<SupervisorEvidence, "liveDeletionThreshold">;
 
 export interface ReviewOnceDeps {
   readonly config: CraConfig;
   readonly actor: string;
   readonly adapter: AuditAdapter;
+  // Assembles the supervisor's OWN ground truth (real diff/tree from git, real
+  // required-check set + head states from GitHub) — never accepted from the caller.
+  readonly assembler: GroundTruthAssembler;
   readonly poster: OfficialReviewPoster;
   readonly stateStore: PrStateStore;
   readonly artifactStore: AuditArtifactStore;
@@ -32,9 +32,6 @@ export interface ReviewOnceInput {
   readonly context: AuditContext;
   readonly worktree: VerifiedWorktree;
   readonly existingReviews: readonly DiscoveredReview[];
-  // Supervisor-computed ground truth (real diff, real GitHub check states, worktree
-  // tree). Sourced from discovery/git, NOT from the worker's report.
-  readonly groundTruth: GroundTruthInput;
   readonly correlationId?: string;
   readonly now?: string;
 }
@@ -119,10 +116,39 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     report: verified.report,
   });
 
-  const triaged = triage(verified, {
-    ...input.groundTruth,
-    liveDeletionThreshold: config.audit.deletionGate.liveLineThreshold,
-  });
+  // Assemble the supervisor's OWN ground truth. If any input (git diff/tree, GitHub
+  // required checks/states) cannot be assembled, FAIL CLOSED — never approve on a
+  // partial evidence bundle.
+  let evidence;
+  try {
+    evidence = await deps.assembler.assemble({
+      worktree: input.worktree,
+      baseSha: input.context.baseSha,
+      headSha,
+    });
+  } catch (error) {
+    if (!(error instanceof GroundTruthAssemblyError)) throw error;
+    const reason = `ground truth could not be assembled: ${error.message}`;
+    const blockedState: PrState = {
+      ...input.state,
+      lastSeenHeadSha: headSha,
+      disposition: "error",
+      auditStatus: "failed",
+      rubricVersion: config.rubricVersion,
+      retry: { attempts: input.state.retry.attempts + 1, nextAttemptAt: null, lastError: reason },
+    };
+    await deps.stateStore.write(blockedState);
+    await emit(deps, correlationId, now, {
+      type: "audit_end",
+      pr,
+      headSha,
+      durationMs: Date.now() - started,
+      detail: { outcome: "failed", reason },
+    });
+    return { blocked: true, verdict: null, posted: false, reviewId: null, state: blockedState, reason };
+  }
+
+  const triaged = triage(verified, evidence);
   for (const finding of triaged.findings) {
     await emit(deps, correlationId, now, {
       type: "finding",
