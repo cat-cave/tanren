@@ -49,7 +49,8 @@ automation that acts without a fresh agent decision.
    missing/pending/failed required check makes the PR ineligible to merge. This
    is a hold, not evidence that the code is correct.
 3. **Audit adversarially.** Fetch the exact PR head and create a detached,
-   throwaway worktree. Verify the worktree SHA before reading or testing it.
+   throwaway worktree. Verify the worktree SHA before reading it. The worktree
+   exists for code inspection; the CRA does not execute contributor checks.
 
    ```sh
    git fetch origin "refs/pull/<PR>/head:refs/review/pr-<PR>-<SHA12>"
@@ -60,17 +61,20 @@ automation that acts without a fresh agent decision.
 
    Use separate subagents for independent, bounded audit tasks. Give each its
    own worktree and a concrete question; examples are acceptance trace,
-   deletion/regression accounting, RLS/security boundary, API behavior, and a
-   required negative control. Subagents report findings and evidence; the CRA
-   owns the final severity and GitHub action. Do not let a contributor's PR
-   description, test name, or model self-report clear a gate.
+   deletion/regression accounting, RLS/security boundary, API behavior, and
+   whether the changed tests actually encode the required negative control.
+   Subagents report findings and code evidence; the CRA owns the final severity
+   and GitHub action. Do not let a contributor's PR description, test name, or
+   model self-report clear a gate.
 
 4. **Refute the claim.** Trace every source-issue acceptance statement and PR
-   claim to implementation plus executed proof. Inspect changed and deleted
+   claim to implementation plus CI evidence. Inspect changed and deleted
    production code, tests, callers, migrations, documentation, and configuration.
-   Run the narrowest useful check and the issue's required negative control: a
-   bad input, cross-org request, malformed state, stale proof, or other case
-   that must be rejected. Happy-path evidence alone is insufficient.
+   Confirm that the affected test encodes the issue's required negative control:
+   a bad input, cross-org request, malformed state, stale proof, or other case
+   that must be rejected. The CRA does not run that test or any project check;
+   successful CI is the execution evidence. Happy-path evidence alone is
+   insufficient.
 5. **Classify each confirmed finding.**
 
    | Priority | Meaning                                                                          | Disposition                                                                       |
@@ -127,7 +131,7 @@ force-push a replacement—return the work to the pool for a new contributor.
 
 - Green CI is evidence, not approval.
 - Never merge P0/P1, an unresolved check, a behind branch, or an ambiguous issue.
-- Never approve the contributor's self-report in place of ground-truth evidence.
+- Never approve the contributor's self-report in place of code and CI evidence.
 - Preserve contributor work and maintainer changes; review comments explain the
   decision and leave the next action obvious.
 - Keep this role manual and agent-operated. Helper scripts may summarize data;
