@@ -35,7 +35,8 @@ describe("slack notification target persistence contract", () => {
     const surfaces = await persistProvisionedArtifact(client, { projectId: "p", orgId: "org_1" }, artifact, actor);
     expect(surfaces.notificationTargetId).toBe("notif_target_persisted");
     const insert = client.queries.find((q) => q.sql.includes("INSERT INTO notification_targets"))!;
-    expect(insert.params[3]).toBe("slack-bot-v1:secret%3A%2F%2Forg%2Fslack-bot-token%2Fg%2F1:C_tanren-x");
+    const destination = `slack-bot-v1:${encodeURIComponent("secret://org/slack-bot-token/g/1")}:C_tanren-x`;
+    expect(insert.params[3]).toBe(destination);
   });
 
   it("persists a Slack target when it carries an incoming-webhook credential ref", async () => {
