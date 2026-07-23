@@ -39,6 +39,40 @@ export const craConfigSchema = z.strictObject({
     cpus: z.number().positive().max(64).default(2),
     pidsLimit: z.number().int().positive().max(4096).default(512),
   }),
+  // The deep adversarial audit worker is a CROSS-MODEL external CLI (like the grok
+  // gate used to build this repo): a different model family from any contributor
+  // and from the supervisor. It receives the structured audit context on stdin and
+  // must emit the strict audit report on stdout. `modelFamily` is the audit worker's
+  // own family and is checked against a known contributor family for independence.
+  audit: z
+    .strictObject({
+      command: commandSchema.default("tanren-cra-audit"),
+      args: z.array(commandSchema).default([]),
+      modelFamily: z.string().min(1).default("grok"),
+      timeoutMs: durationSchema.default(1_800_000),
+      // The TRUSTED acceptance/verification command the supervisor itself runs in
+      // the CRA-04 sandbox against the PR branch. It is config-sourced, NEVER
+      // worker-supplied — a worker command can never confirm a gate. Its ground-truth
+      // exit status is the acceptance signal.
+      verificationCommand: z
+        .strictObject({ executable: commandSchema, args: z.array(z.string()) })
+        .default({ executable: "just", args: ["fast-check"] }),
+      // Supervisor-computed deletion gate: net live-code deletion (deleted minus
+      // added live lines) at or above this many lines blocks regardless of the
+      // worker's accounting. Test deletions are gated separately (any net test
+      // regression blocks).
+      deletionGate: z
+        .strictObject({ liveLineThreshold: z.number().int().positive() })
+        .default({ liveLineThreshold: 100 }),
+    })
+    .default({
+      command: "tanren-cra-audit",
+      args: [],
+      modelFamily: "grok",
+      timeoutMs: 1_800_000,
+      verificationCommand: { executable: "just", args: ["fast-check"] },
+      deletionGate: { liveLineThreshold: 100 },
+    }),
   timing: z
     .strictObject({
       pollSeconds: durationSchema.default(60),
