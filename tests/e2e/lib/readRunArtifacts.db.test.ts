@@ -20,6 +20,7 @@
 // `createDbPool` rather than importing `pg` directly so the file resolves from
 // the repo-root e2e suite (pg is a workspace, not root, dependency).
 
+import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDbPool, type DbPool, migrate } from "@tanren/db";
 import { readRunArtifacts } from "./harness.js";
@@ -36,8 +37,13 @@ const RUN_ID = "run_e2e_artifacts";
 const TASK_ID = "task_e2e_artifacts_write";
 const PR_URL = "https://github.com/cat-cave/tanren-fixture-easy/pull/42";
 
+// Per-RUN, per-PROCESS ephemeral DB name. The timestamp + PID + crypto-random
+// suffix makes the name collision-proof across concurrently-scheduled runs
+// (parallel worktrees / smoke recipes sharing one Postgres): a name collision is
+// the only way one run's teardown could touch another's DB, and this rules it
+// out. Well under Postgres's 63-char identifier limit.
 function uniqueDbName(): string {
-  return `tanren_e2e_artifacts_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  return `tanren_e2e_artifacts_${Date.now()}_${process.pid}_${randomBytes(6).toString("hex")}`;
 }
 
 function withDatabase(url: string, database: string): string {
@@ -53,16 +59,43 @@ describeDb("readRunArtifacts against a real Postgres", () => {
 
   beforeAll(async () => {
     adminPool = createDbPool(ADMIN_URL);
+    // A `pg.Pool` re-emits a backend error that lands on an IDLE (checked-in)
+    // client as an `'error'` EVENT; an EventEmitter `'error'` with no listener
+    // becomes an uncaughtException that crashes the vitest worker (the whole
+    // FILE fails). Under concurrent Postgres load an idle pooled connection can
+    // be terminated (`57P01 terminating connection due to administrator
+    // command`) during the teardown window — e.g. as the DB is dropped. Without
+    // these listeners that benign teardown-race termination presented as the
+    // intermittent `57P01` smoke failure (#1228). Attaching a no-op listener
+    // makes an idle-client termination a no-op. This does NOT mask a real
+    // read/write failure: those surface as a REJECTED `await pool.query(...)`
+    // inside an `it` (an active-query error, not a pool `'error'` event), which
+    // still fails the assertion below.
+    adminPool.on("error", () => {});
     await adminPool.query(`CREATE DATABASE ${database}`);
     ownerPool = createDbPool(withDatabase(ADMIN_URL, database));
+    ownerPool.on("error", () => {});
     await migrate(ownerPool);
     await seedMergedRun(ownerPool);
   }, 120_000);
 
   afterAll(async () => {
+    // Deterministic teardown, matching the RLS-integration canonical pattern:
+    // fully drain the owner pool FIRST, then explicitly terminate any straggler
+    // backend still registered on THIS ephemeral DB (scoped by `datname = $1`,
+    // never a foreign DB), then a plain `DROP DATABASE`. This replaces the lone
+    // `DROP DATABASE ... WITH (FORCE)` outlier: the terminate is ordered before
+    // the drop rather than folded into it, so there is no window where the drop
+    // races an open connection.
     await ownerPool?.end();
-    await adminPool?.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
-    await adminPool?.end();
+    if (adminPool !== undefined) {
+      await adminPool.query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+        [database],
+      );
+      await adminPool.query(`DROP DATABASE IF EXISTS ${database}`);
+      await adminPool.end();
+    }
   });
 
   it("returns the seeded merged run, its cost_records, and a non-zero DORA count", async () => {

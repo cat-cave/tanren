@@ -25,6 +25,9 @@ critical / `P2` normal / `P3` low). Ordering is native GitHub issue dependencies
    only after the audit and gate evidence are green and the branch is current
    with `main`.
 
+The maintainer-side CRA follows [CRA.md](CRA.md); it is the counterpart to this
+contributor flow, not a separate automation service.
+
 For the broader parallel-work protocol, including path ownership and dependency
 planning, read the [parallel orchestration playbook](docs/playbooks/parallel-orchestration.md).
 
