@@ -1,10 +1,15 @@
 import type { IsolatedControlRunner } from "../src/auditAdapter.js";
 import { buildAuditContext, type AuditContext, type AuditContextInput } from "../src/auditContext.js";
 import type { AuditReport } from "../src/auditReport.js";
-import type { DiscoveredPullRequest } from "../src/discovery.js";
+import type { DiscoveredCheck, DiscoveredPullRequest } from "../src/discovery.js";
 import type { CommandResult } from "../src/process.js";
+import type { GroundTruthInput } from "../src/reviewOnce.js";
 import type { VerifiedWorktree } from "../src/worktree.js";
 import { firstSha, secondSha } from "./helpers.js";
+
+// A cited file the supervisor can locate in the tree, so a clean acceptance trace
+// resolves. `just looks good`-style prose does NOT resolve.
+export const knownFiles = ["ops/cra/src/auditAdapter.ts", "ops/cra/tests/audit.test.ts"];
 
 export function discoveredPullRequest(overrides: Partial<DiscoveredPullRequest> = {}): DiscoveredPullRequest {
   return {
@@ -38,7 +43,7 @@ export function auditContextInput(overrides: Partial<AuditContextInput> = {}): A
       requiredNegativeControl: "A report missing executed negative controls is rejected.",
       blockers: [],
     },
-    diff: "diff --git a/x b/x\n+added\n",
+    diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n",
     deletionStats: [],
     checks: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS", kind: "check_run" }],
     standards: "Repository standards.",
@@ -56,8 +61,21 @@ export function verifiedWorktree(): VerifiedWorktree {
   return { path: "/tmp/cra-worktrees/pr-1240-111111111111", ref: "refs/cra/pr-1240-111111111111", headSha: firstSha };
 }
 
-// A well-formed report: acceptance satisfied, no unaccounted deletions, one executed
-// negative control the worker observed rejecting, no findings.
+const passingCheck: DiscoveredCheck = { name: "ci", status: "COMPLETED", conclusion: "SUCCESS", kind: "check_run" };
+
+// Supervisor-computed ground truth for a clean PR: a no-deletion diff, a passing
+// required check, and a tree containing the cited acceptance file.
+export function cleanGroundTruth(overrides: Partial<GroundTruthInput> = {}): GroundTruthInput {
+  return {
+    diff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n+added\n",
+    requiredChecks: [passingCheck],
+    knownFiles: [...knownFiles],
+    ...overrides,
+  };
+}
+
+// A well-formed advisory report: acceptance satisfied and CITING a locatable file, no
+// findings, one mandatory executed control the worker reports as rejecting.
 export function validReport(overrides: Partial<AuditReport> = {}): AuditReport {
   return {
     rubricVersion: "2026-07-22",
@@ -65,7 +83,11 @@ export function validReport(overrides: Partial<AuditReport> = {}): AuditReport {
     baseSha: secondSha,
     examinedFiles: ["ops/cra/src/auditAdapter.ts"],
     acceptanceTraces: [
-      { statement: "A well-formed PR yields a valid strict report.", satisfied: true, evidence: "adapter test" },
+      {
+        statement: "A well-formed PR yields a valid strict report.",
+        satisfied: true,
+        evidence: "covered by ops/cra/tests/audit.test.ts",
+      },
     ],
     deletionAccounting: [],
     negativeControls: [
@@ -87,13 +109,12 @@ export function validReport(overrides: Partial<AuditReport> = {}): AuditReport {
   };
 }
 
-// A runner whose control commands all reject (non-zero) — the confirming case.
-export const rejectingRunner: IsolatedControlRunner = {
-  run: async (): Promise<CommandResult> => ({ stdout: "", stderr: "rejected", exitCode: 1 }),
+// The trusted verification passed (exit 0) — the only sandbox execution.
+export const passingRunner: IsolatedControlRunner = {
+  run: async (): Promise<CommandResult> => ({ stdout: "ok", stderr: "", exitCode: 0 }),
 };
 
-// A runner whose control commands accept a bad input (exit 0) — the fail-open case
-// that must NOT be confirmed.
-export const acceptingRunner: IsolatedControlRunner = {
-  run: async (): Promise<CommandResult> => ({ stdout: "accepted", stderr: "", exitCode: 0 }),
+// The trusted verification failed (exit 1).
+export const failingRunner: IsolatedControlRunner = {
+  run: async (): Promise<CommandResult> => ({ stdout: "", stderr: "verification failed", exitCode: 1 }),
 };

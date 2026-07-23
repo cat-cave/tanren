@@ -12,10 +12,10 @@ import { SingletonLease } from "../src/singleton.js";
 import { PrStateStore } from "../src/stateStore.js";
 import { firstSha, testConfig } from "./helpers.js";
 
-// Negative-control runner that rejects (non-zero) — the confirming case for the
-// reviewOnce pipeline fixtures. Kept inline to avoid an extra module dependency.
-const rejectingRunner: IsolatedControlRunner = {
-  run: async () => ({ stdout: "", stderr: "rejected", exitCode: 1 }),
+// The sandbox runner used for the supervisor's trusted verification command. Passing
+// (exit 0) — the clean-PR case. Kept inline to avoid an extra module dependency.
+const passingRunner: IsolatedControlRunner = {
+  run: async () => ({ stdout: "ok", stderr: "", exitCode: 0 }),
 };
 
 export const reviewMarkerKey = { pr: 1240, headSha: firstSha, rubricVersion: "2026-07-22" };
@@ -51,7 +51,7 @@ export function reviewDeps(
   return {
     config: testConfig(),
     actor: "trevor-workstation[bot]",
-    adapter: new AuditAdapter(testConfig(), rejectingRunner, workerExecutor),
+    adapter: new AuditAdapter(testConfig(), passingRunner, workerExecutor),
     poster: new OfficialReviewPoster(testConfig(), "token", ghExecutor),
     stateStore: new PrStateStore(paths, lease),
     artifactStore: new AuditArtifactStore(paths, lease),

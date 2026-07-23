@@ -2,9 +2,9 @@ export { AuditArtifactStore } from "./artifactStore.js";
 export {
   AuditAdapter,
   ModelUnreachableError,
-  type ControlVerification,
   type IndependenceAssessment,
   type IsolatedControlRunner,
+  type SandboxVerification,
   type VerifiedAuditReport,
 } from "./auditAdapter.js";
 export {
@@ -48,7 +48,13 @@ export { DisposableCommandRunner, type IsolatedCommand } from "./isolatedRunner.
 export { OfficialReviewPoster, type OfficialReviewResult } from "./officialReview.js";
 export { resolveCraPaths, type CraPaths } from "./paths.js";
 export { pollOnce, type PollOnceResult } from "./pollOnce.js";
-export { reviewOnce, type ReviewOnceDeps, type ReviewOnceInput, type ReviewOnceResult } from "./reviewOnce.js";
+export {
+  reviewOnce,
+  type GroundTruthInput,
+  type ReviewOnceDeps,
+  type ReviewOnceInput,
+  type ReviewOnceResult,
+} from "./reviewOnce.js";
 export { buildReviewMarker, bodyMatchesMarker, type ReviewMarkerKey } from "./reviewMarker.js";
 export {
   triage,

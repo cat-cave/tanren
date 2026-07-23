@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuditAdapter, ModelUnreachableError } from "../src/auditAdapter.js";
+import { AuditAdapter, ModelUnreachableError, type IsolatedControlRunner } from "../src/auditAdapter.js";
 import { AuditReportInvalidError, AuditReportMismatchError, parseAuditReport } from "../src/auditReport.js";
-import type { CommandExecutor } from "../src/process.js";
+import type { CommandExecutor, CommandResult } from "../src/process.js";
+import type { IsolatedCommand } from "../src/isolatedRunner.js";
+import type { VerifiedWorktree } from "../src/worktree.js";
 import { firstSha, secondSha, testConfig } from "./helpers.js";
-import { acceptingRunner, auditContext, rejectingRunner, validReport, verifiedWorktree } from "./auditFixtures.js";
+import { auditContext, failingRunner, passingRunner, validReport, verifiedWorktree } from "./auditFixtures.js";
 
 function workerExecutor(stdout: string, exitCode = 0): CommandExecutor {
   return async () => ({ stdout, stderr: "", exitCode });
@@ -54,22 +56,49 @@ describe("strict audit report validation", () => {
 });
 
 describe("cross-model audit adapter", () => {
-  it("validates a well-formed report and confirms an executed negative control", async () => {
+  it("validates the advisory report and records the supervisor's trusted verification", async () => {
     const executor = workerExecutor(JSON.stringify(validReport()));
-    const verified = await new AuditAdapter(testConfig(), rejectingRunner, executor).audit(
+    const verified = await new AuditAdapter(testConfig(), passingRunner, executor).audit(
       auditContext(),
       verifiedWorktree(),
     );
-    expect(verified.controlVerifications).toEqual([
-      {
-        id: "malformed-report",
-        mandatory: true,
-        kind: "executed",
-        confirmed: true,
-        detail: "control rejected with exit 1",
-      },
-    ]);
+    expect(verified.sandbox).toMatchObject({ ran: true, passed: true });
     expect(verified.independence.confirmed).toBe(true);
+  });
+
+  it("runs ONLY the config-sourced verification command in the sandbox — never a worker-supplied control command (the env-false break)", async () => {
+    // The worker supplies a spoofable control command `env false` that would exit 1.
+    // Under the redesigned trust boundary the supervisor never runs worker commands,
+    // so it can never be tricked into 'confirming' via a wrapper like `env`.
+    const report = validReport({
+      negativeControls: [
+        {
+          id: "spoof",
+          description: "env-false wrapper that dodges the basename allowlist",
+          mandatory: true,
+          kind: "executed",
+          command: { executable: "env", args: ["false"] },
+          expectedRejection: "non-zero exit",
+          observedResult: "exit 1",
+          rejected: true,
+          evidenceRef: "worker.log",
+        },
+      ],
+    });
+    const calls: IsolatedCommand[] = [];
+    const spyRunner: IsolatedControlRunner = {
+      run: async (_worktree: VerifiedWorktree, command: IsolatedCommand): Promise<CommandResult> => {
+        calls.push(command);
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+    };
+    await new AuditAdapter(testConfig(), spyRunner, workerExecutor(JSON.stringify(report))).audit(
+      auditContext(),
+      verifiedWorktree(),
+    );
+    // Exactly one sandbox execution, and it is the trusted verification command.
+    expect(calls).toEqual([{ executable: "just", args: ["fast-check"] }]);
+    expect(calls.some((c) => c.executable === "env")).toBe(false);
   });
 
   it("passes the audit context on stdin and strips the GitHub token from the worker env", async () => {
@@ -80,7 +109,7 @@ describe("cross-model audit adapter", () => {
     });
     process.env["GH_TOKEN"] = "must-not-leak";
     try {
-      await new AuditAdapter(testConfig(), rejectingRunner, executor).audit(auditContext(), verifiedWorktree());
+      await new AuditAdapter(testConfig(), passingRunner, executor).audit(auditContext(), verifiedWorktree());
     } finally {
       delete process.env["GH_TOKEN"];
     }
@@ -91,66 +120,9 @@ describe("cross-model audit adapter", () => {
     expect(request?.env?.["GITHUB_TOKEN"]).toBeUndefined();
   });
 
-  it("does NOT confirm a negative control whose boundary accepts a bad input (exit 0)", async () => {
-    const executor = workerExecutor(JSON.stringify(validReport()));
-    const verified = await new AuditAdapter(testConfig(), acceptingRunner, executor).audit(
-      auditContext(),
-      verifiedWorktree(),
-    );
-    expect(verified.controlVerifications[0]?.confirmed).toBe(false);
-  });
-
-  it("does NOT confirm an executed control with a null command (never trust the worker's rejected field)", async () => {
-    const report = validReport({
-      negativeControls: [
-        {
-          id: "no-command",
-          description: "worker claims rejection but supplies no command",
-          mandatory: false,
-          kind: "executed",
-          command: null,
-          expectedRejection: "non-zero exit",
-          observedResult: "exit 1",
-          rejected: true,
-          evidenceRef: "worker.log",
-        },
-      ],
-    });
-    const verified = await new AuditAdapter(
-      testConfig(),
-      rejectingRunner,
-      workerExecutor(JSON.stringify(report)),
-    ).audit(auditContext(), verifiedWorktree());
-    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
-  });
-
-  it("does NOT confirm a trivial executable that cannot exercise a boundary", async () => {
-    const report = validReport({
-      negativeControls: [
-        {
-          id: "trivial",
-          description: "a /bin/true that always exits 0",
-          mandatory: false,
-          kind: "executed",
-          command: { executable: "/bin/false", args: [] },
-          expectedRejection: "non-zero exit",
-          observedResult: "exit 1",
-          rejected: true,
-          evidenceRef: "worker.log",
-        },
-      ],
-    });
-    const verified = await new AuditAdapter(
-      testConfig(),
-      rejectingRunner,
-      workerExecutor(JSON.stringify(report)),
-    ).audit(auditContext(), verifiedWorktree());
-    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
-  });
-
-  it("does NOT confirm a control whose isolated re-run throws", async () => {
-    const throwingRunner = {
-      run: async () => {
+  it("records sandbox.ran=false when the trusted verification cannot run", async () => {
+    const throwingRunner: IsolatedControlRunner = {
+      run: async (): Promise<CommandResult> => {
         throw new Error("container failed to start");
       },
     };
@@ -159,20 +131,29 @@ describe("cross-model audit adapter", () => {
       throwingRunner,
       workerExecutor(JSON.stringify(validReport())),
     ).audit(auditContext(), verifiedWorktree());
-    expect(verified.controlVerifications[0]).toMatchObject({ confirmed: false });
+    expect(verified.sandbox).toMatchObject({ ran: false, passed: false });
+  });
+
+  it("records sandbox.passed=false when the trusted verification fails on the PR head", async () => {
+    const verified = await new AuditAdapter(
+      testConfig(),
+      failingRunner,
+      workerExecutor(JSON.stringify(validReport())),
+    ).audit(auditContext(), verifiedWorktree());
+    expect(verified.sandbox).toMatchObject({ ran: true, passed: false });
   });
 
   it("fails closed on a non-JSON worker response", async () => {
     const executor = workerExecutor("not json at all");
     await expect(
-      new AuditAdapter(testConfig(), rejectingRunner, executor).audit(auditContext(), verifiedWorktree()),
+      new AuditAdapter(testConfig(), passingRunner, executor).audit(auditContext(), verifiedWorktree()),
     ).rejects.toThrow(ModelUnreachableError);
   });
 
   it("fails closed when the worker exits non-zero (unreachable model)", async () => {
     const executor = workerExecutor("", 1);
     await expect(
-      new AuditAdapter(testConfig(), rejectingRunner, executor).audit(auditContext(), verifiedWorktree()),
+      new AuditAdapter(testConfig(), passingRunner, executor).audit(auditContext(), verifiedWorktree()),
     ).rejects.toThrow(ModelUnreachableError);
   });
 
@@ -180,7 +161,7 @@ describe("cross-model audit adapter", () => {
     const executor = workerExecutor(JSON.stringify(validReport()));
     const verified = await new AuditAdapter(
       testConfig({ audit: { ...testConfig().audit, modelFamily: "codex" } }),
-      rejectingRunner,
+      passingRunner,
       executor,
     ).audit(auditContext({ authorModelFamily: "codex" }), verifiedWorktree());
     expect(verified.independence.confirmed).toBe(false);
@@ -188,7 +169,7 @@ describe("cross-model audit adapter", () => {
 
   it("flags unknown provenance on an agent-authored PR as unconfirmable independence", async () => {
     const executor = workerExecutor(JSON.stringify(validReport()));
-    const verified = await new AuditAdapter(testConfig(), rejectingRunner, executor).audit(
+    const verified = await new AuditAdapter(testConfig(), passingRunner, executor).audit(
       auditContext({ authorIsAgent: true, authorModelFamily: null }),
       verifiedWorktree(),
     );

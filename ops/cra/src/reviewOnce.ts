@@ -10,8 +10,12 @@ import type { OfficialReviewPoster } from "./officialReview.js";
 import { bodyMatchesMarker } from "./reviewMarker.js";
 import type { PrStateStore } from "./stateStore.js";
 import type { PrState } from "./stateSchemas.js";
-import { triage, type ReviewVerdict } from "./triage.js";
+import { triage, type ReviewVerdict, type SupervisorEvidence } from "./triage.js";
 import type { VerifiedWorktree } from "./worktree.js";
+
+// The ground truth the supervisor computed itself, minus the config-sourced deletion
+// threshold (reviewOnce fills that from config so the caller cannot weaken the gate).
+export type GroundTruthInput = Omit<SupervisorEvidence, "liveDeletionThreshold">;
 
 export interface ReviewOnceDeps {
   readonly config: CraConfig;
@@ -28,6 +32,9 @@ export interface ReviewOnceInput {
   readonly context: AuditContext;
   readonly worktree: VerifiedWorktree;
   readonly existingReviews: readonly DiscoveredReview[];
+  // Supervisor-computed ground truth (real diff, real GitHub check states, worktree
+  // tree). Sourced from discovery/git, NOT from the worker's report.
+  readonly groundTruth: GroundTruthInput;
   readonly correlationId?: string;
   readonly now?: string;
 }
@@ -112,7 +119,10 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     report: verified.report,
   });
 
-  const triaged = triage(verified, { diff: input.context.evidence.diff });
+  const triaged = triage(verified, {
+    ...input.groundTruth,
+    liveDeletionThreshold: config.audit.deletionGate.liveLineThreshold,
+  });
   for (const finding of triaged.findings) {
     await emit(deps, correlationId, now, {
       type: "finding",

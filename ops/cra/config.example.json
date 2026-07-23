@@ -16,6 +16,8 @@
   "audit": {
     "command": "tanren-cra-audit",
     "args": [],
-    "modelFamily": "grok"
+    "modelFamily": "grok",
+    "verificationCommand": { "executable": "just", "args": ["fast-check"] },
+    "deletionGate": { "liveLineThreshold": 200 }
   }
 }

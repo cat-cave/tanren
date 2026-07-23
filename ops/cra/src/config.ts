@@ -50,8 +50,29 @@ export const craConfigSchema = z.strictObject({
       args: z.array(commandSchema).default([]),
       modelFamily: z.string().min(1).default("grok"),
       timeoutMs: durationSchema.default(1_800_000),
+      // The TRUSTED acceptance/verification command the supervisor itself runs in
+      // the CRA-04 sandbox against the PR branch. It is config-sourced, NEVER
+      // worker-supplied — a worker command can never confirm a gate. Its ground-truth
+      // exit status is the acceptance signal.
+      verificationCommand: z
+        .strictObject({ executable: commandSchema, args: z.array(z.string()) })
+        .default({ executable: "just", args: ["fast-check"] }),
+      // Supervisor-computed deletion gate: net live-code deletion (deleted minus
+      // added live lines) at or above this many lines blocks regardless of the
+      // worker's accounting. Test deletions are gated separately (any net test
+      // regression blocks).
+      deletionGate: z
+        .strictObject({ liveLineThreshold: z.number().int().positive() })
+        .default({ liveLineThreshold: 200 }),
     })
-    .default({ command: "tanren-cra-audit", args: [], modelFamily: "grok", timeoutMs: 1_800_000 }),
+    .default({
+      command: "tanren-cra-audit",
+      args: [],
+      modelFamily: "grok",
+      timeoutMs: 1_800_000,
+      verificationCommand: { executable: "just", args: ["fast-check"] },
+      deletionGate: { liveLineThreshold: 200 },
+    }),
   timing: z
     .strictObject({
       pollSeconds: durationSchema.default(60),

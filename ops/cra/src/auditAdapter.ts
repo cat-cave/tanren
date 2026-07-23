@@ -1,12 +1,19 @@
 import type { CraConfig } from "./config.js";
 import { serializeAuditContext, type AuditContext } from "./auditContext.js";
-import { AuditFailure, parseAuditReport, type AuditReport, type NegativeControl } from "./auditReport.js";
+import { AuditFailure, parseAuditReport, type AuditReport } from "./auditReport.js";
 import type { IsolatedCommand } from "./isolatedRunner.js";
 import { execute, type CommandExecutor, type CommandResult } from "./process.js";
 import type { VerifiedWorktree } from "./worktree.js";
 
-// The isolated-runner seam the adapter uses to re-execute negative controls.
-// `DisposableCommandRunner` (CRA-04) satisfies it structurally; tests inject a fake.
+// TRUST BOUNDARY. The audit worker AUTHORS its report, so every field it controls is
+// spoofable. The report is therefore ADVISORY JUDGMENT ONLY — it can ADD P0-P3
+// findings, but it can never confirm, clear, or suppress a gate condition. The
+// supervisor computes every gate-critical signal from GROUND TRUTH: the real diff,
+// the real GitHub check states, the worktree tree, and ONE trusted verification
+// command (config-sourced, NEVER worker-supplied) run in the CRA-04 sandbox.
+
+// The isolated-runner seam the supervisor uses to run its trusted verification
+// command. `DisposableCommandRunner` (CRA-04) satisfies it structurally.
 export interface IsolatedControlRunner {
   run(worktree: VerifiedWorktree, command: IsolatedCommand): Promise<CommandResult>;
 }
@@ -14,17 +21,13 @@ export interface IsolatedControlRunner {
 // The audit worker command was unreachable or exited non-zero without a report.
 export class ModelUnreachableError extends AuditFailure {}
 
-export interface ControlVerification {
-  readonly id: string;
-  readonly mandatory: boolean;
-  // The worker's declared control kind, carried through so triage can force P0 on
-  // ANY unconfirmed EXECUTED control (a fail-open is a fail-open, mandatory or not).
-  readonly kind: "executed" | "inspected";
-  // Independently CONFIRMED only when the supervisor itself re-ran a real command in
-  // the isolated runner and saw a NON-ZERO exit (the bad input was rejected). The
-  // worker's own `rejected` field is never trusted. Inspected-only controls, missing/
-  // trivial commands, exit-0 (accepted), or a throwing re-run are NOT confirmed.
-  readonly confirmed: boolean;
+export interface SandboxVerification {
+  // The trusted verification command executed to completion in the sandbox.
+  readonly ran: boolean;
+  // ...and exited 0. A verification that could not run (ran=false) is a blocking
+  // unproven-acceptance condition; a run that failed (ran=true, passed=false) means
+  // the PR fails its own acceptance on a clean sandboxed checkout.
+  readonly passed: boolean;
   readonly detail: string;
 }
 
@@ -35,9 +38,12 @@ export interface IndependenceAssessment {
 }
 
 export interface VerifiedAuditReport {
+  // ADVISORY: the worker's judgment. Findings add to triage; nothing here clears a
+  // supervisor-computed gate.
   readonly report: AuditReport;
-  readonly controlVerifications: readonly ControlVerification[];
   readonly independence: IndependenceAssessment;
+  // GROUND TRUTH: the supervisor's own trusted verification result.
+  readonly sandbox: SandboxVerification;
   readonly headSha: string;
   readonly baseSha: string;
   readonly rubricVersion: string;
@@ -90,11 +96,11 @@ export class AuditAdapter {
       baseSha: context.baseSha,
       rubricVersion: context.rubricVersion,
     });
-    const controlVerifications = await this.verifyControls(report.negativeControls, worktree);
+    const sandbox = await this.runTrustedVerification(worktree);
     return {
       report,
-      controlVerifications,
       independence: assessIndependence(context, this.config),
+      sandbox,
       headSha: context.headSha,
       baseSha: context.baseSha,
       rubricVersion: context.rubricVersion,
@@ -127,58 +133,21 @@ export class AuditAdapter {
     }
   }
 
-  // Re-run every executed negative control inside the CRA-04 isolated runner and
-  // confirm the bad input is ACTUALLY rejected. Green CI is not evidence; the
-  // supervisor executes the control itself. A control that cannot be confirmed to
-  // reject stays unconfirmed and drives a P0 completion gap in triage.
-  private async verifyControls(
-    controls: readonly NegativeControl[],
-    worktree: VerifiedWorktree,
-  ): Promise<ControlVerification[]> {
-    const verifications: ControlVerification[] = [];
-    for (const control of controls) {
-      verifications.push(await this.verifyControl(control, worktree));
-    }
-    return verifications;
-  }
-
-  private async verifyControl(control: NegativeControl, worktree: VerifiedWorktree): Promise<ControlVerification> {
-    const base = { id: control.id, mandatory: control.mandatory, kind: control.kind } as const;
-    if (control.kind !== "executed") {
-      return { ...base, confirmed: false, detail: "control is inspected-only; not independently executed" };
-    }
-    const command = control.command;
-    if (command === null || command.executable.trim().length === 0) {
-      return { ...base, confirmed: false, detail: "executed control has no runnable command to re-verify" };
-    }
-    const basename = command.executable.split("/").at(-1) ?? command.executable;
-    if (TRIVIAL_EXECUTABLES.has(basename)) {
-      // `true`/`false`/`:` exit deterministically regardless of input, so they can
-      // neither exercise nor reject a real boundary: never a valid confirmation.
-      return {
-        ...base,
-        confirmed: false,
-        detail: `control command '${command.executable}' does not exercise the boundary`,
-      };
-    }
+  // Runs the ONE trusted, config-sourced verification command in the sandbox. This
+  // is the only sandbox execution and it is NEVER a worker-supplied command — an
+  // arbitrary worker command cannot be tied to the PR's boundary, so it can never
+  // confirm a gate. Its exit status is ground truth the triage gate consumes.
+  private async runTrustedVerification(worktree: VerifiedWorktree): Promise<SandboxVerification> {
+    const command = this.config.audit.verificationCommand;
     try {
-      const result = await this.runner.run(worktree, { executable: command.executable, args: command.args });
-      // A negative control feeds a bad input that MUST be rejected: a non-zero exit is
-      // the rejection. A zero exit means the boundary ACCEPTED bad input (a fail-open).
-      if (result.exitCode === 0) {
-        return {
-          ...base,
-          confirmed: false,
-          detail: "control command exited 0: the boundary accepted a bad input that must be rejected",
-        };
-      }
-      return { ...base, confirmed: true, detail: `control rejected with exit ${result.exitCode}` };
+      const result = await this.runner.run(worktree, { executable: command.executable, args: [...command.args] });
+      return {
+        ran: true,
+        passed: result.exitCode === 0,
+        detail: `trusted verification '${command.executable}' exited ${result.exitCode}`,
+      };
     } catch (error) {
-      return { ...base, confirmed: false, detail: `control could not be executed: ${(error as Error).message}` };
+      return { ran: false, passed: false, detail: `trusted verification could not run: ${(error as Error).message}` };
     }
   }
 }
-
-// Executables that exit deterministically and so can never confirm that a real
-// boundary rejected a bad input.
-const TRIVIAL_EXECUTABLES: ReadonlySet<string> = new Set(["true", "false", ":"]);

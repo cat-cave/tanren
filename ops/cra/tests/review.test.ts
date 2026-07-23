@@ -6,7 +6,7 @@ import { reviewOnce } from "../src/reviewOnce.js";
 import { triage } from "../src/triage.js";
 import type { PrState } from "../src/stateSchemas.js";
 import { firstSha, secondSha, testConfig } from "./helpers.js";
-import { auditContext, validReport, verifiedWorktree } from "./auditFixtures.js";
+import { auditContext, cleanGroundTruth, validReport, verifiedWorktree } from "./auditFixtures.js";
 import { ghSpy, reviewDeps, reviewMarkerKey, stateFixture } from "./reviewHelpers.js";
 
 const roots: string[] = [];
@@ -36,16 +36,14 @@ afterEach(async () => {
 });
 
 const verifiedBase = {
-  controlVerifications: [
-    { id: "malformed-report", mandatory: true, kind: "executed", confirmed: true, detail: "rejected" },
-  ],
   independence: { confirmed: true, reason: "cross-model" },
+  sandbox: { ran: true, passed: true, detail: "exit 0" },
   headSha: firstSha,
   baseSha: secondSha,
   rubricVersion: "2026-07-22",
 } as const;
 
-const noDiff = { diff: "" };
+const cleanEvidence = { ...cleanGroundTruth(), liveDeletionThreshold: 200 };
 
 describe("official GitHub review poster", () => {
   it("posts exactly one review bound to the audited head with inline + summary findings", async () => {
@@ -68,7 +66,7 @@ describe("official GitHub review poster", () => {
           ],
         }),
       },
-      noDiff,
+      cleanEvidence,
     );
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
@@ -99,7 +97,7 @@ describe("official GitHub review poster", () => {
     ];
     const result = await new OfficialReviewPoster(testConfig(), "token", executor).post(
       reviewMarkerKey,
-      triage({ ...verifiedBase, report: validReport() }, noDiff),
+      triage({ ...verifiedBase, report: validReport() }, cleanEvidence),
       existing,
     );
     expect(result).toMatchObject({ posted: false, reviewId: 4242 });
@@ -116,6 +114,7 @@ describe("reviewOnce fail-closed pipeline", () => {
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
+      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(result).toMatchObject({ blocked: false, verdict: "APPROVE", posted: true, reviewId: 5001 });
@@ -132,6 +131,7 @@ describe("reviewOnce fail-closed pipeline", () => {
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
+      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(result.blocked).toBe(true);
@@ -152,6 +152,7 @@ describe("reviewOnce fail-closed pipeline", () => {
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [],
+      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(first.posted).toBe(true);
@@ -169,6 +170,7 @@ describe("reviewOnce fail-closed pipeline", () => {
       context: auditContext(),
       worktree: verifiedWorktree(),
       existingReviews: [priorReview],
+      groundTruth: cleanGroundTruth(),
       now: "2026-07-22T13:00:00.000Z",
     });
     expect(second.posted).toBe(false);
