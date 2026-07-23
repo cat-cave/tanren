@@ -51,12 +51,17 @@ describe("mq-8 eager beam database contract", () => {
     expect(integration.foreignKeys.map((key) => key.getName()).sort()).toEqual([
       "integration_nodes_org_id_organizations_id_fk",
       "integration_nodes_project_id_projects_project_id_fk",
+      // gv-17: composite same-org project FK (tenant lineage).
+      "integration_nodes_project_org_fk",
     ]);
     const proofs = getTableConfig(integrationProofs);
     expect(proofs.foreignKeys.map((key) => key.getName()).sort()).toEqual([
       "integration_proofs_node_id_integration_nodes_node_id_fk",
+      // gv-17: composite same-org node + project FKs.
+      "integration_proofs_node_org_fk",
       "integration_proofs_org_id_organizations_id_fk",
       "integration_proofs_project_id_projects_project_id_fk",
+      "integration_proofs_project_org_fk",
     ]);
     expect(eventTypesSeed).toEqual(
       expect.arrayContaining([
