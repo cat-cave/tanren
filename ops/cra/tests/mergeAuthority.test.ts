@@ -4,6 +4,7 @@ import {
   type MergeAuthorizationInput,
   type MergeAuthorizationSnapshot,
   type MergeAuthorityGateway,
+  type MergeAuthorityRecorder,
 } from "../src/mergeAuthority.js";
 import { firstSha, secondSha } from "./helpers.js";
 
@@ -12,7 +13,7 @@ const input: MergeAuthorizationInput = {
   pr: 1240,
   auditedHeadSha: firstSha,
   auditedBaseSha: secondSha,
-  auditedIssueNumber: 1247,
+  auditedIssueNumber: 100,
   casHeadSha: firstSha,
   rubricVersion: "2026-07-22",
 };
@@ -27,13 +28,13 @@ function green(): MergeAuthorizationSnapshot {
     baseSha: secondSha,
     headSha: firstSha,
     title: "Complete CRA",
-    body: "Closes #1247",
+    body: "Closes #100",
     historyVersion: `v1:${firstSha}`,
     rulesetVersion: "rules-v1",
     mergeStateStatus: "CLEAN",
     mergeable: "MERGEABLE",
-    auditedIssueNumber: 1247,
-    sourceIssues: [{ number: 1247, state: "OPEN", appropriate: true, blockers: [{ number: 1246, state: "CLOSED" }] }],
+    auditedIssueNumber: 100,
+    sourceIssues: [{ number: 100, state: "OPEN", appropriate: true, blockers: [{ number: 99, state: "CLOSED" }] }],
     latestCraReview: {
       id: 55,
       actor: "trevor-workstation[bot]",
@@ -61,6 +62,8 @@ function green(): MergeAuthorizationSnapshot {
 
 function gateway(reads: readonly MergeAuthorizationSnapshot[]): MergeAuthorityGateway & {
   squashMerge: ReturnType<typeof vi.fn<MergeAuthorityGateway["squashMerge"]>>;
+  reopenWronglyClosedIssue: ReturnType<typeof vi.fn<MergeAuthorityGateway["reopenWronglyClosedIssue"]>>;
+  ensureAuditedIssueClosed: ReturnType<typeof vi.fn<MergeAuthorityGateway["ensureAuditedIssueClosed"]>>;
 } {
   let cursor = 0;
   return {
@@ -74,12 +77,27 @@ function gateway(reads: readonly MergeAuthorizationSnapshot[]): MergeAuthorityGa
       headSha: firstSha,
       mergeCommitSha: mergeSha,
     })),
+    readIssueClosureReconciliation: vi.fn<MergeAuthorityGateway["readIssueClosureReconciliation"]>(async () => ({
+      closedByPullRequest: [100],
+      auditedIssueState: "CLOSED",
+    })),
+    reopenWronglyClosedIssue: vi.fn<MergeAuthorityGateway["reopenWronglyClosedIssue"]>(async () => {}),
+    ensureAuditedIssueClosed: vi.fn<MergeAuthorityGateway["ensureAuditedIssueClosed"]>(async () => {}),
+  };
+}
+
+function recorder(): MergeAuthorityRecorder & {
+  recordSecurityAnomaly: ReturnType<typeof vi.fn<MergeAuthorityRecorder["recordSecurityAnomaly"]>>;
+} {
+  return {
+    record: vi.fn<MergeAuthorityRecorder["record"]>(async () => {}),
+    recordSecurityAnomaly: vi.fn<MergeAuthorityRecorder["recordSecurityAnomaly"]>(async () => {}),
   };
 }
 
 async function expectDenied(...reads: readonly MergeAuthorizationSnapshot[]) {
   const fake = gateway(reads);
-  const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+  const result = await authorizeAndSquashMerge({ gateway: fake, recorder: recorder() }, input);
   expect(result.merged).toBe(false);
   expect(fake.squashMerge).not.toHaveBeenCalled();
 }
@@ -87,12 +105,61 @@ async function expectDenied(...reads: readonly MergeAuthorizationSnapshot[]) {
 describe("fresh fail-closed merge authorization", () => {
   it("invokes exactly one SHA-CAS squash merge and verifies returned state before post-merge routing", async () => {
     const fake = gateway([green(), green(), green()]);
+    const events = recorder();
     const route = vi.fn<(sha: string) => Promise<void>>(async () => {});
-    const result = await authorizeAndSquashMerge({ gateway: fake, afterVerifiedMerge: route }, input);
-    expect(result).toEqual({ merged: true, verified: true, mergeCommitSha: mergeSha, reasons: [] });
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: events, afterVerifiedMerge: route }, input);
+    expect(result).toEqual({
+      merged: true,
+      verified: true,
+      anomalous: false,
+      mergeCommitSha: mergeSha,
+      reasons: [],
+    });
     expect(fake.squashMerge).toHaveBeenCalledOnce();
-    expect(fake.squashMerge).toHaveBeenCalledWith(1240, firstSha);
+    expect(fake.squashMerge).toHaveBeenCalledWith(
+      1240,
+      firstSha,
+      "CRA squash merge of PR #1240",
+      `Central Review Authority merged audited head ${firstSha}. Issue closure is reconciled separately.`,
+    );
+    expect(events.recordSecurityAnomaly).not.toHaveBeenCalled();
     expect(route).toHaveBeenCalledWith(mergeSha);
+  });
+
+  it("reconciles a body swap that closes #999 after the audited head wins the merge CAS", async () => {
+    const fake = gateway([green(), green(), green(), { ...green(), body: "Closes #999", historyVersion: "v2" }]);
+    fake.readIssueClosureReconciliation = vi.fn<MergeAuthorityGateway["readIssueClosureReconciliation"]>(async () => ({
+      closedByPullRequest: [999],
+      auditedIssueState: "OPEN",
+    }));
+    const events = recorder();
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: events }, input);
+    expect(result).toMatchObject({ merged: true, verified: true, anomalous: true, mergeCommitSha: mergeSha });
+    expect(fake.reopenWronglyClosedIssue).toHaveBeenCalledWith(1240, 999);
+    expect(fake.ensureAuditedIssueClosed).toHaveBeenCalledWith(1240, 100);
+    expect(events.recordSecurityAnomaly).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr: 1240,
+        headSha: firstSha,
+        auditedIssueNumber: 100,
+        observedClosedIssues: [999],
+        reopenedIssues: [999],
+        auditedIssueClosed: true,
+      }),
+    );
+  });
+
+  it("records a dismissed-review race after the audited head has merged", async () => {
+    const dismissed = {
+      ...green(),
+      latestCraReview: { ...green().latestCraReview!, state: "DISMISSED", dismissed: true },
+    };
+    const fake = gateway([green(), green(), green(), dismissed]);
+    const events = recorder();
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: events }, input);
+    expect(result).toMatchObject({ merged: true, verified: true, anomalous: true });
+    expect(result.reasons).toContain("CRA-approved review changed during merge");
+    expect(events.recordSecurityAnomaly).toHaveBeenCalledOnce();
   });
 
   it("denies the audited-issue body-swap attack without merging or closing the substituted issue", async () => {
@@ -103,7 +170,7 @@ describe("fresh fail-closed merge authorization", () => {
       sourceIssues: [{ number: 999, state: "OPEN", appropriate: false, blockers: [] }],
     };
     const fake = gateway([green(), substitutedIssue]);
-    const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: recorder() }, input);
     expect(result.merged).toBe(false);
     expect(result.reasons).toContain("live closing issue differs from audited issue");
     expect(fake.squashMerge).not.toHaveBeenCalled();
@@ -140,7 +207,7 @@ describe("fresh fail-closed merge authorization", () => {
       latestCraReview: { ...green().latestCraReview!, state: "DISMISSED", dismissed: true },
     };
     const fake = gateway([green(), green(), dismissed]);
-    const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: recorder() }, input);
     expect(result.merged).toBe(false);
     expect(result.reasons).toContain("CRA review was dismissed");
     expect(fake.squashMerge).not.toHaveBeenCalled();
@@ -179,7 +246,7 @@ describe("fresh fail-closed merge authorization", () => {
     ["P1 present", () => ({ latestCraReview: { ...green().latestCraReview!, findingSeverities: ["P1"] as const } })],
     [
       "open blocked_by",
-      () => ({ sourceIssues: [{ ...green().sourceIssues[0]!, blockers: [{ number: 1246, state: "OPEN" }] }] }),
+      () => ({ sourceIssues: [{ ...green().sourceIssues[0]!, blockers: [{ number: 99, state: "OPEN" }] }] }),
     ],
     ["missing required-check set", () => ({ requiredContexts: [] })],
     ["rate limit", () => ({ rateLimited: true })],
@@ -208,7 +275,7 @@ describe("fresh fail-closed merge authorization", () => {
     fake.readFresh = vi.fn<MergeAuthorityGateway["readFresh"]>(async () => {
       throw new Error("rate limited");
     });
-    const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+    const result = await authorizeAndSquashMerge({ gateway: fake, recorder: recorder() }, input);
     expect(result.reasons[0]).toContain("unconfirmable");
     expect(fake.squashMerge).not.toHaveBeenCalled();
   });
@@ -221,7 +288,10 @@ describe("fresh fail-closed merge authorization", () => {
       mergeCommitSha: null,
     }));
     const route = vi.fn<(sha: string) => Promise<void>>(async () => {});
-    const result = await authorizeAndSquashMerge({ gateway: fake, afterVerifiedMerge: route }, input);
+    const result = await authorizeAndSquashMerge(
+      { gateway: fake, recorder: recorder(), afterVerifiedMerge: route },
+      input,
+    );
     expect(result.verified).toBe(false);
     expect(fake.squashMerge).toHaveBeenCalledOnce();
     expect(route).not.toHaveBeenCalled();

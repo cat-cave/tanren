@@ -233,10 +233,10 @@ The implementation uses `gh` as the authenticated transport and pins
   SHA, `event` to `APPROVE` or `REQUEST_CHANGES`, and supplying `comments[]` with
   `path`, `line`, `side`, and finding body. General findings remain in `body`.
 - Read required checks and merge state immediately before merge; squash with
-  `gh pr merge <n> --repo cat-cave/tanren --squash --match-head-commit <sha>`.
-  If the installed `gh` lacks the head-match option, use the pull-request merge
-  REST endpoint with the equivalent expected `sha`; never merge without a
-  compare-and-swap on head.
+  the pull-request merge REST endpoint using the expected `sha` plus an explicit
+  CRA-controlled `commit_title` and `commit_message`. The message contains no
+  inherited PR-body closing keywords. Never merge without the compare-and-swap
+  on head.
 - Create findings with `gh issue create`, apply exactly one type plus bucket and
   priority labels, and add `blocked_by` with
   `POST /repos/cat-cave/tanren/issues/<issue>/dependencies/blocked_by` using the
@@ -275,6 +275,18 @@ authorization. The supervisor records the blocking reason and retries or request
 author action; it never converts uncertainty into approval. After the merge call,
 it verifies the returned merge commit and PR state before filing P2/P3 issues or
 marking the disposition complete.
+
+### Merge-race residual
+
+GitHub does not offer an atomic multi-field squash merge: its merge API provides
+only a head-SHA compare-and-swap. That CAS guarantees that the code which lands is
+exactly the audited head, but a PR-body, review, or required-check mutation can
+still race the final reread. After verifying the merged head and commit, the CRA
+therefore re-reads the issues GitHub closed, reopens any non-audited issue with a
+deduplicated reconciliation comment, closes the audited issue if needed, and
+re-reads the CRA review and required checks. A failed reconciliation read or any
+detected race produces a durable `SECURITY ANOMALY` event for human attention; a
+raced merge is healed where possible and never silently accepted as clean.
 
 ## Findings-driven and time-based abandonment
 

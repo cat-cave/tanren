@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditArtifactStore } from "../src/artifactStore.js";
 import { EventLog } from "../src/eventLog.js";
+import { EventLogMergeRecorder } from "../src/mergeRecorder.js";
 import { resolveCraPaths } from "../src/paths.js";
 import { SingletonLease } from "../src/singleton.js";
 import { PrStateStore } from "../src/stateStore.js";
@@ -126,6 +127,42 @@ describe("persistent CRA state", () => {
       .map((line) => JSON.parse(line));
     expect(lines).toHaveLength(2);
     expect(lines[1].detail).toEqual({ sequence: 2 });
+    await lease.release();
+  });
+
+  it("persists merge security anomalies in the durable event log", async () => {
+    const { paths } = await stateFixture();
+    const lease = await SingletonLease.acquire(paths.lockFile);
+    const recorder = new EventLogMergeRecorder(
+      new EventLog(paths, lease),
+      {
+        pr: 1240,
+        headSha: firstSha,
+        rubricVersion: "2026-07-22",
+        actor: "trevor-workstation[bot]",
+        correlationId: "merge-race",
+      },
+      () => "2026-07-22T12:00:00.000Z",
+    );
+    await recorder.recordSecurityAnomaly({
+      pr: 1240,
+      headSha: firstSha,
+      mergeCommitSha: secondSha,
+      auditedIssueNumber: 100,
+      observedClosedIssues: [999],
+      reopenedIssues: [999],
+      auditedIssueClosed: true,
+      reasons: ["body swap won the issue-closing race"],
+    });
+    const line = await readFile(resolve(paths.eventsDirectory, "2026-07-22.jsonl"), "utf8");
+    expect(JSON.parse(line)).toMatchObject({
+      type: "security_anomaly",
+      detail: {
+        severity: "SECURITY ANOMALY",
+        observedClosedIssues: [999],
+        reopenedIssues: [999],
+      },
+    });
     await lease.release();
   });
 });

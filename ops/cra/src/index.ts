@@ -87,14 +87,18 @@ export { reviewOnce, type ReviewOnceDeps, type ReviewOnceInput, type ReviewOnceR
 export {
   authorizeAndSquashMerge,
   denyReasons,
+  type IssueClosureReconciliation,
   type MergeAuthorizationInput,
   type MergeAuthorizationSnapshot,
   type MergeAuthorityDeps,
   type MergeAuthorityGateway,
+  type MergeAuthorityRecorder,
   type MergeAuthorityResult,
   type MergeCallResult,
+  type MergeSecurityAnomaly,
   type MergedPullRequest,
 } from "./mergeAuthority.js";
+export { EventLogMergeRecorder, type MergeRecorderContext } from "./mergeRecorder.js";
 export { buildReviewMarker, bodyMatchesMarker, type ReviewMarkerKey } from "./reviewMarker.js";
 export {
   triage,

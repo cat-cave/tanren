@@ -2,9 +2,9 @@ import { routeDeferredFindings, type FindingIssueContext, type FindingIssueGatew
 import {
   authorizeAndSquashMerge,
   type MergeAuthorizationInput,
+  type MergeAuthorityRecorder,
   type MergeAuthorityGateway,
   type MergeAuthorityResult,
-  type MergeDecisionRecorder,
 } from "./mergeAuthority.js";
 import type { PrState } from "./stateSchemas.js";
 import type { PrStateStore } from "./stateStore.js";
@@ -14,7 +14,7 @@ export interface ApprovedPostReviewDeps {
   readonly mergeGateway: MergeAuthorityGateway;
   readonly issueGateway: FindingIssueGateway;
   readonly stateStore: PrStateStore;
-  readonly recorder?: MergeDecisionRecorder;
+  readonly recorder: MergeAuthorityRecorder;
 }
 
 export interface ApprovedPostReviewInput {
@@ -55,7 +55,13 @@ export async function runApprovedPostReview(
   if (input.state.disposition === "merged") {
     const state = await routeAndPersist(deps, input, input.state);
     return {
-      merge: { merged: true, verified: true, mergeCommitSha: null, reasons: ["recovered post-merge routing"] },
+      merge: {
+        merged: true,
+        verified: true,
+        anomalous: false,
+        mergeCommitSha: null,
+        reasons: ["recovered post-merge routing"],
+      },
       state,
     };
   }

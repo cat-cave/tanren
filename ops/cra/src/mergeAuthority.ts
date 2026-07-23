@@ -60,6 +60,11 @@ export interface MergeCallResult {
   readonly mergeCommitSha: string | null;
 }
 
+export interface IssueClosureReconciliation {
+  readonly closedByPullRequest: readonly number[];
+  readonly auditedIssueState: string;
+}
+
 export interface MergedPullRequest {
   readonly state: string;
   readonly headSha: string;
@@ -68,23 +73,48 @@ export interface MergedPullRequest {
 
 export interface MergeAuthorityGateway {
   readFresh(input: MergeAuthorizationInput): Promise<MergeAuthorizationSnapshot>;
-  squashMerge(pr: number, expectedHeadSha: string): Promise<MergeCallResult>;
+  squashMerge(
+    pr: number,
+    expectedHeadSha: string,
+    commitTitle: string,
+    commitMessage: string,
+  ): Promise<MergeCallResult>;
   readMerged(pr: number): Promise<MergedPullRequest>;
+  readIssueClosureReconciliation(
+    pr: number,
+    auditedIssue: number,
+    mergeCommitSha: string,
+  ): Promise<IssueClosureReconciliation>;
+  reopenWronglyClosedIssue(pr: number, issue: number): Promise<void>;
+  ensureAuditedIssueClosed(pr: number, issue: number): Promise<void>;
 }
 
-export interface MergeDecisionRecorder {
+export interface MergeSecurityAnomaly {
+  readonly pr: number;
+  readonly headSha: string;
+  readonly mergeCommitSha: string;
+  readonly auditedIssueNumber: number;
+  readonly observedClosedIssues: readonly number[] | null;
+  readonly reopenedIssues: readonly number[];
+  readonly auditedIssueClosed: boolean;
+  readonly reasons: readonly string[];
+}
+
+export interface MergeAuthorityRecorder {
   record(kind: "authorized" | "denied", reasons: readonly string[]): Promise<void>;
+  recordSecurityAnomaly(anomaly: MergeSecurityAnomaly): Promise<void>;
 }
 
 export interface MergeAuthorityDeps {
   readonly gateway: MergeAuthorityGateway;
-  readonly recorder?: MergeDecisionRecorder;
+  readonly recorder: MergeAuthorityRecorder;
   readonly afterVerifiedMerge?: (mergeCommitSha: string) => Promise<void>;
 }
 
 export interface MergeAuthorityResult {
   readonly merged: boolean;
   readonly verified: boolean;
+  readonly anomalous: boolean;
   readonly mergeCommitSha: string | null;
   readonly reasons: readonly string[];
 }
@@ -170,9 +200,31 @@ function stabilityKey(snapshot: MergeAuthorizationSnapshot): string {
 }
 
 async function denied(deps: MergeAuthorityDeps, reasons: readonly string[]): Promise<MergeAuthorityResult> {
-  await deps.recorder?.record("denied", reasons);
-  return { merged: false, verified: false, mergeCommitSha: null, reasons };
+  await deps.recorder.record("denied", reasons);
+  return { merged: false, verified: false, anomalous: false, mergeCommitSha: null, reasons };
 }
+
+function postMergeRaceReasons(snapshot: MergeAuthorizationSnapshot, input: MergeAuthorizationInput): string[] {
+  const reasons: string[] = [];
+  const review = snapshot.latestCraReview;
+  if (review === null) reasons.push("post-merge CRA review is missing");
+  else {
+    if (review.dismissed || review.state !== "APPROVED") reasons.push("CRA-approved review changed during merge");
+    if (!review.latest) reasons.push("CRA-approved review was superseded during merge");
+    if (review.headSha !== input.auditedHeadSha) reasons.push("post-merge CRA review is for a different head");
+  }
+  if (snapshot.requiredContexts.length === 0) reasons.push("post-merge required check set is missing");
+  for (const context of snapshot.requiredContexts) {
+    const matches = snapshot.checks.filter((check) => check.name === context);
+    if (matches.length !== 1 || !checkPasses(matches[0]!))
+      reasons.push(`required check changed during merge: ${context}`);
+  }
+  return reasons;
+}
+
+const controlledCommitTitle = (pr: number) => `CRA squash merge of PR #${pr}`;
+const controlledCommitMessage = (headSha: string) =>
+  `Central Review Authority merged audited head ${headSha}. Issue closure is reconciled separately.`;
 
 // Fresh reads bracket authorization, and a third authoritative read happens after
 // recording the decision and immediately before the SHA-CAS merge. Every mutable
@@ -189,13 +241,18 @@ export async function authorizeAndSquashMerge(
     const finalReasons = denyReasons(final, input);
     if (finalReasons.length > 0) return await denied(deps, finalReasons);
     if (stabilityKey(first) !== stabilityKey(final)) return await denied(deps, ["authorization inputs changed"]);
-    await deps.recorder?.record("authorized", []);
+    await deps.recorder.record("authorized", []);
     const preMerge = await deps.gateway.readFresh(input);
     const preMergeReasons = denyReasons(preMerge, input);
     if (preMergeReasons.length > 0) return await denied(deps, preMergeReasons);
     if (stabilityKey(final) !== stabilityKey(preMerge))
       return await denied(deps, ["authorization inputs changed before merge"]);
-    const response = await deps.gateway.squashMerge(input.pr, input.casHeadSha);
+    const response = await deps.gateway.squashMerge(
+      input.pr,
+      input.casHeadSha,
+      controlledCommitTitle(input.pr),
+      controlledCommitMessage(input.auditedHeadSha),
+    );
     if (!response.merged || response.mergeCommitSha === null) {
       return await denied(deps, ["merge response did not confirm a merge commit"]);
     }
@@ -206,17 +263,87 @@ export async function authorizeAndSquashMerge(
       verified.mergeCommitSha !== response.mergeCommitSha
     )
       return await denied(deps, ["post-merge read did not confirm PR state, head, and merge commit"]);
+
+    const anomalyReasons: string[] = [];
+    let observedClosedIssues: readonly number[] | null = null;
+    const reopenedIssues: number[] = [];
+    let auditedIssueClosed = false;
+    const [closureRead, raceRead] = await Promise.allSettled([
+      deps.gateway.readIssueClosureReconciliation(input.pr, input.auditedIssueNumber, response.mergeCommitSha),
+      deps.gateway.readFresh(input),
+    ]);
+    if (closureRead.status === "rejected") {
+      anomalyReasons.push(`issue-closure reconciliation read failed: ${String(closureRead.reason)}`);
+    } else {
+      observedClosedIssues = [...new Set(closureRead.value.closedByPullRequest)].sort((left, right) => left - right);
+      const wrongIssues = observedClosedIssues.filter((issue) => issue !== input.auditedIssueNumber);
+      const closureSetIsExact =
+        observedClosedIssues.length === 1 && observedClosedIssues[0] === input.auditedIssueNumber;
+      if (!closureSetIsExact) {
+        anomalyReasons.push(
+          `GitHub closed issues [${observedClosedIssues.join(", ")}] instead of audited issue #${input.auditedIssueNumber}`,
+        );
+      }
+      for (const issue of wrongIssues) {
+        try {
+          await deps.gateway.reopenWronglyClosedIssue(input.pr, issue);
+          reopenedIssues.push(issue);
+        } catch (error) {
+          anomalyReasons.push(`failed to reopen wrongly-closed issue #${issue}: ${(error as Error).message}`);
+        }
+      }
+      if (closureRead.value.auditedIssueState === "CLOSED") auditedIssueClosed = true;
+      else {
+        anomalyReasons.push(`audited issue #${input.auditedIssueNumber} was not closed by the merge`);
+        try {
+          await deps.gateway.ensureAuditedIssueClosed(input.pr, input.auditedIssueNumber);
+          auditedIssueClosed = true;
+        } catch (error) {
+          anomalyReasons.push(
+            `failed to close audited issue #${input.auditedIssueNumber}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
+    if (raceRead.status === "rejected") {
+      anomalyReasons.push(`post-merge review/check read failed: ${String(raceRead.reason)}`);
+    } else anomalyReasons.push(...postMergeRaceReasons(raceRead.value, input));
+
+    if (anomalyReasons.length > 0) {
+      const anomaly: MergeSecurityAnomaly = {
+        pr: input.pr,
+        headSha: input.auditedHeadSha,
+        mergeCommitSha: response.mergeCommitSha,
+        auditedIssueNumber: input.auditedIssueNumber,
+        observedClosedIssues,
+        reopenedIssues,
+        auditedIssueClosed,
+        reasons: anomalyReasons,
+      };
+      try {
+        await deps.recorder.recordSecurityAnomaly(anomaly);
+      } catch (error) {
+        anomalyReasons.push(`SECURITY ANOMALY recording failed: ${(error as Error).message}`);
+      }
+    }
     try {
       await deps.afterVerifiedMerge?.(response.mergeCommitSha);
     } catch (error) {
       return {
         merged: true,
         verified: true,
+        anomalous: anomalyReasons.length > 0,
         mergeCommitSha: response.mergeCommitSha,
-        reasons: [`post-merge action requires retry: ${(error as Error).message}`],
+        reasons: [...anomalyReasons, `post-merge action requires retry: ${(error as Error).message}`],
       };
     }
-    return { merged: true, verified: true, mergeCommitSha: response.mergeCommitSha, reasons: [] };
+    return {
+      merged: true,
+      verified: true,
+      anomalous: anomalyReasons.length > 0,
+      mergeCommitSha: response.mergeCommitSha,
+      reasons: anomalyReasons,
+    };
   } catch (error) {
     return await denied(deps, [`authorization unconfirmable: ${(error as Error).message}`]);
   }

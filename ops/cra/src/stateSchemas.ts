@@ -57,6 +57,7 @@ export const eventSchema = z.strictObject({
     "finding",
     "merge_authorization",
     "merge_denial",
+    "security_anomaly",
     "issue_routing",
     "abandonment",
     "cleanup",

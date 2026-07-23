@@ -4,11 +4,13 @@ import { auditReportSchema, type FindingSeverity } from "./auditReport.js";
 import type { AuditArtifactStore } from "./artifactStore.js";
 import type { CraConfig } from "./config.js";
 import { githubTokenEnvironment } from "./githubApp.js";
+import { GithubIssueReconciler } from "./githubIssueReconciliation.js";
 import type {
   MergeAuthorizationInput,
   MergeAuthorizationSnapshot,
   MergeAuthorityGateway,
   MergeCallResult,
+  IssueClosureReconciliation,
   MergedPullRequest,
 } from "./mergeAuthority.js";
 import { execute, executeChecked, type CommandExecutor } from "./process.js";
@@ -36,6 +38,20 @@ const prSchema = z.object({
       z.object({
         number: z.number().int().positive(),
         state: z.string(),
+        timelineItems: z.object({
+          nodes: z.array(
+            z.object({
+              closer: z
+                .object({
+                  __typename: z.string(),
+                  number: z.number().int().positive().optional(),
+                  oid: z.string().optional(),
+                })
+                .nullable(),
+            }),
+          ),
+          pageInfo: pageInfoSchema,
+        }),
         blockedBy: z.object({
           nodes: z.array(z.object({ number: z.number().int().positive(), state: z.string() })),
           pageInfo: pageInfoSchema,
@@ -75,7 +91,22 @@ const SNAPSHOT_QUERY = `query CraMerge($owner:String!,$name:String!,$pr:Int!) {
       number state isDraft title body updatedAt baseRefName baseRefOid headRefOid mergeStateStatus mergeable
       commits(last:1) { totalCount nodes { commit { oid } } pageInfo { hasNextPage } }
       closingIssuesReferences(first:20) {
-        nodes { number state blockedBy(first:50) { nodes { number state } pageInfo { hasNextPage } } }
+        nodes {
+          number state
+          timelineItems(first:100,itemTypes:[CLOSED_EVENT]) {
+            nodes {
+              ... on ClosedEvent {
+                closer {
+                  __typename
+                  ... on PullRequest { number }
+                  ... on Commit { oid }
+                }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+          blockedBy(first:50) { nodes { number state } pageInfo { hasNextPage } }
+        }
         pageInfo { hasNextPage }
       }
       reviews(last:100) {
@@ -111,6 +142,7 @@ function triagedSeverity(finding: z.infer<typeof auditReportSchema>["findings"][
 export class GithubMergeGateway implements MergeAuthorityGateway {
   private readonly owner: string;
   private readonly name: string;
+  private readonly issueReconciler: GithubIssueReconciler;
 
   public constructor(
     private readonly config: CraConfig,
@@ -121,6 +153,11 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
     private readonly executor: CommandExecutor = execute,
   ) {
     [this.owner, this.name] = config.repository.split("/") as [string, string];
+    this.issueReconciler = new GithubIssueReconciler(
+      config.repository,
+      config.github.expectedLogin,
+      async (args, input) => await this.gh(args, input),
+    );
   }
 
   public async readFresh(input: MergeAuthorizationInput): Promise<MergeAuthorizationSnapshot> {
@@ -234,19 +271,28 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
     };
   }
 
-  public async squashMerge(pr: number, expectedHeadSha: string): Promise<MergeCallResult> {
-    const response = z
-      .object({ merged: z.boolean(), sha: z.string().nullable() })
-      .parse(
-        JSON.parse(
-          (
-            await this.gh(
-              ["api", "--method", "PUT", `/repos/${this.owner}/${this.name}/pulls/${pr}/merge`, "--input", "-"],
-              JSON.stringify({ merge_method: "squash", sha: expectedHeadSha }),
-            )
-          ).stdout,
-        ),
-      );
+  public async squashMerge(
+    pr: number,
+    expectedHeadSha: string,
+    commitTitle: string,
+    commitMessage: string,
+  ): Promise<MergeCallResult> {
+    this.lease.assertHeld();
+    const response = z.object({ merged: z.boolean(), sha: z.string().nullable() }).parse(
+      JSON.parse(
+        (
+          await this.gh(
+            ["api", "--method", "PUT", `/repos/${this.owner}/${this.name}/pulls/${pr}/merge`, "--input", "-"],
+            JSON.stringify({
+              merge_method: "squash",
+              sha: expectedHeadSha,
+              commit_title: commitTitle,
+              commit_message: commitMessage,
+            }),
+          )
+        ).stdout,
+      ),
+    );
     return { merged: response.merged, mergeCommitSha: response.sha };
   }
 
@@ -264,6 +310,47 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
       return { state: response.state.toUpperCase(), headSha: response.head.sha, mergeCommitSha: null };
     }
     return { state: "MERGED", headSha: response.head.sha, mergeCommitSha: response.merge_commit_sha };
+  }
+
+  public async readIssueClosureReconciliation(
+    pr: number,
+    auditedIssue: number,
+    mergeCommitSha: string,
+  ): Promise<IssueClosureReconciliation> {
+    this.lease.assertHeld();
+    const [graph, auditedIssueState] = await Promise.all([
+      this.graph(pr),
+      this.issueReconciler.readState(auditedIssue),
+    ]);
+    if (graph.errors !== undefined && graph.errors.length > 0) throw new Error("GitHub GraphQL returned errors");
+    const pullRequest = graph.data.repository.pullRequest;
+    if (pullRequest === null) throw new Error(`PR #${pr} is missing during issue reconciliation`);
+    this.assertComplete(pullRequest);
+    const closedByPullRequest = pullRequest.closingIssuesReferences.nodes
+      .filter(
+        (issue) =>
+          issue.state.toUpperCase() === "CLOSED" &&
+          issue.timelineItems.nodes.some(
+            (event) =>
+              (event.closer?.["__typename"] === "PullRequest" && event.closer.number === pr) ||
+              (event.closer?.["__typename"] === "Commit" && event.closer.oid === mergeCommitSha),
+          ),
+      )
+      .map((issue) => issue.number);
+    return {
+      closedByPullRequest,
+      auditedIssueState,
+    };
+  }
+
+  public async reopenWronglyClosedIssue(pr: number, issue: number): Promise<void> {
+    this.lease.assertHeld();
+    await this.issueReconciler.reopenWronglyClosed(pr, issue);
+  }
+
+  public async ensureAuditedIssueClosed(_pr: number, issue: number): Promise<void> {
+    this.lease.assertHeld();
+    await this.issueReconciler.ensureClosed(issue);
   }
 
   private async graph(pr: number): Promise<z.infer<typeof graphSchema>> {
@@ -292,6 +379,7 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
       pr.commits.pageInfo.hasNextPage ||
       pr.closingIssuesReferences.pageInfo.hasNextPage ||
       pr.reviews.pageInfo.hasNextPage ||
+      pr.closingIssuesReferences.nodes.some((issue) => issue.timelineItems.pageInfo.hasNextPage) ||
       pr.closingIssuesReferences.nodes.some((issue) => issue.blockedBy.pageInfo.hasNextPage)
     )
       throw new Error("authorization snapshot pagination was incomplete");
