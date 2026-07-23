@@ -19,6 +19,7 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
+import { readDraftBranchLease } from "./githubDraftPrLease.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -231,6 +232,10 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
+    // Read the forge ref immediately before every write. A present branch is a
+    // re-publication and must be CAS-guarded; an absent branch gets the explicit
+    // "must still be absent" lease. There is no blind-force path here.
+    const forceWithLease = await readDraftBranchLease(http, repo, branch, resolved.token, resolved.refresh);
     await pushWorkspaceBranchToGitHub({
       ssh: input.ssh,
       target: input.target,
@@ -239,6 +244,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       branch,
       token: resolved.token,
       sourceRef: input.sourceRef,
+      forceWithLease,
     });
     await eventStore.append({
       ...context,

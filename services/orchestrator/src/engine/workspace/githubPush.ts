@@ -31,6 +31,8 @@ export interface GitHubWorkspacePushInput {
    * changes (no lockfile / node_modules).
    */
   sourceRef?: string;
+  /** A forge-read compare-and-swap guard for a re-publication. */
+  forceWithLease?: { expectedSha: string } | { expectedAbsent: true };
 }
 
 // The local ref the cleaned PR commits are staged onto before the push. Kept
@@ -328,7 +330,12 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
       cls: "vcs",
       workspace: input.workspacePath,
     }),
-    command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
+    command: buildGitHubPushCommand({
+      repoUrl: input.repoUrl,
+      branch: input.branch,
+      sourceRef: input.sourceRef,
+      ...(input.forceWithLease !== undefined && { forceWithLease: input.forceWithLease }),
+    }),
     stdin: input.token,
   });
 }
@@ -432,6 +439,11 @@ export function forceWithLeaseArg(branch: string, expectedSha: string): string {
   return `--force-with-lease=refs/heads/${validBranch}:${expectedSha}`;
 }
 
+/** A first write is safe only when a forge read positively proved the branch absent. */
+export function forceWithLeaseAbsentArg(branch: string): string {
+  return `--force-with-lease=refs/heads/${validateGitBranchName(branch)}:`;
+}
+
 export function buildGitHubPushCommand(input: {
   repoUrl: string;
   branch: string;
@@ -443,7 +455,7 @@ export function buildGitHubPushCommand(input: {
    * branch Tanren is the sole writer of (no concurrent-write hazard) so a lease would only add a
    * spurious first-push rejection.
    */
-  forceWithLease?: { expectedSha: string };
+  forceWithLease?: { expectedSha: string } | { expectedAbsent: true };
 }): string {
   const branch = validateGitBranchName(input.branch);
   const sourceRef = validatePushSourceRef(input.sourceRef);
@@ -451,7 +463,11 @@ export function buildGitHubPushCommand(input: {
   const forceArg =
     input.forceWithLease === undefined
       ? "--force"
-      : quoteSshShellArg(forceWithLeaseArg(branch, input.forceWithLease.expectedSha));
+      : quoteSshShellArg(
+          "expectedSha" in input.forceWithLease
+            ? forceWithLeaseArg(branch, input.forceWithLease.expectedSha)
+            : forceWithLeaseAbsentArg(branch),
+        );
 
   return [
     "set -eu",

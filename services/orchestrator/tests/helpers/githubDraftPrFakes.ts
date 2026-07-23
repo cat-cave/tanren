@@ -9,9 +9,11 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 export class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
+  constructor(private readonly result: Partial<CommandResult> = {}) {}
+
   async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...this.result };
   }
 }
 
@@ -22,12 +24,26 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.requests.push({ ...input, token: "<redacted>" });
+    // Most draft-PR tests do not care about the publication lease. Treat an
+    // un-scripted ref lookup as a proven-absent first write without consuming
+    // their PR-operation script; lease-focused tests script the SHA response.
+    if (input.path.includes("/git/ref/heads/") && !hasRefSha(this.responses[0])) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
     }
     return response;
   }
+}
+
+function hasRefSha(response: GitHubHttpResponse | undefined): boolean {
+  return (
+    typeof response?.body === "object" &&
+    response.body !== null &&
+    typeof (response.body as { object?: { sha?: unknown } }).object?.sha === "string"
+  );
 }
 
 export class RecordingPool {
