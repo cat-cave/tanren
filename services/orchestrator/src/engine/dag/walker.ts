@@ -1,22 +1,16 @@
-// The production DagWalker (autonomy-engine.md §1a keystone + §2c speculative
-// execution). A per-project background SCHEDULER over the EXISTING run executor
-// (it mirrors how the BenchmarkRunner schedules trials — it does NOT execute runs
-// itself). Each tick it loads the spec DAG + the per-spec LIFECYCLE PROJECTION
-// under RLS, plans the tick with the pure `planSpeculativeDagTick` core (readiness
-// = all deps crossed the configured SPECULATION THRESHOLD, not just merged), and
-// for each ready spec RESOLVES its ordered unmerged-ancestor stack (when it has
-// unmerged ancestors) and enqueues it carrying that `ancestor_stack` through the SAME
-// createQueuedRunFromSpec path a manual operator trigger uses. The dependent run's own
-// runner later jj-ASSEMBLES its base LOCALLY from those real ancestor PR-head refs (the
-// bootstrap, `plannerRunJjLocalBootstrap.ts`) — there is NO orchestrator-synthesized
-// `tanren/integ` host ref. The parallel run-executor worker then runs them.
+// The production DagWalker (autonomy-engine.md §1a keystone + §2c speculative execution). A per-project background
+// SCHEDULER over the EXISTING run executor (it mirrors how the BenchmarkRunner schedules trials — it does NOT execute
+// runs itself). Each tick it loads the spec DAG + the per-spec LIFECYCLE PROJECTION under RLS, plans the tick with the
+// pure `planSpeculativeDagTick` core (readiness = all deps crossed the configured SPECULATION THRESHOLD, not just
+// merged), and for each ready spec RESOLVES its ordered unmerged-ancestor stack (when it has unmerged ancestors) and
+// enqueues it carrying that `ancestor_stack` through the SAME createQueuedRunFromSpec path a manual operator trigger
+// uses. The dependent run's own runner later jj-ASSEMBLES its base LOCALLY from those real ancestor PR-head refs (the
+// bootstrap, `plannerRunJjLocalBootstrap.ts`) — there is NO orchestrator-synthesized `tanren/integ` host ref. The
+// parallel run-executor worker then runs them.
 //
-// The pg seam wirings (read model + lifecycle projection + enqueuer + event
-// emitter + the org-scoped ancestor-stack resolver) live in `walkerPg.ts`. The
-// LISTEN/NOTIFY
-// subscriber that runs the walker on startup + on every run.*-terminal /
-// merge.completed notification (incl. ancestor-merge → dependent re-gate) lives in
-// `subscriber.ts`.
+// The pg seam wirings (read model + lifecycle projection + enqueuer + event emitter + the org-scoped ancestor-stack
+// resolver) live in `walkerPg.ts`. The LISTEN/NOTIFY subscriber that runs the walker on startup + on every
+// run.*-terminal / merge.completed notification (incl. ancestor-merge → dependent re-gate) lives in `subscriber.ts`.
 
 import { getSystemPool, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -38,7 +32,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
-import { decideAncestorWait } from "./ancestorWaitGate.js";
+import { decideAncestorWait, pruneAncestorWaitBackoff } from "./ancestorWaitGate.js";
 import { pauseDagOnBudget } from "./budgetPause.js";
 import { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
 import { ancestorLifecycleKey, HeldReDriveBackoff } from "./heldReDriveBackoff.js";
@@ -135,6 +129,10 @@ export class EventEmittingDagWalker implements DagWalker {
       this.deps.speculationConfig(projectId),
       this.deps.budgetGate.resolveBudget(projectId),
     ]);
+
+    // Bounded backoff map (issue #1072 F1): before any early return, free this project's
+    // ancestor-wait entries for specs no longer in-play (DAG-phase terminal; see the helper).
+    pruneAncestorWaitBackoff(this.ancestorWaitBackoff, projectId, snapshot);
 
     // Exact lifecycle gate: only a fully activated project may enter planning.
     if (snapshot.projectLifecycle !== "active") {
@@ -288,17 +286,14 @@ export class EventEmittingDagWalker implements DagWalker {
   }
 
   /**
-   * Enqueue one planned spec. A NON-speculative spec (all deps merged) enqueues
-   * against `default_branch` and emits dag.spec.enqueued. A SPECULATIVE spec RESOLVES
-   * its ordered unmerged-ancestor stack (the real PR-head branches), persists it as
-   * `ancestor_stack`, and emits dag.spec.speculative. NO host integration ref is built
-   * — the dependent run jj-assembles its base LOCALLY at bootstrap from those refs (a
-   * spec-vs-spec conflict surfaces there, §4a, not here).
+   * Enqueue one planned spec. A NON-speculative spec (all deps merged) enqueues against `default_branch` and emits
+   * dag.spec.enqueued. A SPECULATIVE spec RESOLVES its ordered unmerged-ancestor stack (the real PR-head branches),
+   * persists it as `ancestor_stack`, and emits dag.spec.speculative. NO host integration ref is built — the dependent
+   * run jj-assembles its base LOCALLY at bootstrap from those refs (a spec-vs-spec conflict surfaces there, §4a).
    *
-   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35 + v45): a speculative attempt is GATED by
-   * `decideAncestorWait` (per-spec backoff + ancestor-progress check + cheap pre-check) BEFORE
-   * the expensive provisioning — see `ancestorWaitGate.ts`. `skip` is silent; `defer` emits the
-   * benign `dag.spec.ancestor_not_ready` (no provisioning); `proceed` enqueues + arms the gate.
+   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35 + v45): a speculative attempt is GATED by `decideAncestorWait` (per-spec
+   * backoff + ancestor-progress check + cheap pre-check) BEFORE the expensive provisioning — see `ancestorWaitGate.ts`.
+   * `skip` is silent; `defer` emits the benign `dag.spec.ancestor_not_ready` (no provisioning); `proceed` enqueues.
    */
   private async enqueueOne(
     projectId: string,
@@ -324,7 +319,13 @@ export class EventEmittingDagWalker implements DagWalker {
     }
 
     // ANCESTOR-NOT-READY GATE: decide skip/defer/proceed against the backoff + cheap pre-check.
-    const decision = decideAncestorWait(this.ancestorWaitBackoff, enqueue.specId, enqueue.unmergedAncestors, lifecycle);
+    const decision = decideAncestorWait(
+      this.ancestorWaitBackoff,
+      projectId,
+      enqueue.specId,
+      enqueue.unmergedAncestors,
+      lifecycle,
+    );
     if (decision.kind === "skip") {
       log.debug("speculative dependent inside its re-drive backoff window — skipping (spaced)", {
         projectId,
@@ -370,10 +371,10 @@ export class EventEmittingDagWalker implements DagWalker {
     // ARM BACKOFF + ANCESTOR KEY: a re-driven speculative spec is gated on BOTH the time window
     // AND ancestor progress — the next walk only re-proceeds when the ancestor's lifecycle changes
     // (ancestor advanced). See `ancestorWaitGate.ts` (apex v35 + v45 hot-loop fix).
-    this.ancestorWaitBackoff.recordHeld(
-      enqueue.specId,
-      ancestorLifecycleKey(enqueue.unmergedAncestors, lifecycle.bySpecId),
-    );
+    this.ancestorWaitBackoff.recordHeld(enqueue.specId, {
+      ancestorStateKey: ancestorLifecycleKey(enqueue.unmergedAncestors, lifecycle.bySpecId),
+      projectId,
+    });
     await this.deps.events.emitSpecSpeculative({
       projectId,
       specId: enqueue.specId,

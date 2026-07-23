@@ -49,6 +49,15 @@ interface HeldEntry {
    * OR the time window elapses AND the key changes. Set on `recordHeld` and cleared on `clear`.
    */
   ancestorStateKey: string | undefined;
+  /**
+   * The project this spec belongs to — recorded so `retainForProject` can evict a project's
+   * dead entries WITHOUT touching another project's live ones (the walker's backoff instance is
+   * a long-lived singleton shared across every project it walks; spec ids are globally unique but
+   * eviction is per-project because a walk only ever sees ONE project's live spec set). Undefined
+   * for callers that do not project-scope (the separate percolation `heldBackoff`, which clears
+   * its own entries and is never pruned by `retainForProject`).
+   */
+  projectId: string | undefined;
 }
 
 /**
@@ -105,14 +114,18 @@ export class HeldReDriveBackoff {
    * → 60s, clamped), and record the ancestor state key so the ancestor-progress gate can
    * detect when the ancestor advances. Returns the chosen delay (for logging/observability).
    */
-  recordHeld(specId: string, ancestorStateKey?: string): { holds: number; delayMs: number } {
+  recordHeld(
+    specId: string,
+    opts?: { ancestorStateKey?: string; projectId?: string },
+  ): { holds: number; delayMs: number } {
     const prior = this.entries.get(specId);
     const holds = (prior?.holds ?? 0) + 1;
     const delayMs = recoverableRetryDelayMs(holds);
     this.entries.set(specId, {
       holds,
       nextEligibleAtMs: this.now() + delayMs,
-      ancestorStateKey: ancestorStateKey ?? prior?.ancestorStateKey,
+      ancestorStateKey: opts?.ancestorStateKey ?? prior?.ancestorStateKey,
+      projectId: opts?.projectId ?? prior?.projectId,
     });
     return { holds, delayMs };
   }
@@ -123,7 +136,7 @@ export class HeldReDriveBackoff {
    * FROM NOW (not from the original enqueue time), so the dependent stays suppressed until
    * the ancestor actually advances or the new window elapses.
    */
-  rearmWindow(specId: string, ancestorStateKey: string): void {
+  rearmWindow(specId: string, ancestorStateKey: string, projectId?: string): void {
     const prior = this.entries.get(specId);
     const holds = prior?.holds ?? 1;
     const delayMs = recoverableRetryDelayMs(holds);
@@ -131,6 +144,7 @@ export class HeldReDriveBackoff {
       holds,
       nextEligibleAtMs: this.now() + delayMs,
       ancestorStateKey,
+      projectId: projectId ?? prior?.projectId,
     });
   }
 
@@ -141,6 +155,36 @@ export class HeldReDriveBackoff {
    */
   clear(specId: string): void {
     this.entries.delete(specId);
+  }
+
+  /**
+   * BOUNDED-MAP EVICTION (leak fix, issue #1072 F1). Drop every entry that belongs to
+   * `projectId` whose spec is NOT in `liveSpecIds` — the set of the project's specs that
+   * still need spacing (per the caller: specs present in the fresh lifecycle projection and
+   * not yet terminal). A spec that MERGED / BLOCKED / was DELETED, or a project that went
+   * non-active (empty live set), frees its entry, so the map is bounded by live in-flight
+   * speculation, never by the cumulative count of specs the long-lived worker ever drove.
+   *
+   * Eviction is LIFECYCLE-driven, never wall-clock: entries leave only when their spec's
+   * lifecycle says the spec no longer speculates (progress-based, timeout-eradication safe).
+   * Only THIS project's entries are considered — another project's live entries (or the
+   * percolation instance's project-less entries) are untouched. Returns the count evicted
+   * (for observability logging).
+   */
+  retainForProject(projectId: string, liveSpecIds: ReadonlySet<string>): number {
+    let evicted = 0;
+    for (const [specId, entry] of this.entries) {
+      if (entry.projectId === projectId && !liveSpecIds.has(specId)) {
+        this.entries.delete(specId);
+        evicted += 1;
+      }
+    }
+    return evicted;
+  }
+
+  /** The number of tracked entries — the live bound (used by observability + tests). */
+  size(): number {
+    return this.entries.size;
   }
 }
 
