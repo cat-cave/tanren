@@ -159,24 +159,34 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
     await seedBehavior(ownerPool, BEHAVIOR_A, "persona_rv4_production_a", "a");
     await seedBehavior(ownerPool, BEHAVIOR_B, "persona_rv4_production_b", "b");
     // gv-17: dual-written members require same-org spec/run FKs.
+    // Deduplicate by runId (nodeInput reuses run_rv4 across heads).
     const seedMembers = [
       nodeInput(BASE_SHA, HEAD_SHA, TREE_HASH, MEMBER_SHA).members[0]!,
-      nodeInput("8".repeat(40), "9".repeat(40), "c".repeat(40), "d".repeat(40)).members[0]!,
+      {
+        ...nodeInput("8".repeat(40), "9".repeat(40), "c".repeat(40), "d".repeat(40)).members[0]!,
+        runId: "run_rv4_concurrent",
+      },
       { specId: "spec_rv4_batch", runId: "run_rv4_batch", branch: "rv4-batch", headSha: "8".repeat(40) },
     ];
+    const seenSpecs = new Set<string>();
+    const seenRuns = new Set<string>();
     for (const member of seedMembers) {
-      await ownerPool.query(
-        `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-         VALUES ($1, $2, $3, $1, $1, 'in_flight')
-        `,
-        [member.specId, PROJECT, ORG],
-      );
-      await ownerPool.query(
-        `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-         VALUES ($1, $2, $3, $4, 'cli', $5, 'running')
-        `,
-        [member.runId, member.specId, PROJECT, ORG, member.branch],
-      );
+      if (!seenSpecs.has(member.specId)) {
+        seenSpecs.add(member.specId);
+        await ownerPool.query(
+          `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+           VALUES ($1, $2, $3, $1, $1, 'in_flight')`,
+          [member.specId, PROJECT, ORG],
+        );
+      }
+      if (!seenRuns.has(member.runId)) {
+        seenRuns.add(member.runId);
+        await ownerPool.query(
+          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+           VALUES ($1, $2, $3, $4, 'cli', $5, 'running')`,
+          [member.runId, member.specId, PROJECT, ORG, member.branch],
+        );
+      }
     }
     await runWithOrgScope(appPool, ORG, async (client) => {
       await BehaviorCoverageEdgesStore.record(
