@@ -1,4 +1,4 @@
-// rv-26.6 (apex P6) — the in-process Playwright runner's fail-loud contract. A real
+// rv-26.6 — the in-process Playwright runner's fail-loud contract. A real
 // browser is NOT required to prove the invariant that matters: an invalid request, a
 // browser that cannot launch, or a page that cannot be reached ALL return `{ ok: false }`
 // — never a fabricated observation. (A full 100-real-click proof runs in the env-gated

@@ -9,7 +9,7 @@
 // passed subtask + writer diff redone). A stall is NON-deterministic — the next identical
 // call almost always succeeds — so throwing away a whole spec loop's legitimate progress on
 // one is a robustness defect (and, with the watchdog now SURFACING stalls on long answerer
-// calls, a likely apex halt family). The WRITER path already has this in-loop recovery
+// calls, a likely autonomous-run halt family). The WRITER path already has this in-loop recovery
 // (subtaskInnerLoop.ts); the AUDITOR already recovers a *schema* miss (auditorStage.ts).
 //
 // THE FIX: `runAnswererStageWithRecovery` wraps a stage's single answerer invocation in the

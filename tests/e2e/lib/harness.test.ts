@@ -53,20 +53,20 @@ describe("e2e manifest", () => {
         "issue-ingest-to-merged-spec",
       ]),
     );
-    // apex is no longer planned: it is a HERMETIC regression-pin (audit §6.8), driven
-    // in-process by services/orchestrator/tests/apexE2eDriver.ts.
-    expect(planned.map((item) => item.id)).not.toContain("apex");
+    // The runtime behavior is no longer planned: it is a hermetic regression pin (audit §6.8), driven
+    // in-process by services/orchestrator/tests/runtimeBehaviorE2eDriver.ts.
+    expect(planned.map((item) => item.id)).not.toContain("runtime-behavior");
   });
 
-  it("registers apex as a HERMETIC case (no longer planned; not a live tier proof)", () => {
-    const apex = caseById("apex");
-    expect(apex?.status).toBe("hermetic");
+  it("registers runtime behavior as a hermetic case (no longer planned; not a live tier proof)", () => {
+    const runtimeBehavior = caseById("runtime-behavior");
+    expect(runtimeBehavior?.status).toBe("hermetic");
     // A hermetic case carries no acceptance tier (it is in-process, not fixture-driven)
     // and is NOT one of the live active cases the credentialed gate runs.
-    expect(apex?.tier).toBeUndefined();
-    expect(activeCases().map((item) => item.id)).not.toContain("apex");
+    expect(runtimeBehavior?.tier).toBeUndefined();
+    expect(activeCases().map((item) => item.id)).not.toContain("runtime-behavior");
     // It still declares a real proof surface (merged PRs + DORA + cost rows).
-    expect(apex?.artifacts.map((a) => a.kind)).toEqual(
+    expect(runtimeBehavior?.artifacts.map((a) => a.kind)).toEqual(
       expect.arrayContaining(["merged_pr", "dora_projection", "cost_records"]),
     );
   });
@@ -94,7 +94,7 @@ describe("e2e manifest", () => {
   });
 
   it("looks a case up by id", () => {
-    expect(caseById("apex")?.capability).toContain("apex");
+    expect(caseById("runtime-behavior")?.capability).toContain("runtime behavior");
     expect(caseById("does-not-exist")).toBeUndefined();
   });
 });

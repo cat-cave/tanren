@@ -1,6 +1,6 @@
 // Lenient governance posture → advisory gate steps.
 //
-// The apex doctrine (docs/operator-guide/apex.md: functional-but-weak — broken
+// The functional-but-weak autonomous-run posture: broken
 // code lands and improves over iterations; the strict gate must not permanently
 // stall an autonomous build) needs a posture where the FIRST-PASS quality tier
 // does not hard-block the loop. Under the `lenient` posture, the cheap

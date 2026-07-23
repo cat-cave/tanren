@@ -8,7 +8,7 @@
 **Latest landed migration on main**: `0042_event_vocabulary_w0.sql`
 **Cards**: [`nodes/cards/ev-sub-w0.md`](./nodes/cards/ev-sub-w0.md) ·
 [`nodes/cards/spec-freeze-w1-a.md`](./nodes/cards/spec-freeze-w1-a.md)
-**Node credit**: freeze = 0 · EV-SUB = 0 · consumer emit+apex = node credit
+**Node credit**: freeze = 0 · EV-SUB = 0 · consumer emit + normal-flow live validation = node credit
 
 **Mission entrypoint:** this authority, its linked W1-A detail, and the linked
 ownership cards are the complete W0 and W1-A named-event handoff; source refs
@@ -27,9 +27,9 @@ generics, not silently rename, not hand-seed outside the SP-8 path.
 
 | Unit               | What                                                                                                                                                | Credit                          |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| **SPEC-FREEZE-Wn** | Docs freeze: exact names, severity, minimal strict payload fields, sensitivity, apex correlation, collision resolution                              | **0**                           |
+| **SPEC-FREEZE-Wn** | Docs freeze: exact names, severity, minimal strict payload fields, sensitivity, runtime-behavior correlation, collision resolution                  | **0**                           |
 | **EV-SUB-Wn**      | Thin substrate: Zod in sole `EventRegistry` path + `eventDefaultSeverity` + sensitivity + `codegen:events` + one additive `INSERT INTO event_types` | **0**                           |
-| **Consumer emit**  | Production `PgEventStore` append of the frozen name + HTTP/UI + apex correlation                                                                    | **node** when principle 8 holds |
+| **Consumer emit**  | Production `PgEventStore` append of the frozen name + HTTP/UI + runtime-behavior correlation                                                        | **node** when principle 8 holds |
 
 ### 1.2 Status vocabulary (per row)
 
@@ -71,7 +71,7 @@ PgEventStore.append validates Zod + FK to event_types
 ```
 
 Forbidden: runtime upsert of `event_types`; hand-edit seed without codegen;
-second catalog; generic substitute events for apex proof.
+second catalog; generic substitute events for general live-run proof.
 
 ---
 
@@ -96,13 +96,13 @@ earn **zero** node credit.
 
 ## 3. Deferred / non-synonymous alternatives (not W0 collisions)
 
-| Name / family                                                                                                                                                   | Relation                                                                                                                                       | Status                               |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `integration.requirement.derived`                                                                                                                               | Future **compiler** fact (requirement derived from behaviors/specs). **Not** a synonym of `validated` (HTTP validate-success proof).           | `deferred` (later integrations wave) |
-| `integration.requirement.superseded`                                                                                                                            | Lifecycle successor of a derived requirement.                                                                                                  | `deferred`                           |
-| `review.simulated.started`                                                                                                                                      | Later **execution** fact when simulated publication I/O begins. Distinct from durable intent `review.simulated_intent`.                        | `deferred`                           |
-| `review.simulated.verdict`                                                                                                                                      | Later **execution** terminal simulated verdict fact. Distinct from intent and from forge-bound `review.approved` / `review.changes_requested`. | `deferred`                           |
-| Remaining bucket apex chains (runtime behavior.\*, integrations lifecycle beyond W1-A, mq group/subset, back-half, governance F1–F5 remainder, designSystem.\*) | Incomplete / under-specified for one dump                                                                                                      | `deferred` (W1+)                     |
+| Name / family                                                                                                                                                              | Relation                                                                                                                                       | Status                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `integration.requirement.derived`                                                                                                                                          | Future **compiler** fact (requirement derived from behaviors/specs). **Not** a synonym of `validated` (HTTP validate-success proof).           | `deferred` (later integrations wave) |
+| `integration.requirement.superseded`                                                                                                                                       | Lifecycle successor of a derived requirement.                                                                                                  | `deferred`                           |
+| `review.simulated.started`                                                                                                                                                 | Later **execution** fact when simulated publication I/O begins. Distinct from durable intent `review.simulated_intent`.                        | `deferred`                           |
+| `review.simulated.verdict`                                                                                                                                                 | Later **execution** terminal simulated verdict fact. Distinct from intent and from forge-bound `review.approved` / `review.changes_requested`. | `deferred`                           |
+| Remaining bucket live-validation chains (runtime behavior.\*, integrations lifecycle beyond W1-A, mq group/subset, back-half, governance F1–F5 remainder, designSystem.\*) | Incomplete / under-specified for one dump                                                                                                      | `deferred` (W1+)                     |
 
 These are **explicitly not** `blocked_collision` against W0 winners.
 
@@ -121,7 +121,7 @@ These are **explicitly not** `blocked_collision` against W0 winners.
 | **defaultSeverity** | `info`                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **semantic fact**   | A caller-supplied `IntegrationRequirementV1` passed strict semantic validation on the **persisting validate-HTTP path**, its canonical bytes were stored by CAS, and that artifact was successfully reread before append. Append only after the reread confirms the stored artifact identity. This is not compiler derivation. Never append for `persist:false`, overview/dry-run/check-only, failed CAS put, failed or mismatched CAS reread, or parse-only validation. |
 | **payload fields**  | See the complete strict schema below.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **apexCorrelation** | `missionNodeId === "in-2"` ∧ `requirementDigest` ∧ all `artifact.*` fields match the persisting validate response and the reread CAS artifact.                                                                                                                                                                                                                                                                                                                           |
+| **runCorrelation**  | `missionNodeId === "in-2"` ∧ `requirementDigest` ∧ all `artifact.*` fields match the persisting validate response and the reread CAS artifact.                                                                                                                                                                                                                                                                                                                           |
 | **sources**         | Card `mission/in-2-integration-requirement-contracts:nodes/cards/in-2.md`; `integrationRequirement.ts` and validate route `routes/integrationContracts/index.ts` @ `b5edc57318245d778a52e3f63cb8e4a579a7da2b`; IN-2 convergence report R1–R3; fanout audit §3.4–§6.2.                                                                                                                                                                                                    |
 
 **Payload (top-level and `artifact` objects are strict; envelope owns `orgId`)**
@@ -157,7 +157,7 @@ CAS put and reread before `PgEventStore.append`.
 | **missionNodes**    | `rv-4`                                                                                                                                                                                                                                             |
 | **defaultSeverity** | `info`                                                                                                                                                                                                                                             |
 | **semantic fact**   | Durable, replayable affected-selection proof: which active behavior revisions were selected (or explicitly excluded) for a set of changed targets under fail-closed coverage edges. Org/project live on the event row.                             |
-| **apexCorrelation** | `analysisId` + selected/excluded `behaviorRevisionId` sets + `changedTargets` match the selection run under test                                                                                                                                   |
+| **runCorrelation**  | `analysisId` + selected/excluded `behaviorRevisionId` sets + `changedTargets` match the selection run under test                                                                                                                                   |
 | **sources**         | Card `redrive/rv-4-post943:docs/roadmap/mission-complete/nodes/cards/rv-4.md`; Zod `BehaviorCoverageSelectionAnalyzedPayload`, `affectedSelection.ts`, and `sensitivityRules.runtimeVerification.ts` @ `c601cae77419a1ef16f805f1a5fe7b708c394b6b`. |
 
 **Payload (root and every nested object/reason arm are strict)**
@@ -224,7 +224,7 @@ excluded[].inspectedEdgeIds[]
 | **missionNodes**    | `gv-1`                                                                                                                                                                                                                                                                    |
 | **defaultSeverity** | `info`                                                                                                                                                                                                                                                                    |
 | **semantic fact**   | An actual audit-posture **transition** committed: org-admin governance PUT successfully CAS-wrote a new `auditPosture` and appended this fact in the **same transaction**. No-op posture PUT emits nothing. Payload is non-secret mutation evidence (who + before/after). |
-| **apexCorrelation** | `actorUserId` + `previous`/`current` postures match the CAS transition; event absent on reserved PATCH / stale CAS / authz failure                                                                                                                                        |
+| **runCorrelation**  | `actorUserId` + `previous`/`current` postures match the CAS transition; event absent on reserved PATCH / stale CAS / authz failure                                                                                                                                        |
 | **sources**         | Card `node/gv-1-audit-posture-write-guard:docs/roadmap/mission-complete/nodes/cards/gv-1.md`; Zod `GovernanceAuditPostureUpdatedPayload`, `AuditPostureConfig`, and `sensitivityRules.governance.ts` @ `b8099d6a85f806954192f925a21385fd9fba9922`.                        |
 
 **Payload (strict)**
@@ -251,7 +251,7 @@ excluded[].inspectedEdgeIds[]
 | **missionNodes**    | `gv-2`                                                                                                                                                                                                                                                                                                   |
 | **defaultSeverity** | `info`                                                                                                                                                                                                                                                                                                   |
 | **semantic fact**   | Durable **simulated-publication intent** (first-wins Answerer fence) on exact head **before** forge I/O. Never land authority. Distinct from later execution facts `review.simulated.started` / `review.simulated.verdict` and from terminal forge-bound `review.approved` / `review.changes_requested`. |
-| **apexCorrelation** | `headSha` (40 hex) + coherent `state`/`event`/`marker`/`body` for the intended verdict; land signals must **not** treat this event as approval                                                                                                                                                           |
+| **runCorrelation**  | `headSha` (40 hex) + coherent `state`/`event`/`marker`/`body` for the intended verdict; land signals must **not** treat this event as approval                                                                                                                                                           |
 | **sources**         | Card `node/gv-2-simulated-review-publication:docs/roadmap/mission-complete/nodes/cards/gv-2.md`; Zod `ReviewSimulatedIntentPayload` and `sensitivityRules.review.ts` @ `ef2893f774acd9b778f888f9e2e807150d71f040`.                                                                                       |
 
 **Payload (strict + cross-field cohere)**
@@ -278,7 +278,7 @@ excluded[].inspectedEdgeIds[]
 | **missionNodes**    | `mq-1`                                                                                                                                                                                                                                                                                |
 | **defaultSeverity** | `info`                                                                                                                                                                                                                                                                                |
 | **semantic fact**   | Durable, prose-free authority-signal classification for one evaluation: closed union of `deterministic_policy` \| `transient_infrastructure` \| `needs_product_decision` \| `unknown_fail_closed`, with invariants that make infrastructure/member-blame mislabeling unrepresentable. |
-| **apexCorrelation** | `missionNodeId === "mq-1"` ∧ `evaluationId` ∧ `groupId` ∧ `classification` (+ member/finding sets when policy)                                                                                                                                                                        |
+| **runCorrelation**  | `missionNodeId === "mq-1"` ∧ `evaluationId` ∧ `groupId` ∧ `classification` (+ member/finding sets when policy)                                                                                                                                                                        |
 | **sources**         | Card `redrive/mq1-post928-prep:docs/roadmap/mission-complete/nodes/cards/mq-1.md`; Zod `MergeSignalClassifiedPayload` and `sensitivityRules.mergeQueueAuthoritySignals.ts` @ `336ce4fbee9caf3b02aa9aab37ce77c74a5276f3`.                                                              |
 
 **Payload (strict discriminated union)**
@@ -322,7 +322,7 @@ The complete sensitivity path set for `merge.signal.classified` is
 | **missionNodes**    | `mq-1`                                                                                                                                                                                                                                                   |
 | **defaultSeverity** | `warn`                                                                                                                                                                                                                                                   |
 | **semantic fact**   | Emitted **only** for a validated member-local deterministic-policy block. Proves one or more members were excluded for policy and one or more blocking findings were attributed; never represents infrastructure, product-decision, or unknown evidence. |
-| **apexCorrelation** | `missionNodeId === "mq-1"` ∧ `evaluationId` ∧ `groupId` ∧ `classification === "deterministic_policy"` ∧ the non-empty canonical `memberIds` and `findingIds` match the policy evaluation.                                                                |
+| **runCorrelation**  | `missionNodeId === "mq-1"` ∧ `evaluationId` ∧ `groupId` ∧ `classification === "deterministic_policy"` ∧ the non-empty canonical `memberIds` and `findingIds` match the policy evaluation.                                                                |
 | **sources**         | Card `redrive/mq1-post928-prep:docs/roadmap/mission-complete/nodes/cards/mq-1.md`; Zod `MergeMemberPolicyBlockedPayload` and `sensitivityRules.mergeQueueAuthoritySignals.ts` @ `336ce4fbee9caf3b02aa9aab37ce77c74a5276f3`.                              |
 
 **Payload (complete fixed strict object)**

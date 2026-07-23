@@ -11,8 +11,8 @@ design/strategy note, not a tracker — `ROADMAP.md` holds the live to-do.
 
 ## What apex proves, and the gap it leaves
 
-apex is a **greenfield** fixture: a paragraph of operator notes → a brand-new
-deployed product. It exercises DAG-build, parallel per-PR execution, the native
+The trials so far use one **greenfield apex-class fixture**: a paragraph of operator
+notes → a brand-new deployed product. It exercises DAG-build, parallel per-PR execution, the native
 Action-less gate, the merge queue, conflict handling, budget, and (still to land)
 deploy + the issue/feature/scheduled-audit loops.
 
@@ -27,17 +27,18 @@ Dogfooding is **brownfield change against a large, evolving TypeScript monorepo*
 - **Conflict resolution under real concurrent change** — many in-flight PRs against
   a shared, dense codebase, far past apex's greenfield pressure.
 - **A heavy real gate** — Tanren's own gate is `just ci` (~75 s) + `just smoke`,
-  not apex's trivial fixture CI. The native gate must run the real thing over SSH.
+  not the current example fixture's trivial CI. The native gate must run the real thing over SSH.
 
 ---
 
 ## Bridge tiers (new validation fixtures, in order)
 
-1. **Brownfield-apex.** Point the apex driver at a _pre-existing_ non-trivial repo
-   (a fork of a real OSS project, or a snapshot of this repo) and drive a change —
-   add a feature, fix a planted bug. This is the single highest-value unproven
-   capability and the concrete next experiment after greenfield-apex is green.
-2. **Interactive / UX validation.** apex drives the HTTP API only; the human
+1. **Brownfield apex-class fixture.** Register a _pre-existing_ non-trivial repo
+   (a fork of a real OSS project, or a snapshot of this repo) through the normal
+   operator flow and request a change — add a feature, fix a planted bug. This is
+   the single highest-value unproven capability and the concrete next experiment
+   after the greenfield fixture is green.
+2. **Interactive / UX validation.** The current apex trial is driven through the HTTP API only; the human
    surface — onboarding wizard, ⌘K Forge chat, DAG canvas, review handoff — is only
    validatable _interactively_. The Playwright e2e seam exists but is thin; growing
    it into a real UX lane is its own post-apex track (see "the surface shifts" in
@@ -109,7 +110,7 @@ maintain cruft it would never itself generate:
   `just ci`).
 - Author the `.tanren/ci.yml` that points the native gate at this repo's real
   checks.
-- Land the brownfield-apex fixture (tier 1 above) — the bridge experiment.
+- Land the brownfield apex-class fixture (tier 1 above) — the bridge experiment.
 
 The end state: a fresh clone of this repo, on a different machine, can be
 understood and continued from the docs alone — which is exactly the property a

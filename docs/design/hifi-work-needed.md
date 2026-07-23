@@ -113,7 +113,7 @@ dashboard + hi-fi both still lack a fragment-library surface."
   lifecycle — no operator-picked stack, no template-selection step in
   onboarding.
 
-### 1.2 Apex run-rhythm + the dollar budget gate
+### 1.2 Live fixture run rhythm + the general dollar budget gate
 
 - **Hi-fi source**: budget is modeled as a **monthly cost cap** only
   (`view-onboard-org.jsx` step 4; `view-costs.jsx`; `view-org.jsx` Overview
@@ -186,9 +186,10 @@ dashboard + hi-fi both still lack a fragment-library surface."
 - **What the new hi-fi should do**: model onboarding as **link-provider-once
   (org) → enable-capability-per-project**, where enabling a capability the org
   hasn't linked shows a **"link <provider> first"** prompt (not a dead control),
-  and where the four apex-relevant capabilities — error tracking (Sentry), deploy
+  and where the four capabilities used by the current apex example — error tracking (Sentry), deploy
   (Vercel/Fly), notify (Slack), allocate (Hetzner) — appear as enable-toggles that
   resolve to provisioned resources by reference (DSNs/channels/tokens never shown).
+  Other apex fixtures may select different capabilities through the same UI.
 
 ---
 

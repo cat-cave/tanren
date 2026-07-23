@@ -93,6 +93,7 @@ function evidenceRunSection(row: Row | undefined): EvidenceRunSection | null {
     verificationRunId,
     artifactDigest: textOrNull(row["artifact_digest"]),
     classification: textOrNull(row["classification"]),
+    runtimeBehaviorContextHash: textOrNull(row["runtime_behavior_context_hash"]),
   };
 }
 
@@ -118,7 +119,7 @@ const LOOP_SQL = `
    WHERE loop.org_id = $1 AND loop.id = $2`;
 
 const PRIOR_RUN_SQL = `
-  SELECT run.id, run.artifact_digest, run.classification
+  SELECT run.id, run.artifact_digest, run.classification, run.runtime_behavior_context_hash
     FROM resolution_jobs AS prior_job
     JOIN behavior_verification_runs AS run
       ON run.org_id = prior_job.org_id AND run.resolution_job_id = prior_job.id
@@ -154,7 +155,7 @@ export async function collectProofEvidence(
 
   const productionRow = (
     await client.query<Row>(
-      `SELECT id, classification, artifact_digest, prepared_head_sha, status
+      `SELECT id, classification, artifact_digest, prepared_head_sha, status, runtime_behavior_context_hash
          FROM behavior_verification_runs
         WHERE org_id = $1 AND resolution_job_id = $2 AND stage = 'production'
         ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -284,6 +285,7 @@ export async function collectProofEvidence(
               classification: textOrNull(productionRow["classification"]),
               outcome: symptomOutcome(textOrNull(productionRow["classification"])),
               artifactDigest: textOrNull(productionRow["artifact_digest"]),
+              runtimeBehaviorContextHash: textOrNull(productionRow["runtime_behavior_context_hash"]),
               preparedHeadSha,
               probedUrl: textOrNull(releaseRow?.["url"]),
               assertions: assertionRows.map((row) => ({

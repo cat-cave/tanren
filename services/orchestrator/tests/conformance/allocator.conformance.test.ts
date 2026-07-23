@@ -7,10 +7,17 @@
 // contract coverage by adding one entry here. The mock clients below model
 // only the happy-path lifecycle each allocator needs (provision -> running+IP
 // -> destroy); each accepts a `fail` flag for the never-ready variant.
-import { FakeAllocator } from "../../src/engine/contracts/allocator.js";
-import type { AllocationRequest, Allocator } from "../../src/engine/contracts/allocator.js";
+import { FakeAllocator, type AllocationRequest, type Allocator } from "../../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { ClaimRunnerInput, RunnerStore } from "../../src/engine/allocators/runnerStore.js";
+import type {
+  ClaimRunnerInput,
+  PoolLeaseReleaseOutcome,
+  PoolLeaseReservation,
+  ReleasePoolLeaseInput,
+  ReservePoolLeaseInput,
+  RunnerPoolLeaseStore,
+  RunnerStore,
+} from "../../src/engine/allocators/runnerStore.js";
 import { StaticRunnerAllocator } from "../../src/engine/allocators/staticRunnerAllocator.js";
 import { ManualSshAllocator } from "../../src/engine/allocators/manualSshAllocator.js";
 import { SidecarHttpAllocator } from "../../src/engine/allocators/sidecarHttpAllocator.js";
@@ -22,9 +29,19 @@ import { AwsEc2Allocator, type AwsEc2Client } from "../../src/engine/allocators/
 import { KubernetesAllocator, type KubernetesClient } from "../../src/engine/allocators/kubernetesAllocator.js";
 import { describeAllocatorConformance, describeAllocatorFailureConformance } from "./allocatorConformance.js";
 
-/** Minimal in-memory RunnerStore scaffolding shared by the impls under test. */
-class MemoryRunnerStore implements RunnerStore {
+/**
+ * Minimal in-memory scaffolding shared by the impls under test. Implements BOTH
+ * the {@link RunnerStore} mirror (cloud/static/sidecar impls) AND the
+ * {@link RunnerPoolLeaseStore} reservation seam (the manual-ssh fixed pool) so one
+ * fake backs every allocator kind. The lease side models the shared store's
+ * contract: one live lease per (poolKey, leaseKey), the `maxConcurrent` cap, and
+ * a fenced (owner + token) release.
+ */
+class MemoryRunnerStore implements RunnerStore, RunnerPoolLeaseStore {
   private readonly claimed = new Map<string, ClaimRunnerInput>();
+  private readonly leases = new Map<string, Map<string, { runnerId: string; owner: string; token: string }>>();
+  private readonly byRunner = new Map<string, { poolKey: string; leaseKey: string }>();
+  private nextToken = 1;
   async claim(input: ClaimRunnerInput): Promise<void> {
     this.claimed.set(input.runnerId, input);
   }
@@ -38,6 +55,44 @@ class MemoryRunnerStore implements RunnerStore {
    */
   async readTeardownDescriptor(runnerId: string) {
     return this.claimed.get(runnerId)?.providerMetadata ?? undefined;
+  }
+  private poolMap(poolKey: string): Map<string, { runnerId: string; owner: string; token: string }> {
+    let map = this.leases.get(poolKey);
+    if (map === undefined) {
+      map = new Map();
+      this.leases.set(poolKey, map);
+    }
+    return map;
+  }
+  async reservePoolLease(input: ReservePoolLeaseInput): Promise<PoolLeaseReservation> {
+    const pool = this.poolMap(input.poolKey);
+    // Plain Errors here (not the typed lease errors) keep this module's
+    // `runnerStore.js` import TYPE-ONLY — the conformance failure case only needs
+    // allocate() to reject when the single-host pool is exhausted; the typed-error
+    // fidelity is proven in manualSshAllocator.test.ts + the RLS integration test.
+    if (input.maxConcurrent !== undefined && pool.size >= input.maxConcurrent) {
+      throw new Error(`pool ${input.poolKey} at capacity ${input.maxConcurrent}`);
+    }
+    const chosen = input.candidates.find((candidate) => !pool.has(candidate.leaseKey));
+    if (chosen === undefined) {
+      throw new Error(`pool ${input.poolKey} exhausted`);
+    }
+    const token = String(this.nextToken++);
+    pool.set(chosen.leaseKey, { runnerId: input.runnerId, owner: input.owner, token });
+    this.byRunner.set(input.runnerId, { poolKey: input.poolKey, leaseKey: chosen.leaseKey });
+    return { ...chosen, owner: input.owner, fencingToken: token };
+  }
+  async releasePoolLease(input: ReleasePoolLeaseInput): Promise<PoolLeaseReleaseOutcome> {
+    const where = this.byRunner.get(input.runnerId);
+    if (where === undefined) return { released: false };
+    const record = this.poolMap(where.poolKey).get(where.leaseKey);
+    if (record === undefined || record.runnerId !== input.runnerId) return { released: false };
+    if (record.owner !== input.owner || record.token !== input.fencingToken) {
+      throw new Error(`stale release of ${input.runnerId}`);
+    }
+    this.poolMap(where.poolKey).delete(where.leaseKey);
+    this.byRunner.delete(input.runnerId);
+    return { released: true };
   }
 }
 
@@ -176,7 +231,7 @@ const makeStatic = (): Allocator =>
 const makeManual = (): Allocator =>
   new ManualSshAllocator({
     hosts: [{ id: "host-1", host: "10.0.0.1", hostKeyFingerprint: PINNED_FINGERPRINT }],
-    runners: new MemoryRunnerStore(),
+    leases: new MemoryRunnerStore(),
   });
 
 const makeSidecar = (): Allocator =>

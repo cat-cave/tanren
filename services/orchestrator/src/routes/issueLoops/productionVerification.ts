@@ -30,7 +30,13 @@ import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js"
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
 import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
 import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
-import { createResolutionStageRegistry } from "../../engine/verification/resolutionStages/index.js";
+import {
+  createResolutionStageRegistry,
+  LockedBehaviorContextError,
+  lockedBehaviorContextFailureResult,
+  PgRuntimeBehaviorContextLoader,
+  type RuntimeBehaviorContextLoader,
+} from "../../engine/verification/resolutionStages/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -80,6 +86,13 @@ export interface ProductionVerificationRoutesOptions {
    */
   readonly behaviorQuarantineReader?: Pick<PgBehaviorQuarantineStore, "isQuarantinedInEpoch">;
   readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
+  /**
+   * bh-15 locked behavior-context loader. This operator-retry surface, like the
+   * walker, locks the exact frozen behavior context BEFORE the probe runs; a
+   * `LockedBehaviorContextError` fails closed (409) rather than re-proving against
+   * an unlocked or drifted behavior. Defaults to the live loader.
+   */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
   readonly releaseById?: (
     orgId: string,
     releaseInstanceId: string,
@@ -122,6 +135,8 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
   const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
   const stage = stages.get("production");
   if (stage === undefined) throw new Error("production resolution stage is not registered");
+  const behaviorContextLoader =
+    options.behaviorContextLoader ?? new PgRuntimeBehaviorContextLoader({ pool: options.pool });
   const releaseById =
     options.releaseById ??
     ((orgId, releaseInstanceId) =>
@@ -179,10 +194,24 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
     if (job === undefined) {
       return c.json({ error: "production_verification_lease_not_active", resolutionJobId: queued.id }, 423);
     }
+    // bh-15: lock the exact frozen behavior context BEFORE the probe, then run the
+    // stage — in ONE try. The probe, the ResolutionAuthority, and the source-close
+    // outbox never run on a lock failure. ANY LockedBehaviorContextError (from the
+    // loader OR from inside stage.run, e.g. the binding's missing-environment case)
+    // is TERMINAL (stale_contract) — re-running cannot fix it — so it settles, never
+    // releases retryable. A genuinely transient/unrelated error still releases retryable.
     let verdict: ResolutionStageResult;
     try {
-      verdict = await stage.run(job, { source: "operator_retry" });
+      const behaviorContext = await behaviorContextLoader.load(job);
+      verdict = await stage.run(job, { behaviorContext, source: "operator_retry" });
     } catch (error) {
+      if (error instanceof LockedBehaviorContextError) {
+        const settled = await settleResolutionJob(jobs, job, lockedBehaviorContextFailureResult(error));
+        if (!settled) {
+          return c.json({ error: "production_verification_lease_lost", resolutionJobId: queued.id }, 423);
+        }
+        return c.json({ error: "stale_behavior_contract", reason: error.reason, resolutionJobId: queued.id }, 409);
+      }
       await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
       throw error;
     }

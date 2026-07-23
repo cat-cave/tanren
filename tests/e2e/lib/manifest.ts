@@ -49,9 +49,9 @@ export interface PersistedArtifactAssertion {
 //                stack (the three tier proofs).
 //   - HERMETIC — a proof driven IN-PROCESS against fakes + the engine's real pure
 //                decision functions (no creds / no network / no real Postgres), so
-//                it is REGRESSION-PINNED in `just fast-check`. The apex proof surface
+//                it is regression-pinned in `just fast-check`. The runtime-behavior proof surface
 //                is hermetic: its driver lives in the orchestrator test suite
-//                (services/orchestrator/tests/apexE2eDriver.ts — fakes are legal
+//                (services/orchestrator/tests/runtimeBehaviorE2eDriver.ts — fakes are legal
 //                there; the e2e-no-mock check forbids them under tests/e2e/**), and
 //                THIS manifest entry is the single typed declaration of what that
 //                hermetic driver proves.
@@ -171,16 +171,16 @@ const capabilityPlaceholderCases: readonly E2eCase[] = [
   },
 ];
 
-// The apex proof — HERMETIC (audit §6.8). No longer `planned`: the apex run is
+// The runtime-behavior proof — hermetic (audit §6.8). No longer `planned`: this run is
 // regression-pinned by an in-process driver
-// (services/orchestrator/tests/apexE2eDriver.ts) that drives the FULL autonomy-loop
+// (services/orchestrator/tests/runtimeBehaviorE2eDriver.ts) that drives the FULL autonomy-loop
 // proof surface against fakes + the engine's real pure decision functions, in
 // `just fast-check`. This entry is its typed declaration; the live, credentialed
-// apex (real surfaces, real deploy) remains the apex-validation the cutover is
+// A live validation (real surfaces, real deploy) remains the validation the cutover is
 // pending on, but the proof surface is no longer only anecdotal in a live run.
-const apexHermeticCase: E2eCase = {
-  id: "apex",
-  capability: "apex — clean repo → deployed product (hermetic regression-pin; autonomy-engine §3/§4)",
+const runtimeBehaviorHermeticCase: E2eCase = {
+  id: "runtime-behavior",
+  capability: "runtime behavior — clean repo → deployed product (hermetic regression-pin; autonomy-engine §3/§4)",
   status: "hermetic",
   surfaces: ["http_api"],
   artifacts: [
@@ -197,11 +197,18 @@ const apexHermeticCase: E2eCase = {
       describe: "the near-empty repo gains the URL-shortener API + web UI + Slack bot target files on base",
     },
     { kind: "cost_records", describe: "each role call carries the right cost_basis + billing_mode (subscription run)" },
-    { kind: "dora_projection", describe: "DORA accumulates a deployment per merged run across the apex run" },
+    {
+      kind: "dora_projection",
+      describe: "DORA accumulates a deployment per merged run across the runtime-behavior run",
+    },
   ],
 };
 
-export const e2eManifest: readonly E2eCase[] = [...tierProofCases, apexHermeticCase, ...capabilityPlaceholderCases];
+export const e2eManifest: readonly E2eCase[] = [
+  ...tierProofCases,
+  runtimeBehaviorHermeticCase,
+  ...capabilityPlaceholderCases,
+];
 
 // validateManifest enforces the manifest's own invariants so a malformed case
 // (duplicate id, an "active" case asserting on nothing real, a tier proof

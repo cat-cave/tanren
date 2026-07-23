@@ -1,8 +1,8 @@
-// The APEX e2e driver — the DRIVE implementation (audit §6.8). Split from
-// apexE2eDriver.ts (the public types + seed + proof surface) to keep each file
+// The runtime-behavior e2e driver — the drive implementation (audit §6.8). Split from
+// runtimeBehaviorE2eDriver.ts (the public types + seed + proof surface) to keep each file
 // ≤500 lines. This file wires each autonomy-loop STAGE against the e2e harness's
-// existing fakes + the engine's REAL pure decision functions, and `driveApex`
-// chains them into one hermetic apex run. See apexE2eDriver.ts for the doctrine.
+// existing fakes + the engine's REAL pure decision functions, and `driveRuntimeBehavior`
+// chains them into one hermetic runtime behavior run. See runtimeBehaviorE2eDriver.ts for the doctrine.
 
 import { type AuditPosture, decideFromFindings } from "../src/engine/contracts/auditPosture.js";
 import type { Finding } from "../src/engine/contracts/findings.js";
@@ -15,11 +15,11 @@ import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe } from "./conformance/fakes/scriptedUrlProbe.js";
 import {
-  APEX_TEMPLATE_SEED,
-  type ApexDerivedSpec,
-  type ApexDriverInput,
-  type ApexProof,
-  type ApexRoleSpend,
+  RUNTIME_BEHAVIOR_TEMPLATE_SEED,
+  type RuntimeBehaviorDerivedSpec,
+  type RuntimeBehaviorDriverInput,
+  type RuntimeBehaviorProof,
+  type RuntimeBehaviorRoleSpend,
   type BudgetProof,
   type CostRowProof,
   type DeployProof,
@@ -28,19 +28,19 @@ import {
   type MergedPrProof,
   type ScheduledAuditProof,
   type SeverityGateProof,
-} from "./apexE2eDriver.js";
+} from "./runtimeBehaviorE2eDriver.js";
 
 const DEFAULT_VELOCITY_POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
 const STRICT_POSTURE: AuditPosture = { blockReviewAt: "P3", p2p3Handling: "fix-if-idle" };
 
 // The default credential the operator imports: a Codex ChatGPT subscription bundle
 // (`credential/codex/…`) — so the cost-basis classifier yields subscription rows,
-// exactly like the live apex run. The checker/auditor are subscription too.
+// exactly like the live runtime behavior run. The checker/auditor are subscription too.
 const SUBSCRIPTION_REF = "credential/codex/org/o1/default";
 
-// The greenfield repo the apex run targets (a near-empty repo seeded from the template).
-const APEX_REPO = { owner: "cat-cave", name: "apex-url-shortener-v32" } as const;
-const INITIAL_SHA = "sha-init-apex-url-shortener-v32";
+// The greenfield repo the runtime behavior run targets (a near-empty repo seeded from the template).
+const RUNTIME_BEHAVIOR_REPO = { owner: "cat-cave", name: "runtime-behavior-url-shortener-v32" } as const;
+const INITIAL_SHA = "sha-init-runtime-behavior-url-shortener-v32";
 
 // ---------------------------------------------------------------------------
 // STAGE 1 — derive: rough notes (+ a fake template seed) → a prioritized DAG.
@@ -49,13 +49,13 @@ const INITIAL_SHA = "sha-init-apex-url-shortener-v32";
 // + merge stages downstream consume the REAL engine functions.
 // ---------------------------------------------------------------------------
 
-function deriveApexDag(): ApexDerivedSpec[] {
-  const role = (r: ApexRoleSpend["role"]): ApexRoleSpend => ({
+function deriveRuntimeBehaviorDag(): RuntimeBehaviorDerivedSpec[] {
+  const role = (r: RuntimeBehaviorRoleSpend["role"]): RuntimeBehaviorRoleSpend => ({
     role: r,
     authRef: SUBSCRIPTION_REF,
     providerCostUsd: null,
   });
-  const roles: ApexRoleSpend[] = [role("write"), role("check"), role("audit")];
+  const roles: RuntimeBehaviorRoleSpend[] = [role("write"), role("check"), role("audit")];
   // A small dependency-ordered DAG: the API is the root; the web UI + Slack bot
   // both depend on it (the walker merges the API first, then the dependents).
   return [
@@ -77,7 +77,10 @@ interface MergeOutcome {
   readonly finalMainSha: string;
 }
 
-async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedSpec[]): Promise<MergeOutcome> {
+async function walkAndMerge(
+  host: InMemoryCodeHost,
+  specs: readonly RuntimeBehaviorDerivedSpec[],
+): Promise<MergeOutcome> {
   const merged: MergedPrProof[] = [];
   const landedSpecIds = new Set<string>();
   let mainSha = INITIAL_SHA;
@@ -88,7 +91,9 @@ async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedS
   while (remaining.length > 0) {
     const ready = remaining.filter((s) => s.dependsOn.every((dep) => landedSpecIds.has(dep)));
     if (ready.length === 0) {
-      throw new Error(`apex driver: DAG is wedged — unlanded deps for ${remaining.map((s) => s.specId).join(", ")}`);
+      throw new Error(
+        `runtime behavior driver: DAG is wedged — unlanded deps for ${remaining.map((s) => s.specId).join(", ")}`,
+      );
     }
     for (const spec of ready) {
       prNumber += 1;
@@ -96,7 +101,7 @@ async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedS
       // The REAL CodeHost compare-and-swap land: it REJECTS if main moved underneath
       // (we feed the current head as expectedMainSha, so each land advances main).
       const landed = await host.landAuthorizedIntegration({
-        repo: APEX_REPO,
+        repo: RUNTIME_BEHAVIOR_REPO,
         intoMain: "main",
         authorizedSha,
         expectedMainSha: mainSha,
@@ -106,7 +111,7 @@ async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedS
       landedSpecIds.add(spec.specId);
       merged.push({
         specId: spec.specId,
-        prUrl: `https://github.com/${APEX_REPO.owner}/${APEX_REPO.name}/pull/${prNumber}`,
+        prUrl: `https://github.com/${RUNTIME_BEHAVIOR_REPO.owner}/${RUNTIME_BEHAVIOR_REPO.name}/pull/${prNumber}`,
         mergeCommitSha: landed.mainSha,
         targetFileOnBase: spec.target,
       });
@@ -120,10 +125,10 @@ async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedS
 // STAGE 3 — cost rows: each role call runs through the REAL cost-basis classifier
 // (`resolveCostSource` + `computeCostUsd`), so a subscription credential yields
 // `billing_mode='subscription'` + `cost_basis='unknown'` (NULL real spend) rows —
-// exactly what the live apex run records. Proves cost rows carry the right basis.
+// exactly what the live runtime behavior run records. Proves cost rows carry the right basis.
 // ---------------------------------------------------------------------------
 
-function recordCostRows(specs: readonly ApexDerivedSpec[]): CostRowProof[] {
+function recordCostRows(specs: readonly RuntimeBehaviorDerivedSpec[]): CostRowProof[] {
   const rows: CostRowProof[] = [];
   for (const spec of specs) {
     for (const r of spec.roles) {
@@ -156,7 +161,7 @@ function recordCostRows(specs: readonly ApexDerivedSpec[]): CostRowProof[] {
 function proveSeverityGate(posture: AuditPosture): SeverityGateProof {
   // A residual P2 finding the auditor surfaced on the merged API spec.
   const findings: Finding[] = [
-    { id: "apex-p2-rate-limit", severity: "P2", title: "no rate limit on the resolve endpoint", body: "…" },
+    { id: "runtime-behavior-p2-rate-limit", severity: "P2", title: "no rate limit on the resolve endpoint", body: "…" },
   ];
   const velocity = decideFromFindings(findings, posture);
   const strict = decideFromFindings(findings, STRICT_POSTURE);
@@ -195,11 +200,11 @@ async function proveIssueLoop(host: InMemoryCodeHost, baseSha: string): Promise<
   const payload = {
     action: "opened",
     issue: { number: 7, title: "resolve returns 500 on an unknown slug", body: "repro: GET /x → 500", labels: ["bug"] },
-    repository: { owner: { login: APEX_REPO.owner }, name: APEX_REPO.name },
+    repository: { owner: { login: RUNTIME_BEHAVIOR_REPO.owner }, name: RUNTIME_BEHAVIOR_REPO.name },
   };
-  const mapped = mapGithubIssueWebhook(payload, "project_apex");
+  const mapped = mapGithubIssueWebhook(payload, "project_runtime_behavior");
   if (mapped.kind !== "ingest") {
-    throw new Error(`apex driver: issue webhook did not ingest (${mapped.kind})`);
+    throw new Error(`runtime behavior driver: issue webhook did not ingest (${mapped.kind})`);
   }
   // The triage routes the bug into the DAG as a fix spec (the auto_routable path).
   const triage: CandidateTriage = triageRoutes({
@@ -210,13 +215,13 @@ async function proveIssueLoop(host: InMemoryCodeHost, baseSha: string): Promise<
     priority: "tbd",
   });
   if (triage.routableSpec === null) {
-    throw new Error("apex driver: triage did not route a spec");
+    throw new Error("runtime behavior driver: triage did not route a spec");
   }
   const routedSpecId = "spec_issue_fix_7";
   // The routed fix spec merges through the SAME CodeHost CAS land that the
   // derived specs used — proving the issue loop re-enters the merge machinery.
   await host.landAuthorizedIntegration({
-    repo: APEX_REPO,
+    repo: RUNTIME_BEHAVIOR_REPO,
     intoMain: "main",
     authorizedSha: `sha-merged-${routedSpecId}`,
     expectedMainSha: baseSha,
@@ -225,7 +230,7 @@ async function proveIssueLoop(host: InMemoryCodeHost, baseSha: string): Promise<
   return {
     ingestedExternalId: mapped.item.externalId,
     routedSpecId,
-    mergedPrUrl: `https://github.com/${APEX_REPO.owner}/${APEX_REPO.name}/pull/99`,
+    mergedPrUrl: `https://github.com/${RUNTIME_BEHAVIOR_REPO.owner}/${RUNTIME_BEHAVIOR_REPO.name}/pull/99`,
   };
 }
 
@@ -259,32 +264,37 @@ function proveScheduledAudit(): ScheduledAuditProof {
   // (route-to-dag), independent of the merge-gate posture. The REAL decideFromFindings
   // routes it under the routing posture (blockReviewAt P0 → a P3 is residual → routed).
   const findings: Finding[] = [
-    { id: "apex-audit-stale-dep", severity: "P3", title: "a dependency is a major version behind", body: "…" },
+    {
+      id: "runtime-behavior-audit-stale-dep",
+      severity: "P3",
+      title: "a dependency is a major version behind",
+      body: "…",
+    },
   ];
   const decision = decideFromFindings(findings, { blockReviewAt: "P0", p2p3Handling: "route-to-dag" });
   const routed = decision.route[0];
   if (routed === undefined) {
-    throw new Error("apex driver: the scheduled audit's residual finding did not re-enter the DAG");
+    throw new Error("runtime behavior driver: the scheduled audit's residual finding did not re-enter the DAG");
   }
   return { reEnteredSpecId: `spec_audit_${routed.id}` };
 }
 
 // ---------------------------------------------------------------------------
-// driveApex — the integrated apex run. POSTs notes → derives → walks to merged PRs
+// driveRuntimeBehavior — the integrated runtime behavior run. POSTs notes → derives → walks to merged PRs
 // → records cost rows → gates severity → enforces budget → deploys the merged
 // commit → re-enters the loop (issue / feature / scheduled audit). Returns the full
 // PROOF surface for the test to assert. Hermetic + deterministic: no I/O.
 // ---------------------------------------------------------------------------
 
-export async function driveApex(input: ApexDriverInput = {}): Promise<ApexProof> {
-  const seed = input.seed ?? APEX_TEMPLATE_SEED;
+export async function driveRuntimeBehavior(input: RuntimeBehaviorDriverInput = {}): Promise<RuntimeBehaviorProof> {
+  const seed = input.seed ?? RUNTIME_BEHAVIOR_TEMPLATE_SEED;
   const posture = input.auditPosture ?? DEFAULT_VELOCITY_POSTURE;
   const ceilingUsd = input.budgetCeilingUsd ?? 50;
 
   // STAGE 1 — the greenfield repo seeded from the (fake) template, then derive.
   const host = new InMemoryCodeHost();
-  host.seed(APEX_REPO, "main", INITIAL_SHA);
-  const specs = deriveApexDag();
+  host.seed(RUNTIME_BEHAVIOR_REPO, "main", INITIAL_SHA);
+  const specs = deriveRuntimeBehaviorDag();
 
   // STAGE 2 — walk the DAG to merged PRs (dependency-ordered CAS lands).
   const { merged, finalMainSha } = await walkAndMerge(host, specs);
@@ -332,13 +342,13 @@ export async function driveApex(input: ApexDriverInput = {}): Promise<ApexProof>
 // deployMergedCommit triggers a deploy of the merged head + smoke-checks the
 // resolved URL through the REAL `UrlReachabilityProbe` contract (scriptedUrlProbe).
 // The deep provisioner wiring is pinned by deployOnMerge.test.ts; here we prove the
-// load-bearing apex property: the deploy TARGETS the merge commit + the URL 200s.
+// load-bearing runtime behavior property: the deploy TARGETS the merge commit + the URL 200s.
 async function deployMergedCommit(mergeSha: string): Promise<DeployProof> {
   // A scripted deploy transport records the ref the trigger targeted (live-reflects-merge).
   const transport = scriptedDeployTransport("vercel");
   const deployedRef = mergeSha;
   const probe = scriptedUrlProbe(200);
-  const url = `https://${APEX_REPO.name}.example.app`;
+  const url = `https://${RUNTIME_BEHAVIOR_REPO.name}.example.app`;
   // Smoke-check the resolved URL through the probe contract (no real timers/network) —
   // a 200 confirms reachable (the verify poll-until-terminal/reachable property).
   const status = await probe.probe(url);

@@ -4,14 +4,18 @@
 > **mission-complete build** — finishing the strengthened engine's **142 consumer
 > nodes** on top of the merged 8-contract spine (#931). The authority is
 > [`docs/roadmap/mission-complete/README.md`](docs/roadmap/mission-complete/README.md);
-> live node status is the single ledger
-> [`docs/roadmap/mission-complete/LEDGER.md`](docs/roadmap/mission-complete/LEDGER.md).
-> The orchestration playbook (wave-frozen base · barrier pre-flight · single-pass
+> the live roster is **GitHub issues**, typed `bug` or `enhancement` and ordered by
+> native `blocked_by`/`blocks` — one issue per remaining unit of work, on the ideal
+> flow (claim → PR → central audit → merge). `docs/roadmap/mission-complete/LEDGER.md` is
+> SUPERSEDED (history of the 99 completed nodes only; do not add forward status there).
+> The orchestration playbook (dependency-ready batches · barrier pre-flight · single-pass
 > audit · lane routing) is
 > [`docs/roadmap/mission-complete/orchestration.md`](docs/roadmap/mission-complete/orchestration.md).
 > **The apex v96/v97 narrative below is now the _acceptance test_ that runs AFTER
 > the nodes land — not the current work item.** Where this file and the
 > mission-complete README disagree, the README wins.
+> **Rule:** apex is a fixture-class run through the normal pipeline; NOTHING in the
+> engine may be apex-shaped or name apex (see `docs/operator-guide/apex.md`).
 
 Tanren turns specs into merged PRs — **autonomously** — through an agent workflow
 that runs each unit of work per-PR through real CI. **v0 (Phases 0–3) is built and
@@ -90,6 +94,19 @@ full autonomous loop has not yet closed end-to-end. See
 5. **`docs/operator-guide/live-validation-findings.md`** — what the live
    validation proved across all three tiers + the config gotchas.
 
+**In beta — running your own fixture / contributing.** Tanren is graduating from
+in-development to in-beta: separate operators run separate instances on their own
+machines, each driving its own apex-difficulty fixture, all filing to one shared
+GitHub issue tracker. To run your own fixture or contribute a fix to the engine,
+start here: **[`CONTRIBUTING.md`](CONTRIBUTING.md)** (claim an issue/file a bug → PR →
+central audit → merge), **[`docs/operator-guide/external-onboarding.md`](docs/operator-guide/external-onboarding.md)**
+(stand up an instance from a fresh checkout), **[`docs/operator-guide/authoring-fixtures.md`](docs/operator-guide/authoring-fixtures.md)**
+(write a new max-difficulty fixture — the link-shortener + Slack is just one
+example), and **[`docs/operator-guide/parallel-instances.md`](docs/operator-guide/parallel-instances.md)**
+(multiple instances, per-org BYOK, isolated deploy targets). The live, claimable
+live roster is GitHub issues, typed `bug` or `enhancement` and ordered by
+`blocked_by`/`blocks`.
+
 ## What's next (pull from `ROADMAP.md` §4, not from memory)
 
 The core promise — a real user gets merged PRs from specs, on public **and
@@ -102,9 +119,13 @@ above; full
 design rationale: `docs/architecture/autonomy-engine.md` +
 `docs/architecture/tanren-owns-the-engine.md`; phase history: `ROADMAP.md` §2).
 
-**The only remaining major effort is Phase 3 — `apex`**: the max-difficulty
-fixture (rough operator notes → a deployed product autonomously). It is the
-**active live-validation vehicle** — the operator contract
+**Phase 3 — `apex` is the acceptance test** (per the mission block above, it runs
+_after_ the nodes land): a max-difficulty **fixture** (rough operator notes → a
+deployed product autonomously) driven through Tanren's **normal operator flow** — no
+apex-shaped harness, workflow, or engine code. The link-shortener + Slack is just
+**one** example fixture; we want **several varied** ones (not all web, not all Slack)
+to flush bugs in parallel. It is the **active live-validation vehicle** — the operator
+contract
 (`docs/operator-guide/apex.md`) and the live-run setup exist, the Tier-1
 credentials (GitHub App + Slack + a deploy target;
 `docs/operator-guide/validation-credentials.md`) are provisioned, and it spends

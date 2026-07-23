@@ -14,6 +14,7 @@ import { ResolutionJobStore } from "../../src/engine/repositories/resolutionJobs
 import { SourceSyncOutboxStore } from "../../src/engine/repositories/sourceSyncOutbox.js";
 import { ProductionSymptomStage } from "../../src/engine/verification/resolutionStages/productionSymptomStage.js";
 import { PgRepairRouter } from "../../src/engine/workflow/repairRouting.js";
+import { stubBehaviorContextLoader } from "./stubBehaviorContextLoader.js";
 
 export const PROOF_IDS = {
   org: "org_resolution_proof",
@@ -211,6 +212,7 @@ export async function walkProduction(app: Pool, id: string): Promise<void> {
     idempotencyKey: id,
   });
   const walker = new ResolutionDagWalker({
+    behaviorContextLoader: stubBehaviorContextLoader(),
     store: jobs,
     orgIds: async () => [org],
     stages: new Map([["production", new ProductionSymptomStage({ pool: app })]]),

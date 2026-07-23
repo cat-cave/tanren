@@ -16,6 +16,7 @@ import {
   VerdictAttemptTraceabilityError,
   assertVerdictTraceable,
   classifyAttemptOutcome,
+  normalizeAttemptForCi,
   type VerdictAttemptTrace,
   type VerdictTraceabilityInput,
 } from "../src/engine/verification/acceptance/index.js";
@@ -152,5 +153,26 @@ describe("classifyAttemptOutcome — outcome→classification mapping", () => {
 
   it("throws TypeError on an unknown outcome (exhaustiveness guard)", () => {
     expect(() => classifyAttemptOutcome("bogus" as BehaviorVerdictOutcome)).toThrow(TypeError);
+  });
+});
+
+describe("normalizeAttemptForCi — exhaustive compatibility mapping", () => {
+  const cases: readonly (readonly [BehaviorVerdictOutcome, string])[] = [
+    ["passed", "passed"],
+    ["failed_product", "failed"],
+    ["failed_visual", "failed"],
+    ["failed_verification_contract", "failed"],
+    ["inconclusive_infrastructure", "error"],
+    ["inconclusive_external", "error"],
+    ["cancelled_superseded", "skipped"],
+  ];
+  for (const [outcome, normalized] of cases) {
+    it(`maps ${outcome} → ${normalized}`, () => {
+      expect(normalizeAttemptForCi(outcome)).toBe(normalized);
+    });
+  }
+
+  it("throws TypeError on an unknown outcome", () => {
+    expect(() => normalizeAttemptForCi("bogus" as BehaviorVerdictOutcome)).toThrow(TypeError);
   });
 });

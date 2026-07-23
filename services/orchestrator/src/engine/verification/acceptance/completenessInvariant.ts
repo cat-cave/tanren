@@ -35,7 +35,7 @@ export interface AcceptanceCompletenessInput {
 }
 
 /**
- * The promotion-time apex invariant.  This deliberately reads first-class release,
+ * The promotion-time behavior-completeness invariant. This deliberately reads first-class release,
  * plan, and verdict facts; `ci_test_results` is only the final compatibility
  * projection and cannot rescue a missing behavior proof.
  */
@@ -148,19 +148,39 @@ export async function checkInScope(
   );
   if (integer(proof.rows[0]?.count) !== 1) return { complete: false, failure: "gate_proof_artifact_mismatch" };
 
-  const ci = await client.query<{ count: unknown }>(
-    `SELECT COUNT(*)::int AS count
-       FROM ci_test_results c
-       JOIN integration_nodes n ON n.org_id = c.org_id AND n.project_id = c.project_id
-       JOIN release_instances ri ON ri.org_id = n.org_id AND ri.integration_node_id = n.node_id
-      WHERE c.org_id = $1 AND c.project_id = $2 AND ri.id = $3
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(n.members) member
-           WHERE member ->> 'runId' = c.run_id
-        )`,
-    [input.orgId, input.projectId, input.releaseInstanceId],
+  const ci = await client.query<{ attempt_count: unknown; projection_count: unknown }>(
+    `SELECT COUNT(a.id)::int AS attempt_count, COUNT(c.id)::int AS projection_count
+       FROM behavior_verification_attempts a
+       JOIN behavior_verification_runs r
+         ON r.org_id = a.org_id AND r.project_id = a.project_id AND r.id = a.run_id
+       LEFT JOIN ci_test_results c
+         ON c.org_id = a.org_id
+        AND c.project_id = a.project_id
+        AND c.source_kind = 'behavior_verification'
+        AND c.behavior_verification_run_id = a.run_id
+        AND c.behavior_attempt_id = a.id
+        AND c.test_id = 'behavior:' || a.behavior_revision_id || ':' || a.example_hash || ':' || a.matrix_hash
+        AND c.head_sha = r.prepared_head_sha
+        AND c.outcome = CASE a.outcome
+          WHEN 'passed' THEN 'passed'
+          WHEN 'failed_product' THEN 'failed'
+          WHEN 'failed_verification_contract' THEN 'failed'
+          WHEN 'failed_visual' THEN 'failed'
+          WHEN 'inconclusive_infrastructure' THEN 'error'
+          WHEN 'inconclusive_external' THEN 'error'
+          WHEN 'cancelled_superseded' THEN 'skipped'
+        END
+        AND c.duration_ms IS NOT DISTINCT FROM
+            CASE WHEN a.finished_at IS NULL THEN NULL
+                 ELSE floor(extract(epoch FROM (a.finished_at - a.started_at)) * 1000)::integer END
+      WHERE a.org_id = $1 AND a.project_id = $2 AND a.run_id = $3`,
+    [input.orgId, input.projectId, runId],
   );
-  if (!positiveInt(ci.rows[0]?.count)) return { complete: false, failure: "ci_compat_projection_missing" };
+  const attemptCount = integer(ci.rows[0]?.attempt_count);
+  const projectionCount = integer(ci.rows[0]?.projection_count);
+  if (attemptCount < 1 || projectionCount !== attemptCount) {
+    return { complete: false, failure: "ci_compat_projection_missing" };
+  }
   return { complete: true, kind: "complete", runId, requiredBehaviorRevisionCount: required.length };
 }
 

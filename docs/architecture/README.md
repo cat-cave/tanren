@@ -4,9 +4,10 @@ This directory documents the **shipped** architecture of Tanren — the durable
 seams and the substrate behind them. Phases 0–2 and the autonomy engine
 (Phases 1 + 2) are built and merged, and the jj/`MergeAuthority`/`CodeHost`
 cutover, the design subsystem, and environment management are all on `main`; these
-notes describe the system as it runs on `main`, not a plan. **Phase 3 (`apex`) is
-not yet closed** — no apex run has yet driven rough notes → merged PRs → a deployed
-product end-to-end (see `autonomy-engine.md` §3 for the honest proof state). For
+notes describe the system as it runs on `main`, not a plan. **Phase 3 (normal-flow
+validation with apex-class fixtures) is not yet closed** — no apex run has yet
+driven rough notes → merged PRs → a deployed product end-to-end (see
+`autonomy-engine.md` §3 for the honest proof state). For
 the phase history and the forward roadmap, see
 [`ROADMAP.md`](../../ROADMAP.md); for the durable vision and invariants, see
 [`PROJECT_BRIEF.md`](../../PROJECT_BRIEF.md).

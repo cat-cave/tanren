@@ -1,5 +1,5 @@
 import { runWithOrgScope } from "@tanren/db";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ResolutionJob, ResolutionStage, ResolutionStageResult } from "../../contracts/resolutionStage.js";
 import type { SymptomBaselineResult } from "../../contracts/symptomProbe.js";
@@ -14,17 +14,16 @@ import {
   type StartedBehaviorVerificationRunStage,
   type WriteBehaviorVerificationRunStageInput,
 } from "../behaviorVerificationRunStage.js";
+import { LockedBehaviorContextError, readRuntimeBehaviorContext } from "./resolutionBehaviorContext.js";
 
 export type BaselineProbe = Pick<SymptomProbeAdapter, "runBaseline">;
 type ContractReader = Pick<SymptomContractStore, "get">;
 
 export interface BaselineReproductionContext {
-  readonly verificationRunId?: string;
   readonly environmentId: string;
   readonly preparedHeadSha: string;
   readonly jjTreeId: string;
   readonly planSetHash: string;
-  readonly runtimeBehaviorContextHash: string;
   readonly artifactDigest: string;
   readonly integrationNodeId?: string;
   readonly policy: Readonly<Record<string, unknown>>;
@@ -116,6 +115,16 @@ export class BaselineReproductionStage implements ResolutionStage {
 
   public async run(job: ResolutionJob, ctx: unknown): Promise<ResolutionStageResult> {
     if (job.stage !== this.kind) throw new Error(`baseline stage cannot run ${job.stage} job ${job.id}`);
+    // bh-15: the stage consumes ONLY the locked behavior context. Fail closed FIRST
+    // (before any DB work) — the release/env are then resolved from the job's FROZEN
+    // release binding, never by recency, and the canonical digest is the locked one.
+    const locked = readRuntimeBehaviorContext(ctx);
+    if (locked === undefined) {
+      throw new LockedBehaviorContextError(
+        "unlocked_context",
+        `baseline stage ran without a locked behavior context for job ${job.id}`,
+      );
+    }
     const contract = await this.contracts.get(job.orgId, job.contractId);
     if (contract === undefined)
       throw new Error(`resolution job ${job.id} references a missing symptom contract ${job.contractId}`);
@@ -123,8 +132,8 @@ export class BaselineReproductionStage implements ResolutionStage {
       throw new Error(`resolution job ${job.id} does not match its locked symptom contract`);
     }
 
-    const runtime = await this.resolveRuntimeContext(ctx, job, contract);
-    const verificationRunId = runtime.verificationRunId ?? this.verificationRunId();
+    const runtime = await this.contextResolver.resolve({ job, contract });
+    const verificationRunId = this.verificationRunId();
     const runInput = {
       orgId: job.orgId,
       id: verificationRunId,
@@ -134,7 +143,7 @@ export class BaselineReproductionStage implements ResolutionStage {
       preparedHeadSha: runtime.preparedHeadSha,
       jjTreeId: runtime.jjTreeId,
       planSetHash: runtime.planSetHash,
-      runtimeBehaviorContextHash: runtime.runtimeBehaviorContextHash,
+      runtimeBehaviorContextHash: locked.contextDigest,
       artifactDigest: runtime.artifactDigest,
       policy: runtime.policy,
       stage: this.kind,
@@ -248,17 +257,6 @@ export class BaselineReproductionStage implements ResolutionStage {
       issueLoopId: job.issueLoopId,
       state,
     });
-  }
-
-  private async resolveRuntimeContext(
-    ctx: unknown,
-    job: ResolutionJob,
-    contract: SymptomContractRow,
-  ): Promise<BaselineReproductionContext> {
-    if (ctx === undefined || ctx === null || (isRecord(ctx) && Object.keys(ctx).length === 0)) {
-      return this.contextResolver.resolve({ job, contract });
-    }
-    return parseBaselineReproductionContext(ctx);
   }
 
   private async writeRunOnPool(input: WriteBehaviorVerificationRunStageInput): Promise<string> {
@@ -376,6 +374,16 @@ class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver
   public constructor(private readonly pool: pg.Pool) {}
 
   public async resolve(input: { readonly job: ResolutionJob; readonly contract: SymptomContractRow }) {
+    // bh-15: resolve the env/node from the job's FROZEN release binding (by id),
+    // never the newest live release. The loader already required this binding, so
+    // an absent id here is a fail-closed invariant breach, not a recency lookup.
+    const releaseInstanceId = input.job.releaseInstanceId;
+    if (typeof releaseInstanceId !== "string" || releaseInstanceId.length === 0) {
+      throw new LockedBehaviorContextError(
+        "missing_release_binding",
+        `baseline job ${input.job.id} has no frozen release binding`,
+      );
+    }
     return runWithOrgScope(this.pool, input.job.orgId, async (client) => {
       const result = await client.query<{
         environment_id: unknown;
@@ -383,14 +391,12 @@ class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver
         jj_tree_id: unknown;
         artifact_digest: unknown;
         integration_node_id: unknown;
-        release_instance_id: unknown;
       }>(
         `SELECT ve.id AS environment_id,
                 inode.head_sha AS prepared_head_sha,
                 inode.tree_hash AS jj_tree_id,
                 ri.artifact_digest,
-                ri.integration_node_id,
-                ri.id AS release_instance_id
+                ri.integration_node_id
            FROM release_instances AS ri
            JOIN verification_environments AS ve
              ON ve.org_id = ri.org_id
@@ -403,27 +409,23 @@ class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver
             AND inode.project_id = ri.project_id
             AND inode.node_id = ri.integration_node_id
           WHERE ri.org_id = $1
-            AND ri.project_id = $2
-            AND ri.environment = 'production'
-            AND ri.state = 'live'
-            AND ($3::text IS NULL OR ri.id = $3)
-          ORDER BY ri.created_at DESC, ri.id DESC
+            AND ri.id = $2
+          ORDER BY ve.id ASC
           LIMIT 1`,
-        [input.job.orgId, input.job.projectId, input.job.releaseInstanceId ?? null],
+        [input.job.orgId, releaseInstanceId],
       );
       const row = result.rows[0];
-      if (row === undefined) throw new Error(`no current live release is available for baseline job ${input.job.id}`);
-      const releaseInstanceId = requiredText(row.release_instance_id, "release_instance_id");
+      if (row === undefined) {
+        throw new LockedBehaviorContextError(
+          "missing_release_binding",
+          `no ready environment for frozen release ${releaseInstanceId} (baseline job ${input.job.id})`,
+        );
+      }
       return {
         environmentId: requiredText(row.environment_id, "environment_id"),
         preparedHeadSha: requiredText(row.prepared_head_sha, "prepared_head_sha"),
         jjTreeId: requiredText(row.jj_tree_id, "jj_tree_id"),
         planSetHash: input.contract.canonicalHash,
-        runtimeBehaviorContextHash: runtimeContextHash({
-          contractId: input.contract.id,
-          releaseInstanceId,
-          artifactDigest: requiredText(row.artifact_digest, "artifact_digest"),
-        }),
         artifactDigest: requiredText(row.artifact_digest, "artifact_digest"),
         integrationNodeId: requiredText(row.integration_node_id, "integration_node_id"),
         policy: {
@@ -436,40 +438,8 @@ class PgBaselineRuntimeContextResolver implements BaselineRuntimeContextResolver
   }
 }
 
-function parseBaselineReproductionContext(value: unknown): BaselineReproductionContext {
-  if (!isRecord(value)) throw new TypeError("baseline reproduction context must be an object");
-  const policy = value["policy"];
-  if (!isRecord(policy)) throw new TypeError("baseline reproduction context policy must be an object");
-  const verificationRunId = optionalText(value["verificationRunId"], "verificationRunId");
-  const integrationNodeId = optionalText(value["integrationNodeId"], "integrationNodeId");
-  return {
-    ...(verificationRunId === undefined ? {} : { verificationRunId }),
-    environmentId: requiredText(value["environmentId"], "environmentId"),
-    preparedHeadSha: requiredText(value["preparedHeadSha"], "preparedHeadSha"),
-    jjTreeId: requiredText(value["jjTreeId"], "jjTreeId"),
-    planSetHash: requiredText(value["planSetHash"], "planSetHash"),
-    runtimeBehaviorContextHash: requiredText(value["runtimeBehaviorContextHash"], "runtimeBehaviorContextHash"),
-    artifactDigest: requiredText(value["artifactDigest"], "artifactDigest"),
-    ...(integrationNodeId === undefined ? {} : { integrationNodeId }),
-    policy,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function requiredText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0)
     throw new TypeError(`baseline ${field} must be a non-empty string`);
   return value;
-}
-
-function optionalText(value: unknown, field: string): string | undefined {
-  if (value === undefined) return undefined;
-  return requiredText(value, field);
-}
-
-function runtimeContextHash(value: Record<string, string>): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   persistedRunnerKeys,
@@ -8,9 +9,11 @@ import {
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
-import type { RunnerStore } from "./runnerStore.js";
+import type { PoolLeaseCandidate, RunnerPoolLeaseStore } from "./runnerStore.js";
 
 const allocatorName = "manual-ssh";
+/** The pool-cap bucket key for manual-ssh leases (see `runners.pool_key`). */
+const manualSshPoolKey = "manual_ssh";
 
 // Strict decode of the manual-hosts JSON (Codex r4 §2). The old `JSON.parse(raw) as
 // ManualSshHost[]` in buildAllocator was a TRUSTED CAST: a bad host shape / blank
@@ -76,8 +79,18 @@ export interface ManualSshAllocatorOptions {
   hosts: ReadonlyArray<ManualSshHost>;
   /** Default SSH username when a host omits one. */
   defaultUsername?: string;
-  /** Orchestrator mirror of the runners table. */
-  runners: RunnerStore;
+  /**
+   * Shared-store lease seam (#1254). Host busy-tracking + the `maxConcurrent` cap
+   * live on the `runners` table so they coordinate across orchestrator processes,
+   * replacing the pre-#1254 in-memory per-process maps that double-booked hosts.
+   */
+  leases: RunnerPoolLeaseStore;
+  /**
+   * Cross-process cap from the routing pool policy (`pools.manual_ssh.maxConcurrent`).
+   * Enforced atomically in {@link RunnerPoolLeaseStore.reservePoolLease}; undefined ⇒
+   * bounded only by the configured host count.
+   */
+  maxConcurrent?: number;
 }
 
 /**
@@ -91,14 +104,16 @@ export interface ManualSshAllocatorOptions {
  */
 export class ManualSshAllocator implements Allocator {
   // FIXED-POOL: pre-provisioned, operator-managed hosts. `allocate()` leases one;
-  // `release()` frees the lease + clears the mirror row. The hosts are never
-  // created or destroyed by the allocator.
+  // `release()` frees the lease. The hosts are never created or destroyed here.
   readonly taxonomy: AllocatorTaxonomy = "fixed_pool";
+  // The cap + host busy-tracking are enforced in the SHARED store, so the router
+  // delegates its (per-process) cap to this allocator's cross-process reservation.
+  readonly enforcesOwnPoolCap = true as const;
   private readonly hosts: ReadonlyArray<ManualSshHost>;
-  /** runnerId -> hostId, so release frees the right host. */
-  private readonly leases = new Map<string, string>();
-  /** hostIds currently leased. */
-  private readonly busy = new Set<string>();
+  /** This allocator instance's fencing owner — distinct per process/instance (#1254). */
+  private readonly leaseOwner = `manual_ssh:${randomUUID()}`;
+  /** runnerId -> the fencing token this instance holds, so its own release is owner-checked. */
+  private readonly held = new Map<string, { fencingToken: string | null }>();
 
   constructor(private readonly options: ManualSshAllocatorOptions) {
     if (options.hosts.length === 0) {
@@ -108,65 +123,73 @@ export class ManualSshAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const host = this.hosts.find((candidate) => !this.busy.has(candidate.id));
-    if (host === undefined) {
-      throw new Error(`manual-ssh pool exhausted: all ${this.hosts.length} hosts are leased (run ${request.runId})`);
-    }
+    const runnerId = `runner_${request.runId}`;
+    const imageSha = `${request.runnerImage}@sha256:manual-ssh`;
+    const candidates: PoolLeaseCandidate[] = this.hosts.map((host) => ({
+      leaseKey: host.id,
+      sshHost: host.host,
+      sshPort: host.port ?? 22,
+      hostKeyFingerprint: host.hostKeyFingerprint,
+      containerId: host.id,
+    }));
 
-    const port = host.port ?? 22;
+    // ATOMIC CROSS-PROCESS RESERVATION: the shared store picks a free host under an
+    // advisory lock + partial unique index and enforces `maxConcurrent`. A second
+    // process contending for the same host / cap is REFUSED here, never
+    // double-booked (the pre-#1254 in-memory `busy` set could not see other
+    // processes' leases).
+    const reservation = await this.options.leases.reservePoolLease({
+      runnerId,
+      // Persist FK-valid (run_id, project_id), or NULLs for a runless Forge
+      // ideation allocation whose synthetic handle is not a real run/project.
+      ...persistedRunnerKeys(request),
+      orgId: request.orgId ?? null,
+      allocator: allocatorName,
+      poolKey: manualSshPoolKey,
+      owner: this.leaseOwner,
+      ...(this.options.maxConcurrent !== undefined && { maxConcurrent: this.options.maxConcurrent }),
+      imageSha,
+      candidates,
+    });
+
+    // The chosen host by its stable id — for the reach fields the store does not
+    // carry (username / identity ref). `reservation.leaseKey` came from `candidates`
+    // derived from `this.hosts`, so the lookup always resolves.
+    const host = this.hosts.find((candidate) => candidate.id === reservation.leaseKey);
+    if (host === undefined) {
+      throw new Error(`manual-ssh reservation returned an unknown host id ${reservation.leaseKey}`);
+    }
     const username = host.username ?? this.options.defaultUsername ?? "tanren";
     const identitySecretRef = host.identitySecretRef ?? request.identitySecretRef;
-    const runnerId = `runner_${request.runId}`;
+    this.held.set(runnerId, { fencingToken: reservation.fencingToken });
 
-    this.busy.add(host.id);
-    this.leases.set(runnerId, host.id);
-
-    const allocation: RunnerAllocation = {
+    return {
       runnerId,
-      imageSha: `${request.runnerImage}@sha256:manual-ssh`,
+      imageSha,
       target: sshRunnerHandle({
         host: host.host,
-        port,
+        port: reservation.sshPort,
         username,
-        hostKeyFingerprint: host.hostKeyFingerprint,
+        hostKeyFingerprint: reservation.hostKeyFingerprint,
         identitySecretRef,
       }),
     };
-
-    try {
-      await this.options.runners.claim({
-        runnerId,
-        // Persist FK-valid (run_id, project_id), or NULLs for a runless Forge
-        // ideation allocation whose synthetic handle is not a real run/project.
-        ...persistedRunnerKeys(request),
-        orgId: request.orgId ?? null,
-        allocator: allocatorName,
-        sshHost: host.host,
-        sshPort: port,
-        hostKeyFingerprint: host.hostKeyFingerprint,
-        imageSha: allocation.imageSha,
-        containerId: host.id,
-      });
-    } catch (error) {
-      // Don't leak the lease if the mirror write fails.
-      this.busy.delete(host.id);
-      this.leases.delete(runnerId);
-      throw error;
-    }
-
-    return allocation;
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const hostId = this.leases.get(runnerId);
-    if (hostId === undefined) {
-      // Already released or never allocated by this instance: no-op.
+    const held = this.held.get(runnerId);
+    if (held === undefined) {
+      // Unknown to this instance (never allocated here, or a process restart lost
+      // the fencing token): no-op. A crashed-mid-run lease is reclaimed by the
+      // orphan sweeper, not by guessing another owner's fencing token.
       return;
     }
-    this.leases.delete(runnerId);
-    this.busy.delete(hostId);
-    // Manual hosts are long-lived; we never destroy them, only free the lease
-    // and clear the orchestrator mirror row.
-    await this.options.runners.release(runnerId);
+    this.held.delete(runnerId);
+    // Manual hosts are long-lived; we never destroy them, only free the fenced lease.
+    await this.options.leases.releasePoolLease({
+      runnerId,
+      owner: this.leaseOwner,
+      fencingToken: held.fencingToken,
+    });
   }
 }

@@ -1,10 +1,10 @@
 /**
- * rv-26.6 (apex P6): the browser click-runtime SEAM the interactive
+ * rv-26.6: the browser click-runtime SEAM the interactive
  * {@link BrowserAcceptanceSurfaceDriver} drives through. A runner navigates a REAL
  * browser to a served URL and performs N clicks on a target selector, returning one
  * observation per CONFIRMED click.
  *
- * FAIL-LOUD, NEVER FABRICATE (the P6 core invariant): a runner MUST return
+ * FAIL-LOUD, NEVER FABRICATE: a runner MUST return
  * `{ ok: false }` when the browser cannot launch, the page cannot be reached, the
  * selector is absent, or ANY click of the requested N cannot be confirmed. It MUST
  * NEVER return `{ ok: true }` with fewer observations than requested, and MUST NEVER
@@ -29,7 +29,7 @@ export type BrowserClickFailureKind = "launch" | "navigate" | "click";
 export interface BrowserClickRunInput {
   /** The exact served URL to navigate to (deployed dashboard, or a local fixture in tests). */
   readonly url: string;
-  /** The click-target selector (e.g. the "Send notification" control). */
+  /** The click-target selector supplied by the verification specification. */
   readonly selector: string;
   /** The exact number of clicks to perform; every one must be confirmed or the run fails. */
   readonly clicks: number;

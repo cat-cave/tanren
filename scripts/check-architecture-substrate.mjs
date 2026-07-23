@@ -94,6 +94,11 @@ export function checkNoHostProcessSpawn(projectFiles) {
     if (!isCodeSource(file)) continue;
     if (
       invariantDocExclusions.has(file) ||
+      // CRA-01..04 is explicitly engine-external workstation tooling. These two
+      // files are its confined structured-command and singleton-flock adapters;
+      // they cannot be imported by an engine workspace package.
+      file === "ops/cra/src/process.ts" ||
+      file === "ops/cra/src/singleton.ts" ||
       file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
       file.startsWith("scripts/") ||
       // The JIT env-image build driver (env-management.md §4 + §7 P4) is a confined
@@ -132,7 +137,7 @@ export function checkNoHostProcessSpawn(projectFiles) {
       // run, analogous to liveEnvBuildDriver's host-side image build. The `PixelRenderRunner`
       // seam lets tests inject a fixture-PNG double; only THIS file imports child_process.
       file === "services/orchestrator/src/engine/design/render/podmanScreenshotRunner.ts" ||
-      // rv-26.6 (apex P6) browser click runner: the SAME confined host-side container-spawn
+      // rv-26.6 browser click runner: the SAME confined host-side container-spawn
       // seam as podmanScreenshotRunner. It shells `podman run` on the ORCHESTRATOR HOST to
       // drive N REAL Playwright chromium clicks INSIDE the render-worker container (the host
       // can't launch a prebuilt chromium). It is NOT workload execution over SSH — it is an
@@ -210,6 +215,10 @@ export function checkNoHostBindMounts(projectFiles) {
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
+      // CRA-04's disposable runner mounts only its verified throwaway worktree,
+      // read-only, into a no-network container. The package is outside the engine.
+      file === "ops/cra/src/isolatedRunner.ts" ||
+      file === "ops/cra/tests/isolation.test.ts" ||
       file.startsWith("services/allocator/") ||
       file.startsWith("services/orchestrator/src/engine/allocators/")
     ) {
@@ -305,6 +314,9 @@ export function checkDockerApiAllocatorOnly(projectFiles) {
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
+      // CRA-04's live negative control asserts that the disposable container has
+      // no runtime socket; mentioning that forbidden path is test evidence only.
+      file === "ops/cra/tests/isolation.test.ts" ||
       file === "scripts/check-architecture.mjs" ||
       file === "scripts/check-architecture-substrate.mjs" ||
       // justfile resolves TANREN_DOCKER_SOCK (docker default + rootless-podman

@@ -5,6 +5,12 @@ import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
 import type { ResolutionStage } from "../../engine/contracts/resolutionStage.js";
 import { settleResolutionJob } from "../../engine/dag/resolutionJobSettlement.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
+import {
+  LockedBehaviorContextError,
+  lockedBehaviorContextFailureResult,
+  PgRuntimeBehaviorContextLoader,
+  type RuntimeBehaviorContextLoader,
+} from "../../engine/verification/resolutionStages/resolutionBehaviorContext.js";
 import { verifyInternalPeer } from "./internalWriteShared.js";
 
 const claimSchema = z.object({
@@ -22,7 +28,6 @@ const reproduceSchema = z
     orgId: z.string().min(1),
     leaseOwner: z.string().min(1),
     leaseMs: z.number().int().positive().optional(),
-    context: z.unknown().optional(),
   })
   .strict();
 
@@ -32,6 +37,8 @@ export interface ResolutionJobRouteDeps {
   readonly store?: ResolutionJobStore;
   /** Test seam; production constructs the real BaselineReproductionStage. */
   readonly baselineStage?: ResolutionStage;
+  /** bh-15 locked behavior-context loader; defaults to the live loader. */
+  readonly behaviorContextLoader?: RuntimeBehaviorContextLoader;
 }
 
 function trusted(verifier: MtlsPeerVerifier, c: Context): boolean {
@@ -41,6 +48,7 @@ function trusted(verifier: MtlsPeerVerifier, c: Context): boolean {
 /** mTLS-only operational claim and heartbeat surface for the durable resolution queue. */
 export function createInternalResolutionJobRoutes(deps: ResolutionJobRouteDeps): Hono {
   const store = deps.store ?? new ResolutionJobStore(deps.pool);
+  const behaviorContextLoader = deps.behaviorContextLoader ?? new PgRuntimeBehaviorContextLoader({ pool: deps.pool });
   const app = new Hono();
 
   app.post("/internal/resolution-jobs/claim", async (c) => {
@@ -70,10 +78,22 @@ export function createInternalResolutionJobRoutes(deps: ResolutionJobRouteDeps):
     if (job === undefined) return c.json({ error: "resolution_job_lease_not_active" }, 423);
     if (job.stage !== "baseline") return c.json({ error: "resolution_job_not_baseline" }, 409);
     if (deps.baselineStage === undefined) return c.json({ error: "baseline_stage_unavailable" }, 503);
+    // bh-15: lock the exact frozen behavior context BEFORE the baseline probe, then
+    // run the stage — in ONE try. A caller-supplied or empty context is never used.
+    // ANY LockedBehaviorContextError (from the loader OR from inside stage.run, e.g.
+    // the resolver's missing-environment case) is TERMINAL (stale_contract) —
+    // re-running cannot fix it — so it settles, never releases retryable. A genuinely
+    // transient/unrelated error still releases retryable.
     let result;
     try {
-      result = await deps.baselineStage.run(job, parsed.data.context);
+      const behaviorContext = await behaviorContextLoader.load(job);
+      result = await deps.baselineStage.run(job, { behaviorContext });
     } catch (error) {
+      if (error instanceof LockedBehaviorContextError) {
+        const settled = await settleResolutionJob(store, job, lockedBehaviorContextFailureResult(error));
+        if (!settled) return c.json({ error: "resolution_job_lease_lost" }, 423);
+        return c.json({ error: "stale_behavior_contract", reason: error.reason }, 409);
+      }
       const released = await store.release({
         orgId: job.orgId,
         id: job.id,

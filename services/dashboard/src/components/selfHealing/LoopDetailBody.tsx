@@ -49,6 +49,12 @@ interface ChainNode {
   readonly symptomFailed?: boolean;
 }
 
+/** bh-15: the locked behavior-context digest each stage ran against, shown per stage. */
+function behaviorContext(hash: string | null | undefined): string {
+  if (hash === null || hash === undefined || hash === "") return "no behavior context";
+  return `behavior ctx ${hash.replace(/^sha256:/u, "").slice(0, 12)}`;
+}
+
 function chainNodes(sections: ProofSections): ChainNode[] {
   const nodes: ChainNode[] = [
     {
@@ -68,7 +74,7 @@ function chainNodes(sections: ProofSections): ChainNode[] {
   if (sections.baseline !== null) {
     nodes.push({
       kind: "baseline reproduced",
-      body: `run ${sections.baseline.verificationRunId} · ${sections.baseline.classification ?? "—"}`,
+      body: `run ${sections.baseline.verificationRunId} · ${sections.baseline.classification ?? "—"} · ${behaviorContext(sections.baseline.runtimeBehaviorContextHash)}`,
     });
   }
   if (sections.merge !== null) {
@@ -84,7 +90,7 @@ function chainNodes(sections: ProofSections): ChainNode[] {
     const sym = sections.production_symptom;
     nodes.push({
       kind: "production symptom re-verify",
-      body: `${sym.outcome} · ${sym.classification ?? "—"} · ${sym.assertions.length} assertion(s) · ${sym.probedUrl ?? "no url"}`,
+      body: `${sym.outcome} · ${sym.classification ?? "—"} · ${sym.assertions.length} assertion(s) · ${sym.probedUrl ?? "no url"} · ${behaviorContext(sym.runtimeBehaviorContextHash)}`,
       symptomFailed: sym.outcome === "failed",
     });
   }

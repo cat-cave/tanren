@@ -89,7 +89,10 @@ export const PersonaCreateInput = z
     scope: PersonaScope,
     orgId: z.string().min(1),
     projectId: z.string().min(1).nullable().default(null),
-    name: z.string().min(1),
+    // rv-21 — TRIM-AND-REJECT blank: `z.string().min(1)` accepts "   ", which would persist
+    // a junk persona (a whitespace-only name) even on a direct/programmatic derive that
+    // bypasses the interview-completion gate. A blank name is rejected at the schema.
+    name: z.string().trim().min(1),
     description: z.string().default(""),
     metadata: PersonaMetadata.default({}),
   })

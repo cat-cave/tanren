@@ -109,6 +109,32 @@ export interface DeriveResult {
   milestoneIds: string[];
 }
 
+// GREENFIELD AUTONOMY mode for a derive (mirrors the orchestrator DeriveBody
+// `autonomy` enum). `auto`/`simulated` land the project already autonomous so the
+// DagWalker advances off the empty repo with no follow-up PATCH; `human` keeps
+// the safe review-gated default.
+export type DeriveAutonomy = "auto" | "simulated" | "human";
+
+// A linked deploy provider selection for a greenfield derive — the client mirror
+// of the orchestrator `GreenfieldDeploySchema` subset the UI collects. Only the
+// two supported provider kinds; connection/grant travel together (a linked grant
+// carries both) so the server's paired-field refinement is satisfied.
+export interface DeriveDeployInput {
+  providerKind: "deploy.vercel" | "deploy.flyio";
+  connectionId?: string;
+  grantId?: string;
+}
+
+// The full derive payload the greenfield UI sends. `owner` (the GitHub owner for
+// the new repo) is REQUIRED by the orchestrator's strict `DeriveBody`; omitting it
+// is what returned the raw 400 the UI now guards against before submit.
+export interface DeriveInput {
+  capture: InterviewCapture;
+  owner: string;
+  autonomy?: DeriveAutonomy;
+  deploy?: DeriveDeployInput;
+}
+
 export function emptyCapture(): InterviewCapture {
   return {
     identity: null,

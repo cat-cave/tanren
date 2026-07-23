@@ -1,4 +1,4 @@
-// rv-26.6 (apex P6) — the interactive click-driver entrypoint (runs INSIDE the container).
+// rv-26.6 — the interactive click-driver entrypoint (runs INSIDE the container).
 //
 // Reads /work/params.json ({ url, selector, clicks }) the host `podmanBrowserClickRunner`
 // bind-mounts in, launches the container's Playwright chromium, navigates to the served

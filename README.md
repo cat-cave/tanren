@@ -6,6 +6,11 @@ the merge with its **own native checks**, merges, and then deploys the change an
 runs a demo against the live surface — against your real repository, with honest
 cost accounting.
 
+> **New here?** Want to build something with Tanren on your machine? Start with the
+> [external onboarding guide](docs/operator-guide/external-onboarding.md). Want to
+> contribute to the engine? Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+> [GitHub issues roster](https://github.com/cat-cave/tanren/issues).
+
 **Tanren is opinionated about the method, not the product.** You choose what you
 build, the language and framework, which LLMs do the work, the deploy target, and
 how much human review is required. Tanren owns the delivery operating model:
@@ -222,9 +227,12 @@ merging through the live jj/`MergeAuthority` path is the open item — but the e
 the single path regardless. Full rationale:
 **`docs/architecture/tanren-owns-the-engine.md`**.
 
-**The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
-that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +
-web UI) **autonomously**, over real surfaces. It is the **active live-validation
+**Phase 3 — `apex` is the acceptance test**: a max-difficulty **fixture** — a
+one-paragraph brief driven through Tanren's **normal operator flow** to a deployed
+product **autonomously**, over real surfaces, with **no apex-shaped harness,
+workflow, or engine code**. The URL shortener + Slack bot + web UI is just **one**
+example fixture; we want **several varied** ones (not all web, not all Slack) to
+flush engine bugs in parallel. It is the **active live-validation
 vehicle** — the operator role + run rhythm is `docs/operator-guide/apex.md`, the
 **concrete drive-from-zero playbook** is `docs/operator-guide/apex-run-playbook.md`,
 and the **templating doctrine** (every project DAG seeds from a validated template;
@@ -313,6 +321,26 @@ the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backen
 are now migrated onto the `Repositories` seam — that item is done.)
 (Vault per-run scoped credentials — the last big data-plane de-privilege — is now
 **done**.) None of these block the core promise above.
+
+## In beta — run your own fixture / contribute
+
+Tanren is graduating from in-development to in-beta: separate operators run separate
+instances on their own machines, each driving its own apex-difficulty fixture, all
+filing to one shared GitHub issue tracker. **To run your own apex-difficulty fixture
+or contribute a fix to the engine, start here:**
+
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — the contribution model: claim an issue or
+  file a bug → work in an isolated worktree (one unit of work per PR) → open a PR →
+  central audit → merge. The live roster is **GitHub issues**, typed `bug` or
+  `enhancement` and ordered by `blocked_by`/`blocks`.
+- **[`docs/operator-guide/external-onboarding.md`](docs/operator-guide/external-onboarding.md)**
+  — stand up your own Tanren instance from a fresh checkout on your own machine.
+- **[`docs/operator-guide/authoring-fixtures.md`](docs/operator-guide/authoring-fixtures.md)**
+  — write a new max-difficulty fixture. The URL shortener + Slack bot is just one
+  example; varied fixtures (not all web, not all Slack) flush bugs faster.
+- **[`docs/operator-guide/parallel-instances.md`](docs/operator-guide/parallel-instances.md)**
+  — run multiple instances in parallel: per-org BYOK credentials, isolated deploy
+  targets, one shared issue tracker.
 
 ## Quickstart for a real run (operator flow)
 

@@ -1,0 +1,34 @@
+{
+  "mode": "shadow",
+  "repository": "cat-cave/tanren",
+  "repositoryRoot": "/home/operator/src/tanren",
+  "baseBranch": "main",
+  "rubricVersion": "2026-07-22",
+  "github": {
+    "appId": 123456,
+    "installationId": 12345678,
+    "expectedLogin": "trevor-workstation[bot]",
+    "privateKeyPath": "/home/operator/.config/tanren-cra/credentials/trevor-workstation.pem"
+  },
+  "isolation": {
+    "worktreeRoot": "/scratch/worktrees/tanren/cra",
+    "image": "tanren-cra-audit:latest"
+  },
+  "audit": {
+    "command": "tanren-cra-audit",
+    "args": [],
+    "modelFamily": "grok",
+    "verificationCommand": { "executable": "just", "args": ["fast-check"] },
+    "deletionGate": { "liveLineThreshold": 100 }
+  },
+  "timing": {
+    "pollSeconds": 60,
+    "jitterSeconds": 10,
+    "inactivityDays": 7,
+    "reminderDays": [3, 6]
+  },
+  "notification": {
+    "command": "logger",
+    "args": ["--stderr", "--priority", "user.err", "--tag", "tanren-cra"]
+  }
+}

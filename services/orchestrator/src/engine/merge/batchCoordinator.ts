@@ -235,7 +235,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
       // These IDs come only from the behavior verifier's failing verdict. A
       // gate-only failure has no behavior coordinate, so it must not fabricate
-      // one just to populate the apex proof stream.
+      // one just to populate the behavior-verification event stream.
       if (verdict.result === "fail" && verdict.behaviorFailure !== undefined) {
         await this.deps.batchEvents.emitBehaviorFailed({
           projectId,

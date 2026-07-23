@@ -17,6 +17,7 @@ import { designContractDigest } from "../src/engine/design/designContract.js";
 import { ProjectDerivationStore } from "../src/engine/repositories/projects.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
 import { stubPool, noopComposeDesignSystem, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
+import { completeCaptureExtras } from "./fixtures/forge/completeCapture.js";
 
 const ACTOR: ActorContext = {
   userId: "response-loss-test",
@@ -27,6 +28,7 @@ const ACTOR: ActorContext = {
 };
 const CAPTURE: InterviewCapture = {
   ...emptyCapture(),
+  ...completeCaptureExtras(),
   identity: { slug: "response-loss", pitch: "Prove exact replay.", repoHint: "" },
   designContract: {
     domain: "proof",
@@ -34,8 +36,8 @@ const CAPTURE: InterviewCapture = {
     intent: "never duplicate external effects",
     principles: [],
     constraints: [],
-    personas: [],
-    behaviors: [],
+    personas: ["operator"],
+    behaviors: ["operator::inspect status"],
     dimensions: [],
   },
   lifecycle: {
@@ -70,6 +72,26 @@ const DESIGN_ANSWER = {
   ],
   coverage: [],
 };
+
+// The capture now carries a persona + behavior (rv-21 completeness), so an elaborated
+// design must EXHAUSTIVELY cover every behavior. The provider `elaborate` receives the
+// plan's `agentInput` (personas + behaviors with their derivation ids), so build the
+// coverage from it — a design answer that covers exactly the captured behaviors.
+function answerCovering(agentInput: {
+  personas: ReadonlyArray<{ id: string }>;
+  behaviors: ReadonlyArray<{ id: string; personaId: string }>;
+}) {
+  return {
+    ...DESIGN_ANSWER,
+    dimensions: [{ ...DESIGN_ANSWER.dimensions[0]!, personaIds: agentInput.personas.map((persona) => persona.id) }],
+    coverage: agentInput.behaviors.map((behavior) => ({
+      behaviorId: behavior.id,
+      personaId: behavior.personaId,
+      dimensionKey: "clarity",
+      surface: "clarity surface",
+    })),
+  };
+}
 
 function deployReceipt(): PreparedGreenfieldDeploy {
   return {
@@ -192,10 +214,10 @@ describe("project derivation — provider response loss at receipt boundaries", 
           }),
         ),
         designAgent: {
-          async elaborate() {
+          async elaborate(agentInput) {
             calls += 1;
             expect(getOrgScope()).toBeUndefined();
-            return DESIGN_ANSWER;
+            return answerCovering(agentInput);
           },
         },
       },
@@ -320,9 +342,9 @@ describe("project derivation — provider response loss at receipt boundaries", 
           }),
         ),
         designAgent: {
-          async elaborate() {
+          async elaborate(agentInput) {
             calls += 1;
-            return DESIGN_ANSWER;
+            return answerCovering(agentInput);
           },
         },
       },

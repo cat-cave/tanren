@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
-import { checkNoApexModeBranching } from "./check-architecture-apex-mode.mjs";
+import { checkNoFixtureModeBranching } from "./check-architecture-fixture-mode.mjs";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
 import { checkNoArbitraryTimeouts } from "./check-architecture-timeouts.mjs";
@@ -474,11 +474,8 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     // progress/sign-of-life primitive, so a NEWLY-introduced arbitrary timeout / retry-cap /
     // disguised quiet-window / banned identifier FAILS CI. No longer a report-only checklist.
     ...checkNoArbitraryTimeouts(projectFiles),
-    // ENFORCED (apex-mode eradication, project-config-is-the-source-of-truth): Tanren must
-    // not branch on whether it's running for apex. A NEWLY-introduced `TANREN_APEX_MODE`
-    // / `isApexMode` / `APEX_THRESHOLDS` / `resolveDefaultAuditPosture` /
-    // `resolveInsightThresholds` reference in production code FAILS CI.
-    ...checkNoApexModeBranching(projectFiles),
+    // ENFORCED: fixture-specific process branching is not the normal product path.
+    ...checkNoFixtureModeBranching(projectFiles),
     ...runStructureChecks(projectFiles),
   ];
 }

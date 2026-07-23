@@ -7,7 +7,7 @@
 **Verified source**: merged PREP @
 `a4ea6eb040359d78dabc1b81e22e89978cb012fe`
 **Node credit**: freeze = 0 · EV-SUB-W1-A = 0 · IN-7 consumer only
-after emit + HTTP + UI + live apex proof
+after emit + HTTP + UI + normal-flow live-run evidence
 
 This linked document is the durable row authority for exactly four W1-A
 events. It extends the single freeze protocol in `event-vocabulary-waves.md`
@@ -64,7 +64,7 @@ identity-only observability and does not project the opaque `Spec`.
 | `missionNodeId`  | `z.literal("in-7")`          | `public` |
 | `unitId`         | `z.string().min(1).max(256)` | `public` |
 
-**Apex correlation:** `missionNodeId === "in-7"` and `unitId` identify the
+**Run correlation:** `missionNodeId === "in-7"` and `unitId` identify the
 entered lifecycle unit. The event alone neither creates nor proves a validated
 row.
 
@@ -89,7 +89,7 @@ trajectory, the same data class as live `fragment.authoring.attempt`, and is
 bounded by `AUTHORING_ATTEMPT_BODY_PREVIEW_MAX`. `canonicalSignature` is
 ephemeral convergence material, never an SP-3 identity, proof, or digest.
 
-**Apex correlation:** `missionNodeId`, `unitId`, `attempt`, bounded preview,
+**Run correlation:** `missionNodeId`, `unitId`, `attempt`, bounded preview,
 signature, rejection, and closed decision must match the completed SP-2
 lifecycle point.
 
@@ -108,7 +108,7 @@ fragment usable; the durable, validated, non-retracted row remains authority.
 **Emit-time eligibility:**
 `persisted && batchVerdict === "passed" && !retracted`.
 
-**Apex correlation:** identity and attempt count match the SP-2 terminal point,
+**Run correlation:** identity and attempt count match the SP-2 terminal point,
 and the authoritative family row is present, validated, and non-retracted.
 
 ### 3.4 `integration.author.failed`
@@ -130,7 +130,7 @@ Eligibility is checked at emit time, not reconstructed later:
 - post-batch failure or skip:
   `persisted && retracted && (batchVerdict === "failed" || batchVerdict === "skipped")`.
 
-**Apex correlation:** identity, bounded reason, and attempt count match the
+**Run correlation:** identity, bounded reason, and attempt count match the
 terminal lifecycle point. Pre-persist failure correlates to row absence;
 post-batch failure correlates to deletion/retraction before event emission.
 
@@ -184,21 +184,21 @@ contract.
 
 ## 6. Collision and compatibility decisions
 
-| Existing or deferred name                                                | W1-A decision                                                                           |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `fragment.authoring.*`                                                   | Template F2 only; forbidden synonym, alias, producer event, or apex substitute for IN-7 |
-| `integration.author.*`                                                   | Final W1-A family namespace for IN-7; exactly the four rows in §1                       |
-| `designFragment.authoring.*`, `verification.author.*`, `policy.author.*` | Sibling families; never aliases                                                         |
-| `integration.requirement.validated`                                      | W0 IN-2 validate-HTTP fact; unrelated and unchanged                                     |
-| `integration.requirement.derived`                                        | Deferred compiler fact; unrelated and not promoted by W1-A                              |
-| `integration.requirement.superseded`                                     | Deferred lifecycle fact; not promoted by W1-A                                           |
-| Plane-A `integration.provisioned`                                        | Existing provision fact; unrelated to authoring                                         |
+| Existing or deferred name                                                | W1-A decision                                                                               |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `fragment.authoring.*`                                                   | Template F2 only; forbidden synonym, alias, producer event, or live-run substitute for IN-7 |
+| `integration.author.*`                                                   | Final W1-A family namespace for IN-7; exactly the four rows in §1                           |
+| `designFragment.authoring.*`, `verification.author.*`, `policy.author.*` | Sibling families; never aliases                                                             |
+| `integration.requirement.validated`                                      | W0 IN-2 validate-HTTP fact; unrelated and unchanged                                         |
+| `integration.requirement.derived`                                        | Deferred compiler fact; unrelated and not promoted by W1-A                                  |
+| `integration.requirement.superseded`                                     | Deferred lifecycle fact; not promoted by W1-A                                               |
+| Plane-A `integration.provisioned`                                        | Existing provision fact; unrelated to authoring                                             |
 
 The four final names have zero `blocked_collision`. W0 rows and meanings are
 immutable. Dual catalogs, runtime `event_types` upserts, hand-seeded rows, and
 generic substitutes remain forbidden.
 
-## 7. Replay, negative controls, and apex proof
+## 7. Replay, negative controls, and general live-run proof
 
 The replay contract is the frozen type string plus the strict payload shape.
 Successful rows correlate by `missionNodeId === "in-7"`, `unitId`, and the
@@ -239,7 +239,7 @@ alias.
 ```text
 SPEC-FREEZE-W1-A (this docs-only freeze)
   -> EV-SUB-W1-A (strict Zod + severity + sensitivity + codegen + catalog)
-  -> IN-7 consumer (producer + HTTP + UI + live apex)
+  -> IN-7 consumer (producer + HTTP + UI + normal-flow live fixture run)
 ```
 
 This freeze takes no migration slot. EV-SUB-W1-A chooses the then-current free
@@ -249,4 +249,4 @@ additive catalog slot only after mapped 0043–0045 owners land (at least
 Still deferred: `integration.requirement.derived`/`superseded`, A3 validation
 and stimulus/effect chains, delivery/grant/resource facts, and every event name
 beyond the four in §1. Freeze and EV-SUB each earn zero node credit; only the
-later callable, visible, apex-proven IN-7 consumer may earn the node.
+later callable, visible, live-run-proven IN-7 consumer may earn the node.

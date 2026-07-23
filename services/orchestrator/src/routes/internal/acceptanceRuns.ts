@@ -225,7 +225,7 @@ export function createInternalAcceptanceRunRoutes(deps: AcceptanceRunRouteDeps):
   // acceptance runs observe the deployed product instead of going inconclusive.
   const drivers: readonly AcceptanceSurfaceDriver[] = deps.drivers ?? [
     new HttpAcceptanceSurfaceDriver({ resolveBaseUrl: new PgReleaseInstanceBaseUrlResolver(deps.pool) }),
-    // rv-26.6 (apex P6): the interactive browser click driver, over the SAME deployed
+    // rv-26.6: the interactive browser click driver, over the SAME deployed
     // release URL, driving REAL clicks in the containerized Playwright chromium. A
     // browser-surface plan's `<id>.clickCount` assertion observes a REAL confirmed count.
     new BrowserAcceptanceSurfaceDriver({

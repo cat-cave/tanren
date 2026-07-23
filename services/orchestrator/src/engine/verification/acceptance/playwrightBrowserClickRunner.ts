@@ -1,5 +1,5 @@
 /**
- * rv-26.6 (apex P6): the in-process {@link BrowserClickRunner} — a REAL Playwright
+ * rv-26.6: the in-process {@link BrowserClickRunner} — a REAL Playwright
  * chromium that navigates to the served URL and clicks the target selector N times.
  *
  * This is the runner for hosts that CAN launch a prebuilt chromium directly (CI lanes,

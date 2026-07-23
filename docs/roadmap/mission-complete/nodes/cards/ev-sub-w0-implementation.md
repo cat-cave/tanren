@@ -20,7 +20,7 @@ Install exactly the six frozen W0 payload schemas through the sole SP-8 chain:
 6. after CAS-SUB lands, one additive `0042` catalog migration.
 
 This unit emits no production event and implements no consumer HTTP, UI, or
-apex behavior. It cannot earn consumer-node credit.
+live-run behavior. It cannot earn consumer-node credit.
 
 ## Exact path lease
 
@@ -88,7 +88,7 @@ runtime behavior must remain byte-for-byte equivalent at the public boundary.
 ## Hard exclusions
 
 - Consumer producers or `PgEventStore.append` call sites
-- IN-2/RV-4/GV-1/GV-2/MQ-1 HTTP, UI, routes, nav, or apex tests
+- IN-2/RV-4/GV-1/GV-2/MQ-1 HTTP, UI, routes, nav, or live fixture tests
 - Any event not frozen in W0, including `integration.requirement.derived`,
   `review.simulated.started`, and `review.simulated.verdict`
 - Runtime catalog upserts, a second seed/catalog, or direct `events` writes
@@ -118,5 +118,5 @@ After CAS-SUB lands and this branch rebases:
 ## Credit and publication
 
 EV-SUB-W0 remains **zero credit** even after merge. Consumer nodes count only
-after their separate emit + HTTP + UI + apex PRs converge and land. This branch
+after their separate emit + HTTP + UI + live-validation PRs converge and land. This branch
 is local authoring only unless root separately authorizes publication.

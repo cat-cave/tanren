@@ -4,7 +4,7 @@
 // swallowed: the resulting machine accumulation fragments a single-instance product's
 // file store (the apex-v96 class), presenting as a false "persistence broken" PRODUCT
 // symptom whose real cause is INFRA. This reporter appends the durable
-// `deploy.reap_failed` (warn) so an apex halt from accumulation is attributable to
+// `deploy.reap_failed` (warn) so a halt from accumulation is attributable to
 // infra, not blamed on product code.
 //
 // Two callers share it: the inline post-verify reap (source `verify`) and the

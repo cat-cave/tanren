@@ -1,8 +1,27 @@
 # `apex` — the test of Tanren (operator role + what's actually under test)
 
-`apex` is the one real, end-to-end run that proves **Tanren works**. Read this
-before driving it — the role it puts you in is counterintuitive, and getting it
-wrong invalidates the result. The full design (domain, DAG shape, proof
+## Doctrine
+
+**apex is a fixture-class, not a feature.** "apex" names a set of rough operator notes
+for **max-difficulty products** — a _class_, deliberately varied (not all web, not all
+Slack, not all "100-of-something") — that Tanren must build by running them through its
+**normal, general pipeline** (design → implement → native-validate → review → merge →
+deploy → observe → triage → repair → live-verify), with **no human in the inner loop**.
+Several apex fixtures run **in parallel** to flush bugs faster. **There must be NOTHING
+apex-specific in the engine** — no apex workflow, harness, proof-composition, table,
+route, correlation-id, test-driver, or comment that names "apex." The proofs an apex run
+exercises are just what the **general behavior-verification pipeline** produces for _any_
+behavior-gated project: event producers → the gate's runtime-proof bundle → MergeAuthority
+landing the exact digest → promote-same-artifact → post-merge re-proof → honest demo, plus
+its negative controls. **Definition of done:** point the finished general pipeline at an
+apex fixture; it autonomously builds the product, a planted product-level bug is
+auto-triaged, fixed, merged through the native gate, deployed, and the production symptom
+is re-verified gone. **If Tanren needs ANY apex-shaped scaffolding to pass, the proof is
+VOID** — we would have shown only that Tanren passes a rigged test, not that it builds
+max-difficulty projects generally.
+
+Read this before driving a fixture — the role it puts you in is counterintuitive, and
+getting it wrong invalidates the result. The full design (domain, DAG shape, proof
 checklist) is `docs/architecture/autonomy-engine.md` §4; this doc is the **operating
 contract for the human/orchestrator driving the run.**
 
@@ -114,7 +133,8 @@ per-spec loop?
 
 **NOT under test:**
 
-- **Whether the URL shortener works.** It is a disposable fixture. Nobody cares if
+- **Whether the link-shortener works.** It is one example apex fixture, of a class.
+  Nobody cares if
   it ships broken. It exists only to give Tanren something real, outward-facing,
   and dependency-layered to build.
 - **How efficiently Tanren reaches the goal.** This is **not** a benchmark run.
@@ -179,13 +199,14 @@ greenfield creation, link a supported org deploy provider (`deploy.vercel` or
 `deploy.flyio`) through the integration API, then include that provider in the
 greenfield/onboarding request. If no provider is named, or the named provider is
 not linked for the org, creation fails loudly with `deploy_provider_missing` or
-`deploy_not_linked`; Tanren must not create an apex project that has no real path
-to a live deploy.
+`deploy_not_linked`; Tanren must not create any deploy-required project without a
+real path to a live deploy.
 
 ## Templating: every project DAG seeds from a fragment-composed template
 
-apex creates a greenfield project — and a greenfield project under Tanren's
-doctrine does **not** scaffold from scratch into an empty repo. EVERY project DAG
+The current example fixture creates a greenfield project through the normal flow —
+and a greenfield project under Tanren's doctrine does **not** scaffold from scratch
+into an empty repo. EVERY project DAG
 seeds from a **fragment-composed template**: derive runs `selectFragmentConfig`
 over the captured lifecycle against the unified library (bundled core fragments +
 the org-scoped fragments persisted by F2), composes the VFS deterministically, and
@@ -233,10 +254,12 @@ real merges with conflict resolution → a planted-bug issue auto-triaged and fi
 output artifact is **that provenance trail**, not a working URL shortener. Then,
 and only then, we formulate the benchmark.
 
-## The proof portfolio (the goal)
+## The normal-flow evidence portfolio (the goal)
 
-apex is the vehicle for a portfolio of validated proofs that **Tanren is an
-autonomous software org**. The proofs:
+Apex-class fixtures are demanding inputs from which the normal event, gate, deploy,
+and observation surfaces yield evidence that **Tanren is an autonomous software
+org**. This is reporting over the general pipeline, not apex-specific proof
+composition. The evidence categories are:
 
 - **autonomy-loop** — each loop the machine is designed to run (DAG-build, walker
   auto-execution, parallel merge, issue-triage→fix, deploy, audits, CI-intelligence,

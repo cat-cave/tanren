@@ -52,7 +52,7 @@ export interface HttpProbeSpec {
 }
 
 /**
- * rv-26.6 (apex P6): one interactive browser interaction the `browser` surface driver
+ * rv-26.6: one interactive browser interaction the `browser` surface driver
  * performs — `clicks` REAL clicks on `selector` in the deployed dashboard. Its observed
  * confirmed-click count feeds an assertion whose subject is `<interactionId>.clickCount`
  * (e.g. `notify.clickCount` equals 100). Each confirmed click also emits one

@@ -1,5 +1,19 @@
 import type pg from "pg";
 import { withJobOrgScope } from "../data/orgScopedDb.js";
+import {
+  PoolLeaseCapacityError,
+  PoolLeaseExhaustedError,
+  StaleLeaseReleaseError,
+  type PoolLeaseReleaseOutcome,
+  type PoolLeaseReservation,
+  type ReleasePoolLeaseInput,
+  type ReservePoolLeaseInput,
+  type RunnerPoolLeaseStore,
+} from "./runnerPoolLease.js";
+
+// Re-export the fixed-pool lease seam so consumers keep a single `runnerStore.js`
+// import surface (the definitions live in `runnerPoolLease.ts` for the line cap).
+export * from "./runnerPoolLease.js";
 
 export interface ClaimRunnerInput {
   runnerId: string;
@@ -24,7 +38,7 @@ export interface ClaimRunnerInput {
    * Forge ideation runner whose `runId` is a synthetic, non-`runs` handle). This
    * was previously derived in-statement from `(SELECT org_id FROM runs WHERE
    * run_id = $runId)`, which returns NULL for that runless handle and made the
-   * org-scoped INSERT violate the `runners` WITH CHECK policy (the apex onboarding
+   * org-scoped INSERT violate the `runners` WITH CHECK policy (the standard onboarding
    * interview 500'd here). `null` is the EXPLICIT system / null-org job case (the
    * worker's system scope / BYPASSRLS), NOT a missing value.
    */
@@ -114,8 +128,139 @@ export interface RunnerStore {
   readTeardownDescriptor(runnerId: string): Promise<ProviderTeardownMetadata | undefined>;
 }
 
-export class PgRunnerStore implements RunnerStore {
+export class PgRunnerStore implements RunnerStore, RunnerPoolLeaseStore {
   constructor(private readonly pool: pg.Pool) {}
+
+  async reservePoolLease(input: ReservePoolLeaseInput): Promise<PoolLeaseReservation> {
+    if (input.candidates.length === 0) {
+      throw new PoolLeaseExhaustedError(input.poolKey, 0);
+    }
+    return withJobOrgScope(this.pool, async (client) => {
+      // ATOMIC CROSS-PROCESS RESERVATION (#1254). Serialize every reserver of this
+      // (org, pool) with a Postgres advisory TRANSACTION lock so the free-host scan
+      // + cap count + INSERT are one indivisible decision — no read-then-write race
+      // between processes. The lock is released automatically at COMMIT/ROLLBACK
+      // (`pg_advisory_xact_lock`), so there is NO wall-clock lease deadline (the
+      // timeout-eradication doctrine: liveness is owner/fencing + the orphan
+      // sweeper, never a `*_MS` expiry). The `runners_live_lease_key_uniq` partial
+      // unique index is the hard backstop: even if this logic regressed, the DB
+      // still refuses a second LIVE lease on the same host.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `${input.orgId ?? ""}:runner_pool_lease:${input.poolKey}`,
+      ]);
+
+      // Live leases for this pool (RLS-scoped to the caller's org): the busy host
+      // set + the cap count.
+      const live = await client.query<{ lease_key: string | null }>(
+        "SELECT lease_key FROM runners WHERE pool_key = $1 AND released_at IS NULL",
+        [input.poolKey],
+      );
+      const liveCount = live.rowCount ?? live.rows.length;
+      if (input.maxConcurrent !== undefined && liveCount >= input.maxConcurrent) {
+        throw new PoolLeaseCapacityError(input.poolKey, input.maxConcurrent);
+      }
+      const busy = new Set<string>();
+      for (const row of live.rows) {
+        if (row.lease_key !== null) {
+          busy.add(row.lease_key);
+        }
+      }
+      const chosen = input.candidates.find((candidate) => !busy.has(candidate.leaseKey));
+      if (chosen === undefined) {
+        throw new PoolLeaseExhaustedError(input.poolKey, input.candidates.length);
+      }
+
+      // Claim the chosen host. `fencing_token` is stamped from the shared sequence
+      // (a fresh monotonic value on BOTH a fresh insert and a re-adopt of a
+      // released row). The `WHERE runners.released_at IS NOT NULL` re-adopt guard +
+      // the rowCount===0 → RunnerClaimLiveRowError mirror `claim()` so a LIVE
+      // runner-id conflict is a typed-permanent throw, never a silent overwrite.
+      const result = await client.query<{ fencing_token: string | null }>(
+        `INSERT INTO runners (
+           runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
+           host_key_fingerprint, image_sha, container_id, pool_key, lease_key, lease_owner, fencing_token
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10, $11, $12, $13,
+           nextval('runner_lease_fencing_token_seq')
+         )
+         ON CONFLICT (runner_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           run_id = EXCLUDED.run_id,
+           project_id = EXCLUDED.project_id,
+           org_id = EXCLUDED.org_id,
+           allocator = EXCLUDED.allocator,
+           ssh_host = EXCLUDED.ssh_host,
+           ssh_port = EXCLUDED.ssh_port,
+           host_key_fingerprint = EXCLUDED.host_key_fingerprint,
+           image_sha = EXCLUDED.image_sha,
+           container_id = EXCLUDED.container_id,
+           pool_key = EXCLUDED.pool_key,
+           lease_key = EXCLUDED.lease_key,
+           lease_owner = EXCLUDED.lease_owner,
+           fencing_token = nextval('runner_lease_fencing_token_seq'),
+           provider_metadata = NULL,
+           created_at = runners.created_at,
+           released_at = NULL
+         WHERE runners.released_at IS NOT NULL
+         RETURNING fencing_token`,
+        [
+          input.runnerId,
+          input.runId,
+          input.projectId,
+          input.orgId,
+          input.allocator,
+          chosen.sshHost,
+          chosen.sshPort,
+          chosen.hostKeyFingerprint,
+          input.imageSha,
+          chosen.containerId,
+          input.poolKey,
+          chosen.leaseKey,
+          input.owner,
+        ],
+      );
+      if (result.rowCount === 0) {
+        throw new RunnerClaimLiveRowError(input.runnerId);
+      }
+      return {
+        leaseKey: chosen.leaseKey,
+        sshHost: chosen.sshHost,
+        sshPort: chosen.sshPort,
+        hostKeyFingerprint: chosen.hostKeyFingerprint,
+        containerId: chosen.containerId,
+        owner: input.owner,
+        fencingToken: result.rows[0]?.fencing_token ?? null,
+      };
+    });
+  }
+
+  async releasePoolLease(input: ReleasePoolLeaseInput): Promise<PoolLeaseReleaseOutcome> {
+    return withJobOrgScope(this.pool, async (client) => {
+      // FENCED release: only the CURRENT owner+token can free the lease.
+      // `IS NOT DISTINCT FROM` matches NULL-to-NULL (test fakes that never stamped a
+      // token); the live path always carries a concrete bigint.
+      const updated = await client.query(
+        `UPDATE runners SET status = 'released', released_at = now()
+         WHERE runner_id = $1 AND released_at IS NULL AND lease_owner = $2
+           AND fencing_token IS NOT DISTINCT FROM $3::bigint
+         RETURNING runner_id`,
+        [input.runnerId, input.owner, input.fencingToken],
+      );
+      if ((updated.rowCount ?? 0) > 0) {
+        return { released: true };
+      }
+      // Nothing matched: distinguish an already-released / absent row (a legitimate
+      // no-op) from a LIVE lease held by a DIFFERENT owner (a stale releaser → fence).
+      const stillLive = await client.query("SELECT 1 FROM runners WHERE runner_id = $1 AND released_at IS NULL", [
+        input.runnerId,
+      ]);
+      if ((stillLive.rowCount ?? 0) === 0) {
+        return { released: false };
+      }
+      throw new StaleLeaseReleaseError(input.runnerId);
+    });
+  }
 
   async claim(input: ClaimRunnerInput): Promise<void> {
     // RLS R3a-worker (runners write): the allocator runs OUTSIDE an open

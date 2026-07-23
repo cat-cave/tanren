@@ -38,9 +38,17 @@ import {
   SidecarHttpAllocator,
   StaticRunnerAllocator,
   UnconfiguredAllocator,
+  PoolLeaseCapacityError,
+  PoolLeaseExhaustedError,
+  StaleLeaseReleaseError,
   type AllocatorRegistry,
   type ClaimRunnerInput,
+  type PoolLeaseReleaseOutcome,
+  type PoolLeaseReservation,
   type ProviderTeardownMetadata,
+  type ReleasePoolLeaseInput,
+  type ReservePoolLeaseInput,
+  type RunnerPoolLeaseStore,
   type RunnerStore,
 } from "../src/engine/allocators/index.js";
 import { AwsEc2Allocator } from "../src/engine/allocators/awsEc2Allocator.js";
@@ -57,8 +65,10 @@ import { generateEd25519KeyPair } from "../src/engine/ssh/keygen.js";
 
 const PINNED_FINGERPRINT = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-class MemoryRunnerStore implements RunnerStore {
+class MemoryRunnerStore implements RunnerStore, RunnerPoolLeaseStore {
   private readonly claimed = new Map<string, ClaimRunnerInput>();
+  private readonly leases = new Map<string, { poolKey: string; leaseKey: string; owner: string; token: string }>();
+  private nextToken = 1;
   async claim(input: ClaimRunnerInput): Promise<void> {
     this.claimed.set(input.runnerId, input);
   }
@@ -68,8 +78,31 @@ class MemoryRunnerStore implements RunnerStore {
   async readTeardownDescriptor(runnerId: string): Promise<ProviderTeardownMetadata | undefined> {
     return this.claimed.get(runnerId)?.providerMetadata ?? undefined;
   }
+  async reservePoolLease(input: ReservePoolLeaseInput): Promise<PoolLeaseReservation> {
+    const held = [...this.leases.values()].filter((l) => l.poolKey === input.poolKey);
+    if (input.maxConcurrent !== undefined && held.length >= input.maxConcurrent) {
+      throw new PoolLeaseCapacityError(input.poolKey, input.maxConcurrent);
+    }
+    const busy = new Set(held.map((l) => l.leaseKey));
+    const chosen = input.candidates.find((candidate) => !busy.has(candidate.leaseKey));
+    if (chosen === undefined) {
+      throw new PoolLeaseExhaustedError(input.poolKey, input.candidates.length);
+    }
+    const token = String(this.nextToken++);
+    this.leases.set(input.runnerId, { poolKey: input.poolKey, leaseKey: chosen.leaseKey, owner: input.owner, token });
+    return { ...chosen, owner: input.owner, fencingToken: token };
+  }
+  async releasePoolLease(input: ReleasePoolLeaseInput): Promise<PoolLeaseReleaseOutcome> {
+    const record = this.leases.get(input.runnerId);
+    if (record === undefined) return { released: false };
+    if (record.owner !== input.owner || record.token !== input.fencingToken) {
+      throw new StaleLeaseReleaseError(input.runnerId);
+    }
+    this.leases.delete(input.runnerId);
+    return { released: true };
+  }
   size(): number {
-    return this.claimed.size;
+    return this.claimed.size + this.leases.size;
   }
 }
 
@@ -85,7 +118,7 @@ const INSTANCE_TAXONOMY_BY_KIND: Record<Exclude<AllocatorKind, never>, Allocator
   }).taxonomy,
   manual_ssh: new ManualSshAllocator({
     hosts: [{ id: "h1", host: "10.0.0.1", hostKeyFingerprint: PINNED_FINGERPRINT }],
-    runners: new MemoryRunnerStore(),
+    leases: new MemoryRunnerStore(),
   }).taxonomy,
   sidecar: new SidecarHttpAllocator({
     baseUrl: "http://allocator:3200",
@@ -225,7 +258,7 @@ describe("AllocatorTaxonomy — reclassification invariants (Codex H3 #14/#15/#1
       const store = new MemoryRunnerStore();
       const allocator = new ManualSshAllocator({
         hosts: [{ id: "h1", host: "10.0.0.1", hostKeyFingerprint: PINNED_FINGERPRINT }],
-        runners: store,
+        leases: store,
       });
       const allocation = await allocator.allocate({
         runId: "run_fp_2",

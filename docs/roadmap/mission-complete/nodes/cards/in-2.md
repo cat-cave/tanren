@@ -5,7 +5,7 @@
 **Base**: `origin/main` @ `67d9363fe220e1f280ed706a0b80af2b16724362`
 **Predecessors**: SP-1, SP-3, and EV-SUB-W0 / migration `0042`
 **State**: **COMPLETE CANDIDATE** — the contracts, durable CAS path, callable
-HTTP surface, visible overview panel, governed producer, and non-mocked apex
+HTTP surface, visible overview panel, governed producer, and non-mocked runtime-behavior
 proof are implemented. Node credit starts only after gates, audit, and merge.
 
 ## Purpose
@@ -45,7 +45,7 @@ shape **must never** validate as a product messaging binding.
 - `services/dashboard/src/components/integrations/IntegrationContractPanel.tsx`
 - `services/orchestrator/tests/integrationRequirement.golden.test.ts`
 - `services/orchestrator/tests/integrationContracts.route.test.ts`
-- `services/orchestrator/tests/integrationContracts.apex.integration.test.ts`
+- `services/orchestrator/tests/integrationContracts.runtimeBehavior.integration.test.ts`
 - `services/orchestrator/tests/pgCasByteStore.rls.integration.test.ts`
 - `services/dashboard/tests/integrationContracts.render.test.ts`
 
@@ -128,18 +128,18 @@ EV-SUB-W0 landed migration `0042` and the strict governed schema for:
 
 The persisting validate route appends it through the sole `PgEventStore` only
 after `PgCasByteStore.put` returns its integrity-verified stored winner. The
-real-Postgres apex test proves HTTP → event → retrievable/rehashed bytes, stable
+real-Postgres runtime-behavior test proves HTTP → event → retrievable/rehashed bytes, stable
 CAS identity across revalidation, and cross-org denial. Preview, invalid,
 malformed, and denied requests emit nothing and produce no CAS write.
 
 ### Convergence fixes (R1–R4 closed)
 
 Independent convergence audit `in2-b5edc573-grok-convergence-report.md` ranked
-the named-event/apex gap (R1) as the original P0. The bounded remediation
+the named-event/runtime-behavior gap (R1) as the original P0. The bounded remediation
 touches only owned/shared paths above:
 
-- **R1 — governed event + apex correlation**
-  (`routes/integrationContracts`, route unit proof, real-PG apex proof): exactly
+- **R1 — governed event + runtime-behavior correlation**
+  (`routes/integrationContracts`, route unit proof, real-PG runtime-behavior proof): exactly
   one append follows each successful persisting CAS put; event and response
   reference the same stored artifact. Non-persisting and failure paths append
   zero events. EV-SUB-W0 owns the catalog/schema/migration; IN-2 owns only the
@@ -172,7 +172,7 @@ touches only owned/shared paths above:
 
 - Golden contract vectors (always-on)
 - Route unit tests (authz, 422 plane separation, CAS put path mocked/in-memory ok)
-- Real-PG apex: HTTP validate → governed event → matching retrievable CAS bytes;
+- Real-PG runtime-behavior verification: HTTP validate → governed event → matching retrievable CAS bytes;
   real session + CSRF, cross-org, wrong/missing-CSRF, and no-effect controls
 - Real-PG RLS: same-org put/get; cross-org denied (`TANREN_RLS_DB_TEST=1`)
 - Dashboard render test: panel shows live result markers + unavailable branch

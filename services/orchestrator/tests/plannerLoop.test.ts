@@ -221,7 +221,7 @@ describe("spec loop — TRIAGE routing", () => {
     expect(summary.outcome).toBe("kept");
     expect(summary.newSpecs).toHaveLength(2);
   });
-  // Coverage-guard + end-to-end routing tests live in `apexV79LoopClosure.test.ts`.
+  // Coverage-guard + end-to-end routing tests live in `runLoopClosureRegression.test.ts`.
 });
 
 describe("spec loop — DEMO-RUN gating (optional slot)", () => {

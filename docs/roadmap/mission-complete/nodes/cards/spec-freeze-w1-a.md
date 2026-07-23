@@ -23,7 +23,7 @@ Freeze exactly these four family-owned SP-2 lifecycle names:
 
 The durable freeze must be self-contained: exact strict payload fields and
 bounds, complete sensitivity leaves, envelope identity, lifecycle bindings,
-firing eligibility, throw-safe emit doctrine, apex correlation, collision
+firing eligibility, throw-safe emit doctrine, runtime-behavior correlation, collision
 decisions, and negative authority pins. It freezes obligations only. A later
 EV-SUB-W1-A implements the sole production Zod/catalog path and also earns
 zero node credit.
@@ -34,7 +34,7 @@ zero node credit.
 merged PREP (credit 0)
   -> SPEC-FREEZE-W1-A (this docs-only unit; credit 0)
   -> EV-SUB-W1-A (registry/seed/migration; credit 0)
-  -> IN-7 producer + HTTP + UI + live apex proof (node credit)
+  -> IN-7 producer + HTTP + UI + normal-flow live-run proof (node credit)
 ```
 
 No IN-1 lifecycle table or SP-2 kernel implementation is required to freeze
@@ -79,7 +79,7 @@ If those accepted semantics move without a new GO audit, the freeze must stop.
   Success requires persistence, passed whole-batch compose, and no retraction;
   post-batch failure requires retraction before emit.
 - `fragment.authoring.*` is template F2 only and is never an IN-7 synonym,
-  alias, producer event, or apex substitute.
+  alias, producer event, or substitute for normal-flow live validation.
 - No automatic EventStore idempotency or row/event same-transaction claim is
   frozen. Breaking payload changes require a later explicit freeze protocol,
   never a silent reshape.
@@ -98,21 +98,21 @@ If those accepted semantics move without a new GO audit, the freeze must stop.
 
 ## Proof gates
 
-| Gate | Requirement                                                                                                                             |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| F1   | Four exact strings; strict fields/bounds/enums; exact severity; complete public sensitivity; sole producer; apex correlation; PREP pins |
-| F2   | Zero `blocked_collision` among the four                                                                                                 |
-| F3   | Template/sibling/W0/deferred collision decisions remain non-synonymous                                                                  |
-| F4   | No fifth name, same-transaction claim, idempotency invention, or deferred fact promoted                                                 |
-| P1   | Changed paths equal this exclusive lease only                                                                                           |
-| P2   | Every owned file remains below 500 lines                                                                                                |
-| P3   | Relevant docs/architecture/affected checks, then `just fast-check`, `just ci`, and root-serialized `just smoke`                         |
-| P4   | Local commit only until the orchestrating root separately authorizes publication                                                        |
+| Gate | Requirement                                                                                                                                         |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1   | Four exact strings; strict fields/bounds/enums; exact severity; complete public sensitivity; sole producer; runtime-behavior correlation; PREP pins |
+| F2   | Zero `blocked_collision` among the four                                                                                                             |
+| F3   | Template/sibling/W0/deferred collision decisions remain non-synonymous                                                                              |
+| F4   | No fifth name, same-transaction claim, idempotency invention, or deferred fact promoted                                                             |
+| P1   | Changed paths equal this exclusive lease only                                                                                                       |
+| P2   | Every owned file remains below 500 lines                                                                                                            |
+| P3   | Relevant docs/architecture/affected checks, then `just fast-check`, `just ci`, and root-serialized `just smoke`                                     |
+| P4   | Local commit only until the orchestrating root separately authorizes publication                                                                    |
 
 ## Credit and handoff
 
 This freeze remains zero credit after merge. EV-SUB-W1-A remains zero credit
 after installation. IN-7 can earn node credit only when the real consumer emits
 the installed names and is independently callable through HTTP, visible in the
-dashboard, and proven by live apex correlation. Do not push or open a PR from
+dashboard, and proven by live runtime-behavior correlation. Do not push or open a PR from
 this author worktree.

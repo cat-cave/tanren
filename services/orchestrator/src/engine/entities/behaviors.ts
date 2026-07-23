@@ -77,7 +77,9 @@ function decodeBehaviorRow(raw: RawBehaviorRow): BehaviorRow {
 export const BehaviorCreateInput = z.object({
   id: z.string().min(1).optional(),
   personaId: z.string().min(1),
-  title: z.string().min(1),
+  // rv-21 — TRIM-AND-REJECT blank (matches PersonaCreateInput.name): a whitespace-only
+  // title must never persist a junk behavior entity, even on a direct/programmatic derive.
+  title: z.string().trim().min(1),
   given: z.string(),
   when: z.string(),
   then: z.string(),

@@ -1,6 +1,6 @@
-// rv-26.6 (apex P6) — the REAL end-to-end proof, gated on TANREN_RV26_BROWSER_E2E=1 (the
+// rv-26.6 — the REAL end-to-end proof, gated on TANREN_RV26_BROWSER_E2E=1 (the
 // RLS-suite pattern) because it needs podman + the render-worker image, not present in
-// every CI lane. It serves a static "Send notification" fixture page over node:http and
+// every CI lane. It serves a static target-control fixture page over node:http and
 // drives 100 REAL clicks through a REAL containerized Playwright chromium, asserting the
 // runner observes EXACTLY 100 confirmed clicks. The negative arm serves a page WITHOUT the
 // button and asserts the runner FAILS LOUD (never a short/fabricated count).
@@ -26,14 +26,14 @@ const execFileAsync = promisify(execFile);
 const ENABLED = process.env["TANREN_RV26_BROWSER_E2E"] === "1";
 const INPROCESS = process.env["TANREN_RV26_BROWSER_INPROCESS"] === "1";
 const PODMAN = process.env["TANREN_PODMAN_BIN"] ?? "podman";
-const SELECTOR = "#send-notification";
+const SELECTOR = "#target-control";
 
 function fixturePage(withButton: boolean): string {
-  const button = withButton ? `<button id="send-notification">Send notification</button>` : `<p>no control here</p>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>apex P6 fixture</title></head>
+  const button = withButton ? `<button id="target-control">Target control</button>` : `<p>no control here</p>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>browser click fixture</title></head>
 <body>${button}<script>
 let n = 0;
-const el = document.getElementById("send-notification");
+const el = document.getElementById("target-control");
 if (el) el.addEventListener("click", () => { n += 1; document.title = "clicks:" + n; });
 </script></body></html>`;
 }

@@ -1,0 +1,25 @@
+name: "Engine task / enhancement"
+description: "A scoped, PR-sized engine capability or improvement."
+title: "<handle>: <short description>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "This must be a **general** capability any project/tenant uses. It must NOT be apex-shaped or name apex (apex is a fixture-class run through the normal pipeline — see docs/operator-guide/apex.md)."
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: "What to build + the seam/contract it slots into — name real files."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: "Positive proof (real test/smoke) AND the REQUIRED negative control — a concrete fail-open it must reject."
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "**Triage sets the rest.** Bucket (`runtime` / `governance` / `back-half` / `merge-queue`) and priority (`P1` / `P2` / `P3`) are assigned in triage. Ordering is recorded via GitHub's `blocked_by` / `blocks` issue dependencies — not a text field here."

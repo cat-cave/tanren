@@ -7,14 +7,14 @@ const input = { orgId: "org", projectId: "project", releaseInstanceId: "release"
 function checker(overrides: Partial<Record<number, readonly Record<string, unknown>[]>> = {}) {
   let call = 0;
   const rows: Record<number, readonly Record<string, unknown>[]> = {
-    1: [{ integration_node_id: "run-apex" }],
+    1: [{ integration_node_id: "run-1" }],
     2: [{ id: "pre-merge-run", status: "completed" }],
     3: [{ behavior_revision_id: "behavior-a" }],
     4: [{ id: "acceptance-run" }],
     5: [{ behavior_revision_id: "behavior-a" }],
     6: [{ behavior_revision_id: "behavior-a", outcome: "passed", executed_assertion_count: 1 }],
     7: [{ count: 1 }],
-    8: [{ count: 1 }],
+    8: [{ attempt_count: 1, projection_count: 1 }],
     ...overrides,
   };
   const pool = {
@@ -69,10 +69,17 @@ describe("acceptance completeness invariant", () => {
     ).resolves.toEqual({ complete: false, failure: "required_verdict_unexecuted" });
   });
 
-  it("real apex binding (release integration_node_id = runId) applies and blocks a missing verdict", async () => {
+  it("release integration-node binding applies and blocks a missing verdict", async () => {
     await expect(checker({ 6: [] }).check(input)).resolves.toEqual({
       complete: false,
       failure: "verdict_set_mismatch",
+    });
+  });
+
+  it("blocks when any direct behavior-attempt compatibility projection is missing or fails field fidelity", async () => {
+    await expect(checker({ 8: [{ attempt_count: 2, projection_count: 1 }] }).check(input)).resolves.toEqual({
+      complete: false,
+      failure: "ci_compat_projection_missing",
     });
   });
 });

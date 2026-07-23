@@ -88,6 +88,7 @@ const EvidenceRunSchema = z
     verificationRunId: z.string(),
     artifactDigest: z.string().nullable(),
     classification: z.string().nullable(),
+    runtimeBehaviorContextHash: z.string().nullish(),
   })
   .nullable();
 
@@ -99,6 +100,7 @@ const ProductionSymptomSchema = z
     artifactDigest: z.string().nullable(),
     probedUrl: z.string().nullable(),
     assertions: z.array(z.object({ id: z.string(), outcome: z.string() })),
+    runtimeBehaviorContextHash: z.string().nullish(),
   })
   .nullable();
 

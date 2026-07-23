@@ -1,5 +1,5 @@
 // Project-progress read contract + aggregation helper. A single "where is my
-// project" surface (apex doctrine: the operator API mirrors the end-user
+// project" surface (the operator API mirrors the end-user
 // dashboard) that folds the three existing read sources — the spec list
 // (`projectSpecs.listForProject`), the project run list (`fetchRunListItems`),
 // and the project activity feed (`fetchFeedPage`) — into one aggregate, so a

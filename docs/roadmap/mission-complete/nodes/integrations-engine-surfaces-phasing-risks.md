@@ -1,5 +1,5 @@
 > Continuation of the integrations bucket. Section (1) ideal design lives in [`integrations.md`](./integrations.md).
-> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §2 comparator parity, §3 data model, §4 engine integration, §5 HTTP surface, §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (2) COMPARATOR PARITY MATRIX — a table: comparator capability -> how Tanren matches it -> how Tanren EXCEEDS it
 
@@ -45,7 +45,7 @@ The matrix covers the integration-lifecycle and workflow capabilities of Zapier,
 | Workload identity and short-lived federated credentials. [Vault identities](https://developer.hashicorp.com/vault/docs/about-vault/why-use-vault/identities), [SPIFFE Workload API](https://spiffe.io/docs/latest/spiffe-specs/spiffe_workload_api/)                                     | Prefer audience-bound workload federation; fall back to scoped Vault projections when providers require static tokens.                                                         | Encode org/project/spec/run/deploy claims and join provider/Vault audit to the exact engine operation.                                                                        |
 | Agent/CSI memory or file injection with renewal/rotation. [Vault Agent vs CSI](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/injector-csi), [CSI auto-rotation](https://secrets-store-csi-driver.sigs.k8s.io/topics/secret-auto-rotation.html)                            | Provider-neutral projection, mounted-version status, rollout on rotation; env only where unavoidable.                                                                          | Enforce bind → lease → inject → deploy → verify loaded generation → A3 → revoke superseded generation.                                                                        |
 | Short-TTL single-use response wrapping with origin/interception checks. [Vault response wrapping](https://developer.hashicorp.com/vault/docs/concepts/response-wrapping)                                                                                                                 | One-use runner/deployer handoff, origin/TTL verification, immediate anomaly event.                                                                                             | An anomalous unwrap cancels the claim, revokes the subtree, and makes its gate evidence ineligible for merge.                                                                 |
-| HMAC-redacted audit of nearly all secret API traffic with correlation headers. [Vault audit](https://developer.hashicorp.com/vault/docs/audit)                                                                                                                                           | Vault audit plus typed Tanren reference events; joinable request/lease accessors without values.                                                                               | APEX joins engine, Vault, provider, deployment, and observed-effect evidence into one signed attestation.                                                                     |
+| HMAC-redacted audit of nearly all secret API traffic with correlation headers. [Vault audit](https://developer.hashicorp.com/vault/docs/audit)                                                                                                                                           | Vault audit plus typed Tanren reference events; joinable request/lease accessors without values.                                                                               | The general evidence pipeline joins engine, Vault, provider, deployment, and observed-effect evidence into one signed attestation for any project run.                        |
 | Manual integration wiring: read docs, create app/channel/project, copy secrets, edit env, redeploy, and test by hand.                                                                                                                                                                    | The same operations are represented as versioned plans, grants, bindings, env projections, deploy stages, and probes.                                                          | The declared behavior itself drives the entire workflow and produces machine-verifiable proof; manual wiring becomes an explicit exceptional approval, never the normal path. |
 
 ## (3) DATA MODEL (tables/migrations, entities, org-scoping)
@@ -243,9 +243,16 @@ tanren integrations verify-evidence integration-evidence.v1.dsse.json
 
 Dashboard response types should be generated from orchestrator Zod/JSON schemas rather than hand-mirrored.
 
-## (7) APEX-PROVABILITY (which events/artifacts prove it fired live)
+## (7) Runtime-behavior provability (which events/artifacts prove it fired live)
 
-The current APEX rough notes explicitly request “when any short link crosses 100 clicks, post a celebratory message to our Slack channel.” [apex-run-playbook.md:340–359](/home/trevor/projects/tanren/docs/operator-guide/apex-run-playbook.md:340) Yet the present E2E artifact vocabulary contains no integration requirement, binding, secret projection, provider receipt, or cross-validation evidence, and its apex case is hermetic. [manifest.ts:22–38](/home/trevor/projects/tanren/tests/e2e/lib/manifest.ts:22), [manifest.ts:174–204](/home/trevor/projects/tanren/tests/e2e/lib/manifest.ts:174)
+> The general pipeline emits and asserts the following for **every behavior-gated run**;
+> an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
+
+One example apex fixture's rough notes request “when any short link crosses 100
+clicks, post a celebratory message to our Slack channel.” Yet the present E2E artifact
+vocabulary contains no integration requirement, binding, secret projection, provider
+receipt, or cross-validation evidence, and its runtime-behavior case is hermetic.
 
 A live pass must produce this correlated chain:
 
@@ -308,14 +315,14 @@ This is intentionally not a small route-wiring patch.
 
 Roughly 18–25 engineer-weeks, 15–22k production/test LOC, or 8–12 elapsed weeks with three parallel worktrees after shared contracts serialize.
 
-| Phase                     | Scope                                                                                                                        | Rough effort |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -----------: |
-| M0: contracts/model       | `IntegrationRequirementV1`, binding/env/proof contracts, migrations/RLS, control-plane writer, events, generated API schemas |       2–3 ew |
-| M1: Forge/fragments       | Requirement compiler, `deriving` lifecycle, integration fragment phase, F2 validation, `.tanren/integrations.yml`            |       3–4 ew |
-| M2: DAG/reconciler        | Capability nodes/edges, provider work queue, durable saga/claims, grant wake, progress-based retry                           |       4–5 ew |
-| M3: Slack product binding | Managed relay or separate product app, app-env materializer, vertical conformance, scoped Vault access                       |       3–5 ew |
-| M4: release lifecycle     | Transactional delivery outbox, durable post-merge DAG, bind-before-deploy, degraded/recovery state                           |       3–4 ew |
-| M5: A3/API/UI/APEX        | Live trigger/observe proof, negative controls, Control Center, artifact readers and attestation                              |       3–5 ew |
+| Phase                          | Scope                                                                                                                        | Rough effort |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | -----------: |
+| M0: contracts/model            | `IntegrationRequirementV1`, binding/env/proof contracts, migrations/RLS, control-plane writer, events, generated API schemas |       2–3 ew |
+| M1: Forge/fragments            | Requirement compiler, `deriving` lifecycle, integration fragment phase, F2 validation, `.tanren/integrations.yml`            |       3–4 ew |
+| M2: DAG/reconciler             | Capability nodes/edges, provider work queue, durable saga/claims, grant wake, progress-based retry                           |       4–5 ew |
+| M3: Slack product binding      | Managed relay or separate product app, app-env materializer, vertical conformance, scoped Vault access                       |       3–5 ew |
+| M4: release lifecycle          | Transactional delivery outbox, durable post-merge DAG, bind-before-deploy, degraded/recovery state                           |       3–4 ew |
+| M5: A3/API/UI/runtime behavior | Live trigger/observe proof, negative controls, Control Center, artifact readers and attestation                              |       3–5 ew |
 
 “MVP” is complete only when the real deployed 100-click Slack behavior is independently observed. Calling the existing provisioner from DagWalker is not an MVP.
 

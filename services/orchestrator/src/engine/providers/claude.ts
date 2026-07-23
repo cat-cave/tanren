@@ -191,7 +191,7 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         return extractClaudeFinalText(result.stdout);
       };
       const firstText = await runOnce(opts.prompt);
-      // ONE bounded schema-repair pass (apex pre-run §7.1): a malformed-then-valid
+      // ONE bounded schema-repair pass: a malformed-then-valid
       // answer repairs in a single cheap re-call instead of throwing the stage. A
       // second miss throws LOUD. Behavior is unchanged for a well-formed answer.
       return parseWithOneSchemaRepair({
@@ -274,7 +274,7 @@ function modelFlag(model?: string): string[] {
   return model === undefined || model === "" ? [] : ["--model", quoteSshShellArg(model)];
 }
 
-// Schema-first ordering (apex pre-run §7.9): the structured-output contract (schema
+// Schema-first ordering: the structured-output contract (schema
 // name + instructions + the JSON Schema) is STATIC across every call of a given
 // answerer, while `prompt` is the variable part. Emitting the static contract FIRST
 // keeps the prompt prefix cache-stable so a repeated answerer call reuses the cached

@@ -165,7 +165,7 @@ The merge/integration subsystem has been cut over from the GitHub-shaped
 `VcsProvider` + speculative-integration + change-percolation model to the
 **tanren-owns-the-engine** model (`docs/architecture/tanren-owns-the-engine.md`).
 **The cutover is the single live path on `main` — no longer flag-gated** (the
-WS-A/WS-B series deleted the kill-switch env vars). apex remains the
+WS-A/WS-B series deleted the kill-switch env vars). An apex-class fixture remains the
 live-validation vehicle: a whole-product loop merging through the live
 jj/`MergeAuthority` path is the open item, but the engine is the single path
 regardless:
@@ -384,11 +384,13 @@ cite); the merge-engine cutover rationale is
 
 ## 4. What is next (the live to-do)
 
-- **Phase 3 — `apex` (close the full autonomous loop).** The max-difficulty
-  live-e2e fixture: a single paragraph of rough operator notes → a deployed product
-  (URL shortener + per-link analytics + a Slack bot + a web UI), built autonomously
-  over real surfaces, every change a merged PR with full provenance. apex tests
-  **Tanren**, not the fixture: the driver acts as a non-technical end user over the
+- **Phase 3 — `apex` (the acceptance test — close the full autonomous loop).** The
+  max-difficulty **fixture-class**: deliberately varied rough operator notes →
+  deployed products, driven through Tanren's **normal operator flow** (no apex-shaped
+  harness, workflow, or engine code), built autonomously over real surfaces, every
+  change a merged PR with full provenance. apex tests **Tanren**, not an individual
+  fixture — the link-shortener + Slack is just one example; we want several varied
+  ones to flush bugs in parallel. The driver acts as a non-technical end user over the
   HTTP API only, files real issues into Tanren for every defect, and never hand-fixes
   the generated repo. **The honest state (§1):** successive apex trials — v37–v46
   ran on the previous WSL host through 2026-06-19; v47–v79 have run on the new
@@ -532,9 +534,9 @@ cite); the merge-engine cutover rationale is
   §3.3 entity-anchored issue Claims (`entity_claims` /
   `engine/repositories/entityClaims.ts` + the self-validating oracle). See
   `docs/roadmap/entity-analysis-layer.md` for the as-built record.
-- **§6 apex-e2e test gaps.** The hermetic apex e2e driver exists (§6); close the
-  remaining gaps in its coverage of the post-merge / deploy / issue-loop stages as
-  the next apex run exercises them.
+- **§6 runtime-behavior test gaps.** The hermetic runtime-behavior driver exists (§6);
+  close the remaining gaps in its coverage of the post-merge / deploy / issue-loop
+  stages as the next fixture exercise drives them.
 - **Native design subsystem — BUILT + wired; one LIVE exercise remaining.** Tanren
   owns design natively: a domain-general, persisted, versioned `DesignContract`
   (`engine/design/`) authored by a native design agent + design phase, **injected

@@ -48,7 +48,12 @@ export { DeriveRollbackError, type CompensationFailure, type DeleteRepositoryCal
 
 // Native design subsystem (WS-D1) — the LOUD guards for a required design contract +
 // dangling moat refs (mirroring `MissingLifecycleError`).
-export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";
+export {
+  assertContractCoversGraph,
+  DanglingDesignRefError,
+  DesignCoverageMismatchError,
+  MissingDesignContractError,
+} from "./deriveDesignContract.js";
 
 // Environment management (env-management.md §2.2 halt-loud, H1 #4) — re-exported so
 // the greenfield onboarding route dispatches the typed error to a 400 body without
@@ -60,6 +65,15 @@ export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOption
 // threads into the F2 writer prompt (acceptance criteria + personas + behaviors).
 export { buildProductContextFromCapture } from "./derive.js";
 export { buildInterviewPrompt } from "./prompt.js";
+// rv-21 — the single deterministic interview-completion predicate + its typed
+// derive-boundary halt.
+export {
+  evaluateInterviewCompletion,
+  InterviewIncompleteError,
+  type InterviewCaptureArea,
+  type InterviewCompletionResult,
+  type InterviewInvalidRef,
+} from "./interviewCompletion.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
 export {
   buildSeedScaffoldDescription,

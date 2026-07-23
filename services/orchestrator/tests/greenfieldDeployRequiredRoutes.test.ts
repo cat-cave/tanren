@@ -50,23 +50,25 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.projects.size).toBe(0);
   });
 
-  it("rejects onboarding derive when the architecture step captured NO lifecycle (400, no Node default)", async () => {
+  it("rejects onboarding derive on an incomplete capture (409 interview_incomplete, missing lifecycle — no Node default)", async () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
     const { app } = appWithRoutes(pool);
 
-    // A deploy provider IS supplied, so the rejection is specifically the missing
-    // lifecycle (not the deploy guard).
+    // An empty capture is INCOMPLETE — the rv-21 completion gate rejects it with a typed
+    // 409 (missing areas include `lifecycle`) BEFORE any project is created; never a
+    // silent Node default, never a partial derive off a half-captured vision.
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave", deploy: { providerKind: "deploy.vercel" } }),
     });
 
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("lifecycle_missing");
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; missing: string[] };
+    expect(body.error).toBe("interview_incomplete");
+    expect(body.missing).toContain("lifecycle");
     expect(pool.projects.size).toBe(0);
   });
 

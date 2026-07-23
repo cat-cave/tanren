@@ -34,7 +34,7 @@ export default defineConfig({
       // Instrument every package's source so the repo-wide floor below is
       // computed against the whole codebase; per-glob thresholds still apply
       // to their (narrower) subsets of this set.
-      include: ["cli/src/**", "db/src/**", "services/*/src/**"],
+      include: ["cli/src/**", "db/src/**", "ops/*/src/**", "services/*/src/**"],
       // Non-code files that live under `src/**` (e.g. fragment library
       // doctrine doc `services/orchestrator/src/engine/templates/fragments/
       // README.md`) match the include glob, then the v8 provider tries to

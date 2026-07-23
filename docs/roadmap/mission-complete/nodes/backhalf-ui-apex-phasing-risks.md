@@ -1,5 +1,5 @@
 > Continuation of the backhalf bucket. Section (1) ideal design lives in [`backhalf.md`](./backhalf.md).
-> This file holds §6 UI/dashboard surface, §7 apex-provability, §8 effort + phasing, and §9 risks/unknowns.
+> This file holds §6 UI/dashboard surface, §7 runtime-behavior provability, §8 effort + phasing, and §9 risks/unknowns.
 
 ## (6) UI/DASHBOARD SURFACE
 
@@ -30,9 +30,16 @@ Export:
 
 A `tanren proof verify <file>` command validates schema, signatures, hash links, event ordering, authority versions, merge/deployment identity, assertion completeness, and source readback. The default export contains hashes and redacted evidence only; raw sensitive artifacts require separate authorization.
 
-## (7) APEX-PROVABILITY
+## (7) Runtime-behavior provability
 
-The existing hermetic apex issue proof maps an in-memory webhook, creates a synthetic triage result, and directly lands through the fake code host in [apexE2eDriver.drive.ts](/home/trevor/projects/tanren/services/orchestrator/tests/apexE2eDriver.drive.ts:188). Its proof stops at `mergedPrUrl` in [apexE2eDriver.ts](/home/trevor/projects/tanren/services/orchestrator/tests/apexE2eDriver.ts:119). Extend it through the real back half.
+> The general pipeline emits and asserts these obligations for **every behavior-gated
+> run**; an apex-class fixture merely exercises them all at once. See
+> [`apex.md`](../../operator-guide/apex.md) for the binding doctrine.
+
+The existing hermetic runtime-behavior driver maps an in-memory webhook, creates a
+synthetic triage result, and directly lands through the fake code host in
+`runtimeBehaviorE2eDriver.drive.ts`. Its proof stops at `mergedPrUrl` in
+`runtimeBehaviorE2eDriver.ts`. Extend it through the real back half.
 
 ### The decisive planted scenario
 
@@ -109,7 +116,7 @@ webhook delivery + signature metadata
 → provider close receipt + authoritative readback
 ```
 
-### Apex assertions
+### Runtime-behavior assertions
 
 The test must prove:
 
@@ -127,20 +134,20 @@ The test must prove:
 - Probe infrastructure failure cannot close the issue or blame the patch.
 - A speculative batch failure maps to the correct integration node and can be bisected.
 
-Validation layers should include adapter conformance suites, state-machine/property tests, RLS integration tests, crash/fault injection, the expanded hermetic apex driver, and a live Fly/source-provider burn-in.
+Validation layers should include adapter conformance suites, state-machine/property tests, RLS integration tests, crash/fault injection, the expanded hermetic runtime-behavior driver, and a live Fly/source-provider burn-in.
 
 ## (8) EFFORT + PHASING
 
 “MVP” must mean a complete closed loop. Webhook ingestion plus auto-PR without production replay is not an MVP for this capability.
 
-| Phase                                | Scope                                                                                                                                                                                                                                   |                                                     Rough size |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------: |
-| P0 — truth and provenance foundation | Normalize issue loops/findings, fix external provenance, make triage a real task, harden webhook uniqueness/claims/reconciliation, source lifecycle revisions, basic UI origin badges.                                                  | 6–10 specs; 8–14k production/test/doc LOC; 6–10 engineer-weeks |
-| P1 — closed-loop MVP                 | GitHub/manual sources, Fly deployment binding, HTTP/JSON and Playwright DOM contracts, baseline reproduction, production verification, `ResolutionAuthority`, close/reopen outbox/readback, P0 repair routing, minimal proof bundle/UI. |                  14–20 specs; 22–35k LOC; 20–30 engineer-weeks |
-| P2 — rich runtime proof              | Full Given/When/Then loading, visual/a11y/trace evidence, A1/A3 runtime-verification reuse, preview/canary checks, counterfactual retention, verification fragments and F2 authoring.                                                   |                  14–22 specs; 20–35k LOC; 20–30 engineer-weeks |
-| P3 — comparator breadth              | Sentry, Linear, Jira, Slack/generic, SARIF/CodeQL, dependency/advisory sources, Renovate/Dependabot-equivalent policy, observational/hybrid soak.                                                                                       |                  18–28 specs; 25–45k LOC; 22–34 engineer-weeks |
-| P4 — owned-stack apex                | Batch symptom verification and bisect, entity health barriers, progressive rollout/rollback, cross-repo issue loops, failure-aware model routing, organization fix-efficacy learning, signed certificates.                              |                  18–30 specs; 30–50k LOC; 28–42 engineer-weeks |
-| P5 — production hardening            | Chaos/restart tests, source drift reconciliation, privacy/retention tooling, proof CLI, fleet analytics, live provider conformance, long-running apex burn-in.                                                                          |                  10–16 specs; 10–18k LOC; 12–20 engineer-weeks |
+| Phase                                              | Scope                                                                                                                                                                                                                                   |                                                     Rough size |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------: |
+| P0 — truth and provenance foundation               | Normalize issue loops/findings, fix external provenance, make triage a real task, harden webhook uniqueness/claims/reconciliation, source lifecycle revisions, basic UI origin badges.                                                  | 6–10 specs; 8–14k production/test/doc LOC; 6–10 engineer-weeks |
+| P1 — closed-loop MVP                               | GitHub/manual sources, Fly deployment binding, HTTP/JSON and Playwright DOM contracts, baseline reproduction, production verification, `ResolutionAuthority`, close/reopen outbox/readback, P0 repair routing, minimal proof bundle/UI. |                  14–20 specs; 22–35k LOC; 20–30 engineer-weeks |
+| P2 — rich runtime proof                            | Full Given/When/Then loading, visual/a11y/trace evidence, A1/A3 runtime-verification reuse, preview/canary checks, counterfactual retention, verification fragments and F2 authoring.                                                   |                  14–22 specs; 20–35k LOC; 20–30 engineer-weeks |
+| P3 — comparator breadth                            | Sentry, Linear, Jira, Slack/generic, SARIF/CodeQL, dependency/advisory sources, Renovate/Dependabot-equivalent policy, observational/hybrid soak.                                                                                       |                  18–28 specs; 25–45k LOC; 22–34 engineer-weeks |
+| P4 — owned-stack max-difficulty fixture validation | Batch symptom verification and bisect, entity health barriers, progressive rollout/rollback, cross-repo issue loops, failure-aware model routing, organization fix-efficacy learning, signed certificates.                              |                  18–30 specs; 30–50k LOC; 28–42 engineer-weeks |
+| P5 — production hardening                          | Chaos/restart tests, source drift reconciliation, privacy/retention tooling, proof CLI, fleet analytics, live provider conformance, long-running normal-flow fixture burn-in.                                                           |                  10–16 specs; 10–18k LOC; 12–20 engineer-weeks |
 
 Total ideal scope is approximately **80–125 specs, 115–195k production/test/documentation LOC, and 108–166 engineer-weeks**. A four-to-five-engineer team could reach the genuine MVP in roughly 10–14 calendar weeks. The full system is plausibly six to nine months for six to eight engineers, including live burn-in and serialized shared-file work.
 
@@ -178,7 +185,7 @@ Implementation should use isolated roadmap worktrees with declared path ownershi
 | Source adapters disagree on “resolved” semantics            | Provider-specific adapter implementation behind a common desired/observed contract and a shared conformance suite.                                                                                              |
 | Mobile/store/manual surfaces cannot be actively probed      | Use device-farm or channel adapters where available; otherwise label evidence `attested`, never `active_causal`.                                                                                                |
 | Push webhooks are lost                                      | Push plus periodic provider reconciliation; never make webhook configuration disable the backstop.                                                                                                              |
-| System-scope code accidentally crosses tenants              | System scope only discovers IDs; all processing enters org scope. Add composite-org foreign keys, RLS conformance, and cross-org apex assertions.                                                               |
+| System-scope code accidentally crosses tenants              | System scope only discovers IDs; all processing enters org scope. Add composite-org foreign keys, RLS conformance, and cross-org assertions exercised by every project class.                                   |
 | Signing key compromise or proof retention cost              | Rotatable versioned signing keys, transparency/audit log, evidence tiering, lifecycle deletion, and verification that remains valid after media expiry via hashes.                                              |
 | Comparator/provider behavior changes                        | Version adapter capabilities, run scheduled conformance against provider sandboxes, and verify every dependency/image/API pin against upstream before updates.                                                  |
 | UI overstates certainty                                     | Distinct visual states for gate, merge, readiness, demo, live symptom, proof grade, and external source readback. A waiver must never render as verified.                                                       |
