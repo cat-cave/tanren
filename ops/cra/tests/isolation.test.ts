@@ -74,7 +74,11 @@ describe("untrusted worktree isolation", () => {
     const lfsMarker = resolve(fixture.root, "lfs-host-command-ran");
     await git(fixture.supervisor, ["config", "filter.host-smudge.smudge", `sh -c 'touch "${customMarker}"; cat'`]);
     await git(fixture.supervisor, ["config", "filter.host-smudge.required", "true"]);
-    await git(fixture.supervisor, ["config", "filter.lfs.smudge", `sh -c 'touch "${lfsMarker}"; cat'`]);
+    await git(fixture.supervisor, [
+      "config",
+      "filter.lfs.smudge",
+      `sh -c 'touch "${lfsMarker}"; printf "host-smudged LFS payload\\n"'`,
+    ]);
     await git(fixture.supervisor, ["config", "filter.lfs.required", "true"]);
 
     const worktree = await fixture.manager.create(7, fixture.sha);
@@ -82,7 +86,12 @@ describe("untrusted worktree isolation", () => {
     await expect(access(customMarker)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(lfsMarker)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(resolve(worktree.path, "payload.txt"), "utf8")).resolves.toBe("untrusted payload\n");
-    await expect(readFile(resolve(worktree.path, "lfs-payload.txt"), "utf8")).resolves.toBe("untrusted LFS payload\n");
+    const lfsPayload = await readFile(resolve(worktree.path, "lfs-payload.txt"), "utf8");
+    expect(lfsPayload).not.toBe("host-smudged LFS payload\n");
+    expect([
+      "untrusted LFS payload\n",
+      expect.stringMatching(/^version https:\/\/git-lfs\.github\.com\/spec\//u),
+    ]).toContainEqual(lfsPayload);
     await fixture.manager.cleanup(worktree);
   });
 
