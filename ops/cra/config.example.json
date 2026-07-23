@@ -1,0 +1,16 @@
+{
+  "repository": "cat-cave/tanren",
+  "repositoryRoot": "/home/operator/src/tanren",
+  "baseBranch": "main",
+  "rubricVersion": "2026-07-22",
+  "github": {
+    "appId": 123456,
+    "installationId": 12345678,
+    "expectedLogin": "trevor-workstation[bot]",
+    "privateKeyPath": "/home/operator/.config/tanren-cra/credentials/trevor-workstation.pem"
+  },
+  "isolation": {
+    "worktreeRoot": "/scratch/worktrees/tanren/cra",
+    "image": "tanren-cra-audit:latest"
+  }
+}

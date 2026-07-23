@@ -1,6 +1,7 @@
 packages:
   - "cli"
   - "db"
+  - "ops/*"
   - "services/*"
 
 onlyBuiltDependencies:

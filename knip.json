@@ -12,6 +12,10 @@
     "db": {
       "project": ["src/**/*.ts"]
     },
+    "ops/cra": {
+      "entry": ["src/index.ts", "src/main.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "services/orchestrator": {
       "entry": ["tests/**/*.test.ts"],
       "project": ["src/**/*.ts"]
