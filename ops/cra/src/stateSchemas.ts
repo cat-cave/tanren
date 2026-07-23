@@ -23,6 +23,11 @@ export const prStateSchema = z.strictObject({
   awaitingAuthorSince: isoDateSchema.nullable(),
   retry: retryStateSchema,
   followUpIssues: z.array(z.number().int().positive()).refine((values) => values.length === new Set(values).size),
+  reminderDaysSent: z
+    .array(z.number().int().positive())
+    .refine((values) => values.length === new Set(values).size)
+    .default([]),
+  abandonmentReason: z.enum(["findings", "inactivity"]).nullable().default(null),
   auditStatus: z.enum(["idle", "in_progress", "completed", "failed"]),
 });
 

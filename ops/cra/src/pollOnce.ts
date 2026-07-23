@@ -29,11 +29,15 @@ function initialState(pr: DiscoveredPullRequest, config: CraConfig): PrState {
     awaitingAuthorSince: null,
     retry: { attempts: 0, nextAttemptAt: null, lastError: null },
     followUpIssues: [],
+    reminderDaysSent: [],
+    abandonmentReason: null,
     auditStatus: "idle",
   };
 }
 
 function observedState(pr: DiscoveredPullRequest, previous: PrState): PrState {
+  const headChanged = previous.lastSeenHeadSha !== pr.headSha;
+  const authorActivityChanged = previous.lastAuthorActivityAt < pr.lastAuthorActivityAt;
   return {
     ...previous,
     lastSeenHeadSha: pr.headSha,
@@ -43,6 +47,12 @@ function observedState(pr: DiscoveredPullRequest, previous: PrState): PrState {
         : pr.firstAuthorActivityAt,
     lastAuthorActivityAt:
       previous.lastAuthorActivityAt > pr.lastAuthorActivityAt ? previous.lastAuthorActivityAt : pr.lastAuthorActivityAt,
+    awaitingAuthorSince: headChanged
+      ? null
+      : authorActivityChanged && previous.awaitingAuthorSince !== null
+        ? pr.lastAuthorActivityAt
+        : previous.awaitingAuthorSince,
+    reminderDaysSent: headChanged || authorActivityChanged ? [] : previous.reminderDaysSent,
   };
 }
 

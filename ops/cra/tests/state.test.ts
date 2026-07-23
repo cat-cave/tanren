@@ -39,6 +39,8 @@ function prState(): PrState {
     awaitingAuthorSince: null,
     retry: { attempts: 0, nextAttemptAt: null, lastError: null },
     followUpIssues: [1300],
+    reminderDaysSent: [],
+    abandonmentReason: null,
     auditStatus: "completed",
   };
 }

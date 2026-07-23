@@ -41,6 +41,8 @@ export interface NormalizedFinding {
   readonly side: "LEFT" | "RIGHT" | null;
   readonly evidence: string;
   readonly forced: boolean;
+  readonly concerns: "acceptance" | "new_work";
+  readonly fixDirection: string | null;
 }
 
 export interface TriageResult {
@@ -77,6 +79,8 @@ function normalizeWorkerFinding(finding: AuditFinding): NormalizedFinding {
     side: finding.evidence.side,
     evidence: finding.evidence.detail,
     forced,
+    concerns: finding.concerns,
+    fixDirection: finding.fixDirection,
   };
 }
 
@@ -99,6 +103,8 @@ function synthesized(
     side: null,
     evidence,
     forced: true,
+    concerns: "acceptance",
+    fixDirection: null,
   };
 }
 

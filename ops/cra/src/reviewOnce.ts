@@ -181,6 +181,8 @@ export async function reviewOnce(deps: ReviewOnceDeps, input: ReviewOnceInput): 
     findingIds: triaged.findings.map((finding) => finding.id),
     disposition,
     awaitingAuthorSince: triaged.verdict === "REQUEST_CHANGES" ? now : null,
+    reminderDaysSent: [],
+    abandonmentReason: null,
     retry: { attempts: 0, nextAttemptAt: null, lastError: null },
     auditStatus: "completed",
   };
