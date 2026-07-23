@@ -7,18 +7,20 @@ import type { AncestorStack } from "./ancestorStack.js";
 import { buildBaseShiftLineage } from "./baseShiftLineage.js";
 import type { BaseShiftEventEmitter, RebaseDecision } from "./baseShiftPorts.js";
 
+export type BaseShiftEmitInput = {
+  projectId: string;
+  dependent: SpeculativeDependent;
+  branch: string;
+  newBaseSha: string;
+  rebase: RebaseResult;
+  ancestorStack?: AncestorStack;
+  ancestorSpecId?: string;
+  priorNodes?: ReadonlyArray<IntegrationNode>;
+};
+
 export async function emitBaseShiftRebase(
   events: BaseShiftEventEmitter,
-  input: {
-    projectId: string;
-    dependent: SpeculativeDependent;
-    branch: string;
-    newBaseSha: string;
-    rebase: RebaseResult;
-    ancestorStack?: AncestorStack;
-    ancestorSpecId?: string;
-    priorNodes?: ReadonlyArray<IntegrationNode>;
-  },
+  input: BaseShiftEmitInput,
   rebaseConflicted: boolean,
   decision: RebaseDecision,
 ): Promise<void> {
@@ -33,4 +35,35 @@ export async function emitBaseShiftRebase(
     decision,
     lineage: buildBaseShiftLineage(input),
   });
+}
+
+/** Persist held lineage when re-gate is pending after a workspace restack. */
+export async function emitHeldOnPendingRegate(
+  events: BaseShiftEventEmitter,
+  projectId: string,
+  dependent: SpeculativeDependent,
+  rebasedHeadSha: string,
+  lineageContext: {
+    branch: string;
+    newBaseSha: string;
+    ancestorStack?: AncestorStack;
+    ancestorSpecId?: string;
+    priorNodes?: ReadonlyArray<IntegrationNode>;
+  },
+): Promise<void> {
+  await emitBaseShiftRebase(
+    events,
+    {
+      projectId,
+      dependent,
+      branch: lineageContext.branch,
+      newBaseSha: lineageContext.newBaseSha,
+      rebase: { outcome: "clean", headSha: rebasedHeadSha },
+      ...(lineageContext.ancestorStack !== undefined && { ancestorStack: lineageContext.ancestorStack }),
+      ...(lineageContext.ancestorSpecId !== undefined && { ancestorSpecId: lineageContext.ancestorSpecId }),
+      ...(lineageContext.priorNodes !== undefined && { priorNodes: lineageContext.priorNodes }),
+    },
+    false,
+    "held",
+  );
 }

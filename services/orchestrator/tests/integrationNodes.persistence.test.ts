@@ -16,11 +16,9 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getSystemPool, migrate, runWithJobOrgId, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { memberKey, proofReuseKey, type ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
-import {
-  observeRunAsIntegrationNode,
-  PgIntegrationNodeModel,
-  speculativeRunToNode,
-} from "../src/engine/dag/integrationNodesPg.js";
+import { observeRunAsIntegrationNode } from "../src/engine/dag/integrationNodeObserve.js";
+import { speculativeRunToNode } from "../src/engine/dag/integrationNodeCompat.js";
+import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 
 const SYSTEM_ROLE = "tanren_system";
 const SYSTEM_PASSWORD = process.env["TANREN_SYSTEM_DB_PASSWORD"] ?? "tanren_system";

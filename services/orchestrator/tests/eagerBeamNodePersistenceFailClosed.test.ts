@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createEagerBeamPlan } from "../src/engine/contracts/eagerBeamPlan.js";
 import { memberKey } from "../src/engine/contracts/integrationNodes.js";
-import {
-  observeRunAsIntegrationNode,
-  PgIntegrationNodeModel,
-  upsertIntegrationNodeOnClient,
-} from "../src/engine/dag/integrationNodesPg.js";
+import { observeRunAsIntegrationNode } from "../src/engine/dag/integrationNodeObserve.js";
+import { PgIntegrationNodeModel, upsertIntegrationNodeOnClient } from "../src/engine/dag/integrationNodesPg.js";
 import { EagerBeamMaterializationPersistence } from "../src/engine/merge/eagerBeamMaterializationPersistence.js";
 import { PgEagerBeamStore } from "../src/engine/merge/eagerBeamStore.js";
 
