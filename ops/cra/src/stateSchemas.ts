@@ -14,6 +14,7 @@ export const prStateSchema = z.strictObject({
   lastSeenHeadSha: shaSchema,
   lastReviewedHeadSha: shaSchema.nullable(),
   lastReviewedBaseSha: shaSchema.nullable(),
+  auditedIssueNumber: z.number().int().positive().nullable().default(null),
   rubricVersion: z.string().min(1),
   reviewId: z.number().int().positive().nullable(),
   findingIds: z.array(z.string().min(1)).refine((values) => values.length === new Set(values).size),
@@ -23,6 +24,11 @@ export const prStateSchema = z.strictObject({
   awaitingAuthorSince: isoDateSchema.nullable(),
   retry: retryStateSchema,
   followUpIssues: z.array(z.number().int().positive()).refine((values) => values.length === new Set(values).size),
+  reminderDaysSent: z
+    .array(z.number().int().positive())
+    .refine((values) => values.length === new Set(values).size)
+    .default([]),
+  abandonmentReason: z.enum(["findings", "inactivity"]).nullable().default(null),
   auditStatus: z.enum(["idle", "in_progress", "completed", "failed"]),
 });
 
@@ -32,6 +38,7 @@ export const auditArtifactSchema = z.strictObject({
   pr: z.number().int().positive(),
   headSha: shaSchema,
   baseSha: shaSchema,
+  auditedIssueNumber: z.number().int().positive(),
   rubricVersion: z.string().min(1),
   createdAt: isoDateSchema,
   report: z.unknown(),
@@ -50,6 +57,7 @@ export const eventSchema = z.strictObject({
     "finding",
     "merge_authorization",
     "merge_denial",
+    "security_anomaly",
     "issue_routing",
     "abandonment",
     "cleanup",

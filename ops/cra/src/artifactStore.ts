@@ -30,6 +30,11 @@ export class AuditArtifactStore {
     }
   }
 
+  public async readReport(pr: number, headSha: string, rubricVersion: string): Promise<AuditArtifact> {
+    const path = this.pathFor(pr, headSha, rubricVersion, "report.json");
+    return auditArtifactSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  }
+
   public async writeWorkerLog(pr: number, headSha: string, rubricVersion: string, contents: string): Promise<void> {
     this.lease.assertHeld();
     const path = this.pathFor(pr, headSha, rubricVersion, "worker.log");

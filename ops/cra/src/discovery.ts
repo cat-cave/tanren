@@ -7,7 +7,7 @@ import type { PrState } from "./stateSchemas.js";
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const actorSchema = z.object({ login: z.string() }).nullable();
 const pageInfoSchema = z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() });
-const activitySchema = z.object({ author: actorSchema, createdAt: z.string() });
+const activitySchema = z.object({ author: actorSchema, createdAt: z.string(), body: z.string().default("") });
 const commitSchema = z.object({
   commit: z.object({ committedDate: z.string(), author: z.object({ user: actorSchema }).nullable() }),
 });
@@ -114,7 +114,7 @@ const DISCOVERY_QUERY = `query CraDiscovery($owner:String!,$name:String!,$cursor
         number title body state isDraft createdAt updatedAt baseRefName baseRefOid headRefOid mergeStateStatus reviewDecision
         author { login }
         closingIssuesReferences(first:20) { nodes { number state blockedBy(first:50) { nodes { number state } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } }
-        comments(last:100) { nodes { author { login } createdAt } pageInfo { hasNextPage endCursor } }
+        comments(last:100) { nodes { author { login } createdAt body } pageInfo { hasNextPage endCursor } }
         commits(last:100) { nodes { commit { committedDate author { user { login } } } } pageInfo { hasNextPage endCursor } }
         reviews(last:100) { nodes { id databaseId author { login } state submittedAt body commit { oid } } pageInfo { hasNextPage endCursor } }
         statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } pageInfo { hasNextPage endCursor } } }
@@ -142,7 +142,11 @@ function normalize(pr: z.infer<typeof pullRequestSchema>): DiscoveredPullRequest
   assertComplete(pr);
   const author = pr.author?.login ?? null;
   const authorActivity = [pr.createdAt];
-  for (const comment of pr.comments.nodes) if (comment.author?.login === author) authorActivity.push(comment.createdAt);
+  for (const comment of pr.comments.nodes) {
+    if (comment.author?.login === author && isSubstantiveAuthorReply(comment.body)) {
+      authorActivity.push(comment.createdAt);
+    }
+  }
   for (const commit of pr.commits.nodes) {
     if (commit.commit.author?.user?.login === author) authorActivity.push(commit.commit.committedDate);
   }
@@ -190,6 +194,17 @@ function normalize(pr: z.infer<typeof pullRequestSchema>): DiscoveredPullRequest
     firstAuthorActivityAt: pr.createdAt,
     lastAuthorActivityAt: [...authorActivity].sort().at(-1) ?? pr.createdAt,
   };
+}
+
+// Bot churn, reactions, and label-only discussion must not buy another seven days.
+// A substantive reply either supplies an ETA or responds to findings/fixes in a
+// structured way; a new commit/head is tracked independently above.
+export function isSubstantiveAuthorReply(body: string): boolean {
+  return (
+    /\bETA\b|\bby (?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu.test(body) ||
+    /\b(?:P[0-3]|finding|requested change)\b[\s\S]{0,80}\b(?:fixed|addressed|resolved|plan|will)\b/iu.test(body) ||
+    /(?:^|\n)\s*[-*]\s+\[[ xX]\]\s+\S/u.test(body)
+  );
 }
 
 export class GithubDiscovery {

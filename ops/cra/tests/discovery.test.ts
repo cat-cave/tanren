@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GithubDiscovery, selectReviewCandidates } from "../src/discovery.js";
+import { GithubDiscovery, isSubstantiveAuthorReply, selectReviewCandidates } from "../src/discovery.js";
 import type { CommandExecutor } from "../src/process.js";
 import type { PrState } from "../src/stateSchemas.js";
 import { firstSha, secondSha, testConfig } from "./helpers.js";
@@ -78,6 +78,7 @@ function reviewedState(pr: number, headSha: string): PrState {
     lastSeenHeadSha: headSha,
     lastReviewedHeadSha: headSha,
     lastReviewedBaseSha: secondSha,
+    auditedIssueNumber: 1247,
     rubricVersion: "2026-07-22",
     reviewId: 55,
     findingIds: [],
@@ -92,6 +93,13 @@ function reviewedState(pr: number, headSha: string): PrState {
 }
 
 describe("read-only GitHub discovery", () => {
+  it("classifies only ETA or structured finding replies as substantive activity", () => {
+    expect(isSubstantiveAuthorReply("ETA tomorrow; I will address P1 first.")).toBe(true);
+    expect(isSubstantiveAuthorReply("- [x] Finding auth-race fixed")).toBe(true);
+    expect(isSubstantiveAuthorReply("Thanks!")).toBe(false);
+    expect(isSubstantiveAuthorReply("rebased")).toBe(false);
+  });
+
   it("normalizes all review inputs and performs only gh api graphql reads", async () => {
     const response = {
       data: {
