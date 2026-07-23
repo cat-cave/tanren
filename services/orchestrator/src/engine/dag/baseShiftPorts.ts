@@ -145,7 +145,8 @@ export interface BaseShiftEventEmitter {
      * Absent on pure in-memory fakes that only assert the event was emitted.
      */
     lineage?: {
-      orgId: string;
+      /** When omitted, the pg emitter resolves org from projectId (fail-closed if missing). */
+      orgId?: string;
       nodeId?: string;
       ancestorSpecId?: string;
       fromBaseSha: string;
