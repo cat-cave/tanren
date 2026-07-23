@@ -87,6 +87,13 @@ export class AllocatorRouter implements Allocator {
   }
 
   private reserveCapacity(kind: AllocatorKind): void {
+    // #1254: an allocator that enforces its own cap in the SHARED store (manual_ssh)
+    // is the sole cap authority — the router's in-memory counter is per-process and
+    // would double-book across processes, so SKIP it and let the allocator's
+    // cross-process reservation refuse an over-cap claim.
+    if (this.registry[kind].enforcesOwnPoolCap === true) {
+      return;
+    }
     const policy = this.config.pools[kind];
     const current = this.inFlight.get(kind) ?? 0;
     if (policy?.maxConcurrent !== undefined && current >= policy.maxConcurrent) {
@@ -96,6 +103,11 @@ export class AllocatorRouter implements Allocator {
   }
 
   private releaseCapacity(kind: AllocatorKind): void {
+    // Mirror {@link reserveCapacity}: a self-enforcing kind never touched the
+    // in-memory counter, so releasing it must not underflow it either.
+    if (this.registry[kind].enforcesOwnPoolCap === true) {
+      return;
+    }
     const current = this.inFlight.get(kind) ?? 0;
     this.inFlight.set(kind, Math.max(0, current - 1));
   }
