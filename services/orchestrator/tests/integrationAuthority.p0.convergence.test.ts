@@ -121,7 +121,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       generation: 1,
       capabilities: ["notify"],
       operations: ["discover", "provision", "bind"],
-      provider_scopes: ["channels:read", "channels:manage"],
+      provider_scopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
       policy_revision: integrationCatalogRevision(),
       consent_revision: "consent.test",
       status: "active",

@@ -13,15 +13,12 @@
 //
 // Delivery model — bot `chat.postMessage` (channel id), NOT an incoming webhook:
 // `provision`/`bind` yield a `notificationTarget` carrying the CHANNEL ID, and the
-// bot token stays the org grant (its credential ref is surfaced ONLY as
-// `secretRefs.botToken`, never the value — and never inside the notification
-// target config, so the incoming-webhook persistence path can't mistake the bot
-// token ref for a webhook destination). The runtime notification channel today
-// is an incoming-WEBHOOK publisher, so this bot+channel-id artifact is NOT
-// consumable by it: `provisionCapability` fail-closes Slack
-// (`SlackDeliveryAdapterUnavailableError`) and the persistence layer rejects a
-// Slack target that has no webhook ref, rather than POSTing an `xoxb-…` token as
-// a webhook. An incoming webhook is not minted here: a webhook URL is itself a
+// bot token stays the org grant (its credential ref, never the value, is surfaced
+// as `secretRefs.botToken` and explicit target metadata). Persistence encodes those
+// bot delivery coordinates without mistaking the token ref for a webhook destination.
+// The runtime Slack channel
+// recognizes that explicit bot target and invokes `chat.postMessage`. An incoming
+// webhook is not minted here: a webhook URL is itself a
 // write-only secret (it would have to be stored as a secret ref, never an
 // artifact value). If a future variant uses a webhook, its URL MUST be stored via
 // the SecretStore and only its ref surfaced (as `webhookRef`).
@@ -231,6 +228,7 @@ export class SlackProvisioner implements IntegrationProvisioner {
       notificationTarget: {
         kind: "slack",
         config: {
+          botTokenRef: grant.eligibleOperation.credentialRef,
           channelId: channel.id,
           channelName: channel.name,
         },

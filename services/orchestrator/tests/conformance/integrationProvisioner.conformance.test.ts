@@ -325,6 +325,19 @@ describeIntegrationProvisionerConformance("SlackProvisioner", {
   seededResourceId: SLACK_SEEDED_ID,
 });
 
+it("SlackProvisioner returns explicit bot delivery coordinates, never a webhook fallback", async () => {
+  const ctx = projectCtx("notify");
+  const artifact = await makeSlackProvisioner().provision(
+    await slackGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
+    ctx,
+  );
+  expect(artifact.notificationTarget?.config).toMatchObject({
+    botTokenRef: "secret://org/slack-bot-token/g/1",
+    channelId: expect.any(String),
+  });
+  expect(artifact.notificationTarget?.config["webhookRef"]).toBeUndefined();
+});
+
 // --- Registry: sentry/deploy.*/slack registered; other kinds still hard-throw ---
 describe("buildIntegrationProvisioner registry (Codex H3 #25 unified registry)", () => {
   it("exposes the registered kinds — the single source of truth for buildIntegrationProvisioner + buildDeployProvisioner", () => {

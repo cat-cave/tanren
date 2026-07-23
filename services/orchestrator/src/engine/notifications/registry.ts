@@ -16,9 +16,9 @@ import { ChannelKind } from "./schemas.js";
 // against it without crashing the dispatcher.
 //
 //   - ntfy: the original v0 reference channel.
-//   - slack: incoming-webhook delivery; the webhook URL is resolved
-//     from a write-only credential ref via the secret store. Only wired when
-//     `slack` deps (carrying the secret store) are supplied.
+//   - slack: legacy incoming-webhook and provisioned bot/channel delivery; its
+//     credential ref is resolved through the secret store. Only wired when
+//     `slack` deps (carrying that store) are supplied.
 //   - github_checks: posts a commit status to a PR head SHA, authed
 //     through the token resolver. Only wired when `github` deps are
 //     supplied.
