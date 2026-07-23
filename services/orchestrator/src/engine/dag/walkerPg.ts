@@ -32,7 +32,10 @@ import type { DagConfigCorruptPayload } from "../events/schemas/dag.js";
 import { SpecPriority } from "../state/spec.js";
 import { ProjectLifecycleEnum, type ProjectLifecycle } from "../repositories/projects.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
+import { createLogger } from "../observability/logger.js";
 import type { AncestorStack } from "./ancestorStack.js";
+
+const log = createLogger("dag-read-model");
 // Re-export the ancestor-stack resolver seam + wiring (split into `ancestorStackResolverPg.ts`
 // for the line cap) so existing `./walkerPg.js` import sites keep importing them unchanged.
 export { type DagAncestorStackResolver, PgDagAncestorStackResolver } from "./ancestorStackResolverPg.js";
@@ -143,6 +146,22 @@ export class PgDagReadModel implements DagReadModel {
     if (project.orgId === null) {
       // No resolvable org ⇒ no DAG the walker may schedule (RLS would deny every
       // read anyway). An empty snapshot drains cleanly rather than throwing.
+      //
+      // F2 (issue #1072): distinguish a benign ABSENT row (a teardown race — the project
+      // was deleted; nothing to say) from a PRESENT row with `org_id = NULL` (a genuine
+      // MISCONFIGURATION — the project exists, may carry open specs, yet can never enqueue
+      // because there is no tenant scope). The latter must NOT drain silently: surface it
+      // LOUD. We cannot durably append an org-scoped `dag.*` event here — `events.org_id` is
+      // NOT NULL + FK-tied to organizations, and the doctrine is never to fake tenancy to
+      // satisfy that constraint (see dagEventEmitterPg `withScopedStore` + jobReaper) — so the
+      // loud signal is a grep-able ERROR log naming the project + its lifecycle, mirroring the
+      // exact precedent `withScopedStore` set for the null-org event-drop case.
+      if (project.rowPresent) {
+        log.error(
+          "project row has NULL org_id — draining WITHOUT scheduling; a misconfigured project can never enqueue (no tenant scope, no durable dag.* event possible)",
+          { projectId, lifecycle: project.lifecycle, reason: "null_org_project" },
+        );
+      }
       return { projectId, nodes: [], projectLifecycle: "missing" };
     }
     if (project.lifecycle !== "active") {
@@ -181,15 +200,17 @@ export class PgDagReadModel implements DagReadModel {
 
   private async resolveProject(
     projectId: string,
-  ): Promise<{ orgId: string | null; lifecycle: ProjectLifecycle | "missing" }> {
+  ): Promise<{ orgId: string | null; lifecycle: ProjectLifecycle | "missing"; rowPresent: boolean }> {
     return runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null; lifecycle: string }>(
         "SELECT org_id, lifecycle FROM projects WHERE project_id = $1",
         [projectId],
       );
       const row = result.rows[0];
-      if (row === undefined) return { orgId: null, lifecycle: "missing" };
-      return { orgId: row.org_id, lifecycle: ProjectLifecycleEnum.parse(row.lifecycle) };
+      // `rowPresent` lets the caller tell a benign absent-row drain (teardown race) apart from a
+      // present-row NULL-org drain (a misconfiguration that must surface LOUD — issue #1072 F2).
+      if (row === undefined) return { orgId: null, lifecycle: "missing", rowPresent: false };
+      return { orgId: row.org_id, lifecycle: ProjectLifecycleEnum.parse(row.lifecycle), rowPresent: true };
     });
   }
 }

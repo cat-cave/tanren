@@ -33,8 +33,43 @@
 // run-terminal notification, which includes ancestor lifecycle events (CI pass, PR merge).
 
 import type { DagLifecycleSnapshot } from "../contracts/dagLifecycle.js";
+import type { DagSnapshot } from "../contracts/dagWalker.js";
 import { ancestorLifecycleKey, type HeldReDriveBackoff } from "./heldReDriveBackoff.js";
 import { firstAncestorWithoutPublishedHead } from "./speculation.js";
+
+/**
+ * BOUNDED-MAP EVICTION (issue #1072 F1 — leak fix). Free THIS project's ancestor-wait backoff
+ * entries for specs that are no longer IN-PLAY, keyed on WALKER-TERMINAL DAG membership — a spec's
+ * `specs.status` / DAG phase — NOT the lifecycle ladder. Retain while the spec is still
+ * open to re-planning (DAG phase `pending`/`in_flight`, i.e. `specs.status` `open`/`in_flight`/`review`);
+ * evict only when it is genuinely gone/done: DAG phase `done` (`merged`), `terminal_blocked`
+ * (`halted`/`cancelled`/`needs_attention` STATUS), absent from the snapshot, or — when the project
+ * went non-active — ALL of them (an empty live set).
+ *
+ * CRITICAL (why NOT the lifecycle `blocked` state): a dependent that hit `AncestorNotReadyError`
+ * is re_driven — its spec is STILL `open` (phase `pending`, open to re-planning) while its LATEST RUN is
+ * `halted`, and `projectSpecLifecycle` maps a halted latest run to lifecycle `blocked`. That is the
+ * NORMAL waiting state the hot-loop gate exists for, so its entry MUST be retained; evicting it
+ * would drop the gate and re-drive/re-provision a runner storm on every terminal notification. The
+ * spec's own STATUS (DAG phase), not its latest run's lifecycle, is the terminal authority here.
+ *
+ * The map stays bounded by live in-play specs, never the cumulative specs the long-lived worker
+ * drove. Progress/lifecycle-based, never wall-clock (timeout-eradication safe). Returns the count
+ * evicted (for observability). Runs every walk.
+ */
+export function pruneAncestorWaitBackoff(
+  backoff: HeldReDriveBackoff,
+  projectId: string,
+  snapshot: DagSnapshot,
+): number {
+  const live = new Set<string>();
+  if (snapshot.projectLifecycle === "active") {
+    for (const node of snapshot.nodes) {
+      if (node.phase === "pending" || node.phase === "in_flight") live.add(node.specId);
+    }
+  }
+  return backoff.retainForProject(projectId, live);
+}
 
 /** The gate's decision for a speculative dependent. */
 export type AncestorWaitDecision =
@@ -54,6 +89,7 @@ export type AncestorWaitDecision =
  */
 export function decideAncestorWait(
   backoff: HeldReDriveBackoff,
+  projectId: string,
   specId: string,
   unmergedAncestors: ReadonlyArray<string>,
   lifecycle: DagLifecycleSnapshot,
@@ -64,9 +100,10 @@ export function decideAncestorWait(
   }
 
   // (2) Cheap pre-check: an ancestor without a published head → defer cheaply without provisioning.
+  // `projectId` is stamped so the bounded-map eviction (issue #1072) can later free this entry.
   const notReady = firstAncestorWithoutPublishedHead(unmergedAncestors, lifecycle);
   if (notReady !== undefined) {
-    const { holds, delayMs } = backoff.recordHeld(specId);
+    const { holds, delayMs } = backoff.recordHeld(specId, { projectId });
     return { kind: "defer", ancestorSpecId: notReady.ancestorSpecId, ancestorPhase: notReady.phase, holds, delayMs };
   }
 
@@ -80,7 +117,7 @@ export function decideAncestorWait(
   if (!backoff.ancestorProgressed(specId, currentKey)) {
     // Ancestor has not moved since the last attempt — skip and re-arm the window from NOW
     // so we don't spin on every walker tick until the ancestor actually advances.
-    backoff.rearmWindow(specId, currentKey);
+    backoff.rearmWindow(specId, currentKey, projectId);
     return { kind: "skip", remainingMs: backoff.remainingMs(specId) };
   }
 
