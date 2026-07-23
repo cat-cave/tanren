@@ -1,10 +1,6 @@
 // §8 compatibility projection: speculative run → IntegrationNode (pure, no DB).
 
-import {
-  type IntegrationNode,
-  type IntegrationNodeMember,
-  memberKey,
-} from "../contracts/integrationNodes.js";
+import { type IntegrationNode, type IntegrationNodeMember, memberKey } from "../contracts/integrationNodes.js";
 import type { AncestorStack } from "./ancestorStack.js";
 
 /**

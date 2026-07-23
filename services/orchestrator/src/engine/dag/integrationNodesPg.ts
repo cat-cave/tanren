@@ -382,4 +382,3 @@ export class PgIntegrationNodeModel {
     return orgId;
   }
 }
-
