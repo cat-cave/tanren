@@ -1,6 +1,7 @@
 import { getJobOrgId } from "@tanren/db";
 import type pg from "pg";
 import { defaultIntegrationResourceConstraints } from "../../src/engine/contracts/integrationAuthority.js";
+import { integrationCatalogRevision } from "../../src/engine/contracts/integrationCatalog.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { parseDigest } from "../../src/engine/contracts/cas.js";
 import type { AppendEventInput, EventStore, PriorEventInput } from "../../src/engine/eventStore.js";
@@ -120,7 +121,7 @@ export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
           operations: ["attach_runtime_env", "deploy", "resolve_artifact_identity", "verify"],
           provider_scopes: [],
           resource_constraints: defaultIntegrationResourceConstraints(),
-          policy_revision: "integration-catalog.v3",
+          policy_revision: integrationCatalogRevision(),
           consent_revision: "consent.test",
           grant_expires_at: null,
           grant_generation_status: "active",
