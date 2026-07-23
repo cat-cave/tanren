@@ -121,12 +121,43 @@ export class PgBaseShiftOperationStore {
         toBaseSha: row.to_base_sha,
         fromMemberKey: row.from_member_key,
         toMemberKey: row.to_member_key,
-        fromMembers: Array.isArray(row.from_members) ? (row.from_members as IntegrationNodeMember[]) : [],
-        toMembers: Array.isArray(row.to_members) ? (row.to_members as IntegrationNodeMember[]) : [],
+        fromMembers: decodeHistoryMembers(row.from_members, row.op_id, "from_members"),
+        toMembers: decodeHistoryMembers(row.to_members, row.op_id, "to_members"),
         decision: row.decision,
         invalidationCause: row.invalidation_cause,
         createdAt: row.created_at,
       }));
     });
   }
+}
+
+/** Fail-closed decode of a history member vector (never invent empty on corrupt JSON). */
+function decodeHistoryMembers(value: unknown, opId: string, field: string): IntegrationNodeMember[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`base_shift_operations ${opId}.${field} is not an array`);
+  }
+  const out: IntegrationNodeMember[] = [];
+  for (const [index, m] of value.entries()) {
+    if (m === null || typeof m !== "object") {
+      throw new TypeError(`base_shift_operations ${opId}.${field}[${index}] is not an object`);
+    }
+    const specId = Reflect.get(m, "specId");
+    const runId = Reflect.get(m, "runId");
+    const branch = Reflect.get(m, "branch");
+    const headSha = Reflect.get(m, "headSha");
+    if (
+      typeof specId !== "string" ||
+      typeof runId !== "string" ||
+      typeof branch !== "string" ||
+      typeof headSha !== "string" ||
+      specId === "" ||
+      runId === "" ||
+      branch === "" ||
+      headSha === ""
+    ) {
+      throw new TypeError(`base_shift_operations ${opId}.${field}[${index}] missing required string fields`);
+    }
+    out.push({ specId, runId, branch, headSha });
+  }
+  return out;
 }

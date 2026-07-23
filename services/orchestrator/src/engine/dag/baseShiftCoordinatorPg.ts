@@ -10,6 +10,7 @@
 // `BaseShiftHeldError` so the dependent's work (the run row + branch) survives (never-discard),
 // never silently discarded or merged (the §0 boundary made literal).
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
 import type {
@@ -104,19 +105,32 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
   }
 }
 
-/** Reads the affected `integration_nodes` for a base shift (S0 compatibility read-model). */
+/** Reads the affected AUTHORITATIVE `integration_nodes` for a base shift (gv-17). */
 export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
   private readonly model: PgIntegrationNodeModel;
-  constructor(pool: pg.Pool) {
+  constructor(private readonly pool: pg.Pool) {
     this.model = new PgIntegrationNodeModel(pool);
   }
 
   async nodesForDependent(input: { projectId: string; dependent: SpeculativeDependent }): Promise<IntegrationNode[]> {
-    // The S0 compatibility read-model projects the project's in-flight speculative run
-    // rows as integration nodes; filter to the dependent's own node (its run id labels
-    // the integration). Observe-only — it does not branch control flow.
-    const nodes = await this.model.projectSpeculativeRunsAsNodes(input.projectId);
-    return nodes.filter((n) => n.members.some((m) => m.runId === input.dependent.runId));
+    const orgId = await resolveProjectOrg(this.pool, input.projectId);
+    if (orgId === null) {
+      throw new Error(`project ${input.projectId} has no org for authoritative integration-node read`);
+    }
+    // Resolve branch from the run row (SpeculativeDependent does not carry branch).
+    const branch = await runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<{ branch: string }>(`SELECT branch FROM runs WHERE run_id = $1`, [
+        input.dependent.runId,
+      ]);
+      return result.rows[0]?.branch ?? "";
+    });
+    // Fail-closed: load persisted nodes + normalized members (not the compat projection).
+    return this.model.findNodesForDependentRun({
+      orgId,
+      projectId: input.projectId,
+      runId: input.dependent.runId,
+      branch,
+    });
   }
 }
 
@@ -174,11 +188,12 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
         | "proof_stale";
     };
   }): Promise<void> {
-    // Org-scoped, plane-aware append (the helper routes through the control plane when
-    // a writer is wired); `held` never reaches here (it throws before the emit).
-    if (input.decision === "held") return;
-    await appendIntegrationRebaseEvent(this.pool, input, this.runStateWriter);
-    // gv-17: durable before/after member vectors for every settled restack.
+    // Org-scoped event append for non-held decisions. Held still records durable
+    // base_shift_operations history (gv-17 / CRA P0) so a workspace restack that
+    // then fails re-gate does not disappear.
+    if (input.decision !== "held") {
+      await appendIntegrationRebaseEvent(this.pool, input, this.runStateWriter);
+    }
     if (input.lineage !== undefined) {
       const orgId = input.lineage.orgId ?? (await resolveProjectOrg(this.pool, input.projectId));
       if (orgId === null) {

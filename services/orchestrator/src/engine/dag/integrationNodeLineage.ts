@@ -81,6 +81,50 @@ export function decodeMembersStrict(value: unknown, nodeId: string): Integration
   return out;
 }
 
+/** Persisted node row shape used by authoritative reads. */
+export interface IntegrationNodeRowShape {
+  node_id: string;
+  base_branch: string;
+  base_sha: string;
+  ref: string;
+  purpose: string;
+  members: unknown;
+  member_key: string;
+  gate_config_hash: string;
+  policy_version: string;
+  affected_fingerprint: string;
+  head_sha: string | null;
+  tree_hash: string | null;
+  status: string;
+}
+
+/**
+ * Load every authoritative node for a dependent run (member participation or branch ref).
+ * Callers map rows through {@link loadAuthoritativeMembers}.
+ */
+export async function selectNodesForDependentRun(
+  client: QueryRunner,
+  input: { projectId: string; runId: string; branch: string },
+): Promise<IntegrationNodeRowShape[]> {
+  const result = await client.query<IntegrationNodeRowShape>(
+    `SELECT DISTINCT n.node_id, n.base_branch, n.base_sha, n.ref, n.purpose, n.members, n.member_key,
+            n.gate_config_hash, n.policy_version, n.affected_fingerprint, n.head_sha,
+            n.tree_hash, n.status
+       FROM integration_nodes n
+      WHERE n.project_id = $1
+        AND (
+          n.ref = $2
+          OR EXISTS (
+            SELECT 1 FROM integration_node_members m
+             WHERE m.org_id = n.org_id AND m.node_id = n.node_id AND m.run_id = $3
+          )
+        )
+      ORDER BY n.node_id ASC`,
+    [input.projectId, input.branch, input.runId],
+  );
+  return result.rows;
+}
+
 /** Replace the authoritative member rows for a node (same transaction as the node UPSERT). */
 export async function replaceIntegrationNodeMembers(
   client: QueryRunner,

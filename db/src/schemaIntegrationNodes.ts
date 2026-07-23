@@ -142,6 +142,16 @@ export const integrationNodeMembers = pgTable(
       foreignColumns: [integrationNodes.orgId, integrationNodes.nodeId],
       name: "integration_node_members_node_fk",
     }),
+    foreignKey({
+      columns: [table.orgId, table.specId],
+      foreignColumns: [specs.orgId, specs.specId],
+      name: "integration_node_members_spec_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.runId],
+      foreignColumns: [runs.orgId, runs.runId],
+      name: "integration_node_members_run_fk",
+    }),
     check("integration_node_members_ordinal_check", sql`${table.ordinal} >= 0`),
     uniqueIndex("integration_node_members_org_node_run_unique").on(table.orgId, table.nodeId, table.runId),
     index("integration_node_members_org_project").on(table.orgId, table.projectId),

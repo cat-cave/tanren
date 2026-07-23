@@ -1,4 +1,3 @@
-// The ONE never-discard base-shift handler (§3/§7): both percolation and merge-behind
 // rebase the existing run/branch in place, re-gate, then preserve exact typed recovery.
 // Conflicts remain recorded in jj; infra and unprovable recovery fail closed.
 
@@ -24,6 +23,7 @@ import {
 import { createLogger } from "../observability/logger.js";
 import { rebaseDecisionFromRecovery, settleBaseShiftRecovery } from "./baseShiftRecovery.js";
 import { emitBaseShiftRebase } from "./baseShiftEmit.js";
+import { reGateOrHold } from "./baseShiftRegate.js";
 
 const log = createLogger("base-shift");
 
@@ -289,7 +289,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     rebase: RebaseResult;
     priorNodes: ReadonlyArray<IntegrationNode>;
   }): Promise<BaseShiftRebaseOutcome> {
-    const result = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
+    const result = await reGateOrHold(this.deps, input.projectId, input.dependent, input.rebase.headSha, {
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      ancestorSpecId: input.ancestorSpecId,
+      priorNodes: input.priorNodes,
+    });
     if (result.verdict === "passed") {
       await this.keepRun(input);
       await this.emit(input, false, "rebased_clean");
@@ -341,7 +347,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // The live resolver may already have routed either planner replan or writer
       // rework. Consume that exact typed result; never collapse it to a boolean and
       // never double-route. A seam without a delegated route uses persistence's
       // canonical planner route, which returns the same typed disposition.
@@ -357,9 +362,14 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO re-plan); a
     // failed GATE-tier re-gate ⇒ WRITER REWORK (the resolved tree is byte-clean, the code just
     // fails a gate); pending ⇒ HOLD (fail-closed).
-    const result = await this.reGateOrHold(input.projectId, input.dependent, resolution.headSha);
+    const result = await reGateOrHold(this.deps, input.projectId, input.dependent, resolution.headSha, {
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      ancestorSpecId: input.ancestorSpecId,
+      priorNodes: input.priorNodes,
+    });
     if (result.verdict === "passed") {
-      // The resolved tree FIT (re-gate passed) — keep the run. The emitted head is the RESOLVED head.
       const resolved: RebaseResult = { outcome: "clean", headSha: resolution.headSha };
       await this.keepRun(input);
       await this.emit({ ...input, rebase: resolved }, true, "rebased_resolved");
@@ -377,26 +387,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
    * `{ verdict, gateError? }` — the gate error (present on `failed`) is the writer-rework
    * steering. Accepts both a bare verdict string and a `ReGateResult` from the re-gate seam.
    */
-  private async reGateOrHold(
-    projectId: string,
-    dependent: SpeculativeDependent,
-    rebasedHeadSha: string,
-  ): Promise<{ verdict: "passed" | "failed"; gateError?: string }> {
-    let result: ReGateVerdict | ReGateResult;
-    try {
-      result = await this.deps.reGate.reGate({ projectId, dependent, rebasedHeadSha });
-    } catch (error) {
-      throw new BaseShiftHeldError("regate", error instanceof Error ? error.message : String(error));
-    }
-    const verdict = typeof result === "string" ? result : result.verdict;
-    const gateError = typeof result === "string" ? undefined : result.gateError;
-    if (verdict === "pending") {
-      // Inconclusive: NEVER merge on an unverified rebase. Hold (the work survives).
-      throw new BaseShiftHeldError("regate", "the re-gate did not converge (held, not merged)");
-    }
-    return { verdict, ...(gateError !== undefined && { gateError }) };
-  }
-
   /**
    * A CLEAN-tree (rebased or resolved) GATE-tier re-gate failure → WRITER REWORK: the tree is
    * byte-clean (no conflict), the code just fails a deterministic gate on the shifted base, which
