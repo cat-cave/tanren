@@ -5,6 +5,7 @@ export interface MergeAuthorizationInput {
   readonly pr: number;
   readonly auditedHeadSha: string;
   readonly auditedBaseSha: string;
+  readonly auditedIssueNumber: number;
   readonly rubricVersion: string;
   readonly casHeadSha: string;
 }
@@ -23,6 +24,7 @@ export interface MergeAuthorizationSnapshot {
   readonly rulesetVersion: string;
   readonly mergeStateStatus: string;
   readonly mergeable: string;
+  readonly auditedIssueNumber: number;
   readonly sourceIssues: readonly {
     readonly number: number;
     readonly state: string;
@@ -105,9 +107,12 @@ export function denyReasons(snapshot: MergeAuthorizationSnapshot, input: MergeAu
   )
     reasons.push("head differs from audited head or CAS argument");
   if (snapshot.baseSha !== input.auditedBaseSha) reasons.push("base changed since audit");
+  if (snapshot.auditedIssueNumber !== input.auditedIssueNumber) reasons.push("audited issue binding is unconfirmable");
   if (snapshot.sourceIssues.length !== 1) reasons.push("source issue linkage is absent or ambiguous");
   const source = snapshot.sourceIssues[0];
   if (source !== undefined) {
+    if (source.number !== snapshot.auditedIssueNumber || source.number !== input.auditedIssueNumber)
+      reasons.push("live closing issue differs from audited issue");
     if (!source.appropriate) reasons.push("source issue is not appropriate for this PR");
     if (source.state !== "OPEN") reasons.push("source issue is not open");
     if (source.blockers.some((blocker) => blocker.state !== "CLOSED")) reasons.push("source issue has open blocked_by");
@@ -155,6 +160,7 @@ function stabilityKey(snapshot: MergeAuthorizationSnapshot): string {
     rulesetVersion: snapshot.rulesetVersion,
     mergeStateStatus: snapshot.mergeStateStatus,
     mergeable: snapshot.mergeable,
+    auditedIssueNumber: snapshot.auditedIssueNumber,
     sourceIssues: snapshot.sourceIssues,
     latestCraReview: snapshot.latestCraReview,
     requiredContexts: snapshot.requiredContexts,
@@ -168,8 +174,9 @@ async function denied(deps: MergeAuthorityDeps, reasons: readonly string[]): Pro
   return { merged: false, verified: false, mergeCommitSha: null, reasons };
 }
 
-// Two fresh reads bracket authorization. The second must be byte-for-byte stable on
-// every decision field, and the merge itself carries the audited head as its CAS.
+// Fresh reads bracket authorization, and a third authoritative read happens after
+// recording the decision and immediately before the SHA-CAS merge. Every mutable
+// decision field must remain byte-for-byte stable throughout.
 export async function authorizeAndSquashMerge(
   deps: MergeAuthorityDeps,
   input: MergeAuthorizationInput,
@@ -183,6 +190,11 @@ export async function authorizeAndSquashMerge(
     if (finalReasons.length > 0) return await denied(deps, finalReasons);
     if (stabilityKey(first) !== stabilityKey(final)) return await denied(deps, ["authorization inputs changed"]);
     await deps.recorder?.record("authorized", []);
+    const preMerge = await deps.gateway.readFresh(input);
+    const preMergeReasons = denyReasons(preMerge, input);
+    if (preMergeReasons.length > 0) return await denied(deps, preMergeReasons);
+    if (stabilityKey(final) !== stabilityKey(preMerge))
+      return await denied(deps, ["authorization inputs changed before merge"]);
     const response = await deps.gateway.squashMerge(input.pr, input.casHeadSha);
     if (!response.merged || response.mergeCommitSha === null) {
       return await denied(deps, ["merge response did not confirm a merge commit"]);

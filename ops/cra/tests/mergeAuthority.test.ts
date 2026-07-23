@@ -12,6 +12,7 @@ const input: MergeAuthorizationInput = {
   pr: 1240,
   auditedHeadSha: firstSha,
   auditedBaseSha: secondSha,
+  auditedIssueNumber: 1247,
   casHeadSha: firstSha,
   rubricVersion: "2026-07-22",
 };
@@ -31,6 +32,7 @@ function green(): MergeAuthorizationSnapshot {
     rulesetVersion: "rules-v1",
     mergeStateStatus: "CLEAN",
     mergeable: "MERGEABLE",
+    auditedIssueNumber: 1247,
     sourceIssues: [{ number: 1247, state: "OPEN", appropriate: true, blockers: [{ number: 1246, state: "CLOSED" }] }],
     latestCraReview: {
       id: 55,
@@ -84,13 +86,64 @@ async function expectDenied(...reads: readonly MergeAuthorizationSnapshot[]) {
 
 describe("fresh fail-closed merge authorization", () => {
   it("invokes exactly one SHA-CAS squash merge and verifies returned state before post-merge routing", async () => {
-    const fake = gateway([green(), green()]);
+    const fake = gateway([green(), green(), green()]);
     const route = vi.fn<(sha: string) => Promise<void>>(async () => {});
     const result = await authorizeAndSquashMerge({ gateway: fake, afterVerifiedMerge: route }, input);
     expect(result).toEqual({ merged: true, verified: true, mergeCommitSha: mergeSha, reasons: [] });
     expect(fake.squashMerge).toHaveBeenCalledOnce();
     expect(fake.squashMerge).toHaveBeenCalledWith(1240, firstSha);
     expect(route).toHaveBeenCalledWith(mergeSha);
+  });
+
+  it("denies the audited-issue body-swap attack without merging or closing the substituted issue", async () => {
+    const substitutedIssue = {
+      ...green(),
+      body: "Closes #999",
+      historyVersion: "v2",
+      sourceIssues: [{ number: 999, state: "OPEN", appropriate: false, blockers: [] }],
+    };
+    const fake = gateway([green(), substitutedIssue]);
+    const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+    expect(result.merged).toBe(false);
+    expect(result.reasons).toContain("live closing issue differs from audited issue");
+    expect(fake.squashMerge).not.toHaveBeenCalled();
+    expect(substitutedIssue.sourceIssues[0]?.state).toBe("OPEN");
+  });
+
+  it.each(["missing", "pending"])("denies an inherited org required check that is %s", async (condition) => {
+    const snapshot = {
+      ...green(),
+      requiredContexts: ["ci", "org/security"],
+      checks:
+        condition === "missing"
+          ? green().checks
+          : [
+              ...green().checks,
+              {
+                name: "org/security",
+                status: "IN_PROGRESS",
+                conclusion: null,
+                kind: "check_run" as const,
+              },
+            ],
+    };
+    await expectDenied(snapshot);
+  });
+
+  it("denies a disposition-bound approval superseded by a later CRA review for the same head", async () => {
+    await expectDenied({ ...green(), latestCraReview: { ...green().latestCraReview!, latest: false } });
+  });
+
+  it("re-reads immediately before merge and denies a review dismissed after the stable snapshot", async () => {
+    const dismissed = {
+      ...green(),
+      latestCraReview: { ...green().latestCraReview!, state: "DISMISSED", dismissed: true },
+    };
+    const fake = gateway([green(), green(), dismissed]);
+    const result = await authorizeAndSquashMerge({ gateway: fake }, input);
+    expect(result.merged).toBe(false);
+    expect(result.reasons).toContain("CRA review was dismissed");
+    expect(fake.squashMerge).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -161,7 +214,7 @@ describe("fresh fail-closed merge authorization", () => {
   });
 
   it("does not route findings when post-merge verification disagrees", async () => {
-    const fake = gateway([green(), green()]);
+    const fake = gateway([green(), green(), green()]);
     fake.readMerged = vi.fn<MergeAuthorityGateway["readMerged"]>(async () => ({
       state: "OPEN",
       headSha: firstSha,

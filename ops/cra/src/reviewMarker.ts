@@ -27,3 +27,12 @@ export function bodyMatchesMarker(body: string, key: ReviewMarkerKey): boolean {
   if (match === null) return false;
   return match[1] === String(key.pr) && match[2] === key.headSha && match[3] === key.rubricVersion;
 }
+
+// Identifies a CRA review for a PR/head even when it was produced under an older
+// rubric. Merge authorization uses this broader identity to prove that the
+// disposition-bound review has not been superseded by a later CRA review.
+export function bodyHasMarkerForHead(body: string, pr: number, headSha: string): boolean {
+  const match = MARKER_PATTERN.exec(body);
+  if (match === null) return false;
+  return match[1] === String(pr) && match[2] === headSha;
+}

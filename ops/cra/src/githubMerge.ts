@@ -12,7 +12,7 @@ import type {
   MergedPullRequest,
 } from "./mergeAuthority.js";
 import { execute, executeChecked, type CommandExecutor } from "./process.js";
-import { bodyMatchesMarker } from "./reviewMarker.js";
+import { bodyHasMarkerForHead, bodyMatchesMarker } from "./reviewMarker.js";
 import type { SingletonLease } from "./singleton.js";
 import type { PrStateStore } from "./stateStore.js";
 
@@ -140,13 +140,20 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
     const required = [...new Set([...legacyRequired, ...rulesets.requiredContexts])].sort();
     if (state === undefined) throw new Error("persistent PR state is missing");
     const report = auditReportSchema.parse(artifact.report);
-    const craReviews = pr.reviews.nodes
+    const craReviewsForHead = pr.reviews.nodes
       .filter(
         (review) =>
-          review.author?.login === this.config.github.expectedLogin && review.commit?.oid === input.auditedHeadSha,
+          review.author?.login === this.config.github.expectedLogin &&
+          review.commit?.oid === pr.headRefOid &&
+          bodyHasMarkerForHead(review.body, input.pr, pr.headRefOid),
       )
-      .sort((left, right) => (left.submittedAt ?? "").localeCompare(right.submittedAt ?? ""));
-    const review = craReviews.at(-1);
+      .sort(
+        (left, right) =>
+          (left.submittedAt ?? "").localeCompare(right.submittedAt ?? "") ||
+          (left.databaseId ?? 0) - (right.databaseId ?? 0),
+      );
+    const latestCraReview = craReviewsForHead.at(-1);
+    const review = pr.reviews.nodes.find((candidate) => candidate.databaseId === state?.reviewId);
     const reviewIsCurrent =
       review !== undefined &&
       bodyMatchesMarker(review.body, {
@@ -163,6 +170,8 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
     const stateHealthy =
       state.lastReviewedHeadSha === input.auditedHeadSha &&
       state.lastReviewedBaseSha === input.auditedBaseSha &&
+      state.auditedIssueNumber === artifact.auditedIssueNumber &&
+      state.auditedIssueNumber === input.auditedIssueNumber &&
       state.rubricVersion === input.rubricVersion &&
       state.reviewId === review?.databaseId &&
       state.auditStatus === "completed" &&
@@ -181,10 +190,11 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
       rulesetVersion: rulesets.version,
       mergeStateStatus: pr.mergeStateStatus,
       mergeable: pr.mergeable,
+      auditedIssueNumber: artifact.auditedIssueNumber,
       sourceIssues: pr.closingIssuesReferences.nodes.map((issue) => ({
         number: issue.number,
         state: issue.state,
-        appropriate: true,
+        appropriate: issue.number === artifact.auditedIssueNumber && issue.number === state.auditedIssueNumber,
         blockers: issue.blockedBy.nodes,
       })),
       latestCraReview:
@@ -200,8 +210,12 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
                 reviewIsCurrent &&
                 report.headSha === input.auditedHeadSha &&
                 report.baseSha === input.auditedBaseSha &&
+                artifact.auditedIssueNumber === input.auditedIssueNumber &&
                 report.rubricVersion === input.rubricVersion,
-              latest: true,
+              latest:
+                latestCraReview !== undefined &&
+                latestCraReview.databaseId !== null &&
+                latestCraReview.databaseId === review.databaseId,
               dismissed: review.state === "DISMISSED",
               findingSeverities: [...report.findings.map(triagedSeverity), ...reviewBodyBlockingSeverities],
               unresolvedRequiredChecks: report.unresolvedChecks.map((check) => check.name),
@@ -214,7 +228,8 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
         permissions: ["ADMIN", "MAINTAIN", "WRITE"].includes(graph.data.repository.viewerPermission ?? ""),
         singletonLease: this.lease.isHeld(),
         statePersistence: stateHealthy,
-        readAfterWrite: review !== undefined && review.commit?.oid === input.auditedHeadSha,
+        readAfterWrite:
+          review !== undefined && review.commit?.oid === input.auditedHeadSha && review.databaseId === state.reviewId,
       },
     };
   }
@@ -325,11 +340,32 @@ export class GithubMergeGateway implements MergeAuthorityGateway {
   }
 
   private async rulesets(): Promise<{ version: string; requiredContexts: string[] }> {
-    const summariesRaw = await this.gh(["api", "--paginate", `/repos/${this.owner}/${this.name}/rulesets`]);
+    const summariesRaw = await this.gh([
+      "api",
+      "--method",
+      "GET",
+      "--paginate",
+      `/repos/${this.owner}/${this.name}/rulesets`,
+      "-f",
+      "includes_parents=true",
+      "-f",
+      "per_page=100",
+    ]);
     const summaries = rulesetsSchema.parse(JSON.parse(summariesRaw.stdout));
     const details = await Promise.all(
       summaries.map(async (summary) =>
-        JSON.parse((await this.gh(["api", `/repos/${this.owner}/${this.name}/rulesets/${summary.id}`])).stdout),
+        JSON.parse(
+          (
+            await this.gh([
+              "api",
+              "--method",
+              "GET",
+              `/repos/${this.owner}/${this.name}/rulesets/${summary.id}`,
+              "-f",
+              "includes_parents=true",
+            ])
+          ).stdout,
+        ),
       ),
     );
     const requiredContexts: string[] = [];

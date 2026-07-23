@@ -78,6 +78,7 @@ function reviewedState(pr: number, headSha: string): PrState {
     lastSeenHeadSha: headSha,
     lastReviewedHeadSha: headSha,
     lastReviewedBaseSha: secondSha,
+    auditedIssueNumber: 1247,
     rubricVersion: "2026-07-22",
     reviewId: 55,
     findingIds: [],

@@ -20,6 +20,7 @@ function initialState(pr: DiscoveredPullRequest, config: CraConfig): PrState {
     lastSeenHeadSha: pr.headSha,
     lastReviewedHeadSha: null,
     lastReviewedBaseSha: null,
+    auditedIssueNumber: null,
     rubricVersion: config.rubricVersion,
     reviewId: null,
     findingIds: [],
