@@ -24,6 +24,7 @@ function initialState(): PrState {
     lastSeenHeadSha: firstSha,
     lastReviewedHeadSha: null,
     lastReviewedBaseSha: null,
+    auditedIssueNumber: null,
     rubricVersion: "2026-07-22",
     reviewId: null,
     findingIds: [],
@@ -124,7 +125,15 @@ describe("reviewOnce fail-closed pipeline", () => {
       now: "2026-07-22T12:00:00.000Z",
     });
     expect(result).toMatchObject({ blocked: false, verdict: "APPROVE", posted: true, reviewId: 5001 });
-    expect((await stateStore.read(1240))?.disposition).toBe("approved");
+    expect(await stateStore.read(1240)).toMatchObject({ disposition: "approved", auditedIssueNumber: 1244 });
+    const artifact = await reviewDeps(
+      paths,
+      lease,
+      gh,
+      JSON.stringify(validReport()),
+      stubAssembler(),
+    ).artifactStore.readReport(1240, firstSha, "2026-07-22");
+    expect(artifact.auditedIssueNumber).toBe(1244);
     expect(gh).toHaveBeenCalledOnce();
     await lease.release();
   });
