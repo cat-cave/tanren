@@ -327,8 +327,14 @@ interface DiffAnalysis {
   readonly changedFiles: ReadonlySet<string>;
 }
 
-// Parse the unified diff for line counts, file removals (text /dev/null, binary
-// deletions, 100% renames), and the changed-file set.
+// Parse the unified diff for line counts, file removals, and the changed-file set.
+//
+// Attribution is PRE-IMAGE for deletions and POST-IMAGE for additions: deleted lines
+// are classified by the OLD (from) path, added lines by the NEW (to) path. This
+// closes the partial-rename laundering evasion — renaming a test out of the test tree
+// (e.g. `tests/gate.test.ts -> src/gate.ts` at 80%) can NOT reclassify the gutted
+// test's deleted lines as live lines. A rename whose source is a test path but whose
+// destination is not is a test-file removal at ANY similarity.
 function analyzeDiff(diff: string): DiffAnalysis {
   let deletedTestLines = 0;
   let addedTestLines = 0;
@@ -338,8 +344,10 @@ function analyzeDiff(diff: string): DiffAnalysis {
   const removedLiveUnmeasured = new Set<string>();
   const changedFiles = new Set<string>();
 
+  // oldPath = pre-image (classifies deletions); newPath = post-image (classifies
+  // additions). Both come from `---`/`+++`, `rename from/to`, or the `diff --git` line.
   let oldPath: string | null = null;
-  let current: string | null = null;
+  let newPath: string | null = null;
   let similarity = 0;
 
   const markRemoved = (path: string, measured: boolean): void => {
@@ -352,15 +360,26 @@ function analyzeDiff(diff: string): DiffAnalysis {
     if (line.startsWith("diff --git ")) {
       similarity = 0;
       oldPath = null;
-      current = null;
+      newPath = null;
       const match = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
-      if (match !== null) oldPath = match[1] ?? null;
+      if (match !== null) {
+        oldPath = match[1] ?? null;
+        newPath = match[2] ?? null;
+      }
     } else if (line.startsWith("similarity index ")) {
       similarity = Number.parseInt(line.slice("similarity index ".length), 10);
     } else if (line.startsWith("rename from ")) {
-      const path = line.slice("rename from ".length).trim();
-      changedFiles.add(path);
-      if (similarity === 100) markRemoved(path, false);
+      oldPath = line.slice("rename from ".length).trim();
+      changedFiles.add(oldPath);
+    } else if (line.startsWith("rename to ")) {
+      newPath = line.slice("rename to ".length).trim();
+      changedFiles.add(newPath);
+      // Classify the rename by its OLD path at ANY similarity: a test renamed out of
+      // the test tree is a test removal; a pure (100%) live move is an unmeasurable
+      // live removal. A test->test rename is a legit move (not flagged here; a gutted
+      // body still surfaces via pre-image deleted-test-line attribution below).
+      if (isTestPath(oldPath ?? "") && !isTestPath(newPath)) markRemoved(oldPath ?? newPath, true);
+      else if (oldPath !== null && !isTestPath(oldPath) && similarity === 100) removedLiveUnmeasured.add(oldPath);
     } else if (line.startsWith("Binary files ")) {
       const match = /^Binary files a\/(.+) and (.+) differ$/u.exec(line);
       if (match !== null && match[1] !== undefined) {
@@ -370,16 +389,22 @@ function analyzeDiff(diff: string): DiffAnalysis {
     } else if (line.startsWith("--- ")) {
       oldPath = stripDiffPath(line.slice(4));
     } else if (line.startsWith("+++ ")) {
-      const newPath = stripDiffPath(line.slice(4));
-      current = newPath ?? oldPath;
-      if (current !== null) changedFiles.add(current);
+      newPath = stripDiffPath(line.slice(4));
+      if (newPath !== null) changedFiles.add(newPath);
+      else if (oldPath !== null) changedFiles.add(oldPath);
       if (newPath === null && oldPath !== null) markRemoved(oldPath, true);
-    } else if (current !== null && line.startsWith("-") && !line.startsWith("---")) {
-      if (isTestPath(current)) deletedTestLines += 1;
-      else deletedLiveLines += 1;
-    } else if (current !== null && line.startsWith("+") && !line.startsWith("+++")) {
-      if (isTestPath(current)) addedTestLines += 1;
-      else addedLiveLines += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      const classifyBy = oldPath ?? newPath;
+      if (classifyBy !== null) {
+        if (isTestPath(classifyBy)) deletedTestLines += 1;
+        else deletedLiveLines += 1;
+      }
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      const classifyBy = newPath ?? oldPath;
+      if (classifyBy !== null) {
+        if (isTestPath(classifyBy)) addedTestLines += 1;
+        else addedLiveLines += 1;
+      }
     }
   }
   return {

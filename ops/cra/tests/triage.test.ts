@@ -51,6 +51,12 @@ function renameDiff(from: string, to: string): string {
   return `diff --git a/${from} b/${to}\nsimilarity index 100%\nrename from ${from}\nrename to ${to}\n`;
 }
 
+function renameWithBody(from: string, to: string, similarity: number, deleted: number, added: number): string {
+  const del = Array.from({ length: deleted }, (_, i) => `-old${i}`).join("\n");
+  const add = Array.from({ length: added }, (_, i) => `+new${i}`).join("\n");
+  return `diff --git a/${from} b/${to}\nsimilarity index ${similarity}%\nrename from ${from}\nrename to ${to}\n--- a/${from}\n+++ b/${to}\n${del}\n${add}\n`;
+}
+
 describe("supervisor triage — advisory findings", () => {
   it("approves a clean, fully-proved PR with no findings", () => {
     const result = triageClean();
@@ -117,6 +123,24 @@ describe("supervisor triage — ground-truth gates the worker cannot clear", () 
     );
     expect(result.verdict).toBe("REQUEST_CHANGES");
     expect(result.findings.some((f) => f.id === "deletion-live-substantial")).toBe(true);
+  });
+
+  it("PARTIAL RENAME EVASION: an 80% rename of a test out of the test tree, gutting the body, still blocks", () => {
+    // `git mv services/foo/tests/gate.test.ts -> services/foo/gate.ts` at 80%, delete
+    // the test body, add live lines elsewhere so net-live stays under threshold. The
+    // laundered test deletion must still be caught by pre-image classification.
+    const diff = `${cleanDiff}${renameWithBody("services/foo/tests/gate.test.ts", "services/foo/gate.ts", 80, 20, 25)}`;
+    const result = triageClean({}, { diff });
+    expect(result.verdict).toBe("REQUEST_CHANGES");
+    const regression = result.findings.find((f) => f.id === "deletion-test-regression");
+    expect(regression).toBeDefined();
+    expect(regression?.body).toContain("removed test file");
+  });
+
+  it("does not false-block a legit test-preserving rename (test -> test, body intact)", () => {
+    const diff = `${cleanDiff}${renameWithBody("ops/cra/tests/a.test.ts", "ops/cra/tests/b.test.ts", 95, 2, 2)}`;
+    const result = triageClean({}, { diff });
+    expect(result.verdict).toBe("APPROVE");
   });
 
   it("does not gate a small live deletion below the configured threshold", () => {
