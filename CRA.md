@@ -113,7 +113,7 @@ automation that acts without a fresh agent decision.
 ## Stalled and abandoned PRs
 
 Do not babysit a PR indefinitely. A wrong-direction, sweeping, destructive, or
-unreviewable PR can be closed with a concise explanation; keep the original
+too-broad PR can be closed with a concise explanation; keep the original
 issue open (or reopen it), record durable findings there, clear its stale claim
 or assignment, and state that it is claimable again.
 
