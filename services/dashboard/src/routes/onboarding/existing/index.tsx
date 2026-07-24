@@ -21,7 +21,7 @@ import type { Context, Hono } from "hono";
 import { clientDepsFor } from "../../../api/clientDeps.js";
 import { formField } from "../../formField.js";
 import { ExistingBrownfieldClient } from "../../../api/existingBrownfieldClient.js";
-import type { GovernancePosture, ReconReport } from "../../../api/existingBrownfieldTypes.js";
+import { decodeReconStateForDisplay, type GovernancePosture } from "../../../api/existingBrownfieldTypes.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import type { BrownfieldDetectedFile } from "../../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../../app/mountShell.js";
@@ -57,15 +57,6 @@ async function writeOrchestratorClient(c: Context, deps: ShellDeps): Promise<Orc
 /** Prefer the orchestrator-published App install URL over the local env fallback. */
 async function resolveGithubAppUrl(c: Context, deps: ShellDeps): Promise<string> {
   return (await orchestratorClient(c, deps).authGithubAppInstallUrl()) ?? GITHUB_APP_URL_FALLBACK;
-}
-
-function parseReport(raw: unknown): ReconReport | undefined {
-  if (typeof raw !== "string" || raw === "") return undefined;
-  try {
-    return JSON.parse(raw) as ReconReport;
-  } catch {
-    return undefined;
-  }
 }
 
 function render(c: Context, ctx: ShellContext, body: unknown) {
@@ -177,6 +168,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       repoUrl={repoUrl}
       recon={recon.result}
       report={recon.result.report}
+      state={recon.result.state}
       csrfToken={ctx.csrfToken}
     />,
   );
@@ -187,8 +179,10 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
   const orgLogin = ctx.org?.login ?? "your org";
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
   const step = Number.parseInt(formField(form, "step", "2"), 10) || 2;
-  const repoUrl = formField(form, "repoUrl");
-  const report = parseReport(form["report"]);
+  const state = formField(form, "state");
+  const decoded = decodeReconStateForDisplay(state);
+  const repoUrl = decoded?.repoUrl ?? "";
+  const report = decoded?.report;
   const projectId = projectIdFromForm(form, ctx);
   const next = Math.min(5, step + 1) as 2 | 3 | 4 | 5;
   return render(
@@ -201,6 +195,7 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
+      state={state}
       csrfToken={ctx.csrfToken}
     />,
   );
@@ -211,8 +206,10 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = formField(form, "repoUrl");
-  const report = parseReport(form["report"]);
+  const state = formField(form, "state");
+  const decoded = decodeReconStateForDisplay(state);
+  const repoUrl = decoded?.repoUrl ?? "";
+  const report = decoded?.report;
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
   const kept = keepPathsFromForm(form);
@@ -227,22 +224,21 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
         projectId={projectId}
         repoUrl={repoUrl}
         report={report}
+        state={state}
         posture={posture}
         csrfToken={ctx.csrfToken}
         {...extra}
       />,
     );
 
-  if (orgId === undefined || projectId === undefined || report === undefined) {
+  if (orgId === undefined || projectId === undefined || report === undefined || state === "") {
     return baseStep3({ configInjectionError: "lost the recon report — restart from step 1." });
   }
   const excludePaths = ALL_PROPOSED_PATHS.filter((p) => !kept.includes(p));
   const result = await (
     await writeBrownfieldClient(c, deps)
   ).configInjection(orgId, projectId, {
-    repoUrl,
-    baseBranch: "main",
-    report,
+    state,
     posture,
     excludePaths,
   });
@@ -259,10 +255,12 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
   const githubAppUrl = await resolveGithubAppUrl(c, deps);
-  const repoUrl = formField(form, "repoUrl");
-  const report = parseReport(form["report"]);
+  const state = formField(form, "state");
+  const decoded = decodeReconStateForDisplay(state);
+  const repoUrl = decoded?.repoUrl ?? "";
+  const report = decoded?.report;
   const projectId = projectIdFromForm(form, ctx);
-  if (orgId === undefined || projectId === undefined || report === undefined) {
+  if (orgId === undefined || projectId === undefined || report === undefined || state === "") {
     return render(
       c,
       ctx,
@@ -278,8 +276,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const result = await (
     await writeBrownfieldClient(c, deps)
   ).seedDag(orgId, projectId, {
-    repoUrl,
-    report,
+    state,
     includeIssues: true,
   });
   return render(
@@ -292,6 +289,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
+      state={state}
       seeded={result.ok ? result.result : undefined}
       seedError={result.ok ? undefined : (result.error ?? "could not seed the spec dag — try again.")}
       csrfToken={ctx.csrfToken}

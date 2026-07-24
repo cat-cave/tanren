@@ -12,6 +12,7 @@ import { CsrfField } from "../../shell/CsrfField.js";
 export function SeedDagStep(props: {
   repoUrl: string;
   report: ReconReport;
+  state: string;
   baseAction: string;
   projectId?: string;
   seeded?: SeedDagResult;
@@ -74,8 +75,7 @@ export function SeedDagStep(props: {
             <input type="hidden" name="phase" value="advance" />
             <input type="hidden" name="step" value="4" />
             <input type="hidden" name="projectId" value={props.projectId ?? ""} />
-            <input type="hidden" name="repoUrl" value={props.repoUrl} />
-            <input type="hidden" name="report" value={JSON.stringify(props.report)} />
+            <input type="hidden" name="state" value={props.state} />
             <div class="foot">
               <div class="hint">↑ each spec inherits its priority from the issue label · forge re-routes on demand</div>
               <div class="grow"></div>
@@ -91,8 +91,7 @@ export function SeedDagStep(props: {
           <input type="hidden" name="phase" value="seed" />
           <input type="hidden" name="step" value="4" />
           <input type="hidden" name="projectId" value={props.projectId ?? ""} />
-          <input type="hidden" name="repoUrl" value={props.repoUrl} />
-          <input type="hidden" name="report" value={JSON.stringify(props.report)} />
+          <input type="hidden" name="state" value={props.state} />
           <div class="col-card live" style="flex-direction:row;align-items:center;gap:12px">
             <div style="font-family:var(--font-ui);font-size:12px;color:var(--fg-1);line-height:1.4;flex:1">
               seed creates pending specs from {props.report.gaps.length} recon gaps + your open github issues. nothing

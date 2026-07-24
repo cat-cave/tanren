@@ -1,9 +1,9 @@
 /**
  * brownfield step 2 — read-only recon. Renders the chapters the
  * read-only Answerer pre-filled (identity / personas / behaviors / architecture
- * / risks) for operator review, plus the gap cards the operator settles. The
- * recon report rides forward on a hidden form field (transient — no session
- * table), mirroring the greenfield capture model. Recreated from the hi-fi
+ * / risks) for operator review, plus the gap cards the operator settles. A
+ * signed, expiring state token rides forward on a hidden form field (transient
+ * — no session table), mirroring the greenfield capture model. Recreated from the hi-fi
  * `view-onboard-existing` step 2.
  */
 
@@ -18,6 +18,7 @@ function severityGlyph(severity: "info" | "warn" | "fail"): string {
 export function ReconStep(props: {
   repoUrl: string;
   result: ReconResult;
+  state: string;
   baseAction: string;
   projectId?: string;
   csrfToken?: string;
@@ -137,9 +138,8 @@ export function ReconStep(props: {
             <CsrfField token={props.csrfToken} />
             <input type="hidden" name="phase" value="advance" />
             <input type="hidden" name="step" value="2" />
-            <input type="hidden" name="repoUrl" value={props.repoUrl} />
             <input type="hidden" name="projectId" value={props.projectId ?? ""} />
-            <input type="hidden" name="report" value={JSON.stringify(report)} />
+            <input type="hidden" name="state" value={props.state} />
             <div class="foot">
               <div class="hint">↑ no writes happen until the config-injection PR in step 3</div>
               <div class="grow"></div>

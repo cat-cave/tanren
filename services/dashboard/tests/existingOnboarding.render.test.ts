@@ -52,7 +52,24 @@ const RECON_RESULT = {
       },
     ],
   },
+  state: "",
 };
+
+function fixtureState(payload: Record<string, unknown>): string {
+  return `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.fixture`;
+}
+
+const RECON_STATE = fixtureState({
+  version: 1,
+  kind: "recon",
+  orgId: ORG.id,
+  projectId: PROJECT.projectId,
+  repoUrl: RECON_RESULT.repoUrl,
+  issuedAt: 1,
+  expiresAt: 4_000_000_000_000,
+  report: RECON_RESULT.report,
+});
+RECON_RESULT.state = RECON_STATE;
 
 const CONFIG_INJECTION_RESULT = {
   pullRequest: {
@@ -146,8 +163,6 @@ async function build() {
 }
 
 const FORM = { "content-type": "application/x-www-form-urlencoded" };
-const REPORT_JSON = JSON.stringify(RECON_RESULT.report);
-
 describe("brownfield · 5-step shell (step 1 link)", () => {
   it("renders the full-track journey strip + the link form", async () => {
     const app = await build();
@@ -188,7 +203,7 @@ describe("brownfield · config-injection PR (step 3)", () => {
         step: "2",
         repoUrl: PROJECT.repoUrl,
         projectId: PROJECT.projectId,
-        report: REPORT_JSON,
+        state: RECON_STATE,
       }),
     });
     const html = await res.text();
@@ -210,7 +225,7 @@ describe("brownfield · config-injection PR (step 3)", () => {
         ["step", "3"],
         ["repoUrl", PROJECT.repoUrl],
         ["projectId", PROJECT.projectId],
-        ["report", REPORT_JSON],
+        ["state", RECON_STATE],
         ["posture", "strict"],
         ["keep", ".tanren/PROJECT.md"],
         ["keep", ".tanren/ci.yml"],
@@ -235,7 +250,7 @@ describe("brownfield · DAG seed (step 4)", () => {
         step: "4",
         repoUrl: PROJECT.repoUrl,
         projectId: PROJECT.projectId,
-        report: REPORT_JSON,
+        state: RECON_STATE,
       }),
     });
     const html = await res.text();
@@ -270,7 +285,7 @@ describe("brownfield · DAG seed (step 4)", () => {
         step: "4",
         repoUrl: PROJECT.repoUrl,
         projectId: PROJECT.projectId,
-        report: REPORT_JSON,
+        state: RECON_STATE,
       }),
     });
     const html = await res.text();
@@ -311,7 +326,7 @@ describe("brownfield · governance (step 5)", () => {
         step: "4",
         repoUrl: PROJECT.repoUrl,
         projectId: PROJECT.projectId,
-        report: REPORT_JSON,
+        state: RECON_STATE,
       }),
     });
     const html = await res.text();

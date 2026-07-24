@@ -14,6 +14,7 @@ import {
   appWithGreenfieldRoutes as appWithRoutes,
   preparedDeploy,
   seedGithubAppOrg,
+  signedInterviewState,
 } from "./helpers/greenfieldRoutes.js";
 
 describe("fragment_authoring_failed 409 — failureReasons propagation (v66)", () => {
@@ -24,7 +25,7 @@ describe("fragment_authoring_failed 409 — failureReasons propagation (v66)", (
     const reasonsByFragment = {
       "runtime-python": "body parse rejected: vfs.write(...) accepts string literals only",
     };
-    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, githubHttp, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -52,10 +53,13 @@ describe("fragment_authoring_failed 409 — failureReasons propagation (v66)", (
       body: JSON.stringify({
         // A stack whose open-world tokenization yields runtime-<unknown>, forcing
         // a missing-fragments decision so the wired runFragmentAuthoring fires.
-        capture: {
-          ...apexCapture(),
-          lifecycle: { ...apexCapture().lifecycle, stack: "russian-fanfiction-tools + fly" },
-        },
+        state: await signedInterviewState(
+          {
+            ...apexCapture(),
+            lifecycle: { ...apexCapture().lifecycle, stack: "russian-fanfiction-tools + fly" },
+          },
+          onboardingStateSecrets,
+        ),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),

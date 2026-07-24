@@ -9,18 +9,18 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import type { DeriveInput, DeriveResult, InterviewCapture, InterviewRoundResult } from "./onboardingNewTypes.js";
+import type { DeriveInput, DeriveResult, InterviewRoundResult } from "./onboardingNewTypes.js";
 
 export class OnboardingNewClient extends OrchestratorHttpClient {
   /** Run one interview round; returns the next question + updated capture. */
   async round(
     orgId: string,
-    input: { round: number; answer: string; capture: InterviewCapture },
+    input: { round: number; answer: string; state?: string },
   ): Promise<{ ok: boolean; status: number; result: InterviewRoundResult | undefined }> {
     const r = await this.sendJson<InterviewRoundResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/round`,
-      input,
+      { round: input.round, answer: input.answer, ...(input.state === undefined ? {} : { state: input.state }) },
       { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
@@ -38,7 +38,7 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
     input: DeriveInput,
   ): Promise<{ ok: boolean; status: number; result: DeriveResult | undefined }> {
     const body: DeriveInput = {
-      capture: input.capture,
+      state: input.state,
       owner: input.owner,
       ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
       ...(input.deploy === undefined ? {} : { deploy: input.deploy }),

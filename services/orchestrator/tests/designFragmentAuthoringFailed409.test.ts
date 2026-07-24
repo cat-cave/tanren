@@ -15,6 +15,7 @@ import {
   appWithGreenfieldRoutes as appWithRoutes,
   preparedDeploy,
   seedGithubAppOrg,
+  signedInterviewState,
 } from "./helpers/greenfieldRoutes.js";
 
 describe("design_fragment_authoring_failed 409 — typed arm (not a generic 500)", () => {
@@ -24,7 +25,7 @@ describe("design_fragment_authoring_failed 409 — typed arm (not a generic 500)
     pool.seedMembership("org_acme", "user_alice", "admin");
     const failedIds = ["surface/components-Components"];
     const failureReasons = { "surface/components-Components": "adapter rejected: token set unresolvable" };
-    const { app } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -41,7 +42,7 @@ describe("design_fragment_authoring_failed 409 — typed arm (not a generic 500)
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),

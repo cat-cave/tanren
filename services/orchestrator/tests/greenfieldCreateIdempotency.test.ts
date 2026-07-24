@@ -9,7 +9,13 @@
 import { describe, expect, it } from "vitest";
 import { FakeRepoCreateHttp } from "./conformance/fakes/fakeRepoCreateHttp.js";
 import { RoutesPool } from "./helpers/routesPool.js";
-import { apexCapture, appWithGreenfieldRoutes, preparedDeploy, seedGithubAppOrg } from "./helpers/greenfieldRoutes.js";
+import {
+  apexCapture,
+  appWithGreenfieldRoutes,
+  preparedDeploy,
+  seedGithubAppOrg,
+  signedInterviewState,
+} from "./helpers/greenfieldRoutes.js";
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
@@ -267,7 +273,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     pool.seedMembership("org_acme", "user_alice", "admin");
     const githubHttp = new FakeRepoCreateHttp();
     let deployProvisions = 0;
-    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+    const { app, onboardingStateSecrets } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         deployProvisions += 1;
@@ -275,7 +281,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
       },
     });
     const body = JSON.stringify({
-      capture: apexCapture(),
+      state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
       owner: "cat-cave",
       private: true,
       autonomy: "auto",
@@ -317,7 +323,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     pool.seedMembership("org_acme", "user_alice", "admin");
     let designCalls = 0;
     let deployProvisions = 0;
-    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, onboardingStateSecrets } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         deployProvisions += 1;
@@ -331,7 +337,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
       }),
     });
     const body = JSON.stringify({
-      capture: apexCapture(),
+      state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
       owner: "cat-cave",
       deploy: { providerKind: "deploy.vercel" },
     });
@@ -370,7 +376,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     const githubHttp = new FakeRepoCreateHttp();
-    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+    const { app, onboardingStateSecrets } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -382,10 +388,13 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
-        capture: {
-          ...apexCapture(),
-          identity: { slug: "My Cool App!!!", pitch: "A short link service.", repoHint: "" },
-        },
+        state: await signedInterviewState(
+          {
+            ...apexCapture(),
+            identity: { slug: "My Cool App!!!", pitch: "A short link service.", repoHint: "" },
+          },
+          onboardingStateSecrets,
+        ),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
@@ -407,24 +416,23 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     const githubHttp = new FakeRepoCreateHttp();
-    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+    const { onboardingStateSecrets } = appWithGreenfieldRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
       },
     });
-    // A slug that is ALL punctuation normalizes to "" — rejected at the capture
-    // boundary (400 invalid_derive), never coerced into a bad repo/host name.
-    const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        capture: { ...apexCapture(), identity: { slug: "!!!@@@###", pitch: "x", repoHint: "" } },
-        owner: "cat-cave",
-        deploy: { providerKind: "deploy.vercel" },
-      }),
-    });
-    expect(res.status).toBe(400);
+    // A slug that is ALL punctuation is rejected by the server-side state schema
+    // before it can be signed, never coerced into a bad repo/host name.
+    await expect(
+      signedInterviewState(
+        {
+          ...apexCapture(),
+          identity: { slug: "!!!@@@###", pitch: "x", repoHint: "" },
+        },
+        onboardingStateSecrets,
+      ),
+    ).rejects.toThrow(/hostname-safe/u);
     expect(githubHttp.createdRepositories).toEqual([]);
     expect(pool.projects.size).toBe(0);
   });

@@ -58,6 +58,11 @@ import type { DesignAgent } from "../../engine/design/designAgent.js";
 import { DesignFragmentAuthoringFailedError } from "../../engine/design/system/authoring/index.js";
 import type { MaterializeTemplate } from "../../engine/templates/fragments/materialize.js";
 import type { FragmentAuthoring, FragmentLibrary } from "../../engine/templates/index.js";
+import {
+  InvalidOnboardingStateError,
+  OnboardingStateSigner,
+  type InterviewStatePayload,
+} from "../../engine/forge/onboardingState.js";
 export { buildLiveMaterializeTemplate } from "./materializeTemplate.js";
 export {
   buildLiveFragmentAuthoringDeps,
@@ -131,7 +136,7 @@ const RoundBody = z
   .object({
     round: z.number().int().min(1).max(100),
     answer: z.string().max(8000).default(""),
-    capture: InterviewCapture.default(InterviewCapture.parse({})),
+    state: z.string().min(1).max(500_000).optional(),
   })
   .strict();
 
@@ -152,7 +157,7 @@ function buildGreenfieldRepoCallbacks(options: OnboardingRoutesOptions, githubHt
 
 const DeriveBody = z
   .object({
-    capture: InterviewCapture,
+    state: z.string().min(1).max(500_000),
     owner: z.string().min(1).max(100),
     private: z.boolean().optional(),
     description: z.string().min(1).max(400).optional(),
@@ -169,6 +174,7 @@ const DeriveBody = z
 
 export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+  const stateSigner = new OnboardingStateSigner(options.secrets);
 
   app.post("/:orgId/onboarding/interview/round", async (c) => {
     const actor = requireActor(c);
@@ -180,9 +186,30 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_round", issues: parsed.error.issues }, 400);
     }
+    let capture = InterviewCapture.parse({});
+    if (parsed.data.state !== undefined) {
+      try {
+        const state = await stateSigner.verifyInterview(parsed.data.state, orgId);
+        if (state.nextRound !== parsed.data.round) {
+          return c.json({ error: "invalid_onboarding_state", reason: "stale" }, 400);
+        }
+        capture = state.capture;
+      } catch (error) {
+        if (!(error instanceof InvalidOnboardingStateError)) {
+          return c.json({ error: "interview_round_failed", message: messageOf(error) }, 500);
+        }
+        return invalidStateResponse(error);
+      }
+    } else if (parsed.data.round !== 1) {
+      return c.json({ error: "invalid_onboarding_state", reason: "missing" }, 400);
+    }
     try {
-      const result = await runRound({ pool: options.pool, answerer: options.answererFactory({ orgId }) }, parsed.data);
-      return c.json(result, 200);
+      const result = await runRound(
+        { pool: options.pool, answerer: options.answererFactory({ orgId }) },
+        { round: parsed.data.round, answer: parsed.data.answer, capture },
+      );
+      const state = await stateSigner.signInterview({ orgId, nextRound: result.round + 1, capture: result.capture });
+      return c.json({ ...result, state }, 200);
     } catch (error) {
       return c.json({ error: "interview_round_failed", message: messageOf(error) }, 500);
     }
@@ -198,83 +225,18 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_derive", issues: parsed.error.issues }, 400);
     }
+    let state: InterviewStatePayload;
     try {
-      const preflightDeploy =
-        options.preflightDeploy ??
-        ((input) =>
-          preflightGreenfieldDeploy({
-            client: options.pool,
-            actorId: actor.userId,
-            ...input,
-          }));
-      const prepareDeploy =
-        options.prepareDeploy ??
-        ((input) =>
-          prepareGreenfieldDeploy({
-            pool: options.pool,
-            secrets: options.secrets,
-            orgId: input.orgId,
-            projectId: input.projectId,
-            actorId: actor.userId,
-            projectKey: input.projectKey,
-            projectName: input.projectName,
-            deploy: input,
-          }));
-      if (options.githubHttp === undefined) {
-        return c.json({ error: "vcs_provider_missing" }, 500);
+      state = await stateSigner.verifyInterview(parsed.data.state, orgId);
+    } catch (error) {
+      if (!(error instanceof InvalidOnboardingStateError)) {
+        return c.json({ error: "interview_derive_failed", message: messageOf(error) }, 500);
       }
-      const githubHttp = options.githubHttp;
-      const result = await deriveFromCapture(
-        { pool: options.pool, preflightDeploy, prepareDeploy },
-        {
-          orgId,
-          capture: parsed.data.capture,
-          actor: { ...actor, orgId },
-          owner: parsed.data.owner,
-          ...(parsed.data.private === undefined ? {} : { private: parsed.data.private }),
-          ...(parsed.data.description === undefined ? {} : { description: parsed.data.description }),
-          // The greenfield repo-lifecycle callbacks (create + task-#78 delete rollback +
-          // the apex-v84 re-attach emptiness probe), all over the same org credential context.
-          ...buildGreenfieldRepoCallbacks(options, githubHttp, orgId),
-          ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
-          ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
-          persistDeploySelection:
-            options.persistDeploySelection ??
-            (async (selection) => {
-              await persistGreenfieldDeploySelection(options.pool, selection, actor.userId);
-            }),
-          // WS-D3: resolve the design agent for THIS org so the derive's design phase
-          // elaborates the captured intent into the designed HEAD `DesignContract`.
-          ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
-          // The compose+materialize seam (docs/roadmap/templating-system.md).
-          ...(options.materializeTemplate === undefined
-            ? {}
-            : {
-                materializeTemplate: options.materializeTemplate({
-                  orgId,
-                  actor: { ...actor, orgId },
-                }),
-              }),
-          // F2 — per-fragment authoring DAG (runs on missing-fragments decisions).
-          ...(options.runFragmentAuthoring === undefined
-            ? {}
-            : {
-                runFragmentAuthoring: options.runFragmentAuthoring({
-                  orgId,
-                  actor: { ...actor, orgId },
-                }),
-              }),
-          // F2 — unified library (bundled + org-authored fragments).
-          ...(options.loadFragmentLibrary === undefined
-            ? {}
-            : { fragmentLibrary: await options.loadFragmentLibrary(orgId) }),
-          // ds-composer — compose+publish the web design system during derive (F2D fires).
-          ...(options.composeDesignSystem === undefined
-            ? {}
-            : { composeDesignSystem: options.composeDesignSystem({ orgId, actor: { ...actor, orgId } }) }),
-          ...(options.bootstrapProject === undefined ? {} : { bootstrapProject: options.bootstrapProject }),
-        },
-      );
+      return invalidStateResponse(error);
+    }
+    try {
+      if (options.githubHttp === undefined) return c.json({ error: "vcs_provider_missing" }, 500);
+      const result = await runInterviewDerive({ options, actor, orgId, state, input: parsed.data });
       if (result.repository === undefined) {
         throw new Error("greenfield repository missing after derive");
       }
@@ -431,6 +393,65 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
   return app;
 }
 
+async function runInterviewDerive(input: {
+  options: OnboardingRoutesOptions;
+  actor: ActorContext;
+  orgId: string;
+  state: InterviewStatePayload;
+  input: z.infer<typeof DeriveBody>;
+}) {
+  const { options, actor, orgId, state, input: parsed } = input;
+  const preflightDeploy =
+    options.preflightDeploy ??
+    ((value) => preflightGreenfieldDeploy({ client: options.pool, actorId: actor.userId, ...value }));
+  const prepareDeploy =
+    options.prepareDeploy ??
+    ((value) =>
+      prepareGreenfieldDeploy({
+        pool: options.pool,
+        secrets: options.secrets,
+        orgId: value.orgId,
+        projectId: value.projectId,
+        actorId: actor.userId,
+        projectKey: value.projectKey,
+        projectName: value.projectName,
+        deploy: value,
+      }));
+  return deriveFromCapture(
+    { pool: options.pool, preflightDeploy, prepareDeploy },
+    {
+      orgId,
+      capture: state.capture,
+      actor: { ...actor, orgId },
+      owner: parsed.owner,
+      ...(parsed.private === undefined ? {} : { private: parsed.private }),
+      ...(parsed.description === undefined ? {} : { description: parsed.description }),
+      ...buildGreenfieldRepoCallbacks(options, options.githubHttp!, orgId),
+      ...(parsed.autonomy === undefined ? {} : { autonomy: parsed.autonomy }),
+      ...(parsed.deploy === undefined ? {} : { deploy: parsed.deploy }),
+      persistDeploySelection:
+        options.persistDeploySelection ??
+        (async (selection) => {
+          await persistGreenfieldDeploySelection(options.pool, selection, actor.userId);
+        }),
+      ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
+      ...(options.materializeTemplate === undefined
+        ? {}
+        : { materializeTemplate: options.materializeTemplate({ orgId, actor: { ...actor, orgId } }) }),
+      ...(options.runFragmentAuthoring === undefined
+        ? {}
+        : { runFragmentAuthoring: options.runFragmentAuthoring({ orgId, actor: { ...actor, orgId } }) }),
+      ...(options.loadFragmentLibrary === undefined
+        ? {}
+        : { fragmentLibrary: await options.loadFragmentLibrary(orgId) }),
+      ...(options.composeDesignSystem === undefined
+        ? {}
+        : { composeDesignSystem: options.composeDesignSystem({ orgId, actor: { ...actor, orgId } }) }),
+      ...(options.bootstrapProject === undefined ? {} : { bootstrapProject: options.bootstrapProject }),
+    },
+  );
+}
+
 /** The shared 409 body for an authoring fixed-point halt — both the code-F2
  * `FragmentAuthoringFailedError` and the ds-composer `DesignFragmentAuthoringFailedError`
  * carry `failedIds` + `failureReasons`, so one shape serves both typed arms. */
@@ -457,4 +478,12 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function invalidStateResponse(error: unknown): Response {
+  const reason = error instanceof InvalidOnboardingStateError ? error.reason : "malformed";
+  return new Response(JSON.stringify({ error: "invalid_onboarding_state", reason }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  });
 }

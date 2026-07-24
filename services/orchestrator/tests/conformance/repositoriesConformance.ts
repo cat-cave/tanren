@@ -56,7 +56,7 @@ export function describeRepositoriesConformance(
       const h = await makeHarness();
       await h.seed({ projects: [projectA()] });
       const ownership = await h.repositories.projects.getOwnership(h.clientForOrg(ORG_A), "project_a", systemActor);
-      expect(ownership).toEqual({ orgId: ORG_A, defaultBranch: "main" });
+      expect(ownership).toEqual({ orgId: ORG_A, defaultBranch: "main", repoUrl: "https://example.com/a.git" });
     });
 
     it("reads back the config blob it wrote via revision CAS on the caller's client", async () => {

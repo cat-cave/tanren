@@ -35,8 +35,24 @@ const CAPTURE_AFTER_ROUND = {
   interfaces: [],
   designContract: null,
   architecture: [],
+  lifecycle: null,
+  lifecycleConfirmed: false,
   rulesets: [],
 };
+
+function fixtureState(payload: Record<string, unknown>): string {
+  return `${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}.fixture`;
+}
+
+const INTERVIEW_STATE = fixtureState({
+  version: 1,
+  kind: "interview",
+  orgId: ORG.id,
+  nextRound: 3,
+  issuedAt: 1,
+  expiresAt: 4_000_000_000_000,
+  capture: CAPTURE_AFTER_ROUND,
+});
 
 const ROUND_RESULT = {
   round: 3,
@@ -44,6 +60,7 @@ const ROUND_RESULT = {
   say: "Now I want to nail the behaviors for the line worker.",
   suggestions: [{ label: "tote has its own barcode", value: "tote has its own barcode" }],
   capture: CAPTURE_AFTER_ROUND,
+  state: INTERVIEW_STATE,
   complete: false,
 };
 
@@ -167,7 +184,7 @@ describe("greenfield · interview (step 1)", () => {
         phase: "round",
         round: "3",
         answer: "they clock in with a badge",
-        capture: JSON.stringify({}),
+        state: INTERVIEW_STATE,
       }),
     });
     const html = await res.text();
@@ -186,28 +203,10 @@ describe("greenfield · interview (step 1)", () => {
 describe("greenfield · derive → spec dag (step 2)", () => {
   it("derives the graph and renders the LIVE derived DAG via the P3-0013 canvas", async () => {
     const app = await build();
-    const capture = JSON.stringify({
-      identity: { slug: "supply-chain-os", pitch: "p", repoHint: "" },
-      personas: [{ name: "line worker", description: "d", surface: "handheld" }],
-      behaviors: [{ persona: "line worker", title: "clock in with badge", given: "", when: "", then: "" }],
-      interfaces: [{ name: "handheld", note: "" }],
-      designContract: {
-        domain: "saas-web",
-        identity: "an industrial, dense ops console",
-        intent: "a calm, scannable control surface",
-        principles: [],
-        constraints: [],
-        personas: ["line worker"],
-        behaviors: ["line worker::clock in with badge"],
-        dimensions: [],
-      },
-      architecture: [],
-      rulesets: ["main protected"],
-    });
     const res = await app.request("/onboarding/new?step=2", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ phase: "advance", capture, owner: "cat-cave", autonomy: "auto" }),
+      body: new URLSearchParams({ phase: "advance", state: INTERVIEW_STATE, owner: "cat-cave", autonomy: "auto" }),
     });
     const html = await res.text();
     expect(html).toContain("data-derived-dag");
@@ -225,12 +224,11 @@ describe("greenfield · derive → spec dag (step 2)", () => {
 
   it("#1233: omitting owner surfaces a field-level validation error, never a 400", async () => {
     const app = await build();
-    const capture = JSON.stringify({ identity: { slug: "x", pitch: "p", repoHint: "" } });
     const res = await app.request("/onboarding/new?step=2", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       // no `owner` field — the pre-#1233 payload.
-      body: new URLSearchParams({ phase: "advance", capture }),
+      body: new URLSearchParams({ phase: "advance", state: INTERVIEW_STATE }),
     });
     // The UI renders a normal 200 with an inline error, not a raw 400 passthrough.
     expect(res.status).toBe(200);
@@ -283,7 +281,7 @@ describe("greenfield · derive → spec dag (step 2)", () => {
     const res = await app.request("/onboarding/new?step=1", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ phase: "round", round: "14", answer: "done", capture: JSON.stringify({}) }),
+      body: new URLSearchParams({ phase: "round", round: "14", answer: "done", state: INTERVIEW_STATE }),
     });
     const html = await res.text();
     // owner prefilled to the org login + the linked fly.io deploy grant offered.

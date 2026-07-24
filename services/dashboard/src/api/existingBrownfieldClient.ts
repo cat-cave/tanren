@@ -15,7 +15,6 @@ import type {
   ConfigInjectionResult,
   GovernancePosture,
   GovernanceResult,
-  ReconReport,
   ReconResult,
   SeedDagResult,
 } from "./existingBrownfieldTypes.js";
@@ -34,9 +33,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
     const r = await this.sendJson<ReconResult>(
       "POST",
       `${projectBase(orgId, projectId)}/recon`,
-      {
-        repoUrl,
-      },
+      { repoUrl },
       { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
@@ -47,9 +44,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
     orgId: string,
     projectId: string,
     input: {
-      repoUrl: string;
-      baseBranch: string;
-      report: ReconReport;
+      state: string;
       posture: GovernancePosture;
       excludePaths: string[];
     },
@@ -81,7 +76,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   async seedDag(
     orgId: string,
     projectId: string,
-    input: { repoUrl: string; report: ReconReport; includeIssues: boolean },
+    input: { state: string; includeIssues: boolean },
   ): Promise<{ ok: boolean; status: number; result: SeedDagResult | undefined; error?: string }> {
     const r = await this.sendJson<SeedDagResult>("POST", `${projectBase(orgId, projectId)}/seed-dag`, input, {
       expectBody: true,

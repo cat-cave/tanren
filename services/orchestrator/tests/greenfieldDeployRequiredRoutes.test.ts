@@ -10,6 +10,7 @@ import {
   preparedDeploy,
   seedGithubAppOrg,
   seedStaticTokenOrg,
+  signedInterviewState,
 } from "./helpers/greenfieldRoutes.js";
 
 describe("greenfield/apex deploy dependency routes", () => {
@@ -17,12 +18,16 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool);
+    const { app, onboardingStateSecrets } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: captureWithLifecycle(), owner: "cat-cave", autonomy: "auto" }),
+      body: JSON.stringify({
+        state: await signedInterviewState(captureWithLifecycle(), onboardingStateSecrets),
+        owner: "cat-cave",
+        autonomy: "auto",
+      }),
     });
 
     expect(res.status).toBe(400);
@@ -36,12 +41,15 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool);
+    const { app, onboardingStateSecrets } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: captureWithLifecycle(), owner: "cat-cave" }),
+      body: JSON.stringify({
+        state: await signedInterviewState(captureWithLifecycle(), onboardingStateSecrets),
+        owner: "cat-cave",
+      }),
     });
 
     expect(res.status).toBe(400);
@@ -54,7 +62,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool);
+    const { app, onboardingStateSecrets } = appWithRoutes(pool);
 
     // An empty capture is INCOMPLETE — the rv-21 completion gate rejects it with a typed
     // 409 (missing areas include `lifecycle`) BEFORE any project is created; never a
@@ -62,7 +70,11 @@ describe("greenfield/apex deploy dependency routes", () => {
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: emptyCapture(), owner: "cat-cave", deploy: { providerKind: "deploy.vercel" } }),
+      body: JSON.stringify({
+        state: await signedInterviewState(emptyCapture(), onboardingStateSecrets),
+        owner: "cat-cave",
+        deploy: { providerKind: "deploy.vercel" },
+      }),
     });
 
     expect(res.status).toBe(409);
@@ -76,13 +88,13 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool);
+    const { app, onboardingStateSecrets } = appWithRoutes(pool);
 
     const res = await app.request("/orgs/org_acme/onboarding/interview/derive", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: captureWithLifecycle(),
+        state: await signedInterviewState(captureWithLifecycle(), onboardingStateSecrets),
         owner: "cat-cave",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
@@ -109,7 +121,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     const githubHttp = new FakeRepoCreateHttp();
-    const { app } = appWithRoutes(pool, githubHttp, {
+    const { app, onboardingStateSecrets } = appWithRoutes(pool, githubHttp, {
       async preflightDeploy() {},
       async prepareDeploy() {
         throw new Error("deploy provision failed: provider token expired");
@@ -120,7 +132,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: captureWithLifecycle(),
+        state: await signedInterviewState(captureWithLifecycle(), onboardingStateSecrets),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
       }),
@@ -141,7 +153,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, githubHttp, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -152,7 +164,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         private: true,
         autonomy: "auto",
@@ -189,7 +201,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app } = appWithRoutes(pool, new FakeRepoCreateHttp("forbidden"), {
+    const { app, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp("forbidden"), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -200,7 +212,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
@@ -220,7 +232,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedStaticTokenOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, githubHttp, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -231,7 +243,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         private: true,
         autonomy: "auto",
@@ -256,7 +268,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     pool.seedOrg({ id: "org_acme" });
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, githubHttp, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -267,7 +279,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),
@@ -288,7 +300,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     seedStaticTokenOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     const githubHttp = new FakeRepoCreateHttp();
-    const { app } = appWithRoutes(
+    const { app, onboardingStateSecrets } = appWithRoutes(
       pool,
       githubHttp,
       {
@@ -305,7 +317,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture: apexCapture(),
+        state: await signedInterviewState(apexCapture(), onboardingStateSecrets),
         owner: "cat-cave",
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
@@ -331,7 +343,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
-    const { app, githubHttp } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
+    const { app, githubHttp, onboardingStateSecrets } = appWithRoutes(pool, new FakeRepoCreateHttp(), {
       async preflightDeploy() {},
       async prepareDeploy() {
         return preparedDeploy();
@@ -346,10 +358,13 @@ describe("greenfield/apex deploy dependency routes", () => {
         // A stack the bundled library has no runtime for (the open-world
         // tokenization derives `runtime-russian-fanfiction-tools` which has no
         // bundled fragment).
-        capture: {
-          ...apexCapture(),
-          lifecycle: { ...apexCapture().lifecycle, stack: "russian-fanfiction-tools + fly" },
-        },
+        state: await signedInterviewState(
+          {
+            ...apexCapture(),
+            lifecycle: { ...apexCapture().lifecycle, stack: "russian-fanfiction-tools + fly" },
+          },
+          onboardingStateSecrets,
+        ),
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
       }),

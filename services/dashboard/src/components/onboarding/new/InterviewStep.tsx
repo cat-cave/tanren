@@ -30,6 +30,7 @@ export interface InterviewStepProps {
   suggestions: InterviewSuggestion[];
   priorAnswer: string;
   capture: InterviewCapture;
+  state: string;
   complete: boolean;
   /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
   csrfToken?: string;
@@ -49,7 +50,6 @@ const AUTONOMY_OPTIONS: Array<[string, string]> = [
 
 export function InterviewStep(props: InterviewStepProps) {
   const pct = Math.round((Math.min(props.round, props.totalRounds) / props.totalRounds) * 100);
-  const captureJson = JSON.stringify(props.capture);
   return (
     <>
       <div class="step-heading">
@@ -82,7 +82,7 @@ export function InterviewStep(props: InterviewStepProps) {
           {props.complete ? (
             <form method="post" action="/onboarding/new?step=2" data-derive-form>
               <CsrfField token={props.csrfToken} />
-              <input type="hidden" name="capture" value={captureJson} />
+              <input type="hidden" name="state" value={props.state} />
               <input type="hidden" name="phase" value="advance" />
               <div class="gf-derive-fields" data-derive-fields>
                 <div class="field">
@@ -135,7 +135,7 @@ export function InterviewStep(props: InterviewStepProps) {
           ) : (
             <form method="post" action="/onboarding/new?step=1">
               <CsrfField token={props.csrfToken} />
-              <input type="hidden" name="capture" value={captureJson} />
+              <input type="hidden" name="state" value={props.state} />
               <input type="hidden" name="round" value={String(props.round + 1)} />
               <input type="hidden" name="phase" value="round" />
               {props.suggestions.length > 0 && (
