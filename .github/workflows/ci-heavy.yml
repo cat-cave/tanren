@@ -4,20 +4,21 @@
 # smoke suite). A failing merge group is bisected + the culprit ejected by GitHub's native
 # merge queue.
 #
-# CUTOVER: this is the legacy `ci.yml` `check` behavior, moved off `pull_request` onto the
-# queue. Required status context on `merge_group`: `ci-heavy`. See ops/review/CUTOVER.md —
-# the queue MUST be enabled and this context required before the legacy `check` is removed,
-# or PRs lose their build+smoke gate.
+# CUTOVER: this is the legacy `ci.yml` `check` behavior, now running ONLY in the merge queue
+# (on `merge_group`), amortized across the batch, plus `push: main` as a post-merge safety net.
+# It is NOT on `pull_request` — the heavy suite does not run per-PR; ci-light gates entry. Its
+# job is named `gate` (the shared required status context): on `merge_group` the `gate` check is
+# THIS full job; on `pull_request` the `gate` check is ci-light's fast job. One required context,
+# produced on both events, so the merge queue never waits on a check that can't report.
 name: ci-heavy
 
 on:
-  pull_request:
   merge_group:
   push:
     branches: [main]
 
 jobs:
-  ci-heavy:
+  gate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
