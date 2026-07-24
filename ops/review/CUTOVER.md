@@ -32,8 +32,27 @@ until `ci-heavy` is required on the merge queue and proven green. Until then, ke
      "Fork pull request workflows from outside collaborators" → set **"Require approval for
      all outside collaborators"** so a fork PR cannot run any workflow (and thus cannot reach
      even the untrusted lane) until a maintainer approves it.
-   - the review **identity** for posting (github-actions[bot] posts the review; the gate is the
-     `review/verdict` status it sets, not an approval).
+   - **Dedicated reviewer App identity (for a REAL `Approved` review).** GitHub bars
+     `github-actions[bot]` / the default `GITHUB_TOKEN` from _approving_ PRs — an APPROVE 422s and
+     post-review falls back to a COMMENT review. A GitHub App **installation token** is NOT the
+     Actions bot and CAN approve. To get a real green `Approved` review on a clean PR, register a
+     small GitHub App (a "Tanren Reviewer"), install it on the repo with **Pull requests: read &
+     write** permission, and set:
+     - secret `REVIEWER_APP_ID` = the App's numeric App ID.
+     - secret `REVIEWER_APP_PRIVATE_KEY` = the App's PEM private key.
+     - var `REVIEW_BOT_LOGIN` = the App's bot login (e.g. `tanren-reviewer[bot]`) so the pipeline
+       reconciles against the reviewer's OWN prior comments/reviews + scopes gather-signal's
+       resolve/reaction lookup to the reviewer's ocr-finding comments.
+
+     The trusted lane mints an installation token via
+     `actions/create-github-app-token` (SHA-pinned) **guarded on `secrets.REVIEWER_APP_ID != ''`**,
+     and post-review posts with it. **Graceful degradation — the App is OPTIONAL:** if
+     `REVIEWER_APP_ID` is unset the mint step is skipped, post-review uses `github.token`, the
+     APPROVE downgrades to a COMMENT review (body: "No open P0/P1 findings — `review/verdict`
+     passes.", never a false "Approved"), and `REVIEW_BOT_LOGIN` defaults to
+     `github-actions[bot]`. Either way the **gate is the `review/verdict` commit status** the
+     verdict step sets (still on `github.token` — the status needs no reviewer identity), NOT the
+     approval; the App only improves the reviewer UX by turning the pass into a real `Approved`.
 
 3. **Shadow-run the review** on a few open PRs (the untrusted job produces the JSON artifact;
    let the trusted job post but leave the verdict advisory / not-yet-required). Confirm finding
