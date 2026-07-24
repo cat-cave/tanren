@@ -1,0 +1,66 @@
+# Tier 1 (fast, per-PR): the non-build gate. Gates the OCR review + queue entry.
+# Runs `just fast-check` = format/lint/type-aware-lint/architecture + all *-drift gates
+# + typecheck + test + compose-config. NO build, NO smoke (those move to ci-heavy on the
+# merge queue). This is the fast context the review waits on; the arch-checks here are the
+# mechanical violations the reviewer is told NOT to re-flag.
+#
+# CUTOVER: this replaces the per-PR run of the legacy `ci.yml` `check` job. Do not require
+# both — see ops/review/CUTOVER.md. Required status context: `ci-light`.
+name: ci-light
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-light-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ci-light:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      TURBO_TELEMETRY_DISABLED: "1"
+      TANREN_SECRETS_MODE: dev-defaults
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.1.0 --activate
+      # jj — the sole WorkspaceVcsCore backend; the conformance test drives a real jj process,
+      # so `just fast-check`'s `test` step needs jj on PATH. Pinned to v0.42.0 (matches runner).
+      - name: Install jj
+        run: |
+          set -euo pipefail
+          JJ_VERSION=0.42.0
+          ASSET="jj-v${JJ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          URL="https://github.com/jj-vcs/jj/releases/download/v${JJ_VERSION}/${ASSET}"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "/tmp/${ASSET}" "${URL}"
+          mkdir -p /tmp/jjx
+          tar xzf "/tmp/${ASSET}" -C /tmp/jjx
+          sudo install -m 0755 /tmp/jjx/jj /usr/local/bin/jj
+          rm -rf "/tmp/${ASSET}" /tmp/jjx
+          jj --version
+      - run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - name: Cache pnpm store
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+      - name: Cache turbo
+        uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+      - run: pnpm install --frozen-lockfile
+      - run: just fast-check
