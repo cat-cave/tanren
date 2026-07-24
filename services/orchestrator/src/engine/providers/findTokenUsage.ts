@@ -16,6 +16,7 @@
 // never lost quietly, then return whatever usage WAS found before the bound (the
 // real, well-formed case is shallow and finds it long before any cap).
 
+import { Buffer } from "node:buffer";
 import type { TokenUsage } from "./types.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -26,24 +27,96 @@ const log = createLogger("provider-usage");
 // trip on pathological (hostile/buggy) input, so the normal case is identical.
 export const MAX_USAGE_PARSE_DEPTH = 64;
 export const MAX_USAGE_PARSE_NODES = 50_000;
+export const MAX_JSONL_OBJECT_LINE_BYTES = 1_048_576;
+export const MAX_JSONL_OBJECT_EVENTS = 50_000;
 
-// Splits a JSON Lines stream into its non-empty records. Keep the original line
-// text so callers can apply provider-specific malformed-line policies.
+interface JsonlObjectEventsBase {
+  /** Every non-empty line received from the provider, valid or not. */
+  rawEventCount: number;
+  /** JSON-object events in their original order. */
+  events: Record<string, unknown>[];
+}
+
+export interface JsonlObjectParseFailure {
+  lineNumber: number;
+  reason: "invalid_json" | "non_object" | "line_too_large" | "event_limit_exceeded";
+}
+
+export interface JsonlObjectDecodeFailure {
+  kind: "jsonl_object_decode_failed";
+  failures: JsonlObjectParseFailure[];
+}
+
+export type JsonlObjectEvents = JsonlObjectEventsBase &
+  ({ ok: true; failure?: never } | { ok: false; failure: JsonlObjectDecodeFailure });
+
+export class JsonlObjectDecodeError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly failure: JsonlObjectDecodeFailure,
+    readonly tokenUsage?: TokenUsage,
+  ) {
+    super(`${provider} JSONL object decode failed at line ${failure.failures[0]?.lineNumber ?? "unknown"}`);
+    this.name = "JsonlObjectDecodeError";
+  }
+}
+
+/**
+ * Decodes bounded provider JSONL object events. Any rejected record makes the
+ * result a typed failure, while valid events on either side remain available so
+ * callers can preserve proven usage before failing closed.
+ */
+export function decodeJsonlObjectEvents(stdout: string): JsonlObjectEvents {
+  const events: Record<string, unknown>[] = [];
+  const failures: JsonlObjectParseFailure[] = [];
+  let rawEventCount = 0;
+  for (const [index, rawLine] of stdout.split(/\n/u).entries()) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line.trim() === "") continue;
+    rawEventCount += 1;
+    if (rawEventCount > MAX_JSONL_OBJECT_EVENTS) {
+      if (rawEventCount === MAX_JSONL_OBJECT_EVENTS + 1) {
+        failures.push({ lineNumber: index + 1, reason: "event_limit_exceeded" });
+      }
+      continue;
+    }
+    if (Buffer.byteLength(line, "utf8") > MAX_JSONL_OBJECT_LINE_BYTES) {
+      failures.push({ lineNumber: index + 1, reason: "line_too_large" });
+      continue;
+    }
+    const decoded = decodeJsonObject(line);
+    if (decoded.event === undefined) {
+      failures.push({ lineNumber: index + 1, reason: decoded.reason });
+    } else {
+      events.push(decoded.event);
+    }
+  }
+  return failures.length === 0
+    ? { ok: true, rawEventCount, events }
+    : { ok: false, rawEventCount, events, failure: { kind: "jsonl_object_decode_failed", failures } };
+}
+
+// Retained as lower-level exports for the non-Claude/Codex adapters. New
+// Claude/Codex call sites consume `decodeJsonlObjectEvents` so their malformed
+// record accounting cannot drift apart.
 export function splitNonEmptyJsonlLines(stdout: string): string[] {
   return stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
 }
 
-// JSONL telemetry events must be objects. Primitive JSON values and arrays are
-// rejected alongside syntactically invalid JSON so each provider can decide
-// whether that rejected line is loud or benign.
 export function parseJsonObject(line: string): Record<string, unknown> | undefined {
+  return decodeJsonObject(line).event;
+}
+
+function decodeJsonObject(
+  line: string,
+): { event: Record<string, unknown>; reason?: never } | { event?: never; reason: JsonlObjectParseFailure["reason"] } {
   try {
     const value = JSON.parse(line) as unknown;
     return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
+      ? { event: value as Record<string, unknown> }
+      : { reason: "non_object" };
   } catch {
-    return undefined;
+    return { reason: "invalid_json" };
   }
 }
 
