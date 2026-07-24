@@ -283,7 +283,7 @@ async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, d
           json: false,
         });
     } else {
-      // Line moved — the API cannot relocate a comment; delete + repost.
+      // Line moved — the API cannot relocate a comment; delete + re-post.
       await del(ex.id, f.fingerprint);
       await postNew(f);
     }
