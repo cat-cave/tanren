@@ -48,6 +48,8 @@ function gh(args, { json = false, allowFail = false } = {}) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   return gh(["repo", "view", "--json", "nameWithOwner"], { json: true }).nameWithOwner;
 }
 
@@ -86,9 +88,13 @@ function fileFollowups({ pr, dryRun = false }) {
   const slug = repoSlug();
   const [owner, repo] = slug.split("/");
 
-  const view = gh(["pr", "view", String(pr), "--json", "number,state,mergedAt,mergeCommit,url,comments"], {
-    json: true,
-  });
+  // --repo <slug>: CI runs from a non-repo dir; resolve the repo explicitly.
+  const view = gh(
+    ["pr", "view", String(pr), "--repo", slug, "--json", "number,state,mergedAt,mergeCommit,url,comments"],
+    {
+      json: true,
+    },
+  );
   const merged = view.state === "MERGED" || Boolean(view.mergedAt);
   if (!merged) {
     console.error(`PR #${pr} is not merged (state=${view.state}); discarding follow-ups (no orphan issues).`);
@@ -131,7 +137,7 @@ function fileFollowups({ pr, dryRun = false }) {
       .trim()
       .slice(0, 80)}`;
     const body = issueBody(finding, { pr, prUrl: view.url, mergedSha });
-    const args = ["issue", "create", "--title", title, "--body", body];
+    const args = ["issue", "create", "--repo", slug, "--title", title, "--body", body];
     for (const l of labelsFor(finding)) args.push("--label", l);
     if (dryRun) {
       skipped.push({ fp, title });
