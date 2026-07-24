@@ -1,13 +1,3 @@
-// candidate-inbox engine tests.
-//
-// Exercises the GitHub Issues connector (MOCKED GitHubHttpClient + secrets — no
-// network), the deterministic triage answerer (dedupe / match / placement /
-// verdict + auto-route for system sources), the ingest pipeline (connector →
-// triage → upsert), and the accept→discovery hand-off (reuses the discovery
-// accept path, creating a spec + resolving the candidate). The pool is a
-// lightweight in-memory stub keyed by SQL substring, mirroring the orchestrator
-// engine-test pattern (see specDiscovery.test.ts).
-
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
@@ -27,7 +17,7 @@ import {
   type TriageAnswererContext,
 } from "../src/engine/forge/inbox/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
-import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
+import { terminalSentryLink, testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -79,7 +69,10 @@ const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_token" });
 await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
 
-const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
+const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.io",
+});
 
 const sentryConnector = (sentryHttp: SentryHttpClient) =>
   createSentryConnector({ secrets, sentryHttp, authority: sentryAuthority });
@@ -96,19 +89,25 @@ function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHu
   const client: GitHubHttpClient = {
     async request(input) {
       calls.push(input);
-      return { status: 200, body: issues };
+      return { status: 200, body: githubRows(issues) };
     },
   };
   return { client, calls };
 }
+function githubRows(rows: unknown[]): unknown[] {
+  return rows.map((row) =>
+    typeof row === "object" && row !== null && !Array.isArray(row)
+      ? { comments: 0, user: { login: "octocat" }, ...row }
+      : row,
+  );
+}
 
-// A fake SentryHttpClient returning a fixed issue list (no network/token).
 function fakeSentry(issues: unknown[]): { client: SentryHttpClient; calls: SentryHttpRequest[] } {
   const calls: SentryHttpRequest[] = [];
   const client: SentryHttpClient = {
     async request(input) {
       calls.push(input);
-      return { status: 200, body: issues };
+      return { status: 200, body: issues, headers: { link: terminalSentryLink(input) } };
     },
   };
   return { client, calls };
@@ -416,8 +415,8 @@ describe("sentry connector (mocked)", () => {
       permalink: "https://sentry.io/organizations/cat-cave/issues/4002/",
       metadata: { value: "query exceeded 5s" },
     },
-    // A degenerate row with neither id nor title signal — must be dropped.
-    { level: "info" },
+    // A valid row with a stable provider id but no title signal — must be dropped.
+    { id: "4003", level: "info" },
   ];
 
   it("maps unresolved sentry issues to candidates with permalink + metadata body", async () => {

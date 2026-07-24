@@ -1,3 +1,4 @@
+/* oxlint-disable import/max-dependencies -- coherent serialized authority mount */
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -8,6 +9,7 @@ import type { EventStore } from "../../engine/eventStore.js";
 import type { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { integrationRequestFingerprint } from "../../engine/integrations/integrationOperationFingerprint.js";
 import { hasPrincipalVerifier, principalVerifierFor } from "../../engine/integrations/principalVerifiers.js";
+import { canonicalSentryEndpoint, SentryPrincipalIdentity } from "../../engine/integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../../engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -33,8 +35,12 @@ export interface IntegrationAuthorityRouteDatabase {
   withOrgScope<T>(orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T>;
 }
 
-const LinkBody = z.object({ token: z.string().min(1).max(4096), idempotencyKey: z.string().min(1).max(200) }).strict();
-const RotateBody = LinkBody;
+const CredentialBody = z.object({
+  token: z.string().min(1).max(4096),
+  idempotencyKey: z.string().min(1).max(200),
+});
+const LinkBody = CredentialBody.extend({ baseUrl: z.string().min(1).max(2048).optional() }).strict();
+const RotateBody = CredentialBody.strict();
 const SelectionBody = z
   .object({
     connectionId: z.string().min(1).max(200),
@@ -52,7 +58,29 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+function linkVerifierEndpoint(providerKind: string, value: string | undefined): string | undefined {
+  if (providerKind !== "sentry") {
+    if (value !== undefined) throw new Error("provider endpoint is not accepted");
+    return undefined;
+  }
+  if (value === undefined) throw new Error("Sentry endpoint is required");
+  const canonical = canonicalSentryEndpoint(value);
+  if (canonical !== value) throw new Error("Sentry endpoint must be canonical");
+  return canonical;
+}
 
+async function rotationVerifierEndpoint(
+  database: IntegrationAuthorityRouteDatabase,
+  orgId: string,
+  providerKind: string,
+  connectionId: string,
+): Promise<string | undefined> {
+  if (providerKind !== "sentry") return undefined;
+  const metadata = await database.withOrgScope(orgId, (client) =>
+    IntegrationConnectionsStore.getPrincipalMetadata(client, { orgId, providerKind, connectionId }),
+  );
+  return SentryPrincipalIdentity.parse(metadata).baseUrl;
+}
 async function projectAccess(
   database: IntegrationAuthorityRouteDatabase,
   orgId: string,
@@ -89,12 +117,19 @@ export function mountIntegrationAuthorityWrites(
     }
     const parsed = LinkBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
+    let providerEndpoint: string | undefined;
+    try {
+      providerEndpoint = linkVerifierEndpoint(providerKind, parsed.data.baseUrl);
+    } catch {
+      return c.json({ error: "invalid_provider_endpoint" }, 400);
+    }
 
     try {
       const requestFingerprint = integrationRequestFingerprint({
         orgId,
         providerKind,
         operationKind: "link",
+        providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
       });
@@ -158,7 +193,11 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
+      const verified = await principalVerifierFor(providerKind, fetchImpl, providerEndpoint).verify(
+        permit,
+        staged,
+        integrationSecrets,
+      );
       if (verified.status === "invalid") {
         const terminal = await terminalizeVerifierFailure(transitionContext, verified.reason);
         if (terminal.status === "completed") {
@@ -237,6 +276,12 @@ export function mountIntegrationAuthorityWrites(
     }
     const parsed = RotateBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_rotate", issues: parsed.error.issues }, 400);
+    let providerEndpoint: string | undefined;
+    try {
+      providerEndpoint = await rotationVerifierEndpoint(database, orgId, providerKind, connectionId);
+    } catch {
+      return c.json({ error: "verified_provider_identity_required" }, 409);
+    }
 
     try {
       const requestFingerprint = integrationRequestFingerprint({
@@ -244,6 +289,7 @@ export function mountIntegrationAuthorityWrites(
         providerKind,
         operationKind: "rotate",
         connectionId,
+        providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
       });
@@ -295,7 +341,11 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
+      const verified = await principalVerifierFor(providerKind, fetchImpl, providerEndpoint).verify(
+        permit,
+        staged,
+        integrationSecrets,
+      );
       if (verified.status === "unavailable") {
         const unavailable = await recordVerifierUnavailable(transitionContext, verified.reason, verified.retryAfter);
         if (unavailable.status === "completed") {

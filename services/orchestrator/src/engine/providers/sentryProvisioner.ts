@@ -43,13 +43,17 @@ import {
   type IntegrationOperationTarget,
   type IntegrationPrivilegedOperation,
 } from "../contracts/integrationAuthority.js";
+import {
+  SentryPrincipalIdentity,
+  type SentryPrincipalIdentity as SentryIdentity,
+} from "../integrations/sentryPrincipalIdentity.js";
 
 /**
  * The injectable Sentry transport for provisioning. Mirrors the runtime
  * `sentryConnector`'s `SentryHttpClient` but adds the write verb (`POST`) the
  * provisioner needs to create projects + client keys. `path` is API-root-relative
- * (`/api/0/...`); `token` is the resolved org grant token; `baseUrl` defaults to
- * Sentry SaaS but is overridable for self-hosted. A scripted fake of this seam is
+ * (`/api/0/...`); `token` is the resolved org grant token; `baseUrl` is the
+ * provider-verified endpoint. A scripted fake of this seam is
  * what the conformance suite drives — no live Sentry call in CI.
  */
 export interface SentryProvisionHttpRequest {
@@ -107,19 +111,14 @@ export interface SentryProvisionerDeps {
   secrets: SecretStore;
 }
 
-/** The default Sentry SaaS API root. Self-hosted overrides via the grant metadata. */
-const DEFAULT_SENTRY_BASE_URL = "https://sentry.io";
 /** The capability the matrix names for an error-tracking source. */
 const CAPABILITY_ERRORS = "errors";
 
-/** The non-secret org metadata a Sentry grant carries. `orgSlug` is mandatory. */
-interface SentryGrantMetadata {
-  orgSlug: string;
+/** Provider-verified durable identity plus optional provisioning selection. */
+type SentryGrantMetadata = Pick<SentryIdentity, "sentryIdentityVersion" | "orgSlug" | "baseUrl"> & {
   /** The Sentry team slug new projects are created under (provision/create path). */
   team?: string;
-  /** Self-hosted API root override; defaults to Sentry SaaS. */
-  baseUrl?: string;
-}
+};
 
 /** A Sentry project as the org-projects list / create endpoints return it. */
 interface RawSentryProject {
@@ -193,12 +192,8 @@ function dsnSecretRef(orgId: string, projectSlug: string): string {
 }
 
 function readGrantMetadata(grant: OrgGrant): SentryGrantMetadata {
-  const metadata = grant.metadata as Partial<SentryGrantMetadata>;
-  const orgSlug = asString(metadata.orgSlug);
-  if (orgSlug === undefined) {
-    throw new Error("sentry provisioner: grant metadata is missing the required `orgSlug`");
-  }
-  return { orgSlug, team: asString(metadata.team), baseUrl: asString(metadata.baseUrl) };
+  const identity = SentryPrincipalIdentity.parse(grant.metadata);
+  return { ...identity, team: asString(grant.metadata["team"]) };
 }
 
 /**
@@ -446,7 +441,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
   }
 
   private baseUrl(meta: SentryGrantMetadata): string {
-    return meta.baseUrl ?? DEFAULT_SENTRY_BASE_URL;
+    return meta.baseUrl;
   }
 }
 

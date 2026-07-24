@@ -14,6 +14,7 @@ export function integrationRequestFingerprint(input: {
   providerKind: string;
   operationKind: "link" | "rotate";
   connectionId?: string;
+  providerEndpoint?: string;
   actorId: string;
   credential: string;
 }): string {
@@ -23,6 +24,7 @@ export function integrationRequestFingerprint(input: {
     input.providerKind,
     input.operationKind,
     input.connectionId ?? null,
+    input.providerEndpoint ?? null,
     input.actorId,
     input.credential,
   ]);

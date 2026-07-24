@@ -67,9 +67,7 @@ export const SystemSourceConfig = z.object({ ciInsights: z.literal(true) }).stri
 const CreateGitHubIssuesConfig = ActiveGitHubIssuesConfig.extend({
   labels: z.array(z.string().trim().min(1)).default([]),
 });
-const CreateSentryConfig = ActiveSentryConfig.omit({ managedBy: true }).extend({
-  baseUrl: z.string().url().default("https://sentry.io"),
-});
+const CreateSentryConfig = ActiveSentryConfig.omit({ managedBy: true });
 
 function schemaForSourceKind(kind: SourceKind, trusted: boolean): z.ZodType<Record<string, unknown>> {
   if (kind === "issues") return trusted ? ActiveGitHubIssuesConfig : CreateGitHubIssuesConfig;

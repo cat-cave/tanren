@@ -119,6 +119,7 @@ export interface GitHubHttpRequest {
 export interface GitHubHttpResponse {
   status: number;
   body: unknown;
+  nextPagePath?: string;
   /**
    * rate-limit signal lifted from the response: a `Retry-After` (seconds), an exhausted
    * primary window (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset`), or a secondary/abuse

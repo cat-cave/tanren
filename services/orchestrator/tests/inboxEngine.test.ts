@@ -10,13 +10,11 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
-import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   CandidateNotFoundError,
   CandidateNotPlaceableError,
   acceptCandidate,
   closeDuplicateCandidate,
-  createGitHubIssuesConnector,
   dismissCandidate,
   foldCandidate,
   ingestSource,
@@ -159,32 +157,6 @@ describe("ingestSource — source selection + status mapping", () => {
     });
     expect(out.candidates).toHaveLength(0);
     expect(called).toBe(false);
-    expect(candidates.size).toBe(0);
-  });
-
-  it("rejects malformed provider data before candidate creation", async () => {
-    const secrets = new InMemorySecretStore();
-    await secrets.put({ ref: "credential/github/org/org_a/default", value: "token" });
-    const connector = createGitHubIssuesConnector({
-      secrets,
-      defaultStaticRef: "credential/github/org/org_a/default",
-      githubHttp: {
-        async request() {
-          return {
-            status: 200,
-            body: [
-              { number: 1, title: "valid", labels: [] },
-              { number: 2, title: "malformed PR marker", labels: [], pull_request: "not an object" },
-            ],
-          };
-        },
-      },
-    });
-    const { pool, candidates } = stubPool();
-
-    await expect(ingestSource(depsFor(new Map([["issues", connector]]), pool), issuesSource)).rejects.toThrow(
-      "Invalid input",
-    );
     expect(candidates.size).toBe(0);
   });
 

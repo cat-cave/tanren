@@ -11,7 +11,7 @@
 //   • a >300-char title is truncated by the mapper (no decode crash).
 
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { getJobOrgId } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -242,7 +242,11 @@ function issuesBody(number: number, title: string): string {
   });
 }
 
-async function buildApp(answerer: TriageAnswerer, pool: pg.Pool) {
+async function buildApp(
+  answerer: TriageAnswerer,
+  pool: pg.Pool,
+  recordIssueObservation: WebhookProcessorDeps["recordIssueObservation"] = async () => {},
+) {
   const secrets = new FakeSecretStore();
   await secrets.put({ ref: "wh/src_gh", value: WEBHOOK_SECRET });
   return createIssueWebhookRoutes({
@@ -250,9 +254,7 @@ async function buildApp(answerer: TriageAnswerer, pool: pg.Pool) {
     secrets,
     answererFactory: () => answerer,
     autoRoute: intakeAutoRouteDeps(),
-    // This suite isolates bh-3's processor behavior; bh-7 has its own RLS
-    // integration proof through the same processor.
-    recordIssueObservation: async () => {},
+    recordIssueObservation,
   });
 }
 
@@ -351,6 +353,22 @@ describe("issues webhook receiver — persist-then-202 (§3.6)", () => {
     expect(pool.webhookEvents.get(event.id)!["status"]).toBe("dead_lettered");
     for (let i = 0; i < 5; i++) await sweepWebhookEvents(deps);
     expect(attempts).toBe(1);
+  });
+  it("dead-letters a signed empty-title payload before observation, triage, or candidate write", async () => {
+    const pool = stubPool();
+    const observation = vi.fn<NonNullable<WebhookProcessorDeps["recordIssueObservation"]>>(async () => {});
+    const answerer = fixedTriage("needs_call", null);
+    const triage = vi.spyOn(answerer, "triage");
+    const app = await buildApp(answerer, pool.pool, observation);
+    const body = `{"action":"opened","issue":{"number":1,"title":"","labels":[]},"repository":{"owner":{"login":"cat-cave"},"name":"app"}}`;
+    const response = await app.request(`/github/webhooks/issues/${source.id}`, {
+      method: "POST",
+      headers: { "x-github-event": "issues", "x-hub-signature-256": sign(body), "content-type": "application/json" },
+      body,
+    });
+    expect(response.status).toBe(202);
+    await expect.poll(() => [...pool.webhookEvents.values()][0]?.["status"]).toBe("dead_lettered");
+    expect([observation.mock.calls.length, triage.mock.calls.length, pool.candidates.size]).toEqual([0, 0, 0]);
   });
 
   it("auto-routes a routable delivery into the DAG (exactly one spec) via the processor", async () => {

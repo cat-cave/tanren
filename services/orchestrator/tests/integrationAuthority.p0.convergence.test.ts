@@ -17,6 +17,7 @@ import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAu
 import { IntegrationMemoryDb } from "./helpers/integrationMemoryDb.js";
 import { secretValueForLease } from "../src/engine/repositories/integrationConnectionResolve.js";
 import { testOrgGrant, testPrincipalVerificationPermit } from "./helpers/orgGrant.js";
+import { sentryOrganizationsResponse } from "./helpers/sentryIntakeAuthority.js";
 
 const SRC_ROOT = resolve(import.meta.dirname, "../src");
 
@@ -285,12 +286,12 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       if (url.includes("/organizations/") && url.includes("/projects/")) {
         return Response.json([{ slug: "p1" }]);
       }
-      return Response.json([
+      return sentryOrganizationsResponse([
         { id: "1", slug: "a", name: "A" },
         { id: "2", slug: "b", name: "B" },
       ]);
     });
-    const result = await new SentryPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(
+    const result = await new SentryPrincipalVerifier(fetchImpl as unknown as typeof fetch, "https://sentry.io").verify(
       permit,
       staged,
       secrets,

@@ -1,5 +1,3 @@
-// engine tests: the capability → grant → discover → smart-default →
-// provision/bind → persist → event flow, driven over an in-memory stub pool
 // (keyed by SQL substring, mirroring candidateInbox.test.ts) + a FAKE
 // IntegrationProvisioner (under tests/, never wired into prod) + an in-memory
 // SecretStore. NO real DB, NO live provider API.
@@ -16,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { FakeSentryProvisioner } from "./fakes/fakeSentryProvisioner.js";
+import { sentryPrincipalIdentity } from "../src/engine/integrations/sentryPrincipalIdentity.js";
 import type { IntegrationProvisioner } from "../src/engine/contracts/integrationProvisioner.js";
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import {
@@ -278,7 +277,7 @@ function freshState(linked: boolean): StubState {
             org_id: ORG,
             provider_kind: "sentry",
             credential_ref: TOKEN_REF,
-            metadata: { orgSlug: "acme", team: "core" },
+            metadata: { ...sentryPrincipalIdentity("acme", "https://sentry.io"), team: "core" },
           },
         ]
       : [],
