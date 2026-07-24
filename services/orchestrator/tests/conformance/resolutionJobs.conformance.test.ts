@@ -84,6 +84,7 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
     await store.enqueueOnClient(client as never, input);
     await store.claimNextOnClient(client as never, { orgId: ORG_A, leaseOwner: "worker-a", leaseMs: 30_000 });
     observedAt = new Date("2026-01-01T00:00:31.000Z");
+    const beforeLateMutation = { ...db.resolutionJobs[0] };
 
     await expect(
       store.verifyActiveLeaseOnClient(client as never, {
@@ -99,5 +100,28 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
     await expect(
       store.releaseOnClient(client as never, { orgId: ORG_A, id: input.id, leaseOwner: "worker-a" }),
     ).resolves.toBe(false);
+    expect(db.resolutionJobs[0]).toEqual(beforeLateMutation);
+
+    await store.enqueueOnClient(client as never, {
+      ...input,
+      id: "rjob_unexpired_release",
+      idempotencyKey: "issue:iloop_a:unexpired-release",
+    });
+    await expect(
+      store.claimNextOnClient(client as never, { orgId: ORG_A, leaseOwner: "worker-release", leaseMs: 30_000 }),
+    ).resolves.toMatchObject({ id: "rjob_unexpired_release", leaseOwner: "worker-release" });
+    await expect(
+      store.releaseOnClient(client as never, {
+        orgId: ORG_A,
+        id: "rjob_unexpired_release",
+        leaseOwner: "worker-release",
+        state: "retryable",
+      }),
+    ).resolves.toBe(true);
+    expect(db.resolutionJobs.find((job) => job.id === "rjob_unexpired_release")).toMatchObject({
+      state: "retryable",
+      lease_owner: null,
+      lease_expiry: null,
+    });
   });
 });
