@@ -96,6 +96,14 @@ export function checkNoHostProcessSpawn(projectFiles) {
       invariantDocExclusions.has(file) ||
       file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
       file.startsWith("scripts/") ||
+      // The engine-external OCR review layer (ops/review/**) is ops CLI tooling —
+      // NOT engine code. Its scripts are standalone entrypoints that shell `gh`/`git`
+      // on the CI runner (the same category as `scripts/**`), never engine workload
+      // execution over the SSH CommandSubstrate seam. The ban targets ENGINE spawning;
+      // this is the successor to the former engine-external CRA command/lock adapters
+      // documented in the exception path. Deletion condition: when MergeAuthority
+      // absorbs the review layer and ops/review/** is removed.
+      file.startsWith("ops/review/") ||
       // The JIT env-image build driver (env-management.md §4 + §7 P4) is a confined
       // host-process-spawn capability, the same category as cli-runner: it shells the
       // BuildKit build (`build-env-image.sh`) on the ORCHESTRATOR HOST (where
