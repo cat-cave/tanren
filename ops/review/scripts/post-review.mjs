@@ -317,9 +317,7 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
   const outMarker = relocateMarker(marker, findings);
 
-  // --dry-run: compute the intended inline PATCH/POST/DELETE plan + review decision
-  // + sticky body, print them, ZERO gh calls. No read ⇒ existing state assumed empty
-  // (every inline ⇒ POST, no prior review ⇒ submit); the plan is annotated as such.
+  // --dry-run: compute + print the intended inline plan + review decision + sticky body, ZERO gh calls (no read ⇒ empty state).
   if (dryRun) {
     if (!sha) throw new Error("--dry-run requires --sha/--head (no gh read to derive headRefOid)");
     const body = summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
@@ -362,7 +360,7 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   const [owner, repo] = slug.split("/");
 
   // --repo <slug>: CI runs from a non-repo dir; resolve the repo explicitly.
-  const view = await gh(["pr", "view", String(pr), "--repo", slug, "--json", "headRefOid,comments"], { json: true });
+  const view = await gh(["pr", "view", String(pr), "--repo", slug, "--json", "headRefOid"], { json: true });
   const headSha = sha || view.headRefOid;
 
   // Fetch existing bot review comments (fp map) + the bot's last review state.
@@ -396,9 +394,11 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
     }
   }
 
-  // Upsert the sticky summary comment (carries stash + marker) — always.
+  // Upsert the sticky summary — always. Read comments via REST (NUMERIC ids); NOT `gh pr
+  // view --json comments` (GraphQL node IDs IC_… a REST PATCH 404s on), as inline does.
   const body = summaryBody({ pr, sha: headSha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
-  const existing = (view.comments || []).find(
+  const ic = await gh(["api", `repos/${owner}/${repo}/issues/${pr}/comments`, "--paginate"], { json: true });
+  const existing = (ic || []).find(
     (c) => (c.body || "").includes("<!-- ocr-state") && (c.body || "").includes(STICKY_HEADER),
   );
   if (existing) {
