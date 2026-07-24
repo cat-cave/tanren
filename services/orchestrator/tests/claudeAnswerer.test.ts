@@ -12,6 +12,7 @@ import {
   extractClaudeFinalText,
   parseClaudeAnswererOutput,
 } from "../src/engine/providers/claude.js";
+import { JsonlObjectDecodeError } from "../src/engine/providers/findTokenUsage.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -77,6 +78,29 @@ describe("Claude Answerer adapter", () => {
     await expect(
       answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
     ).rejects.toBeInstanceOf(ClaudeUsageLimitError);
+  });
+
+  it("rejects malformed event JSONL while retaining usage proven after the bad line", async () => {
+    const stdout = [
+      '{"usage":{"input_tokens":2,"output_tokens":1}}',
+      "not-json",
+      JSON.stringify({ type: "result", result: answer, usage: { input_tokens: 7, output_tokens: 4 } }),
+    ].join("\n");
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(stdout)]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/claude/dev", value: authJson });
+    const answerer = createClaudeAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/claude/dev",
+      runId: "run_claude_jsonl_failure",
+    });
+
+    await expect(
+      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
+    ).rejects.toBeInstanceOf(JsonlObjectDecodeError);
+    expect(answerer.lastTokenUsage?.()?.totalTokens).toBe(11);
   });
 
   it("repairs a malformed-then-valid answer in ONE bounded re-call (no stage throw)", async () => {

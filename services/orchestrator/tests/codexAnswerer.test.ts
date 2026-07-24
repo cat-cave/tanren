@@ -10,6 +10,7 @@ import {
   createCodexAnswerer,
   parseStructuredAnswererOutput,
 } from "../src/engine/providers/codex.js";
+import { JsonlObjectDecodeError } from "../src/engine/providers/findTokenUsage.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -97,6 +98,29 @@ describe("Codex Answerer adapter", () => {
       outputTokens: 250,
       reasoningOutputTokens: 50,
     });
+  });
+
+  it("rejects malformed event JSONL while retaining usage proven after the bad line", async () => {
+    const stdout = [
+      '{"usage":{"promptTokens":2,"completionTokens":1}}',
+      '{"one":1}{"two":2}',
+      '{"usage":{"promptTokens":7,"completionTokens":4}}',
+    ].join("\n");
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok(stdout), ok(authJson)]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+    const answerer = createCodexAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_codex_jsonl_failure",
+    });
+
+    await expect(
+      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
+    ).rejects.toBeInstanceOf(JsonlObjectDecodeError);
+    expect(answerer.lastTokenUsage?.()?.totalTokens).toBe(11);
   });
 
   it("fails LOUD when the workspace mkdir is denied (no swallowed os-error-2)", async () => {

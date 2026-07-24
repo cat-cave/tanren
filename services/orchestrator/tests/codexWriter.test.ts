@@ -270,15 +270,17 @@ describe("Codex writer adapter", () => {
       prompt: "do work",
       workspace: "/workspace/repo",
     });
-
     expect(result.exitReason).toBe("completed");
-    // The rotated bundle replaced the prior value — the write-back actually happened.
     await expect(secrets.get("credential/codex/dev")).resolves.toMatchObject({ value: rotatedAuthJson });
   });
 
-  it("parses raw Codex JSONL count and optional token usage; COUNTS a malformed non-empty line (loud, not silent)", () => {
-    expect(parseCodexJsonlTelemetry('{}\nnot-json\n{"usage":{"promptTokens":7,"completionTokens":4}}\n')).toEqual({
-      rawEventCount: 3,
+  it("fails the writer typed with exact final usage across malformed events", async () => {
+    const stdout =
+      '{"usage":{"promptTokens":2,"completionTokens":1}}\nnot-json\n[]\n42\n' +
+      '{"usage":{"promptTokens":7,"completionTokens":4}}\n';
+    const telemetry = parseCodexJsonlTelemetry(stdout);
+    expect(telemetry).toEqual({
+      rawEventCount: 5,
       tokenUsage: {
         inputTokens: 7,
         cachedInputTokens: 0,
@@ -287,20 +289,24 @@ describe("Codex writer adapter", () => {
         reasoningOutputTokens: 0,
         totalTokens: 11,
       },
-      // `--json` means every non-empty line is a JSON event — `not-json` is counted.
-      malformedLineCount: 1,
+      jsonlDecodeFailure: {
+        kind: "jsonl_object_decode_failed",
+        failures: [
+          { lineNumber: 2, reason: "invalid_json" },
+          { lineNumber: 3, reason: "non_object" },
+          { lineNumber: 4, reason: "non_object" },
+        ],
+      },
     });
-  });
-
-  it("a fully-valid Codex JSONL stream reports ZERO malformed lines (legitimate, quiet)", () => {
-    const out = parseCodexJsonlTelemetry('{"type":"x"}\n{"usage":{"promptTokens":1,"completionTokens":1}}\n');
-    expect(out.malformedLineCount).toBe(0);
+    await expect(runWithCodexResult(ok(stdout))).resolves.toMatchObject({
+      exitReason: "crashed",
+      tokenUsage: { totalTokens: 11 },
+      telemetry: { jsonlDecodeFailure: telemetry.jsonlDecodeFailure },
+    });
+    expect(parseCodexJsonlTelemetry('{"type":"x"}\n').jsonlDecodeFailure).toBeUndefined();
   });
 
   it("de-overlaps Codex inclusive token shape into disjoint buckets", () => {
-    // Real Codex shape: cached_input_tokens ⊆ input_tokens and
-    // reasoning_output_tokens ⊆ output_tokens, so input/output must shed the
-    // overlap to keep the buckets mutually exclusive.
     const line = JSON.stringify({
       type: "usage",
       usage: {
