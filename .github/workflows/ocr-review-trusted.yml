@@ -38,6 +38,10 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     env:
       RUN_ID: ${{ github.event.workflow_run.id }}
+      # GitHub forbids the `secrets` context in a step `if:` ("Unrecognized
+      # named-value: 'secrets'"), so map "is the reviewer App configured?" to an
+      # env here (secrets ARE allowed in env) and gate the mint step on it.
+      REVIEW_HAS_APP: ${{ secrets.REVIEWER_APP_ID != '' }}
       # LLM/model key intentionally NOT needed here: posting is deterministic.
       # Only forge-write credentials (github.token) are used.
     steps:
@@ -101,7 +105,7 @@ jobs:
       # Third-party action ⇒ pinned to a full commit SHA (v3.2.0).
       - name: Mint reviewer App token
         id: reviewer_token
-        if: ${{ secrets.REVIEWER_APP_ID != '' }}
+        if: ${{ env.REVIEW_HAS_APP == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.REVIEWER_APP_ID }}
