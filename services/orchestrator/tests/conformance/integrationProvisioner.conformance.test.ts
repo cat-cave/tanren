@@ -21,6 +21,7 @@ import {
 import { projectIntegrationOperationTarget } from "../../src/engine/contracts/integrationAuthority.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { SentryProvisioner } from "../../src/engine/providers/sentryProvisioner.js";
+import { sentryPrincipalIdentity } from "../../src/engine/integrations/sentryPrincipalIdentity.js";
 import { FlyDeployProvisioner } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { VercelDeployProvisioner } from "../../src/engine/provisioners/vercelDeployProvisioner.js";
 import { InMemoryIntegrationProvisioner } from "./fakes/inMemoryIntegrationProvisioner.js";
@@ -42,7 +43,7 @@ const grant = (
   testOrgGrant({
     providerKind: "sentry",
     credentialRef: "secret://org/sentry-token/g/1",
-    metadata: { orgSlug: "acme" },
+    metadata: sentryPrincipalIdentity("acme", "https://sentry.io"),
     capability: "errors",
     operation,
     target,
@@ -83,7 +84,7 @@ function sentryGrant(
   return testOrgGrant({
     providerKind: "sentry",
     credentialRef: SENTRY_TOKEN_REF.includes("/g/") ? SENTRY_TOKEN_REF : `${SENTRY_TOKEN_REF}/g/1`,
-    metadata: { orgSlug: "acme", team: "platform" },
+    metadata: { ...sentryPrincipalIdentity("acme", "https://sentry.io"), team: "platform" },
     capability: "errors",
     operation,
     target,

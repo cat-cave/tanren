@@ -19,6 +19,8 @@ import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../integrations/integrationSecretStoreImpl.js";
+import { sentryNextPage, SentryPaginationError } from "../../integrations/sentryPagination.js";
+import { canonicalSentryEndpoint, SentryPrincipalIdentity } from "../../integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../repositories/integrationConnections.js";
 import { assertOrgGrantMatchesLease, secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
 import { systemActor } from "../../state/actor.js";
@@ -73,7 +75,10 @@ export class FetchSentryHttpClient implements SentryHttpClient {
     return {
       status: response.status,
       body,
-      headers: { "retry-after": response.headers.get("retry-after") ?? undefined },
+      headers: {
+        link: response.headers.get("link") ?? undefined,
+        "retry-after": response.headers.get("retry-after") ?? undefined,
+      },
     };
   }
 }
@@ -124,10 +129,6 @@ export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthori
     });
 }
 
-// Decode every provider row before mapping it. A partial response must never
-// become a partial set of durable findings: malformed provider data is a loud
-// source failure before the inbox engine has an item it could persist. Unknown
-// fields remain forward-compatible because Sentry adds fields independently.
 const SentryIssuePayload = z.object({
   id: z.string().min(1),
   shortId: z.string().min(1).optional(),
@@ -199,6 +200,34 @@ function buildPath(config: ActiveSentryConfig): string {
     `/issues/?${search.toString()}`
   );
 }
+function assertSentryAuthorityBinding(grant: OrgGrant, config: ActiveSentryConfig): string {
+  const lease = grant.eligibleOperation;
+  if (
+    grant.providerKind !== "sentry" ||
+    lease.capability !== "errors" ||
+    lease.operation !== "intake" ||
+    lease.target.resourceId !== config.project
+  ) {
+    throw new IntakeSourceAuthorityError("sentry", "the selected lease does not bind this project intake effect");
+  }
+  const identity = SentryPrincipalIdentity.safeParse(grant.metadata);
+  if (!identity.success) {
+    throw new IntakeSourceAuthorityError("sentry", "the selected principal has no verified Sentry identity");
+  }
+  if (identity.data.orgSlug !== config.org) {
+    throw new IntakeSourceAuthorityError("sentry", "the source organization does not match the selected principal");
+  }
+  let sourceBaseUrl: string;
+  try {
+    sourceBaseUrl = canonicalSentryEndpoint(config.baseUrl);
+  } catch {
+    throw new IntakeSourceAuthorityError("sentry", "the source endpoint is not a canonical HTTPS endpoint");
+  }
+  if (sourceBaseUrl !== identity.data.baseUrl) {
+    throw new IntakeSourceAuthorityError("sentry", "the source endpoint does not match the selected principal");
+  }
+  return identity.data.baseUrl;
+}
 
 export function createSentryConnector(deps: SentryConnectorDeps): SourceConnector {
   return {
@@ -214,6 +243,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         resourceId: config.project,
       });
       assertOrgGrantMatchesLease(grant);
+      const baseUrl = assertSentryAuthorityBinding(grant, config);
       const token = await secretValueForLease(
         new GenerationAddressedIntegrationSecretStore(deps.secrets),
         grant.eligibleOperation,
@@ -227,32 +257,47 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         },
       );
 
-      const response = await deps.sentryHttp.request({
-        method: "GET",
-        path: buildPath(config),
-        token,
-        baseUrl: config.baseUrl,
-      });
-      // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
-      // transient), NEVER an empty list. Only a genuine 200-with-an-array is "no
-      // unresolved issues". A 200 whose body is not the expected array is a failed
-      // read (shape changed / error envelope) — also LOUD.
-      assertIntakeResponseOk(
-        "sentry",
-        response.status,
-        "provider response",
-        retryAfterMs(response.headers?.["retry-after"]),
-      );
-      if (!Array.isArray(response.body)) {
-        throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
+      const issuesPath = buildPath(config);
+      const issues: SentryIssuePayload[] = [];
+      const seenCursors = new Set<string>();
+      let path: string | undefined = issuesPath;
+      while (path !== undefined) {
+        const response = await deps.sentryHttp.request({ method: "GET", path, token, baseUrl });
+        assertIntakeResponseOk(
+          "sentry",
+          response.status,
+          "provider response",
+          retryAfterMs(response.headers?.["retry-after"]),
+        );
+        if (!Array.isArray(response.body)) {
+          throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
+        }
+        issues.push(...z.array(SentryIssuePayload).parse(response.body));
+        let next;
+        try {
+          next = sentryNextPage({
+            link: response.headers?.["link"],
+            baseUrl,
+            resourcePath: issuesPath,
+            seenCursors,
+          });
+        } catch (error) {
+          if (error instanceof SentryPaginationError) {
+            throw new IntakeSourceFetchError("sentry", 200, error.message);
+          }
+          throw error;
+        }
+        if (next === undefined) {
+          path = undefined;
+        } else {
+          seenCursors.add(next.cursor);
+          path = next.path;
+        }
       }
 
-      const issues = z.array(SentryIssuePayload).parse(response.body);
       const items: IngestedItem[] = [];
       for (const issue of issues) {
         const title = titleFor(issue);
-        // A valid Sentry issue may omit its title but still carry a useful
-        // culprit, metadata value, or short id for the operator-facing title.
         if (title === undefined) continue;
         items.push({
           // Idempotent external id = the Sentry issue id.

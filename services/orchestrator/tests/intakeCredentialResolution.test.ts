@@ -60,8 +60,7 @@ const fakeSecrets = {
   get: async (ref: string) => (ref === ORG_A_GITHUB_REF ? { ref, value: "ghs_fake" } : undefined),
 } as never;
 
-// A fake GitHub HTTP client returning one open issue, capturing the token used so
-// the test asserts the resolved (org-default static) token reached the wire.
+// Fake GitHub HTTP client returning one honest issue while capturing the token.
 function fakeGithubHttp(): { http: never; tokensSeen: string[] } {
   const tokensSeen: string[] = [];
   const http = {
@@ -69,7 +68,16 @@ function fakeGithubHttp(): { http: never; tokensSeen: string[] } {
       tokensSeen.push(input.token);
       return {
         status: 200,
-        body: [{ number: 1, title: "polled issue", body: "details", labels: [] }],
+        body: [
+          {
+            number: 1,
+            title: "polled issue",
+            body: "details",
+            comments: 0,
+            user: { login: "octocat" },
+            labels: [],
+          },
+        ],
       };
     },
   } as never;

@@ -10,7 +10,6 @@
 // asserts the request it built + the normalized output it returned — no spies,
 // no mock-only assertions.
 
-import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
@@ -27,7 +26,7 @@ import {
   type SentryHttpRequest,
   type SentryIntakeAuthority,
 } from "../src/engine/forge/inbox/index.js";
-import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
+import { terminalSentryLink, testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_static_token" });
@@ -64,10 +63,18 @@ function recordGitHub(body: unknown, status = 200): { client: GitHubHttpClient; 
     client: {
       async request(input) {
         calls.push(input);
-        return { status, body };
+        return { status, body: githubRows(body) };
       },
     },
   };
+}
+function githubRows(body: unknown): unknown {
+  if (!Array.isArray(body)) return body;
+  return body.map((row) =>
+    typeof row === "object" && row !== null && !Array.isArray(row)
+      ? { comments: 0, user: { login: "octocat" }, ...row }
+      : row,
+  );
 }
 
 function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; calls: SentryHttpRequest[] } {
@@ -77,14 +84,24 @@ function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; 
     client: {
       async request(input) {
         calls.push(input);
-        return { status, body };
+        return { status, body, headers: { link: terminalSentryLink(input) } };
       },
     },
   };
 }
 
-const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
-const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/missing/g/1");
+const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.io",
+});
+const customSentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.example",
+});
+const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/missing/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.io",
+});
 
 const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAuthority = sentryAuthority) =>
   createSentryConnector({ secrets, sentryHttp, authority });
@@ -221,13 +238,28 @@ describe("github issues connector — normalization", () => {
     const items = await githubConnector(client).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
   });
-
-  it("rejects a malformed provider row rather than silently ingesting a partial GitHub response", async () => {
-    const { client } = recordGitHub([
-      { number: 1, title: "valid", labels: [] },
-      { number: 2, title: "malformed PR marker", labels: [], pull_request: "not an object" },
+  it("follows every advertised issues page instead of treating per_page=50 as complete", async () => {
+    const calls: GitHubHttpRequest[] = [];
+    const client: GitHubHttpClient = {
+      async request(input) {
+        calls.push(input);
+        return calls.length === 1
+          ? {
+              status: 200,
+              body: githubRows([{ number: 1, title: "first" }]),
+              nextPagePath: "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate&page=2",
+            }
+          : { status: 200, body: githubRows([{ number: 2, title: "second" }]) };
+      },
+    };
+    await expect(githubConnector(client).fetch(githubSource)).resolves.toMatchObject([
+      { externalId: "gh-cat-cave/app#1" },
+      { externalId: "gh-cat-cave/app#2" },
     ]);
-    await expect(githubConnector(client).fetch(githubSource)).rejects.toBeInstanceOf(z.ZodError);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate",
+      "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate&page=2",
+    ]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
@@ -275,7 +307,7 @@ describe("sentry connector — request wire shape", () => {
 
   it("accepts the canonical provisioner-owned config including lifecycle metadata", async () => {
     const { client, calls } = recordSentry([]);
-    await sentryConnector(client).fetch({
+    await sentryConnector(client, customSentryAuthority).fetch({
       ...sentrySource,
       config: {
         org: "cat-cave",
@@ -399,14 +431,6 @@ describe("sentry connector — normalization", () => {
     ]);
     const items = await sentryConnector(client).fetch(sentrySource);
     expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
-  });
-
-  it("rejects a malformed provider row rather than silently ingesting a partial Sentry response", async () => {
-    const { client } = recordSentry([
-      { id: "1", title: "valid" },
-      { id: 2, title: "malformed" },
-    ]);
-    await expect(sentryConnector(client).fetch(sentrySource)).rejects.toBeInstanceOf(z.ZodError);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {

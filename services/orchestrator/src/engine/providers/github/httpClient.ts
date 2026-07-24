@@ -1,4 +1,5 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
+import { parseLinkHeader } from "../../integrations/linkHeader.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../github.js";
 import {
   buildErrorDetail,
@@ -120,6 +121,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     const text = await response.text();
     const responseBody = text === "" ? undefined : JSON.parse(text);
     const getHeader = headerGetter(response.headers);
+    const nextPagePath = githubNextPagePath(getHeader("link"), this.apiBaseUrl);
     const retryBackoffMs = rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody);
     const retryAfterHeader = getHeader("retry-after");
     const retryAfterSeconds =
@@ -135,7 +137,43 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       body: responseBody,
       retryAfterMs: exactRetryAfterMs,
       retryBackoffMs,
+      ...(nextPagePath === undefined ? {} : { nextPagePath }),
       ...(response.status >= 400 && { errorDetail: buildErrorDetail(response.status, responseBody, getHeader) }),
     };
   }
+}
+function githubNextPagePath(link: string | null, apiBaseUrl: string): string | undefined {
+  if (link === null || link.trim() === "") return undefined;
+  let values;
+  try {
+    values = parseLinkHeader(link);
+  } catch {
+    throw new Error("GitHub Link header contained malformed syntax");
+  }
+  const nextLinks = values
+    .filter((value) => {
+      const rel = value.parameters.get("rel");
+      if (rel === undefined) return false;
+      const relations = rel.toLowerCase().split(/\s+/u).filter(Boolean);
+      if (relations.length === 0 || relations.some((relation) => !/^[a-z][a-z0-9.-]*$/u.test(relation))) {
+        throw new Error("GitHub Link header contained a malformed rel parameter");
+      }
+      return relations.includes("next");
+    })
+    .map((value) => value.target);
+  if (nextLinks.length === 0) return undefined;
+  if (nextLinks.length !== 1) {
+    throw new Error("GitHub Link header contained ambiguous next-page links");
+  }
+  let url: URL;
+  const api = new URL(apiBaseUrl);
+  try {
+    url = new URL(nextLinks[0]!, api);
+  } catch {
+    throw new Error("GitHub Link header contained an invalid next-page URL");
+  }
+  if (url.origin !== api.origin) {
+    throw new Error("GitHub Link header next-page URL was not API-origin scoped");
+  }
+  return `${url.pathname}${url.search}`;
 }

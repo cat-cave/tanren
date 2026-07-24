@@ -310,7 +310,16 @@ describe("B3 — manual /ingest now auto-routes", () => {
   it("an auto_routable ingest result creates a spec (was a dead-end)", async () => {
     const oneIssue = fakeGithub(() => ({
       status: 200,
-      body: [{ number: 11, title: "polled bug", body: "x", labels: [] }],
+      body: [
+        {
+          number: 11,
+          title: "polled bug",
+          body: "x",
+          comments: 0,
+          user: { login: "octocat" },
+          labels: [],
+        },
+      ],
     }));
     const routableSpec: TriageRoutableSpec = {
       title: "ingested feature",

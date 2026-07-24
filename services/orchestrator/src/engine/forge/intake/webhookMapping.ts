@@ -25,26 +25,29 @@ function truncateTitle(title: string): string {
 
 // The GitHub `issues` event payload fields we read. `action` distinguishes
 // opened/edited/reopened (we ingest) from closed/deleted (we skip).
-const GithubIssueEvent = z
+const GithubIssueEventSchema = z
   .object({
-    action: z.string(),
+    action: z.string().min(1),
     issue: z
       .object({
-        number: z.number(),
-        title: z.string(),
+        number: z.number().int().positive(),
+        title: z.string().min(1),
         body: z.string().nullable().optional(),
-        labels: z.array(z.union([z.string(), z.object({ name: z.string().optional() }).passthrough()])).optional(),
-        pull_request: z.unknown().optional(),
+        updated_at: z.string().nullable().optional(),
+        labels: z.array(z.union([z.string().min(1), z.object({ name: z.string().min(1) }).passthrough()])).optional(),
+        pull_request: z.object({}).passthrough().optional(),
       })
       .passthrough(),
     repository: z
       .object({
-        owner: z.object({ login: z.string() }).passthrough(),
-        name: z.string(),
+        owner: z.object({ login: z.string().min(1) }).passthrough(),
+        name: z.string().min(1),
       })
       .passthrough(),
   })
   .passthrough();
+export type GithubIssueEvent = z.infer<typeof GithubIssueEventSchema>;
+export const decodeGithubIssueEvent = (payload: unknown) => ({ data: GithubIssueEventSchema.parse(payload) });
 
 // Actions that represent a live, ingest-worthy issue. A closed/deleted issue is
 // a no-op (it never becomes new work); the upsert keeps any prior candidate.
@@ -65,15 +68,11 @@ function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severi
  * idempotent against each other.
  */
 export function mapGithubIssueWebhook(payload: unknown, projectId: string | null): WebhookMapResult {
-  const parsed = GithubIssueEvent.safeParse(payload);
-  if (!parsed.success) return { kind: "skip", reason: "payload is not a github issues event" };
-  const event = parsed.data;
+  const event = decodeGithubIssueEvent(payload).data;
   if (event.issue.pull_request !== undefined) return { kind: "skip", reason: "pull request, not an issue" };
   if (!INGEST_ACTIONS.has(event.action)) return { kind: "skip", reason: `action not ingestable: ${event.action}` };
 
-  const labels = (event.issue.labels ?? [])
-    .map((l) => (typeof l === "string" ? l : (l.name ?? "")))
-    .filter((l): l is string => l.length > 0);
+  const labels = (event.issue.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
   const owner = event.repository.owner.login;
   const repo = event.repository.name;
   return {

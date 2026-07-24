@@ -26,6 +26,7 @@
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { ZodError } from "zod";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import {
   autoRouteCandidate,
@@ -36,7 +37,7 @@ import {
 } from "../inbox/index.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { intakeItem } from "./pipeline.js";
-import { mapGithubIssueWebhook } from "./webhookMapping.js";
+import { decodeGithubIssueEvent, mapGithubIssueWebhook } from "./webhookMapping.js";
 import { WebhookEventStore, type WebhookEvent } from "../../repositories/webhookEvents.js";
 import { loadRunnableInboxSource } from "./sourceValidation.js";
 
@@ -110,10 +111,11 @@ export async function processWebhookEvent(deps: WebhookProcessorDeps, event: Web
     // bh-7 observes the exact delivery bh-3 already persisted and claimed. It
     // does not create a second webhook processor; a failed observation leaves
     // this event recoverable for this processor's normal sweeper retry.
+    decodeGithubIssueEvent(event.payload);
     await deps.recordIssueObservation?.(source, event);
     mapped = mapEvent(event, source);
   } catch (error) {
-    await markFailure(deps, event, messageOf(error), false, workerId);
+    await markFailure(deps, event, messageOf(error), error instanceof ZodError, workerId);
     return false;
   }
   if (mapped.kind === "skip") {
