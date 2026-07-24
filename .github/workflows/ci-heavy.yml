@@ -66,3 +66,33 @@ jobs:
       - run: just smoke
       - if: always()
         run: just compose-down
+
+  # review/verdict PASS-THROUGH for the merge queue (only on merge_group).
+  #
+  # The LLM review gate (`review/verdict`) is enforced at QUEUE ENTRY: a PR
+  # cannot be added to the queue unless `review/verdict` is `success` on its
+  # head (it is a required check that runs on `pull_request` via the OCR lane).
+  # But `review/verdict` NEVER reports on the `merge_group` event, and GitHub's
+  # merge queue waits for every required check to report on the merge group —
+  # so without this stamp the queue would deadlock. The rebased merge-group
+  # code IS re-verified for correctness by the `ci-heavy` job above; only the
+  # (advisory, already-enforced) LLM review is carried forward, not re-run per
+  # rebase. See ops/review/CUTOVER.md §queue.
+  review-verdict-passthrough:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Stamp review/verdict=success on the merge-group head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MG_HEAD" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad merge_group head sha: $MG_HEAD"; exit 1; }
+          gh api -X POST "repos/${REPO}/statuses/${MG_HEAD}" \
+            -f state=success \
+            -f context=review/verdict \
+            -f description="carried from PR entry gate (review enforced pre-queue)"
