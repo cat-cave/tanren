@@ -1,0 +1,120 @@
+name: ocr-review-trusted
+
+# ============================================================================
+# TRUSTED lane (DESIGN §SECURITY.1, issue #110).
+#
+# Runs on `workflow_run` after `ocr-review-untrusted` COMPLETES. `workflow_run`
+# always executes from the BASE repository's default branch with the base repo's
+# permissions/secrets, even for fork PRs — so this is the safe place to hold
+# secrets and post. This job:
+#   * NEVER checks out PR-head code (only the trusted default-branch checkout
+#     for its own scripts),
+#   * only proceeds if the untrusted run concluded `success`,
+#   * downloads the `ocr-review-output` artifact and binds EVERYTHING to the
+#     exact head SHA recorded inside it (re-sanitized before use),
+#   * runs post-review.mjs (native `gh pr review` + sticky summary/marker) and
+#     verdict.mjs (the `review/verdict` commit status), and
+#   * on rule_change=true forces a P0 "reviewer-config change" + verdict=FAIL.
+# ============================================================================
+
+on:
+  workflow_run:
+    workflows: [ocr-review-untrusted]
+    types: [completed]
+
+# Secrets-holding, write-capable — but scoped to exactly what posting needs.
+permissions:
+  contents: read
+  pull-requests: write # native review + sticky summary comment
+  statuses: write # review/verdict commit status
+  actions: read # download the triggering run's artifact
+  checks: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    # Gate #1: only act on a SUCCESSFUL untrusted run. A failed/cancelled
+    # untrusted run must not produce a verdict.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      # LLM/model key intentionally NOT needed here: posting is deterministic.
+      # Only forge-write credentials (github.token) are used.
+    steps:
+      # Trusted checkout of OUR default branch — provides the post/verdict
+      # scripts. This is NOT PR-head code. First-party actions/* pinned to a
+      # major tag per repo convention; any third-party action would be SHA-pinned.
+      - name: Checkout trusted scripts
+        uses: actions/checkout@v6 # actions/checkout (first-party)
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6 # actions/setup-node (first-party)
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      # Download the artifact produced by the exact triggering run (run-id bound).
+      - name: Download review artifact
+        uses: actions/download-artifact@v4 # actions/download-artifact (first-party)
+        with:
+          name: ocr-review-output
+          path: artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # Validate the payload and re-sanitize the head SHA before ANY use
+      # (DESIGN §SECURITY.3 — trust nothing from the untrusted lane's output).
+      - name: Validate artifact + bind head SHA
+        id: bind
+        run: |
+          set -euo pipefail
+          PAYLOAD="artifact/review-output.json"
+          test -f "$PAYLOAD" || { echo "::error::missing $PAYLOAD"; exit 1; }
+          HEAD_SHA="$(node -e 'const o=require("./artifact/review-output.json");process.stdout.write(String(o.head_sha||""))')"
+          PR_NUMBER="$(node -e 'const o=require("./artifact/review-output.json");process.stdout.write(String(o.pr_number||""))')"
+          RULE_CHANGE="$(node -e 'const o=require("./artifact/review-output.json");process.stdout.write(o.rule_change?"true":"false")')"
+          case "$HEAD_SHA" in
+            -*) echo "::error::head_sha refuses leading '-': $HEAD_SHA"; exit 1;;
+          esac
+          printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad head_sha: $HEAD_SHA"; exit 1; }
+          printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || { echo "::error::bad pr_number: $PR_NUMBER"; exit 1; }
+          # Defense in depth: the artifact head SHA must match the SHA the
+          # untrusted run actually ran on (workflow_run.head_sha).
+          EVENT_HEAD="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$EVENT_HEAD" ] && [ "$EVENT_HEAD" != "$HEAD_SHA" ]; then
+            echo "::error::artifact head_sha ($HEAD_SHA) != workflow_run head_sha ($EVENT_HEAD)"; exit 1
+          fi
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "rule_change=$RULE_CHANGE" >> "$GITHUB_OUTPUT"
+
+      # Post ONE native review with inline comments + sticky summary/marker.
+      # On rule_change the script injects the P0 "reviewer-config change —
+      # maintainer review required" finding (DESIGN §SECURITY.4).
+      - name: Post native review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.bind.outputs.head_sha }}
+          RULE_CHANGE: ${{ steps.bind.outputs.rule_change }}
+        run: |
+          set -euo pipefail
+          node ops/review/scripts/post-review.mjs \
+            --in artifact/review-output.json \
+            --pr "$PR_NUMBER" --head "$HEAD_SHA"
+
+      # Set review/verdict on the EXACT reviewed SHA (issue #16). success iff
+      # zero open P0/P1; rule_change forces FAIL.
+      - name: Set review/verdict status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.bind.outputs.head_sha }}
+          RULE_CHANGE: ${{ steps.bind.outputs.rule_change }}
+        run: |
+          set -euo pipefail
+          node ops/review/scripts/verdict.mjs \
+            --in artifact/review-output.json \
+            --pr "$PR_NUMBER" --head "$HEAD_SHA"
