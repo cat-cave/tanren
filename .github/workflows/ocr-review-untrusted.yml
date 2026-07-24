@@ -355,7 +355,7 @@ jobs:
       # This is the entire output of the untrusted lane. No review is posted here.
       - name: Upload review artifact
         if: always()
-        uses: actions/upload-artifact@v4 # actions/upload-artifact (first-party)
+        uses: actions/upload-artifact@v7 # actions/upload-artifact (first-party)
         with:
           name: ocr-review-output
           retention-days: 3

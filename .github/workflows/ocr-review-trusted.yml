@@ -57,7 +57,7 @@ jobs:
 
       # Download the artifact produced by the exact triggering run (run-id bound).
       - name: Download review artifact
-        uses: actions/download-artifact@v4 # actions/download-artifact (first-party)
+        uses: actions/download-artifact@v8 # actions/download-artifact (first-party)
         with:
           name: ocr-review-output
           path: artifact
