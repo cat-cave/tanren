@@ -14,6 +14,7 @@ import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
+import { z } from "zod";
 import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
 import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
 
@@ -28,15 +29,18 @@ export interface GitHubConnectorDeps {
   defaultStaticRef?: string;
 }
 
-// A GitHub issue as the Issues API returns it (the fields we map). `pull_request`
-// is present only on PRs, which we drop.
-interface RawIssue {
-  number?: unknown;
-  title?: unknown;
-  body?: unknown;
-  labels?: Array<{ name?: unknown } | string> | undefined;
-  pull_request?: unknown;
-}
+// Decode every provider row before filtering or mapping it. An array response is
+// not enough evidence that it is safe to ingest: silently skipping one malformed
+// row would make a partial provider response look authoritative. Unknown GitHub
+// fields are deliberately ignored because the API evolves independently.
+const GithubIssuePayload = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1),
+  body: z.string().nullable().optional(),
+  labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).optional(),
+  pull_request: z.object({}).passthrough().optional(),
+});
+type GithubIssuePayload = z.infer<typeof GithubIssuePayload>;
 
 function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severity"] {
   const lowered = labels.map((l) => l.toLowerCase());
@@ -49,7 +53,7 @@ function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severi
   return "info";
 }
 
-function labelNames(issue: RawIssue): string[] {
+function labelNames(issue: GithubIssuePayload): string[] {
   const raw = issue.labels ?? [];
   return raw
     .map((l) => (typeof l === "string" ? l : typeof l?.name === "string" ? l.name : ""))
@@ -100,17 +104,16 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
       }
 
-      const issues = response.body as RawIssue[];
+      const issues = z.array(GithubIssuePayload).parse(response.body);
       const items: IngestedItem[] = [];
       for (const issue of issues) {
         // The Issues API also returns PRs; drop them.
         if (issue.pull_request !== undefined) continue;
-        if (typeof issue.number !== "number" || typeof issue.title !== "string") continue;
         const labels = labelNames(issue);
         items.push({
           externalId: `gh-${config.owner}/${config.repo}#${issue.number}`,
           title: issue.title,
-          body: typeof issue.body === "string" ? issue.body.slice(0, 8000) : "",
+          body: issue.body?.slice(0, 8000) ?? "",
           severity: severityFromLabels(labels),
           projectId: source.projectId,
         });

@@ -14,6 +14,7 @@
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
@@ -123,19 +124,22 @@ export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthori
     });
 }
 
-// A Sentry issue as the Issues API returns it (the fields we map). All optional
-// because we validate defensively rather than trusting the upstream shape.
-interface RawSentryIssue {
-  id?: unknown;
-  shortId?: unknown;
-  title?: unknown;
-  culprit?: unknown;
-  level?: unknown;
-  permalink?: unknown;
-  count?: unknown;
-  userCount?: unknown;
-  metadata?: { value?: unknown; type?: unknown } | undefined;
-}
+// Decode every provider row before mapping it. A partial response must never
+// become a partial set of durable findings: malformed provider data is a loud
+// source failure before the inbox engine has an item it could persist. Unknown
+// fields remain forward-compatible because Sentry adds fields independently.
+const SentryIssuePayload = z.object({
+  id: z.string().min(1),
+  shortId: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  culprit: z.string().min(1).optional(),
+  level: z.string().min(1).optional(),
+  permalink: z.string().min(1).optional(),
+  count: z.union([z.string(), z.number()]).optional(),
+  userCount: z.union([z.string(), z.number()]).optional(),
+  metadata: z.object({ value: z.string().min(1).optional(), type: z.string().min(1).optional() }).optional(),
+});
+type SentryIssuePayload = z.infer<typeof SentryIssuePayload>;
 
 // Map a Sentry `level` to the inbox severity. fatal/error → fail (a live
 // production error), warning → warn, everything else (info/debug/sample) → info.
@@ -157,14 +161,14 @@ function asString(value: unknown): string | undefined {
 
 // The candidate title prefers the issue title, then the human culprit, then the
 // metadata value — whichever first carries signal.
-function titleFor(issue: RawSentryIssue): string | undefined {
+function titleFor(issue: SentryIssuePayload): string | undefined {
   return asString(issue.title) ?? asString(issue.culprit) ?? asString(issue.metadata?.value) ?? asString(issue.shortId);
 }
 
 // The candidate body is the permalink plus the metadata Sentry already
 // computed (type/value/level + event/user counts) so the triage answerer and
 // the surface have the context without a second round-trip.
-function bodyFor(issue: RawSentryIssue): string {
+function bodyFor(issue: SentryIssuePayload): string {
   const lines: string[] = [];
   const permalink = asString(issue.permalink);
   if (permalink !== undefined) lines.push(permalink);
@@ -243,16 +247,16 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
       }
 
-      const issues = response.body as RawSentryIssue[];
+      const issues = z.array(SentryIssuePayload).parse(response.body);
       const items: IngestedItem[] = [];
       for (const issue of issues) {
-        const id = asString(issue.id);
         const title = titleFor(issue);
-        // Skip anything without a stable id or any title signal.
-        if (id === undefined || title === undefined) continue;
+        // A valid Sentry issue may omit its title but still carry a useful
+        // culprit, metadata value, or short id for the operator-facing title.
+        if (title === undefined) continue;
         items.push({
           // Idempotent external id = the Sentry issue id.
-          externalId: `sentry-${id}`,
+          externalId: `sentry-${issue.id}`,
           title: title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFromLevel(asString(issue.level)),
