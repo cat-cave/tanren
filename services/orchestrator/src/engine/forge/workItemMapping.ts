@@ -62,6 +62,13 @@ const mappingProfile = z
   .strict()
   .superRefine((profile, ctx) => {
     const capabilities = new Set(profile.lifecycle.capabilities);
+    if (capabilities.size !== profile.lifecycle.capabilities.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["lifecycle", "capabilities"],
+        message: "duplicate capability",
+      });
+    }
     for (const operation of profile.lifecycle.capabilities) {
       if (profile.lifecycle.operations[operation] === undefined) {
         ctx.addIssue({
@@ -252,7 +259,13 @@ const evidence = z
     workItemId: z.string().min(1),
     operation: lifecycleOperation,
     receipt: z.object({ providerRevision: z.string().min(1), effect: lifecycleEffect }).strict(),
-    readback: z.object({ providerRevision: z.string().min(1), effect: lifecycleEffect }).strict(),
+    readback: z
+      .object({
+        providerRevision: z.string().min(1),
+        effect: lifecycleEffect,
+        observation: z.record(z.string().min(1), z.unknown()),
+      })
+      .strict(),
   })
   .strict();
 
@@ -288,6 +301,12 @@ function evidenceKey(item: LifecycleReadbackEvidence): string {
   return canonical(item);
 }
 
+function countStrings(values: readonly string[]): Map<string, number> {
+  const result = new Map<string, number>();
+  for (const value of values) result.set(value, (result.get(value) ?? 0) + 1);
+  return result;
+}
+
 function assertEvidence(
   profile: WorkItemMappingProfile,
   corpusValue: LifecycleReadbackCorpus,
@@ -303,8 +322,34 @@ function assertEvidence(
   if (item.receipt.effect !== operation.effect || item.readback.effect !== operation.effect) {
     throw new LifecycleReadbackConformanceError(`proof does not equal lifecycle effect for ${item.caseId}`);
   }
+  const observed = pointerValue(item.readback.observation, operation.readback.path);
+  if (observed !== operation.readback.equals) {
+    throw new LifecycleReadbackConformanceError(
+      `readback contract does not prove ${item.operation} for ${item.caseId}`,
+    );
+  }
   if (item.receipt.providerRevision !== item.readback.providerRevision) {
     throw new LifecycleReadbackConformanceError(`readback revision does not prove receipt for ${item.caseId}`);
+  }
+}
+
+function assertLifecycleOperationCoverage(
+  profile: WorkItemMappingProfile,
+  cases: readonly LifecycleReadbackEvidence[],
+): void {
+  const expected = countStrings(profile.lifecycle.capabilities);
+  const observed = countStrings(cases.map((item) => item.operation));
+  if (expected.size !== observed.size || profile.lifecycle.capabilities.length !== cases.length) {
+    throw new LifecycleReadbackConformanceError(
+      "lifecycle corpus operation multiset does not cover profile capabilities",
+    );
+  }
+  for (const [operation, count] of expected) {
+    if (observed.get(operation) !== count) {
+      throw new LifecycleReadbackConformanceError(
+        "lifecycle corpus operation multiset does not cover profile capabilities",
+      );
+    }
   }
 }
 
@@ -338,6 +383,7 @@ export function verifyLifecycleReadbackConformance(
   if (corpusValue.profileVersion !== profile.version)
     throw new LifecycleReadbackConformanceError("profile/corpus versions differ");
   const expected = corpusValue.cases;
+  assertLifecycleOperationCoverage(profile, expected);
   const parsedActual = z.array(evidence).safeParse(actualInput);
   if (!parsedActual.success)
     throw new LifecycleReadbackConformanceError("readback evidence is incomplete or malformed");

@@ -10,7 +10,7 @@
       "workItemId": "gh-cat-cave/fixture#1268",
       "operation": "open",
       "receipt": { "providerRevision": "rev-open", "effect": "open" },
-      "readback": { "providerRevision": "rev-open", "effect": "open" }
+      "readback": { "providerRevision": "rev-open", "effect": "open", "observation": { "state": "open" } }
     },
     {
       "caseId": "close",
@@ -18,7 +18,7 @@
       "workItemId": "gh-cat-cave/fixture#1268",
       "operation": "close",
       "receipt": { "providerRevision": "rev-close", "effect": "closed" },
-      "readback": { "providerRevision": "rev-close", "effect": "closed" }
+      "readback": { "providerRevision": "rev-close", "effect": "closed", "observation": { "state": "closed" } }
     },
     {
       "caseId": "reopen",
@@ -26,7 +26,7 @@
       "workItemId": "gh-cat-cave/fixture#1268",
       "operation": "reopen",
       "receipt": { "providerRevision": "rev-reopen", "effect": "open" },
-      "readback": { "providerRevision": "rev-reopen", "effect": "open" }
+      "readback": { "providerRevision": "rev-reopen", "effect": "open", "observation": { "state": "open" } }
     },
     {
       "caseId": "comment",
@@ -34,7 +34,11 @@
       "workItemId": "gh-cat-cave/fixture#1268",
       "operation": "comment",
       "receipt": { "providerRevision": "rev-comment", "effect": "comment_recorded" },
-      "readback": { "providerRevision": "rev-comment", "effect": "comment_recorded" }
+      "readback": {
+        "providerRevision": "rev-comment",
+        "effect": "comment_recorded",
+        "observation": { "comment_recorded": "true" }
+      }
     }
   ]
 }

@@ -94,9 +94,20 @@ describe("public work-item mapping profile conformance", () => {
       /incomplete or has extra cases/u,
     );
     const mismatched = actual.map((item) => ({ ...(item as Record<string, unknown>) }));
-    (mismatched[1] as Record<string, unknown>).readback = { providerRevision: "rev-close", effect: "open" };
+    (mismatched[1] as Record<string, unknown>).readback = {
+      providerRevision: "rev-close",
+      effect: "open",
+      observation: { state: "closed" },
+    };
     expect(() => verifyLifecycleReadbackConformance(parsed, corpus, mismatched)).toThrow(
       /proof does not equal lifecycle effect/u,
+    );
+    const alteredProfile = structuredClone(profile) as {
+      lifecycle: { operations: { close: { readback: { equals: string } } } };
+    };
+    alteredProfile.lifecycle.operations.close.readback.equals = "open";
+    expect(() => verifyLifecycleReadbackConformance(alteredProfile, corpus, actual)).toThrow(
+      /readback contract does not prove close/u,
     );
     const profileRecord = profile as { lifecycle: { operations: { open: unknown } } };
     const limitedProfile = {
@@ -104,7 +115,14 @@ describe("public work-item mapping profile conformance", () => {
       lifecycle: { capabilities: ["open"], operations: { open: profileRecord.lifecycle.operations.open } },
     };
     expect(() => verifyLifecycleReadbackConformance(limitedProfile, corpus, actual)).toThrow(
-      /unsupported lifecycle capability close/u,
+      /operation multiset does not cover profile capabilities/u,
+    );
+    const trimmedCorpus = {
+      ...(corpus as Record<string, unknown>),
+      cases: actual.slice(0, -1),
+    };
+    expect(() => verifyLifecycleReadbackConformance(parsed, trimmedCorpus, trimmedCorpus.cases)).toThrow(
+      /operation multiset does not cover profile capabilities/u,
     );
   });
 });
