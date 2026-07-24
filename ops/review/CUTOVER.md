@@ -23,10 +23,10 @@ heavy gate off per-PR and onto the batched queue).
 GitHub's merge queue splits gating into two events, and a required check that does not report on
 the event it is evaluated on **deadlocks the queue**. So the checks are placed deliberately:
 
-| gate            | event          | required check(s)              | purpose                                   |
-| --------------- | -------------- | ------------------------------ | ----------------------------------------- |
-| **queue entry** | `pull_request` | `ci-light` + `review/verdict`  | fast checks + LLM review gate the PR       |
-| **in queue**    | `merge_group`  | `ci-heavy`                     | full `just ci` + `just smoke`, batched     |
+| gate            | event          | required check(s)             | purpose                                |
+| --------------- | -------------- | ----------------------------- | -------------------------------------- |
+| **queue entry** | `pull_request` | `ci-light` + `review/verdict` | fast checks + LLM review gate the PR   |
+| **in queue**    | `merge_group`  | `ci-heavy`                    | full `just ci` + `just smoke`, batched |
 
 - **`ci-light`** (`pull_request`) — `just fast-check`. Cheap; gates queue ENTRY and the review
   trigger. A PR cannot be queued until it is green.
@@ -38,7 +38,7 @@ the event it is evaluated on **deadlocks the queue**. So the checks are placed d
 - **`ci-heavy`** (`merge_group`) — the real merge gate, run on the batched/rebased queue commit
   (amortized across the batch) plus `push:main` as a post-merge safety net.
 
-Why not make `ci-heavy` a required *PR* check too? Because that runs the full heavy suite on
+Why not make `ci-heavy` a required _PR_ check too? Because that runs the full heavy suite on
 every PR push — the exact per-PR cost the queue exists to amortize. Once the queue is proven,
 `ci-heavy`'s `pull_request` trigger is removed so it runs ONLY in the queue, and the required PR
 contexts become `ci-light` + `review/verdict` (entry), with `ci-heavy` gating the merge group.
