@@ -10,6 +10,7 @@
 // asserts the request it built + the normalized output it returned — no spies,
 // no mock-only assertions.
 
+import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
@@ -212,19 +213,21 @@ describe("github issues connector — normalization", () => {
     expect(items[1]!.severity).toBe("fail");
   });
 
-  it("drops pull requests and rows missing a numeric number or string title", async () => {
+  it("drops pull requests after decoding a fully valid provider response", async () => {
     const { client } = recordGitHub([
       { number: 1, title: "keep", labels: [] },
       { number: 2, title: "a PR", pull_request: { url: "x" }, labels: [] },
-      // no title
-      { number: 3, labels: [] },
-      // no number
-      { title: "no number", labels: [] },
-      // number not numeric
-      { number: "4", title: "string number", labels: [] },
     ]);
     const items = await githubConnector(client).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
+  });
+
+  it("rejects a malformed provider row rather than silently ingesting a partial GitHub response", async () => {
+    const { client } = recordGitHub([
+      { number: 1, title: "valid", labels: [] },
+      { number: 2, title: "malformed PR marker", labels: [], pull_request: "not an object" },
+    ]);
+    await expect(githubConnector(client).fetch(githubSource)).rejects.toBeInstanceOf(z.ZodError);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
@@ -388,15 +391,22 @@ describe("sentry connector — normalization", () => {
     expect(items[2]!.severity).toBe("info");
   });
 
-  it("skips rows lacking a stable id or any title signal", async () => {
+  it("skips a valid row without a title signal", async () => {
     const { client } = recordSentry([
-      { title: "no id" },
       // no title signal
       { id: "5" },
       { id: "6", title: "kept" },
     ]);
     const items = await sentryConnector(client).fetch(sentrySource);
     expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
+  });
+
+  it("rejects a malformed provider row rather than silently ingesting a partial Sentry response", async () => {
+    const { client } = recordSentry([
+      { id: "1", title: "valid" },
+      { id: 2, title: "malformed" },
+    ]);
+    await expect(sentryConnector(client).fetch(sentrySource)).rejects.toBeInstanceOf(z.ZodError);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {
