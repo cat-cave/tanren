@@ -334,6 +334,11 @@ jobs:
         env:
           PR_NUMBER: ${{ env.PR_NUMBER }}
           GITHUB_TOKEN: ${{ github.token }} # read-only: comments + reactions + reviewThreads
+          # The reviewer's login (public var, not a secret — safe in the untrusted
+          # lane) so gather-signal scopes ocr-finding comments + their reactions/
+          # resolution to the reviewer's OWN identity. Defaults to github-actions[bot]
+          # when the reviewer App is not configured (matches the trusted post lane).
+          REVIEW_BOT_LOGIN: ${{ vars.REVIEW_BOT_LOGIN || 'github-actions[bot]' }}
         run: |
           set -euo pipefail
           node "${{ steps.base.outputs.scripts }}/gather-signal.mjs" \
