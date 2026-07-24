@@ -1,0 +1,40 @@
+{
+  "version": "work-item-lifecycle.v1",
+  "profileVersion": "work-item-mapping.v1",
+  "orgId": "org_conformance",
+  "workItemId": "gh-cat-cave/fixture#1268",
+  "cases": [
+    {
+      "caseId": "open",
+      "orgId": "org_conformance",
+      "workItemId": "gh-cat-cave/fixture#1268",
+      "operation": "open",
+      "receipt": { "providerRevision": "rev-open", "effect": "open" },
+      "readback": { "providerRevision": "rev-open", "effect": "open" }
+    },
+    {
+      "caseId": "close",
+      "orgId": "org_conformance",
+      "workItemId": "gh-cat-cave/fixture#1268",
+      "operation": "close",
+      "receipt": { "providerRevision": "rev-close", "effect": "closed" },
+      "readback": { "providerRevision": "rev-close", "effect": "closed" }
+    },
+    {
+      "caseId": "reopen",
+      "orgId": "org_conformance",
+      "workItemId": "gh-cat-cave/fixture#1268",
+      "operation": "reopen",
+      "receipt": { "providerRevision": "rev-reopen", "effect": "open" },
+      "readback": { "providerRevision": "rev-reopen", "effect": "open" }
+    },
+    {
+      "caseId": "comment",
+      "orgId": "org_conformance",
+      "workItemId": "gh-cat-cave/fixture#1268",
+      "operation": "comment",
+      "receipt": { "providerRevision": "rev-comment", "effect": "comment_recorded" },
+      "readback": { "providerRevision": "rev-comment", "effect": "comment_recorded" }
+    }
+  ]
+}

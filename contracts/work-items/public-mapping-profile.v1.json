@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tanren.dev/contracts/work-item-mapping/v1",
+  "version": "work-item-mapping.v1",
+  "profileId": "github-issues-public",
+  "provider": "github",
+  "orgScope": "caller",
+  "input": {
+    "requiredPaths": [
+      "/action",
+      "/issue/number",
+      "/issue/title",
+      "/issue/body",
+      "/issue/updated_at",
+      "/issue/labels",
+      "/repository/owner/login",
+      "/repository/name"
+    ]
+  },
+  "fields": {
+    "externalKey": {
+      "kind": "template",
+      "template": "gh-{{repository.owner.login}}/{{repository.name}}#{{issue.number}}"
+    },
+    "providerObjectId": {
+      "kind": "template",
+      "template": "gh-{{repository.owner.login}}/{{repository.name}}#{{issue.number}}"
+    },
+    "providerRevision": {
+      "kind": "path",
+      "path": "/issue/updated_at"
+    },
+    "status": {
+      "kind": "action_enum",
+      "path": "/action",
+      "values": {
+        "opened": "open",
+        "closed": "closed",
+        "reopened": "reopened",
+        "edited": "edited",
+        "deleted": "deleted"
+      }
+    },
+    "severity": {
+      "kind": "label_severity",
+      "path": "/issue/labels",
+      "failLabels": ["bug", "regression", "critical"],
+      "warnLabels": ["warn", "performance", "perf"]
+    },
+    "title": {
+      "kind": "path",
+      "path": "/issue/title"
+    },
+    "body": {
+      "kind": "path",
+      "path": "/issue/body"
+    }
+  },
+  "lifecycle": {
+    "capabilities": ["open", "close", "reopen", "comment"],
+    "operations": {
+      "open": { "effect": "open", "readback": { "path": "/state", "equals": "open" } },
+      "close": { "effect": "closed", "readback": { "path": "/state", "equals": "closed" } },
+      "reopen": { "effect": "open", "readback": { "path": "/state", "equals": "open" } },
+      "comment": { "effect": "comment_recorded", "readback": { "path": "/comment_recorded", "equals": "true" } }
+    }
+  }
+}
