@@ -5,21 +5,18 @@
 // -----------------------------------------------------------------------------
 // Re-reviewing a PR EDITS its prior review artifacts in place instead of piling
 // on new ones every push. Three moving parts:
-//   * INLINE COMMENTS — reconciled in place, keyed by finding FINGERPRINT (a
-//     hidden `<!-- ocr-finding:<fp> -->` marker in each body). Each run reads the
-//     bot's existing ocr-finding comments (…/pulls/{pr}/comments --paginate, #158)
-//     into an fp -> {id,path,line} map, then per GROUNDED finding: fp present ⇒
-//     PATCH the body (or, since the API cannot move a comment's line, DELETE +
-//     re-POST when the anchor line shifted); new fp ⇒ POST a standalone review
-//     comment; any existing bot fp NOT raised this round ⇒ DELETE (resolved).
-//     Line 0/0 / ungrounded ⇒ summary, never dropped (#80); MAX_INLINE cap ⇒
-//     overflow to summary (#158); throttle + backoff around every write (#158).
+//   * INLINE COMMENTS — reconciled in place, keyed by finding FINGERPRINT (a hidden
+//     `<!-- ocr-finding:<fp> -->` marker), read from the bot's existing comments
+//     (…/pulls/{pr}/comments --paginate) into an fp map: fp present ⇒ PATCH (DELETE +
+//     re-POST on an anchor-line shift — the API can't move a line); new fp ⇒ POST; a
+//     bot fp not raised ⇒ DELETE. Line 0/0/ungrounded ⇒ summary, never dropped (#80);
+//     MAX_INLINE overflow ⇒ summary; throttle + backoff on every write (#158).
 //   * THE REVIEW DECISION — submitted only on a STATE CHANGE. Desired event =
 //     REQUEST_CHANGES iff any OPEN P0/P1 finding, else APPROVE. We read the bot's
 //     LAST review state and submit a NEW review (POST /reviews — event + short
-//     body, NO inline comments[]) ONLY when it differs (or there is no prior bot
-//     review). Reviewer github-actions[bot] so APPROVE is allowed (COMMENT
-//     fallback if config blocks a bot approve), bound to head sha (#16).
+//     body, NO inline comments[]) ONLY when it differs (or there is no prior review).
+//     A dedicated reviewer App can APPROVE; github-actions[bot] cannot → APPROVE
+//     downgrades to a COMMENT review whose body matches the event. Head sha (#16).
 //   * The sticky SUMMARY comment is upserted (PATCH/POST) — unchanged.
 //
 // Input JSON (--in <file> | stdin): the reconcile.mjs output —
@@ -37,8 +34,8 @@ const MAX_INLINE = Number(process.env.MAX_INLINE || 25);
 const BACKOFF_MS = Number(process.env.REVIEW_BACKOFF_MS || 2000);
 const BACKOFF_TRIES = Number(process.env.REVIEW_BACKOFF_TRIES || 6);
 const THROTTLE_MS = Number(process.env.REVIEW_THROTTLE_MS || 0);
-// The bot the trusted workflow posts as (GITHUB_TOKEN ⇒ github-actions[bot]).
-// Used to scope existing review comments + prior review state to OUR bot.
+// The reviewer identity the trusted lane posts as (a dedicated App login, else
+// github-actions[bot]) — scopes existing comments + prior review state to it.
 const BOT_LOGIN = process.env.REVIEW_BOT_LOGIN || "github-actions[bot]";
 
 const STICKY_HEADER = "## OCR review";
@@ -247,11 +244,10 @@ function stateSatisfied(lastState, desiredEvent) {
   return lastState === "APPROVED" || lastState === "COMMENTED";
 }
 
-// Reconcile inline comments in place against the existing bot comments. Returns
-// the executed (or, in dryRun, the intended) plan: per-op tallies + a step list.
-// GitHub-API limitation worked around: a review comment's line CANNOT be moved by
-// PATCH — when a finding's anchor line shifts we DELETE the stale comment and POST
-// a fresh one at the new line.
+// Reconcile inline comments in place against existing bot comments. Returns the
+// executed (or, in dryRun, intended) plan: per-op tallies + a step list. API limit:
+// a comment's line CANNOT be moved by PATCH — on an anchor-line shift we DELETE the
+// stale comment and POST a fresh one at the new line.
 async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, dismissed = new Set(), dryRun }) {
   const plan = { post: 0, patch: 0, delete: 0, steps: [] };
   const desired = new Set(inline.map((f) => f.fingerprint));
@@ -298,12 +294,15 @@ async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, d
   return plan;
 }
 
-// The short body a submitted review carries (NO inline comments[] — those are
-// managed by reconcileInline; the review is only the decision).
-function reviewBody(gateOpen, gateCount, stashCount) {
-  return gateOpen
-    ? `${STICKY_HEADER}: **Changes requested** — ${gateCount} open P0/P1 finding(s). See the inline comments and the pinned summary.`
-    : `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${stashCount > 0 ? ` ${stashCount} P2/P3 filed as follow-ups.` : ""}`;
+// The short body a submitted review carries (NO inline comments[]). It MUST match
+// the ACTUAL submitted event: a COMMENT fallback (the identity cannot APPROVE —
+// e.g. github-actions[bot]) must NOT claim "Approved".
+function reviewBody(event, gateCount, stashCount) {
+  const fu = stashCount > 0 ? ` ${stashCount} P2/P3 filed as follow-ups.` : "";
+  if (event === "REQUEST_CHANGES")
+    return `${STICKY_HEADER}: **Changes requested** — ${gateCount} open P0/P1 finding(s). See the inline comments and the pinned summary.`;
+  if (event === "APPROVE") return `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${fu}`;
+  return `${STICKY_HEADER}: No open P0/P1 findings — \`review/verdict\` passes.${fu}`;
 }
 
 // ---- native review + sticky upsert ------------------------------------------
@@ -318,10 +317,9 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
   const outMarker = relocateMarker(marker, findings);
 
-  // --dry-run: compute the intended inline PATCH/POST/DELETE plan + the review
-  // decision + the sticky body from the inputs, print them, ZERO gh calls. With no
-  // read possible, existing state is treated as empty (every inline ⇒ POST, no
-  // prior review ⇒ submit), and the plan is annotated as such.
+  // --dry-run: compute the intended inline PATCH/POST/DELETE plan + review decision
+  // + sticky body, print them, ZERO gh calls. No read ⇒ existing state assumed empty
+  // (every inline ⇒ POST, no prior review ⇒ submit); the plan is annotated as such.
   if (dryRun) {
     if (!sha) throw new Error("--dry-run requires --sha/--head (no gh read to derive headRefOid)");
     const body = summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
@@ -334,7 +332,7 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
       commentMap: new Map(),
       dryRun: true,
     });
-    const reviewPayload = { commit_id: sha, event, body: reviewBody(gateOpen, gateFindings.length, stash.length) };
+    const reviewPayload = { commit_id: sha, event, body: reviewBody(event, gateFindings.length, stash.length) };
     process.stdout.write(
       JSON.stringify(
         {
@@ -378,15 +376,17 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // Submit a NEW review only on a STATE CHANGE (or when there is no prior bot review).
   const submit = !stateSatisfied(lastReviewState, event);
   if (submit) {
-    const reviewPayload = { commit_id: headSha, event, body: reviewBody(gateOpen, gateFindings.length, stash.length) };
+    const reviewPayload = { commit_id: headSha, event, body: reviewBody(event, gateFindings.length, stash.length) };
     try {
       await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
         input: JSON.stringify(reviewPayload),
       });
     } catch (e) {
-      // Fallback: if a bot APPROVE is blocked by repo config, post it as a COMMENT.
+      // APPROVE blocked (the identity cannot approve — e.g. github-actions[bot]):
+      // re-submit as COMMENT and rewrite the body so it no longer says "Approved".
       if (reviewPayload.event === "APPROVE") {
         reviewPayload.event = "COMMENT";
+        reviewPayload.body = reviewBody("COMMENT", gateFindings.length, stash.length);
         await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
           input: JSON.stringify(reviewPayload),
         });
