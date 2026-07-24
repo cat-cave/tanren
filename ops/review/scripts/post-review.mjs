@@ -87,7 +87,8 @@ async function gh(args, { json = false, input } = {}) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
-  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/")) return process.env.GITHUB_REPOSITORY;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   const res = ghSync(["repo", "view", "--json", "nameWithOwner"]);
   if (res.status !== 0) throw new Error(`repo view failed: ${res.stderr}`);
   return JSON.parse(res.stdout).nameWithOwner;

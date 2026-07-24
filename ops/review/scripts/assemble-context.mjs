@@ -48,7 +48,8 @@ function gh(args, { json = false } = {}) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
-  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/")) return process.env.GITHUB_REPOSITORY;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   const r = gh(["repo", "view", "--json", "nameWithOwner"], { json: true });
   return r.nameWithOwner;
 }
@@ -175,7 +176,15 @@ function assemble({ pr, out, sha }) {
   const view = gh(
     // --repo <slug>: CI runs this from a non-repo dir, so gh cannot infer the
     // repo from git — resolve it explicitly (repoSlug → GITHUB_REPOSITORY).
-    ["pr", "view", String(pr), "--repo", slug, "--json", "number,title,body,url,headRefOid,comments,reviews,closingIssuesReferences"],
+    [
+      "pr",
+      "view",
+      String(pr),
+      "--repo",
+      slug,
+      "--json",
+      "number,title,body,url,headRefOid,comments,reviews,closingIssuesReferences",
+    ],
     { json: true },
   );
 

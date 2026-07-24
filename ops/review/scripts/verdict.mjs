@@ -46,7 +46,8 @@ function ghSync(args) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
-  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/")) return process.env.GITHUB_REPOSITORY;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   return JSON.parse(ghSync(["repo", "view", "--json", "nameWithOwner"])).nameWithOwner;
 }
 

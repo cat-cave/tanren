@@ -48,7 +48,8 @@ function gh(args, { json = false, allowFail = false } = {}) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
-  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/")) return process.env.GITHUB_REPOSITORY;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   return gh(["repo", "view", "--json", "nameWithOwner"], { json: true }).nameWithOwner;
 }
 
@@ -88,9 +89,12 @@ function fileFollowups({ pr, dryRun = false }) {
   const [owner, repo] = slug.split("/");
 
   // --repo <slug>: CI runs from a non-repo dir; resolve the repo explicitly.
-  const view = gh(["pr", "view", String(pr), "--repo", slug, "--json", "number,state,mergedAt,mergeCommit,url,comments"], {
-    json: true,
-  });
+  const view = gh(
+    ["pr", "view", String(pr), "--repo", slug, "--json", "number,state,mergedAt,mergeCommit,url,comments"],
+    {
+      json: true,
+    },
+  );
   const merged = view.state === "MERGED" || Boolean(view.mergedAt);
   if (!merged) {
     console.error(`PR #${pr} is not merged (state=${view.state}); discarding follow-ups (no orphan issues).`);
