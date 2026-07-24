@@ -250,6 +250,28 @@ export async function runSelftest(postReview) {
     "R5 dry-run: intended plan computed (2 POST, submit)",
   );
 
+  // ---- ROUND 6: a maintainer-dismissed fp's comment is NEVER deleted ----------
+  // Marker carries dismissed=gD. gD's bot comment is present but NOT raised this
+  // round (human resolved/👎'd it) → it must be LEFT as the human record. gGone is
+  // also not raised but NOT dismissed → genuinely resolved → its comment deleted.
+  process.env.MAX_INLINE = "25";
+  const gD = { fingerprint: "gd0000", path: "z.ts", start_line: 7, end_line: 7, priority: "P1", title: "dismissed" };
+  const gGone = { fingerprint: "gg0000", path: "w.ts", start_line: 8, end_line: 8, priority: "P1", title: "gone" };
+  const dismissMarker = "<!-- ocr-state v1 last_reviewed_sha=headsha123456 open=g1 dismissed=gd0000 followups= -->";
+  writeSeeds({
+    comments: [seedComment(g1, 601), seedComment(gD, 602), seedComment(gGone, 603)],
+    reviews: [{ user: botUser, state: "CHANGES_REQUESTED" }],
+  });
+  await postReview({ pr: 42, sha: HEAD, findings: [g1], addressed: [], marker: dismissMarker });
+  const r6 = tally();
+  const deletedEps = r6.calls.filter((c) => c.kind === "comment-delete").map((c) => c.ep);
+  T(r6.commentDelete === 1, "R6: exactly one comment deleted");
+  T(!deletedEps.some((e) => e.endsWith("/602")), "R6: dismissed fp's comment (602) NOT deleted (human record kept)");
+  T(
+    deletedEps.some((e) => e.endsWith("/603")),
+    "R6: genuinely-gone fp's comment (603) IS deleted",
+  );
+
   let ok = true;
   for (const [pass, name] of checks) {
     console.log(`${pass ? "ok  " : "FAIL"} ${name}`);

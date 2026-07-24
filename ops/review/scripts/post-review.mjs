@@ -18,10 +18,8 @@
 //     REQUEST_CHANGES iff any OPEN P0/P1 finding, else APPROVE. We read the bot's
 //     LAST review state and submit a NEW review (POST /reviews — event + short
 //     body, NO inline comments[]) ONLY when it differs (or there is no prior bot
-//     review). Real native review (Changes requested / Approved), reviewer is
-//     github-actions[bot] so APPROVE is allowed (COMMENT fallback if a config
-//     blocks a bot approve), bound to the exact head sha (#16). review/verdict
-//     (verdict.mjs) stays the machine-enforced gate.
+//     review). Reviewer github-actions[bot] so APPROVE is allowed (COMMENT
+//     fallback if config blocks a bot approve), bound to head sha (#16).
 //   * The sticky SUMMARY comment is upserted (PATCH/POST) — unchanged.
 //
 // Input JSON (--in <file> | stdin): the reconcile.mjs output —
@@ -254,7 +252,7 @@ function stateSatisfied(lastState, desiredEvent) {
 // GitHub-API limitation worked around: a review comment's line CANNOT be moved by
 // PATCH — when a finding's anchor line shifts we DELETE the stale comment and POST
 // a fresh one at the new line.
-async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, dryRun }) {
+async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, dismissed = new Set(), dryRun }) {
   const plan = { post: 0, patch: 0, delete: 0, steps: [] };
   const desired = new Set(inline.map((f) => f.fingerprint));
 
@@ -291,9 +289,11 @@ async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, d
     }
   }
 
-  // Any existing bot ocr-finding comment not raised this round is resolved → delete.
+  // Any existing bot ocr-finding comment not raised this round is resolved → delete,
+  // UNLESS the fp was maintainer-dismissed (resolved thread / 👎): leave that comment
+  // standing as the human record so it is never re-posted (#59/#369).
   for (const [fp, ex] of commentMap) {
-    if (!desired.has(fp)) await del(ex.id, fp);
+    if (!desired.has(fp) && !dismissed.has(fp)) await del(ex.id, fp);
   }
   return plan;
 }
@@ -370,8 +370,10 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // Fetch existing bot review comments (fp map) + the bot's last review state.
   const { commentMap, lastReviewState } = await fetchExisting({ owner, repo, pr });
 
-  // Reconcile inline comments IN PLACE (PATCH / POST / DELETE), keyed by fp.
-  const inlinePlan = await reconcileInline({ owner, repo, pr, headSha, inline, commentMap, dryRun: false });
+  // Reconcile inline comments IN PLACE (PATCH / POST / DELETE), keyed by fp; a
+  // maintainer-dismissed fp's comment is NEVER deleted (left as the human record).
+  const dismissed = new Set(parseMarker(marker).dismissed);
+  const inlinePlan = await reconcileInline({ owner, repo, pr, headSha, inline, commentMap, dismissed, dryRun: false });
 
   // Submit a NEW review only on a STATE CHANGE (or when there is no prior bot review).
   const submit = !stateSatisfied(lastReviewState, event);

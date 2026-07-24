@@ -322,6 +322,24 @@ jobs:
             --base "$BASE_SHA" --head "$HEAD_SHA" \
             > "$RUNNER_TEMP/grounded.json"
 
+      # --- Human signal: resolved threads + 👎 reactions ⇒ dismissed -----------
+      # A maintainer RESOLVING a finding's review thread OR reacting 👎 on its
+      # comment means "false positive — never resurface". Runs BEFORE dedup, on the
+      # read-only token (LISTs comments/reactions/reviewThreads; the GraphQL query
+      # works with `pull-requests: read`). Its `dismissed` output threads into BOTH
+      # dedup (drop this round) and reconcile (UNION into the persisted marker).
+      - name: Gather human signal
+        id: signal
+        working-directory: repo
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          GITHUB_TOKEN: ${{ github.token }} # read-only: comments + reactions + reviewThreads
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/gather-signal.mjs" \
+            --pr "$PR_NUMBER" \
+            > "$RUNNER_TEMP/signal.json"
+
       - name: Dedup findings
         working-directory: repo
         run: |
@@ -329,6 +347,7 @@ jobs:
           node "${{ steps.base.outputs.scripts }}/dedup.mjs" \
             --in "$RUNNER_TEMP/grounded.json" \
             --pr "$PR_NUMBER" \
+            --dismissed "${{ steps.signal.outputs.dismissed }}" \
             > "$RUNNER_TEMP/deduped.json"
         env:
           GITHUB_TOKEN: ${{ github.token }} # read-only: prior open/dismissed fps
@@ -344,6 +363,7 @@ jobs:
           node "${{ steps.base.outputs.scripts }}/reconcile.mjs" \
             --in "$RUNNER_TEMP/deduped.json" \
             --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --dismissed "${{ steps.signal.outputs.dismissed }}" \
             > "$RUNNER_TEMP/reconciled.json"
 
       # --- Assemble the single artifact payload -------------------------------
