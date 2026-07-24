@@ -7,11 +7,13 @@
 // ride along on the single review):
 //
 //   * event = REQUEST_CHANGES  iff any OPEN P0/P1 finding this round,
-//             else COMMENT.
-//     NEVER APPROVE — the bot cannot self-approve; the merge GATE is the
-//     `review/verdict` commit status set by verdict.mjs, not this review's
-//     approval state (issues #80 / #158). A COMMENT review carries the
-//     detail without pretending to be an authorization.
+//             else APPROVE. This is a REAL native code review, not advisory
+//             comments — Changes requested / Approved shows on the PR. The
+//             reviewer is github-actions[bot] (never the PR author) so APPROVE
+//             is allowed; a COMMENT fallback covers any config that blocks a bot
+//             approval. The `review/verdict` commit status set by verdict.mjs is
+//             the machine-enforced merge gate (a bot approval doesn't count toward
+//             required-review counts), but the review itself is the actual review.
 //
 //   * Inline comments only on GROUNDED findings (line in the changed-hunk set).
 //     A finding at line 0/0 or otherwise ungrounded is ROLLED INTO the
@@ -215,7 +217,7 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
     if (!sha) throw new Error("--dry-run requires --sha/--head (no gh read to derive headRefOid)");
     const { open, inline, overflow, ungrounded } = partitionFindings(findings, maxInline);
     const gateOpen = open.some((f) => isGate(f.priority));
-    const event = gateOpen ? "REQUEST_CHANGES" : "COMMENT";
+    const event = gateOpen ? "REQUEST_CHANGES" : "APPROVE";
     const stash = open.filter((f) => f.priority === "P2" || f.priority === "P3");
     const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
     const outMarker = relocateMarker(marker, findings);
@@ -224,8 +226,8 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
       commit_id: sha,
       event,
       body: gateOpen
-        ? `${STICKY_HEADER} — changes requested (${open.filter((f) => isGate(f.priority)).length} open P0/P1). Full detail in the pinned summary comment. The merge gate is the \`review/verdict\` status, not this review.`
-        : `${STICKY_HEADER} — advisory comments only. See the pinned summary; the merge gate is the \`review/verdict\` status.`,
+        ? `${STICKY_HEADER}: **Changes requested** — ${open.filter((f) => isGate(f.priority)).length} open P0/P1 finding(s). See the inline comments and the pinned summary.`
+        : `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${stash.length > 0 ? ` ${stash.length} P2/P3 filed as follow-ups.` : ""}`,
       comments: inline.map((f) => inlineComment(f)),
     };
     process.stdout.write(JSON.stringify({ dryRun: true, reviewPayload, summaryBody: body }, null, 2) + "\n");
@@ -246,9 +248,10 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   const headSha = sha || view.headRefOid;
 
   const { open, inline, overflow, ungrounded } = partitionFindings(findings, maxInline);
-  // NEVER APPROVE — gate is the status
+  // Real native review: REQUEST_CHANGES on open P0/P1, else APPROVE (the reviewer is
+  // github-actions[bot], not the PR author, so APPROVE is allowed; COMMENT fallback below).
   const gateOpen = open.some((f) => isGate(f.priority));
-  const event = gateOpen ? "REQUEST_CHANGES" : "COMMENT";
+  const event = gateOpen ? "REQUEST_CHANGES" : "APPROVE";
 
   const stash = open.filter((f) => f.priority === "P2" || f.priority === "P3");
   const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
@@ -261,13 +264,25 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
     commit_id: headSha,
     event,
     body: gateOpen
-      ? `${STICKY_HEADER} — changes requested (${open.filter((f) => isGate(f.priority)).length} open P0/P1). Full detail in the pinned summary comment. The merge gate is the \`review/verdict\` status, not this review.`
-      : `${STICKY_HEADER} — advisory comments only. See the pinned summary; the merge gate is the \`review/verdict\` status.`,
+      ? `${STICKY_HEADER}: **Changes requested** — ${open.filter((f) => isGate(f.priority)).length} open P0/P1 finding(s). See the inline comments and the pinned summary.`
+      : `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${stash.length > 0 ? ` ${stash.length} P2/P3 filed as follow-ups.` : ""}`,
     comments: inline.map((f) => inlineComment(f)),
   };
-  await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
-    input: JSON.stringify(reviewPayload),
-  });
+  try {
+    await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
+      input: JSON.stringify(reviewPayload),
+    });
+  } catch (e) {
+    // Fallback: if a bot APPROVE is blocked by repo config, post the same review as a COMMENT.
+    if (reviewPayload.event === "APPROVE") {
+      reviewPayload.event = "COMMENT";
+      await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
+        input: JSON.stringify(reviewPayload),
+      });
+    } else {
+      throw e;
+    }
+  }
 
   // Upsert the sticky summary comment (carries stash + marker).
   const existing = (view.comments || []).find(
@@ -395,7 +410,7 @@ async function selftest() {
 
   const checks = [
     [review && review.payload.event === "REQUEST_CHANGES", "event=REQUEST_CHANGES (open P0/P1)"],
-    [review && review.payload.event !== "APPROVE", "NEVER APPROVE"],
+    [review && !/advisory/u.test(review.payload.body), "review body is a real decision, not 'advisory comments only'"],
     [review && review.payload.commit_id === "headsha123456", "review bound to exact head sha (#16)"],
     [review && review.payload.comments.length === 2, "inline capped at MAX_INLINE=2 (#158)"],
     [res.rolledUp >= 2, "overflow + ungrounded rolled into summary, not dropped (#80)"],
@@ -439,7 +454,7 @@ function help() {
       `  --selftest   run offline fixture test\n` +
       `  --help       this text\n\n` +
       `env: MAX_INLINE (25) REVIEW_BACKOFF_MS (2000) REVIEW_BACKOFF_TRIES (6) REVIEW_THROTTLE_MS (0)\n` +
-      `The bot never APPROVEs — the merge gate is the review/verdict status.\n`,
+      `Posts a REAL native review (Approve / Request-changes); the review/verdict status is the enforced gate.\n`,
   );
 }
 
