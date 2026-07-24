@@ -149,6 +149,23 @@ export function defaultGh(args, { json = false } = {}) {
   return json ? JSON.parse(out || "null") : out;
 }
 
+// ---- repo resolution (CI-safe) ----------------------------------------------
+// In CI the pipeline runs from a directory that is NOT the target repo's git
+// root (a split base/head checkout, or a bare workspace), so `gh` cannot infer
+// the repo from git remotes — it crashes with "not a git repository". Resolve
+// the slug from the env GitHub always sets (GITHUB_REPOSITORY) or an explicit
+// GH_REPO override, and pass it to every git-inferring gh call via `--repo`.
+// Returns null only outside CI with no override (local runs in a normal repo,
+// where git inference works and `--repo` is unnecessary).
+export function repoSlug() {
+  const r = process.env.GH_REPO || process.env.GITHUB_REPOSITORY || "";
+  return r.includes("/") ? r : null;
+}
+export function repoArgs() {
+  const s = repoSlug();
+  return s ? ["--repo", s] : [];
+}
+
 // ---- readMarker: fetch the prior sticky comment's ocr-state marker ----------
 // Returns the parseMarker() shape: {version,last_reviewed_sha,open,dismissed,
 // followups,filed,extra}. Empty marker if the PR has no OCR sticky comment yet.
@@ -156,7 +173,7 @@ export function defaultGh(args, { json = false } = {}) {
 export function readMarker(pr, { gh = defaultGh } = {}) {
   let view;
   try {
-    view = gh(["pr", "view", String(pr), "--json", "comments"], { json: true });
+    view = gh(["pr", "view", String(pr), ...repoArgs(), "--json", "comments"], { json: true });
   } catch {
     return parseMarker("");
   }
