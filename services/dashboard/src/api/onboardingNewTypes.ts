@@ -14,7 +14,11 @@ const CaptureIdentitySchema = z
     repoHint: z.string(),
   })
   .strict();
-export type CaptureIdentity = z.infer<typeof CaptureIdentitySchema>;
+export interface CaptureIdentity {
+  slug: string;
+  pitch: string;
+  repoHint: string;
+}
 
 const CapturePersonaSchema = z
   .object({
@@ -23,7 +27,11 @@ const CapturePersonaSchema = z
     surface: z.string(),
   })
   .strict();
-export type CapturePersona = z.infer<typeof CapturePersonaSchema>;
+export interface CapturePersona {
+  name: string;
+  description: string;
+  surface: string;
+}
 
 const CaptureBehaviorSchema = z
   .object({
@@ -35,7 +43,13 @@ const CaptureBehaviorSchema = z
     ["then"]: z.string(),
   })
   .strict();
-export type CaptureBehavior = z.infer<typeof CaptureBehaviorSchema>;
+export interface CaptureBehavior {
+  persona: string;
+  title: string;
+  given: string;
+  when: string;
+  then: string;
+}
 
 const CaptureInterfaceSchema = z
   .object({
@@ -43,7 +57,10 @@ const CaptureInterfaceSchema = z
     note: z.string(),
   })
   .strict();
-export type CaptureInterface = z.infer<typeof CaptureInterfaceSchema>;
+export interface CaptureInterface {
+  name: string;
+  note: string;
+}
 
 const CaptureArchitectureLineSchema = z
   .object({
@@ -51,7 +68,10 @@ const CaptureArchitectureLineSchema = z
     choice: z.string(),
   })
   .strict();
-export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLineSchema>;
+export interface CaptureArchitectureLine {
+  layer: string;
+  choice: string;
+}
 
 const CaptureLifecycleSchema = z
   .object({
@@ -66,7 +86,17 @@ const CaptureLifecycleSchema = z
     toolchain: z.array(z.object({ name: z.string(), version: z.string() }).strict()),
   })
   .strict();
-export type CaptureLifecycle = z.infer<typeof CaptureLifecycleSchema>;
+export interface CaptureLifecycle {
+  stack: string;
+  bootstrap: string;
+  tier1: string;
+  tier2: string;
+  tier3: string;
+  build: string;
+  deploy: string;
+  upgrade: string;
+  toolchain: { name: string; version: string }[];
+}
 
 const CaptureDesignDimensionSchema = z
   .object({
@@ -77,7 +107,13 @@ const CaptureDesignDimensionSchema = z
     personas: z.array(z.string()),
   })
   .strict();
-export type CaptureDesignDimension = z.infer<typeof CaptureDesignDimensionSchema>;
+export interface CaptureDesignDimension {
+  key: string;
+  label: string;
+  intent: string;
+  guidance: string;
+  personas: string[];
+}
 
 const CaptureDesignContractSchema = z
   .object({
@@ -91,7 +127,16 @@ const CaptureDesignContractSchema = z
     dimensions: z.array(CaptureDesignDimensionSchema),
   })
   .strict();
-export type CaptureDesignContract = z.infer<typeof CaptureDesignContractSchema>;
+export interface CaptureDesignContract {
+  domain: string;
+  identity: string;
+  intent: string;
+  principles: string[];
+  constraints: string[];
+  personas: string[];
+  behaviors: string[];
+  dimensions: CaptureDesignDimension[];
+}
 
 export const InterviewCaptureSchema = z
   .object({
@@ -120,7 +165,15 @@ export const InterviewCaptureSchema = z
 // a typed core + a domain-adaptive dimension set + FIRST-CLASS persona/behavior
 // links (`personas` by name, `behaviors` by `persona::title` key — the moat
 // binding design to Tanren's native entity graph). `null` until the design step.
-export type InterviewCapture = z.infer<typeof InterviewCaptureSchema>;
+export type InterviewCapture = z.infer<typeof InterviewCaptureSchema> & {
+  identity: CaptureIdentity | null;
+  personas: CapturePersona[];
+  behaviors: CaptureBehavior[];
+  interfaces: CaptureInterface[];
+  designContract: CaptureDesignContract | null;
+  architecture: CaptureArchitectureLine[];
+  lifecycle: CaptureLifecycle | null;
+};
 
 export interface InterviewSuggestion {
   label: string;
