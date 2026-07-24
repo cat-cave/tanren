@@ -1,0 +1,28 @@
+{
+  "//": "Wrapper-level model routing (OCR OSS has no per-task tiering / --provider flag). select-model.mjs consumes this.",
+  "default": "openai/gpt-5.6-luna",
+  "provider": "openrouter",
+  "tiers": {
+    "high_stakes": {
+      "//": "Fail-open-prone paths: cross-confirmation ensemble may be enabled once hy3(or another) is validated as a hedge.",
+      "path_globs": [
+        "services/orchestrator/src/engine/merge/**",
+        "services/orchestrator/src/engine/**/*Authority*",
+        "db/migrations/**",
+        "db/src/orgScope.ts",
+        "**/*runStateAtomic*",
+        "**/*Coordinator*"
+      ],
+      "models": ["openai/gpt-5.6-luna"],
+      "ensemble_candidate": "tencent/hy3",
+      "ensemble_enabled": true,
+      "//validated": "2026-07-23 gap-closing finale: hy3+rules caught #987 lease-owner TOCTOU (0->4, matched+extended luna) and #819 transient-terminal (0->1); hallucinations suppressed. Used as cross-confirmation ONLY on these paths; hy3-only findings are lower-confidence (it still trails luna on config-path reasoning and can fabricate 'missing negative control' — guarded by the rule refinement)."
+    },
+    "cheap": {
+      "//": "Docs/test-only/small diffs → cheapest capable model.",
+      "path_globs": ["**/*.md", "**/*.{test,spec}.{ts,tsx,mjs}", "docs/**"],
+      "models": ["openai/gpt-5.6-luna"]
+    }
+  },
+  "notes": "ensemble_enabled flips to true and a second model is added ONLY after the gap-closing finale validates it. Cross-confirmation: a finding raised by >=2 models is high-confidence; single-model P0/P1 still gates but is labeled lower-confidence."
+}
