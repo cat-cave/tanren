@@ -90,12 +90,36 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "rule_change=$RULE_CHANGE" >> "$GITHUB_OUTPUT"
 
+      # Mint a dedicated-reviewer App installation token so a clean PR gets a
+      # REAL `Approved` review. GitHub bars `github-actions[bot]` / the default
+      # `GITHUB_TOKEN` from approving PRs (an APPROVE 422s → post-review falls
+      # back to COMMENT); a GitHub App installation token is NOT the Actions bot
+      # and CAN approve. Guarded on `secrets.REVIEWER_APP_ID != ''` so the lane
+      # degrades gracefully when the App is not configured — post-review then
+      # uses `github.token` and the APPROVE downgrades to COMMENT, with the
+      # `review/verdict` status still gating (see ops/review/CUTOVER.md).
+      # Third-party action ⇒ pinned to a full commit SHA (v3.2.0).
+      - name: Mint reviewer App token
+        id: reviewer_token
+        if: ${{ secrets.REVIEWER_APP_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.REVIEWER_APP_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
       # Post ONE native review with inline comments + sticky summary/marker.
       # On rule_change the script injects the P0 "reviewer-config change —
       # maintainer review required" finding (DESIGN §SECURITY.4).
+      #
+      # GH_TOKEN is the minted App token when the reviewer App is configured
+      # (real Approve), else the default `github.token` (graceful fallback →
+      # COMMENT). REVIEW_BOT_LOGIN tells post-review whose prior comments/reviews
+      # to reconcile against — the reviewer's OWN identity, defaulting to
+      # github-actions[bot] when the App var is unset.
       - name: Post native review
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.reviewer_token.outputs.token || github.token }}
+          REVIEW_BOT_LOGIN: ${{ vars.REVIEW_BOT_LOGIN || 'github-actions[bot]' }}
           PR_NUMBER: ${{ steps.bind.outputs.pr_number }}
           HEAD_SHA: ${{ steps.bind.outputs.head_sha }}
           RULE_CHANGE: ${{ steps.bind.outputs.rule_change }}

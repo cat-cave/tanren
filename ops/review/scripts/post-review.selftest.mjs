@@ -35,7 +35,14 @@ const ep = a.find(t=>t.startsWith("repos/")) || "";
 if (joined.includes("repo view")) { out({ nameWithOwner: "cat-cave/tanren" }); process.exit(0); }
 if (joined.includes("pr view")) { out({ headRefOid: "headsha123456", comments: seed("seed-issue-comments.json") }); process.exit(0); }
 if (/\\/pulls\\/\\d+\\/reviews$/.test(ep)) {
-  if (method === "POST") { log({ kind: "review-submit", payload: JSON.parse(stdin()||"{}") }); out({ id: 1 }); process.exit(0); }
+  if (method === "POST") {
+    const p = JSON.parse(stdin()||"{}");
+    // Simulate GitHub barring an APPROVE from a non-approving identity (the
+    // github-actions[bot]/GITHUB_TOKEN 422): fail so post-review falls back to
+    // COMMENT. Not a rate-limit stderr, so the gh wrapper throws immediately.
+    if (process.env.MOCK_REJECT_APPROVE && p.event === "APPROVE") { process.stderr.write("HTTP 422: review cannot be approved by this token"); process.exit(1); }
+    log({ kind: "review-submit", payload: p }); out({ id: 1 }); process.exit(0);
+  }
   out(seed("seed-reviews.json")); process.exit(0);
 }
 if (/\\/pulls\\/\\d+\\/comments$/.test(ep)) {
@@ -272,6 +279,27 @@ export async function runSelftest(postReview) {
     "R6: genuinely-gone fp's comment (603) IS deleted",
   );
 
+  // ---- ROUND 7: APPROVE blocked → COMMENT fallback body is NOT "Approved" -----
+  // No open P0/P1 → desired APPROVE; prior CHANGES_REQUESTED → submit; the mock
+  // 422s the APPROVE (identity cannot approve), so post-review re-submits as
+  // COMMENT — and the SUBMITTED body must match that event: no "Approved".
+  process.env.MAX_INLINE = "25";
+  process.env.MOCK_REJECT_APPROVE = "1";
+  writeSeeds({ comments: [seedComment(g1, 701)], reviews: [{ user: botUser, state: "CHANGES_REQUESTED" }] });
+  const r7res = await postReview({ pr: 42, sha: HEAD, findings: [], addressed: ["g1"], marker });
+  const r7 = tally();
+  delete process.env.MOCK_REJECT_APPROVE;
+  T(r7.reviewPost === 1 && r7.review.payload.event === "COMMENT", "R7 fallback: APPROVE 422 → ONE COMMENT review");
+  T(!/Approved/u.test(r7.review.payload.body), "R7 fallback: COMMENT fallback body does NOT claim 'Approved'");
+  T(/review\/verdict/u.test(r7.review.payload.body), "R7 fallback: COMMENT body states review/verdict passes");
+  T(r7res.submitted === true, "R7 fallback: result reports submitted=true");
+
+  return reportChecks(checks);
+}
+
+// Print each check + the pass/fail banner; return whether all passed. Extracted
+// to keep runSelftest under the max-lines-per-function cap.
+function reportChecks(checks) {
   let ok = true;
   for (const [pass, name] of checks) {
     console.log(`${pass ? "ok  " : "FAIL"} ${name}`);
