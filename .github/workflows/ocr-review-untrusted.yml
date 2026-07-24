@@ -1,0 +1,422 @@
+name: ocr-review-untrusted
+
+# ============================================================================
+# UNTRUSTED lane (DESIGN §SECURITY.1, issue #110).
+#
+# Runs on `pull_request`, so it may execute code from a fork / from PR head.
+# OCR reads `.opencodereview/rule.json` from the checked-out tree and has a
+# git-option-injection RCE (`--commit '-O./pwn.sh'`). Therefore this job:
+#   * holds the LLM key ONLY (a spend-capped, low-value secret OCR needs to
+#     authenticate to OpenRouter) and NO repo-write token — the two secrets are
+#     split by blast radius: the write token that could push to `main` lives in
+#     the TRUSTED lane, which never runs OCR/PR code; the worst a leaked LLM key
+#     buys an attacker is capped LLM spend, not repo write. For same-repo PRs
+#     GitHub provides the LLM secret; fork PRs get NO secret by design (a
+#     maintainer re-triggers per the fork-review note in ocr-review-trusted.yml),
+#   * has a read-only, write-incapable GITHUB_TOKEN and NEVER posts anything,
+#   * checks out PR head READ-ONLY and deletes any PR-head `.opencodereview/`,
+#   * loads the rule file AND the pipeline SCRIPTS from the TRUSTED BASE tree
+#     (extracted from the base SHA via `git archive`, never from PR head), and
+#   * produces a single `review-output.json` artifact — nothing else.
+#
+# CHECKOUT MODEL (unified — the split base/head checkout is gone). There is ONE
+# git checkout: the PR head, with the base commit fetched into it so the whole
+# pipeline sees BOTH refs (OCR's `--from <base> --to <head>` and the
+# preflight/guard/ground `git diff base..head`). A directory holding two
+# unrelated checkouts is NOT itself a git repo, so `gh` and git-diff crash with
+# "not a git repository" — a unified checkout fixes that, and every `gh` call is
+# also made repo-explicit (`--repo`, resolved from $GITHUB_REPOSITORY by the
+# scripts). The trusted rule + scripts still come from the base SHA (not PR
+# head): `git archive <base_sha> ops/review` extracts them to $RUNNER_TEMP, so a
+# PR that edits ops/review/** still cannot change what actually runs.
+#
+# The companion `ocr-review-trusted.yml` (workflow_run) holds the WRITE token and
+# does all posting, bound to the exact head SHA recorded in the artifact; it
+# never runs OCR or any PR-head code.
+# ============================================================================
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# ============================================================================
+# FORK-PR REVIEW (maintainer-triggered) — do not auto-run OCR on fork code + key.
+#
+# The auto path above is for SAME-REPO PRs: GitHub only injects
+# `secrets.OPENROUTER_API_KEY` when the PR head is a branch of THIS repo, so a
+# fork PR's `pull_request` run has no key and OCR yields empty findings — safe
+# by design. Reviewing a fork requires running OCR (with the key) against
+# untrusted fork code, which a maintainer must consciously authorize AFTER
+# eyeballing the fork diff. That is a deliberate, gated action — never automatic.
+#
+# To wire it, add an `issue_comment`-triggered job that:
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     fork-review:
+#       # 1. Only PR comments, only the `/review` command.
+#       # 2. Only a trusted commenter — author_association MUST be one of
+#       #    OWNER / MEMBER / COLLABORATOR (a fork author is CONTRIBUTOR/NONE and
+#       #    is rejected). This is the authorization gate.
+#       if: >-
+#         github.event.issue.pull_request != null &&
+#         startsWith(github.event.comment.body, '/review') &&
+#         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+#                  github.event.comment.author_association)
+#       # 3. Resolve the PR head SHA via the API (never trust the comment text),
+#       #    sanitize it (^[0-9a-f]{7,40}$), then run the SAME sanitized,
+#       #    rules-from-base, read-only, no-write-token pipeline as the `review`
+#       #    job below — the key is present but the write token is NOT, so the
+#       #    blast radius stays "capped LLM spend". The trusted lane posts as usual.
+# Kept as a documented stub intentionally: the same-repo auto path covers the
+# common case; the fork path is a rare, maintainer-initiated action.
+# ============================================================================
+
+# issue #58 — one in-flight review per PR; a new push cancels the stale run.
+concurrency:
+  group: ocr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Least privilege. `contents: read` (checkouts) + `pull-requests: read`
+# (assemble-context / reconcile read prior findings, discussion, sticky marker).
+# NO write scope anywhere: this job cannot post, comment, or set a status.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest # ephemeral runner (DESIGN §SECURITY.5)
+    env:
+      # Sanitized, GitHub-provided commit SHAs. These come from the trusted
+      # event context (not PR-controllable branch names) but are re-validated
+      # by a sanitize step before ANY use, per DESIGN §SECURITY.3.
+      RAW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      RAW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # OCR install target. `npm i -g --prefix` fails on a standard runner global
+      # path, so we invoke via `npx --package <pkg> ocr` (binary name != package).
+      OCR_PACKAGE: "@alibaba-group/open-code-review"
+      # Cost/behavior knobs consumed by preflight.mjs (issue #409). Defaults live
+      # in the script; surfaced here so an operator can override per-repo.
+      MAX_FILES: "60"
+      MAX_DIFF_LINES: "8000"
+      REVIEW_DEADLINE_SEC: "1800"
+    steps:
+      # --- Unified checkout: PR head, with base fetched below ------------------
+      # ONE checkout (issue #287 — OCR runs from a real git root). The tree is
+      # UNTRUSTED (PR-head code), but nothing security-sensitive is READ from it:
+      # the rule + scripts are extracted from the base SHA (below). fetch-depth:0
+      # so both base and head commits are reachable for the diffs.
+      # persist-credentials:false keeps the tree write-incapable. First-party
+      # actions/* are pinned to a major version tag per repo convention; ANY
+      # non-`actions/`-owner (third-party) action MUST be pinned to a full commit
+      # SHA (there are none in this file).
+      - name: Checkout PR head (read-only, untrusted)
+        uses: actions/checkout@v6 # actions/checkout (first-party)
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6 # actions/setup-node (first-party)
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      # --- Sanitize SHAs (DESIGN §SECURITY.3) ---------------------------------
+      # Validate ^[0-9a-f]{7,40}$ and reject a leading '-' BEFORE any sha reaches
+      # git or OCR. Export the clean values for later steps.
+      - name: Sanitize base/head SHAs
+        id: sha
+        run: |
+          set -euo pipefail
+          sanitize() {
+            local label="$1" val="$2"
+            case "$val" in
+              -*) echo "::error::${label} refuses leading '-' (option injection): ${val}"; exit 1;;
+            esac
+            if ! printf '%s' "$val" | grep -Eq '^[0-9a-f]{7,40}$'; then
+              echo "::error::${label} is not a valid sha (^[0-9a-f]{7,40}\$): ${val}"; exit 1
+            fi
+            printf '%s' "$val"
+          }
+          BASE_SHA="$(sanitize base "$RAW_BASE_SHA")"
+          HEAD_SHA="$(sanitize head "$RAW_HEAD_SHA")"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      # --- Make the base sha reachable in the unified checkout ----------------
+      # Both commits must be present for the OCR diff AND the preflight/guard/
+      # ground `git diff base..head`. Sanitized sha only; no PR-controlled refs.
+      - name: Fetch base commit
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${{ steps.sha.outputs.base_sha }}" || \
+            git fetch --no-tags origin "${{ steps.sha.outputs.base_sha }}"
+          git cat-file -e "${{ steps.sha.outputs.base_sha }}^{commit}"
+          git cat-file -e "${{ steps.sha.outputs.head_sha }}^{commit}"
+
+      # --- Extract the TRUSTED base review tree (rules + scripts) -------------
+      # `git archive <base_sha> ops/review` materializes the reviewer config AND
+      # the pipeline scripts AS THEY EXIST AT THE BASE — never PR head. So a PR
+      # editing ops/review/** (rule.json, the scripts, this guard) cannot change
+      # what actually executes (DESIGN §SECURITY.1/.2/.4). The extracted tree
+      # lives at an absolute $RUNNER_TEMP path; every script is invoked from
+      # there, and --rule points at the extracted rule file.
+      - name: Extract trusted base review tree
+        id: base
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ steps.sha.outputs.base_sha }}"
+          # Defense in depth: re-assert the sha shape before it reaches git.
+          printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad base_sha: $BASE_SHA"; exit 1; }
+          BASE_TREE="$RUNNER_TEMP/base-review"
+          rm -rf "$BASE_TREE"; mkdir -p "$BASE_TREE"
+          # `--` after the sha is belt-and-suspenders; the sha is already pure hex.
+          git archive --format=tar "$BASE_SHA" -- ops/review | tar -x -C "$BASE_TREE"
+          SCRIPTS="$BASE_TREE/ops/review/scripts"
+          RULE_ABS="$BASE_TREE/ops/review/tanren-ocr-rules.json"
+          ROUTING_ABS="$BASE_TREE/ops/review/model-routing.json"
+          test -d "$SCRIPTS" || { echo "::error::missing base scripts dir: $SCRIPTS"; exit 1; }
+          test -f "$RULE_ABS" || { echo "::error::missing base rule file: $RULE_ABS"; exit 1; }
+          test -f "$ROUTING_ABS" || { echo "::error::missing base routing file: $ROUTING_ABS"; exit 1; }
+          echo "scripts=$SCRIPTS" >> "$GITHUB_OUTPUT"
+          echo "rule_abs=$RULE_ABS" >> "$GITHUB_OUTPUT"
+          echo "routing_abs=$ROUTING_ABS" >> "$GITHUB_OUTPUT"
+
+      # --- Neutralize the PR-head reviewer-config dir (DESIGN §SECURITY.2) -----
+      # Any `.opencodereview/` shipped by the PR is deleted so OCR cannot load a
+      # PR-authored rule.json. Rules come only from the trusted base tree above.
+      - name: Delete PR-head .opencodereview/
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          rm -rf .opencodereview
+          test ! -e .opencodereview
+
+      # --- Reviewer-config change guard (DESIGN §SECURITY.4) ------------------
+      # Runs the TRUSTED base copy of guard-rule-changes.mjs against base..head
+      # from the unified repo root. rule_change=true forces the trusted job to
+      # post a P0 + verdict=FAIL.
+      - name: Guard reviewer-config changes
+        id: guard
+        working-directory: repo
+        env:
+          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/guard-rule-changes.mjs" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" | tee "$RUNNER_TEMP/guard.json"
+
+      # --- Preflight: size/cost gate + ignore-glob (issue #409) ---------------
+      - name: Preflight (cost/size gate)
+        working-directory: repo
+        env:
+          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/preflight.mjs" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            > "$RUNNER_TEMP/preflight.json"
+
+      # --- Assemble background context (issue #59/#324) -----------------------
+      # Reads prior OCR findings + human/bot comments + linked-issue acceptance.
+      # Uses the read-only token; makes ONLY `gh` calls (repo-explicit via
+      # $GITHUB_REPOSITORY — no git inference), writes context.md at an ABSOLUTE
+      # path for OCR's --background-file (issue #324). Runs from the repo root
+      # for uniformity, though it needs no git.
+      - name: Assemble review context
+        id: context
+        working-directory: repo
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          GITHUB_TOKEN: ${{ github.token }} # read-only; assemble-context only reads
+        run: |
+          set -euo pipefail
+          # --out is a DIRECTORY; the script names the file (PR+sha) and prints
+          # its ABSOLUTE path on stdout (issue #324). Capture that path — do NOT
+          # assume a fixed filename.
+          CONTEXT_MD="$(node "${{ steps.base.outputs.scripts }}/assemble-context.mjs" \
+            --pr "$PR_NUMBER" --out "$RUNNER_TEMP/context")"
+          test -f "$CONTEXT_MD"
+          echo "context_md=$CONTEXT_MD" >> "$GITHUB_OUTPUT"
+
+      # --- Select model(s) (config: model-routing.json) -----------------------
+      - name: Select model
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/select-model.mjs" \
+            --preflight "$RUNNER_TEMP/preflight.json" \
+            --routing "${{ steps.base.outputs.routing_abs }}" \
+            > "$RUNNER_TEMP/model.json"
+
+      # --- Install OCR --------------------------------------------------------
+      # `npm i -g --prefix` breaks on the standard runner global path; use npx
+      # with an explicit --package (the `ocr` binary name differs from the pkg).
+      - name: Warm OCR (npx)
+        run: npx --yes --package "$OCR_PACKAGE" ocr --version || true
+
+      # --- Run OCR from the git ROOT of the unified checkout ------------------
+      # Rule + background-file are ABSOLUTE paths pointing at TRUSTED, base-derived
+      # artifacts. --from/--to are the sanitized SHAs. No PR-controlled string is
+      # interpolated into an OCR flag. A timed-out run is still billable, so we
+      # always keep whatever partial JSON was written (issue #409).
+      - name: Run OCR review
+        id: ocr
+        working-directory: repo
+        env:
+          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+          RULE_ABS: ${{ steps.base.outputs.rule_abs }}
+          MODEL_JSON: ${{ runner.temp }}/model.json
+          # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
+          # OCR authenticates to the LLM endpoint with OCR_LLM_AUTH_TOKEN. On a
+          # same-repo PR GitHub injects `secrets.OPENROUTER_API_KEY`; on a FORK
+          # PR the secret is empty by design (fork jobs get no secrets) — OCR
+          # then produces empty findings and a maintainer re-triggers the review
+          # (see the fork-review note in ocr-review-trusted.yml). The URL /
+          # protocol / model are non-secret routing config.
+          OCR_LLM_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+          OCR_LLM_URL: https://openrouter.ai/api/v1
+          OCR_LLM_PROTOCOL: openai
+        run: |
+          set -euo pipefail
+          # Model id resolved by select-model.mjs; default to the routing default.
+          MODEL="$(node -e 'const m=require(process.env.MODEL_JSON);process.stdout.write((m.models&&m.models[0])||"openai/gpt-5.6-luna")')"
+          echo "using model: $MODEL"
+          # Non-secret; surface the resolved model to OCR as well as the --model flag.
+          export OCR_LLM_MODEL="$MODEL"
+          OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
+          # Absolute paths for --rule and --background-file (issues #287/#324).
+          npx --yes --package "$OCR_PACKAGE" ocr review \
+            --model "$MODEL" \
+            --rule "$RULE_ABS" \
+            --from "$BASE_SHA" \
+            --to "$HEAD_SHA" \
+            --background-file "${{ steps.context.outputs.context_md }}" \
+            --format json \
+            > "$OCR_RAW" || echo "::warning::OCR exited non-zero; keeping partial JSON"
+          test -s "$OCR_RAW" || echo "{}" > "$OCR_RAW"
+
+      # --- JSON pipeline: ground -> dedup -> reconcile ------------------------
+      # ground-findings needs the unified repo (git diff base..head); dedup +
+      # reconcile are pure/gh-read (repo-explicit). reconcile emits the new marker.
+      - name: Ground findings
+        working-directory: repo
+        env:
+          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/ground-findings.mjs" \
+            --ocr "$RUNNER_TEMP/ocr-raw.json" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            > "$RUNNER_TEMP/grounded.json"
+
+      # --- Human signal: resolved threads + 👎 reactions ⇒ dismissed -----------
+      # A maintainer RESOLVING a finding's review thread OR reacting 👎 on its
+      # comment means "false positive — never resurface". Runs BEFORE dedup, on the
+      # read-only token (LISTs comments/reactions/reviewThreads; the GraphQL query
+      # works with `pull-requests: read`). Its `dismissed` output threads into BOTH
+      # dedup (drop this round) and reconcile (UNION into the persisted marker).
+      - name: Gather human signal
+        id: signal
+        working-directory: repo
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          GITHUB_TOKEN: ${{ github.token }} # read-only: comments + reactions + reviewThreads
+          # The reviewer's login (public var, not a secret — safe in the untrusted
+          # lane) so gather-signal scopes ocr-finding comments + their reactions/
+          # resolution to the reviewer's OWN identity. Defaults to github-actions[bot]
+          # when the reviewer App is not configured (matches the trusted post lane).
+          REVIEW_BOT_LOGIN: ${{ vars.REVIEW_BOT_LOGIN || 'github-actions[bot]' }}
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/gather-signal.mjs" \
+            --pr "$PR_NUMBER" \
+            > "$RUNNER_TEMP/signal.json"
+
+      - name: Dedup findings
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/dedup.mjs" \
+            --in "$RUNNER_TEMP/grounded.json" \
+            --pr "$PR_NUMBER" \
+            --dismissed "${{ steps.signal.outputs.dismissed }}" \
+            > "$RUNNER_TEMP/deduped.json"
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # read-only: prior open/dismissed fps
+
+      - name: Reconcile state
+        working-directory: repo
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+          GITHUB_TOKEN: ${{ github.token }} # read-only: prior sticky marker
+        run: |
+          set -euo pipefail
+          node "${{ steps.base.outputs.scripts }}/reconcile.mjs" \
+            --in "$RUNNER_TEMP/deduped.json" \
+            --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --dismissed "${{ steps.signal.outputs.dismissed }}" \
+            > "$RUNNER_TEMP/reconciled.json"
+
+      # --- Assemble the single artifact payload -------------------------------
+      # review-output.json is the ONLY thing the trusted job trusts. It binds the
+      # exact head/base SHA, the rule_change flag, preflight metadata, the
+      # reconciled findings, and the new sticky-marker string.
+      - name: Assemble review-output.json
+        env:
+          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
+          RULE_CHANGE: ${{ steps.guard.outputs.rule_change }}
+          RULE_CHANGE_PATHS: ${{ steps.guard.outputs.rule_change_paths }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const T = process.env.RUNNER_TEMP;
+          const readJson = (p, d) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return d; } };
+          const reconciled = readJson(`${T}/reconciled.json`, { findings: [], marker: "" });
+          const preflight = readJson(`${T}/preflight.json`, {});
+          const model = readJson(`${T}/model.json`, {});
+          const out = {
+            schema: "ocr-review-output/v1",
+            pr_number: Number(process.env.PR_NUMBER),
+            base_sha: process.env.BASE_SHA,
+            head_sha: process.env.HEAD_SHA,       // trusted job binds to THIS sha
+            rule_change: process.env.RULE_CHANGE === "true",
+            rule_change_paths: (process.env.RULE_CHANGE_PATHS || "").split(",").filter(Boolean),
+            oversized: !!preflight.oversized,
+            preflight,
+            model,
+            findings: reconciled.findings || [],
+            addressed: reconciled.addressed || [],
+            marker: reconciled.marker || "",
+          };
+          fs.writeFileSync(`${T}/review-output.json`, JSON.stringify(out, null, 2));
+          console.log(`review-output.json: pr=${out.pr_number} head=${out.head_sha} rule_change=${out.rule_change} findings=${out.findings.length}`);
+          NODE
+
+      # --- Upload the artifact (JSON + assembled context) ---------------------
+      # This is the entire output of the untrusted lane. No review is posted here.
+      - name: Upload review artifact
+        if: always()
+        uses: actions/upload-artifact@v7 # actions/upload-artifact (first-party)
+        with:
+          name: ocr-review-output
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/review-output.json
+            ${{ steps.context.outputs.context_md }}
