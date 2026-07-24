@@ -11,6 +11,7 @@
 
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
+import { sameQueryMultiset } from "../../integrations/pageScope.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
@@ -29,17 +30,17 @@ export interface GitHubConnectorDeps {
   defaultStaticRef?: string;
 }
 
-// Decode every provider row before filtering or mapping it. An array response is
-// not enough evidence that it is safe to ingest: silently skipping one malformed
-// row would make a partial provider response look authoritative. Unknown GitHub
-// fields are deliberately ignored because the API evolves independently.
-const GithubIssuePayload = z.object({
-  number: z.number().int().positive(),
-  title: z.string().min(1),
-  body: z.string().nullable().optional(),
-  labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).optional(),
-  pull_request: z.object({}).passthrough().optional(),
-});
+const GithubIssuePayload = z
+  .object({
+    number: z.number().int().positive(),
+    title: z.string().min(1),
+    body: z.string().nullable().optional(),
+    comments: z.number().int().nonnegative(),
+    user: z.object({ login: z.string().min(1) }).passthrough(),
+    labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).optional(),
+    pull_request: z.object({}).passthrough().optional(),
+  })
+  .passthrough();
 type GithubIssuePayload = z.infer<typeof GithubIssuePayload>;
 
 function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severity"] {
@@ -81,30 +82,50 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       });
 
       const labelQuery = config.labels.length > 0 ? `&labels=${encodeURIComponent(config.labels.join(","))}` : "";
-      const path =
+      const issuesPath =
         `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}` +
         `/issues?state=open&per_page=50${labelQuery}`;
-
-      const response = await deps.githubHttp.request({
-        method: "GET",
-        path,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-        // The durable intake scheduler owns rate-limit delays. Surface the raw
-        // classified response so this source never sleeps ahead of its peers.
-        retryRateLimit: false,
-      });
-      // No-silent-fallbacks: a non-200 is a LOUD throw (a 401/403 ⇒ auth error
-      // the poller re-throws; any other non-200 ⇒ a transient fetch error), NEVER
-      // an empty list masking a failed fetch. Only a genuine 200-with-an-array is
-      // an empty result. A 200 whose body is not the expected array is itself a
-      // failed read (the API shape changed / an error envelope) — also LOUD.
-      assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
-      if (!Array.isArray(response.body)) {
-        throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
+      const seenPaths = new Set<string>();
+      const issues: GithubIssuePayload[] = [];
+      let path: string | undefined = issuesPath;
+      let page = 1;
+      while (path !== undefined) {
+        if (seenPaths.has(path)) {
+          throw new IntakeSourceFetchError("github", 200, "issues pagination repeated a page path");
+        }
+        seenPaths.add(path);
+        const response = await deps.githubHttp.request({
+          method: "GET",
+          path,
+          token: resolved.token,
+          refreshToken: resolved.refresh,
+          retryRateLimit: false,
+        });
+        assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
+        if (!Array.isArray(response.body)) {
+          throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
+        }
+        issues.push(...z.array(GithubIssuePayload).parse(response.body));
+        if (response.nextPagePath !== undefined) {
+          const nextPage = configuredIssuesPage(response.nextPagePath, issuesPath);
+          if (nextPage === undefined) {
+            throw new IntakeSourceFetchError(
+              "github",
+              response.status,
+              "next page changed the configured issues resource scope",
+            );
+          }
+          if (nextPage !== page + 1) {
+            throw new IntakeSourceFetchError(
+              "github",
+              response.status,
+              "issues pagination cursor did not advance contiguously",
+            );
+          }
+          page = nextPage;
+        }
+        path = response.nextPagePath;
       }
-
-      const issues = z.array(GithubIssuePayload).parse(response.body);
       const items: IngestedItem[] = [];
       for (const issue of issues) {
         // The Issues API also returns PRs; drop them.
@@ -121,4 +142,20 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       return items;
     },
   };
+}
+function configuredIssuesPage(nextPath: string, issuesPath: string): number | undefined {
+  if (!nextPath.startsWith("/") || nextPath.startsWith("//")) return undefined;
+  let next: URL;
+  let configured: URL;
+  try {
+    next = new URL(nextPath, "https://github.invalid");
+    configured = new URL(issuesPath, "https://github.invalid");
+  } catch {
+    return undefined;
+  }
+  if (next.pathname !== configured.pathname || next.hash !== "") return undefined;
+  const pages = next.searchParams.getAll("page");
+  if (pages.length !== 1 || !/^[1-9][0-9]*$/u.test(pages[0]!)) return undefined;
+  if (!sameQueryMultiset(configured, next, "page")) return undefined;
+  return Number(pages[0]);
 }

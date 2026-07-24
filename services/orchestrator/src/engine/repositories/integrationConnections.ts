@@ -117,6 +117,17 @@ export const IntegrationConnectionsStore = {
   recordNonterminalFailure,
   listTerminalStagedCleanupCandidates,
   markTerminalStagedCleanupComplete,
+  async getPrincipalMetadata(
+    client: IntegrationQueryClient,
+    input: { orgId: string; providerKind: string; connectionId: string },
+  ): Promise<unknown> {
+    const result = await client.query(
+      `SELECT principal_metadata FROM org_integration_connections
+       WHERE org_id = $1 AND provider_kind = $2 AND id = $3 AND status = 'active'`,
+      [input.orgId, input.providerKind, input.connectionId],
+    );
+    return (result.rows[0] as { principal_metadata?: unknown } | undefined)?.principal_metadata;
+  },
 
   async getOperation(
     client: IntegrationQueryClient,

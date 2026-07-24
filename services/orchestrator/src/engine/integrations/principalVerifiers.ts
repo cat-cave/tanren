@@ -20,6 +20,12 @@ import {
   readStagedToken,
   unavailableError,
 } from "./principalVerifierSupport.js";
+import { sentryNextPage, SentryPaginationError } from "./sentryPagination.js";
+import {
+  canonicalSentryEndpoint,
+  sentryPrincipalIdentity,
+  SentryPrincipalIdentity,
+} from "./sentryPrincipalIdentity.js";
 
 export type PrincipalVerificationResult =
   | { status: "verified"; principal: PrincipalCandidate; authKind: string; scopes: string[]; expiresAt?: string }
@@ -52,8 +58,8 @@ export async function scopesForSelectedPrincipal(
 ): Promise<string[]> {
   if (providerKind !== "sentry") return discoveredScopes;
   const token = await readStagedToken(permit, staged, secrets);
-  const slug = principal.metadata["slug"] ?? principal.providerPrincipalId;
-  const scopes = await probeSentryScopes(fetchImpl, token, slug);
+  const identity = SentryPrincipalIdentity.parse(principal.metadata);
+  const scopes = await probeSentryScopes(fetchImpl, token, identity);
   if (scopes.length === 0) throw new Error("selected_principal_scopes_unproven");
   return scopes;
 }
@@ -119,7 +125,7 @@ export class SlackPrincipalVerifier implements PrincipalVerifier {
 
 const SentryOrgSchema = z.object({
   id: z.string().min(1),
-  slug: z.string().optional(),
+  slug: z.string().min(1),
   name: z.string().optional(),
 });
 
@@ -129,12 +135,15 @@ const SentryOrgSchema = z.object({
  * catalog requires only project:write. Prefer org `access` when present; otherwise
  * project list proves project:read. Do not invent project:admin.
  */
-async function probeSentryScopes(fetchImpl: FetchImpl, token: string, orgSlug: string): Promise<string[]> {
+async function probeSentryScopes(
+  fetchImpl: FetchImpl,
+  token: string,
+  identity: SentryPrincipalIdentity,
+): Promise<string[]> {
   const scopes = new Set<string>();
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
-  const orgDetail = await fetchImpl(`https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/`, {
-    headers,
-  });
+  const orgPath = `/api/0/organizations/${encodeURIComponent(identity.orgSlug)}`;
+  const orgDetail = await fetchImpl(`${identity.baseUrl}${orgPath}/`, { headers });
   if (orgDetail.status === 401 || orgDetail.status === 403) return [];
   if (!orgDetail.ok) throw unavailableError(orgDetail, `sentry_scope_http_${orgDetail.status}`);
   if (orgDetail.ok) {
@@ -151,10 +160,7 @@ async function probeSentryScopes(fetchImpl: FetchImpl, token: string, orgSlug: s
     }
   }
   // project:read — listing projects under the org (side-effect-free).
-  const projects = await fetchImpl(
-    `https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/projects/?per_page=1`,
-    { headers },
-  );
+  const projects = await fetchImpl(`${identity.baseUrl}${orgPath}/projects/?per_page=1`, { headers });
   if (projects.status === 401 || projects.status === 403) {
     return scopes.has("project:write") || scopes.has("project:read") ? [...scopes] : [];
   }
@@ -167,7 +173,13 @@ async function probeSentryScopes(fetchImpl: FetchImpl, token: string, orgSlug: s
 
 export class SentryPrincipalVerifier implements PrincipalVerifier {
   readonly providerKind = "sentry";
-  constructor(private readonly fetchImpl: FetchImpl = fetch) {}
+  private readonly endpoint: string;
+  constructor(
+    private readonly fetchImpl: FetchImpl,
+    endpoint: string,
+  ) {
+    this.endpoint = canonicalSentryEndpoint(endpoint);
+  }
 
   async verify(
     permit: PrincipalVerificationPermit,
@@ -175,41 +187,47 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
     secrets: IntegrationSecretStore,
   ): Promise<PrincipalVerificationResult> {
     const token = await readStagedToken(permit, staged, secrets);
-    const candidates: PrincipalCandidate[] = [];
+    const organizations: z.infer<typeof SentryOrgSchema>[] = [];
     const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    for (;;) {
-      const url =
-        cursor === undefined
-          ? "https://sentry.io/api/0/organizations/?per_page=100"
-          : `https://sentry.io/api/0/organizations/?per_page=100&cursor=${encodeURIComponent(cursor)}`;
-      const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
+    const resourcePath = "/api/0/organizations/?per_page=100";
+    let path: string | undefined = resourcePath;
+    while (path !== undefined) {
+      const response = await this.fetchImpl(`${this.endpoint}${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (response.status === 401 || response.status === 403) {
         return { status: "invalid", reason: `sentry_http_${response.status}` };
       }
       if (!response.ok) return providerUnavailable(response, `sentry_http_${response.status}`);
       const raw: unknown = await response.json();
-      if (!Array.isArray(raw)) return { status: "unavailable", reason: "sentry_malformed_organizations" };
-      for (const item of raw) {
-        const parsed = SentryOrgSchema.safeParse(item);
-        if (!parsed.success) continue;
-        candidates.push({
-          providerPrincipalId: parsed.data.id,
-          principalKind: "organization",
-          displayName: parsed.data.name ?? parsed.data.slug ?? parsed.data.id,
-          metadata: meta({ slug: parsed.data.slug }),
+      const page = z.array(SentryOrgSchema).safeParse(raw);
+      if (!page.success) return { status: "unavailable", reason: "sentry_malformed_organizations" };
+      organizations.push(...page.data);
+      try {
+        const next = sentryNextPage({
+          link: response.headers.get("link") ?? undefined,
+          baseUrl: this.endpoint,
+          resourcePath,
+          seenCursors,
         });
+        if (next === undefined) path = undefined;
+        else {
+          seenCursors.add(next.cursor);
+          path = next.path;
+        }
+      } catch (error) {
+        if (error instanceof SentryPaginationError) {
+          return { status: "unavailable", reason: "sentry_malformed_pagination" };
+        }
+        throw error;
       }
-      const link = response.headers.get("link") ?? "";
-      const next = /<[^>]*[?&]cursor=([^&>]+)[^>]*>;\s*rel="next"/u.exec(link);
-      const nextCursor = next?.[1] === undefined ? undefined : decodeURIComponent(next[1]);
-      if (nextCursor === undefined || nextCursor === "") break;
-      if (seenCursors.has(nextCursor)) {
-        throw new Error(`sentry organizations listing returned a non-advancing cursor (${nextCursor})`);
-      }
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
     }
+    const candidates: PrincipalCandidate[] = organizations.map((organization) => ({
+      providerPrincipalId: organization.id,
+      principalKind: "organization",
+      displayName: organization.name ?? organization.slug,
+      metadata: sentryPrincipalIdentity(organization.slug, this.endpoint),
+    }));
     if (candidates.length === 0) return { status: "invalid", reason: "sentry_no_organizations" };
 
     if (candidates.length > 1) {
@@ -436,12 +454,17 @@ export function hasPrincipalVerifier(providerKind: string): boolean {
   return ["slack", "sentry", "deploy.vercel", "deploy.flyio"].includes(providerKind);
 }
 
-export function principalVerifierFor(providerKind: string, fetchImpl: FetchImpl = fetch): PrincipalVerifier {
+export function principalVerifierFor(
+  providerKind: string,
+  fetchImpl: FetchImpl = fetch,
+  providerEndpoint?: string,
+): PrincipalVerifier {
   switch (providerKind) {
     case "slack":
       return new SlackPrincipalVerifier(fetchImpl);
     case "sentry":
-      return new SentryPrincipalVerifier(fetchImpl);
+      if (providerEndpoint === undefined) throw new Error("sentry verifier endpoint is required");
+      return new SentryPrincipalVerifier(fetchImpl, providerEndpoint);
     case "deploy.vercel":
       return new VercelPrincipalVerifier(fetchImpl);
     case "deploy.flyio":
