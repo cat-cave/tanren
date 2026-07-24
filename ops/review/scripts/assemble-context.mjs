@@ -48,6 +48,8 @@ function gh(args, { json = false } = {}) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   const r = gh(["repo", "view", "--json", "nameWithOwner"], { json: true });
   return r.nameWithOwner;
 }
@@ -172,7 +174,17 @@ function assemble({ pr, out, sha }) {
   const [owner, repo] = slug.split("/");
 
   const view = gh(
-    ["pr", "view", String(pr), "--json", "number,title,body,url,headRefOid,comments,reviews,closingIssuesReferences"],
+    // --repo <slug>: CI runs this from a non-repo dir, so gh cannot infer the
+    // repo from git — resolve it explicitly (repoSlug → GITHUB_REPOSITORY).
+    [
+      "pr",
+      "view",
+      String(pr),
+      "--repo",
+      slug,
+      "--json",
+      "number,title,body,url,headRefOid,comments,reviews,closingIssuesReferences",
+    ],
     { json: true },
   );
 
@@ -214,7 +226,7 @@ function assemble({ pr, out, sha }) {
     linkedIssueFromBody(view.body);
   if (refNum) {
     try {
-      issue = gh(["issue", "view", String(refNum), "--json", "number,title,body"], { json: true });
+      issue = gh(["issue", "view", String(refNum), "--repo", slug, "--json", "number,title,body"], { json: true });
     } catch {
       issue = null;
     }
