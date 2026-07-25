@@ -1,4 +1,7 @@
 import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
+import type { JsonlObjectDecodeFailure } from "../contracts/jsonlDecodeFailure.js";
+
+export type { JsonlObjectDecodeFailure, JsonlObjectParseFailure } from "../contracts/jsonlDecodeFailure.js";
 
 // Token consumption by TYPE. Disjoint buckets — never fold into one number.
 // All buckets are mutually exclusive and sum to totalTokens.
@@ -57,6 +60,7 @@ export interface WriterResult {
     rawEventCount: number;
     tokenUsage?: TokenUsage;
     usageLimit?: UsageLimitSignal;
+    jsonlDecodeFailure?: JsonlObjectDecodeFailure;
   };
 }
 

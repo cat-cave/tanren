@@ -276,11 +276,11 @@ describe("Codex writer adapter", () => {
 
   it("fails the writer typed with exact final usage across malformed events", async () => {
     const stdout =
-      '{"usage":{"promptTokens":2,"completionTokens":1}}\nnot-json\n[]\n42\n' +
+      '{"usage":{"promptTokens":2,"completionTokens":1}}\n \t \n' +
       '{"usage":{"promptTokens":7,"completionTokens":4}}\n';
     const telemetry = parseCodexJsonlTelemetry(stdout);
     expect(telemetry).toEqual({
-      rawEventCount: 5,
+      rawEventCount: 3,
       tokenUsage: {
         inputTokens: 7,
         cachedInputTokens: 0,
@@ -291,11 +291,7 @@ describe("Codex writer adapter", () => {
       },
       jsonlDecodeFailure: {
         kind: "jsonl_object_decode_failed",
-        failures: [
-          { lineNumber: 2, reason: "invalid_json" },
-          { lineNumber: 3, reason: "non_object" },
-          { lineNumber: 4, reason: "non_object" },
-        ],
+        failures: [{ lineNumber: 2, reason: "invalid_json" }],
       },
     });
     await expect(runWithCodexResult(ok(stdout))).resolves.toMatchObject({

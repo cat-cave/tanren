@@ -3,9 +3,11 @@
 // A crashed / timed-out writer is a hard FAILED task (routed to rework); a
 // window-exhausted writer is the recoverable §4.3 window-pressure terminal.
 import { describe, expect, it } from "vitest";
-import type { EventName, EventPayload } from "../src/engine/events/index.js";
+import { EventRegistry, type EventName, type EventPayload } from "../src/engine/events/index.js";
+import type { TokenUsage } from "../src/engine/providers/types.js";
 import type { CostRecorder } from "../src/engine/costs/index.js";
 import type { PlanSubtask } from "../src/engine/answerers/schemas/index.js";
+import { parseClaudeStreamTelemetry } from "../src/engine/providers/claude.js";
 import { runWriterStage, type WriterStageOutcome } from "../src/engine/workflow/subtaskStages.js";
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { makeFailingWriter, makeWriter } from "./helpers/plannerLoopHelpers.js";
@@ -26,6 +28,7 @@ interface RecordedEvent {
 // `h.outcomeOrKind` / `h.names()` keep holding without churn.
 class Harness {
   readonly events: RecordedEvent[] = [];
+  readonly costs: TokenUsage[] = [];
   readonly writer = new InMemoryRunStateWriter({
     forwardAppend: async (input) => {
       this.events.push({
@@ -53,7 +56,9 @@ class Harness {
   };
 
   costCtx(): SubtaskCostContext {
-    const recorder = { record: async () => undefined as never } as unknown as CostRecorder;
+    const recorder = {
+      record: async (_context: unknown, usage: TokenUsage) => this.costs.push(usage),
+    } as unknown as CostRecorder;
     return { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1", orgId: "org_1" };
   }
 
@@ -101,19 +106,46 @@ describe("runWriterStage — exitReason routing (C2)", () => {
     expect(h.names()).not.toContain("task.failed");
   });
 
-  it("a crashed writer is a FAILED task (kind=failed/crashed), never passed/completed", async () => {
+  it("malformed physical JSONL is typed on both failure surfaces after one exact cost", async () => {
     const h = new Harness();
-    const outcome = await runWriterStage(callArgs(h, makeFailingWriter("crashed")));
+    const adapter = makeFailingWriter("crashed");
+    const secret = "SECRET_WRITER_STDOUT";
+    const telemetry = parseClaudeStreamTelemetry(
+      [
+        '{"usage":{"input_tokens":2,"output_tokens":1}}',
+        `not-json-${secret}`,
+        '{"usage":{"input_tokens":7,"output_tokens":4}}',
+      ].join("\n"),
+    );
+    adapter.runWriter = async () => ({
+      diff: "",
+      commits: [],
+      exitReason: "crashed",
+      tokenUsage: telemetry.tokenUsage,
+      telemetry,
+    });
+    const outcome = await runWriterStage(callArgs(h, adapter));
 
-    expect(outcome.kind).toBe("failed");
-    expect(failureKindOf(outcome)).toBe("crashed");
-    expect(h.status).toBe("failed");
-    expect(h.outcomeOrKind).toBe("crashed");
-    expect(h.names()).toContain("writer.subtask.failed");
-    expect(h.names()).toContain("task.failed");
-    // The success events are NEVER emitted for a crashed run.
-    expect(h.names()).not.toContain("writer.subtask.completed");
-    expect(h.names()).not.toContain("task.completed");
+    expect(outcome).toMatchObject({ kind: "failed", failureKind: "crashed" });
+    expect([h.status, h.outcomeOrKind]).toEqual(["failed", "jsonl_object_decode_failed"]);
+    const kind = "jsonl_object_decode_failed";
+    const detail = { kind, failures: [{ lineNumber: 2, reason: "invalid_json" }] };
+    const writerFailed = h.events.find((event) => event.eventType === "writer.subtask.failed");
+    const taskFailed = h.events.find((event) => event.eventType === "task.failed");
+    expect(writerFailed?.payload).toMatchObject({ failureKind: detail.kind, jsonlDecodeFailure: detail });
+    expect(taskFailed?.payload).toMatchObject({ failureKind: detail.kind, jsonlDecodeFailure: detail });
+    expect(() => EventRegistry["writer.subtask.failed"].parse(writerFailed?.payload)).not.toThrow();
+    expect(() => EventRegistry["task.failed"].parse(taskFailed?.payload)).not.toThrow();
+    expect(h.costs).toHaveLength(1);
+    expect(h.costs[0]).toMatchObject({ inputTokens: 7, outputTokens: 4, totalTokens: 11 });
+    expect(JSON.stringify([writerFailed, taskFailed])).not.toContain(secret);
+    expect(h.names()).toEqual(["task.started", "writer.subtask.started", "writer.subtask.failed", "task.failed"]);
+    const generic = new Harness();
+    await runWriterStage(callArgs(generic, makeFailingWriter("crashed")));
+    expect([generic.status, generic.outcomeOrKind]).toEqual(["failed", "crashed"]);
+    expect(generic.events.find((event) => event.eventType === "task.failed")?.payload).toMatchObject({
+      failureKind: "crashed",
+    });
   });
 
   it("a timed-out writer is a FAILED task (kind=failed/timeout), never passed/completed", async () => {

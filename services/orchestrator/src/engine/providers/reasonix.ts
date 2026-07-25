@@ -3,10 +3,10 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
-import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
-import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import type { JsonlObjectDecodeFailure, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
+import { decodeJsonlObjectEvents, findTokenUsageBounded } from "./findTokenUsage.js";
 
 // reasonix harness adapter (DeepSeek-native, npm `reasonix`) — a Writer-only
 // CLI harness conforming to the v1 harness protocol
@@ -56,6 +56,7 @@ export interface ReasonixEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
   usageLimit?: UsageLimitSignal;
+  jsonlDecodeFailure?: JsonlObjectDecodeFailure;
 }
 
 export function createReasonixWriter(dependencies: ReasonixWriterDependencies): WriterAdapter {
@@ -88,13 +89,17 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
         }),
       });
       const telemetry = parseReasonixStreamTelemetry(reasonix.stdout);
-      const gitState = await captureGitStateAfterWriter(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-        "reasonix writer",
+      const postProcessed = await postProcessPreservingJsonlFailure("reasonix", telemetry, () =>
+        captureGitStateAfterWriter(
+          dependencies.ssh,
+          dependencies.target,
+          opts.workspace,
+          baselineSha,
+          "reasonix writer",
+        ),
       );
+      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
+      const gitState = postProcessed.gitState;
       if (reasonix.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
@@ -144,18 +149,15 @@ export function buildReasonixWriterCommand(input: { apiKey: string; task: string
 // on the phrase, not the event type, so a minor CLI wording change still
 // surfaces it). Mirrors opencode's stream parser.
 export function parseReasonixStreamTelemetry(stdout: string): ReasonixEventTelemetry {
-  const lines = splitNonEmptyJsonlLines(stdout);
+  const decoded = decodeJsonlObjectEvents(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
-  for (const line of lines) {
-    const parsed = parseJsonObject(line);
-    if (parsed === undefined) {
-      continue;
-    }
+  for (const parsed of decoded.events) {
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
   }
-  return { rawEventCount: lines.length, tokenUsage, usageLimit };
+  const telemetry = { rawEventCount: decoded.rawEventCount, tokenUsage, usageLimit };
+  return decoded.ok ? telemetry : { ...telemetry, jsonlDecodeFailure: decoded.failure };
 }
 
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {

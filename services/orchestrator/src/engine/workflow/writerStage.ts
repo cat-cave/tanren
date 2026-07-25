@@ -9,6 +9,7 @@
 // passed task whose partial/empty diff flows downstream as a success.
 
 import type pg from "pg";
+import { projectPublicJsonlObjectDecodeFailure } from "../contracts/jsonlDecodeFailure.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { PlanSubtask } from "../answerers/schemas/index.js";
 import { emitStageTiming } from "../observability/index.js";
@@ -276,7 +277,13 @@ function writerEventEnvelope(args: WriterStageInput) {
 // Emit the (previously latent) `writer.subtask.failed` timeline event so a
 // crashed / timed-out / window-exhausted writer is recorded loudly with its
 // failure kind + message, never silently swallowed.
-async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: string, message: string): Promise<void> {
+async function emitWriterSubtaskFailed(
+  args: WriterStageInput,
+  writerResult: WriterResult,
+  failureKind: string,
+  message: string,
+): Promise<void> {
+  const jsonlDecodeFailure = writerResult.telemetry?.jsonlDecodeFailure;
   await args.appendEvent(
     "writer.subtask.failed",
     {
@@ -286,6 +293,9 @@ async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: stri
       intent: args.subtask.intent,
       failureKind,
       message,
+      ...(jsonlDecodeFailure === undefined
+        ? {}
+        : { jsonlDecodeFailure: projectPublicJsonlObjectDecodeFailure(jsonlDecodeFailure) }),
     },
     args.writeTaskId,
   );
@@ -347,13 +357,18 @@ async function emitWriterSubtaskTerminalFailure(
   writerResult: WriterResult,
   exit: WriterFailedExitDescriptor,
 ): Promise<WriterStageOutcome> {
-  await wrapEventAppend(() => emitWriterSubtaskFailed(args, exit.failureKind, exit.message));
+  const jsonlDecodeFailure = writerResult.telemetry?.jsonlDecodeFailure;
+  const failureKind = jsonlDecodeFailure?.kind ?? exit.failureKind;
+  await wrapEventAppend(() => emitWriterSubtaskFailed(args, writerResult, failureKind, exit.message));
   await markTaskFailedWithEvent({
     writer: args.writer,
     taskId: args.writeTaskId,
     envelope: writerEventEnvelope(args),
-    failureKind: exit.failureKind,
+    failureKind,
     message: exit.message,
+    ...(jsonlDecodeFailure === undefined
+      ? {}
+      : { jsonlDecodeFailure: projectPublicJsonlObjectDecodeFailure(jsonlDecodeFailure) }),
   });
   return exit.outcome(writerResult);
 }

@@ -75,6 +75,9 @@ export const sensitivityRules: SensitivityRule[] = [
     ["jobId", "public"],
     ["kind", "public"],
     ["failureKind", "public"],
+    ["jsonlDecodeFailure.kind", "public"],
+    ["jsonlDecodeFailure.failures[].lineNumber", "public"],
+    ["jsonlDecodeFailure.failures[].reason", "public"],
     ["message", "public"],
     ["status", "public"],
     ["reason", "public"],
@@ -148,6 +151,9 @@ export const sensitivityRules: SensitivityRule[] = [
     ["telemetry.tokenUsage.outputTokens", "public"],
     ["telemetry.tokenUsage.reasoningOutputTokens", "public"],
     ["telemetry.tokenUsage.totalTokens", "public"],
+    ["telemetry.jsonlDecodeFailure.kind", "public"],
+    ["telemetry.jsonlDecodeFailure.failures[].lineNumber", "public"],
+    ["telemetry.jsonlDecodeFailure.failures[].reason", "public"],
     // Provider usage-limit notice (names the reset time); no secret material.
     ["telemetry.usageLimit.message", "public"],
     ["intent", "public"],
@@ -193,6 +199,9 @@ export const sensitivityRules: SensitivityRule[] = [
     ["intent", "public"],
     ["failureKind", "public"],
     ["message", "public"],
+    ["jsonlDecodeFailure.kind", "public"],
+    ["jsonlDecodeFailure.failures[].lineNumber", "public"],
+    ["jsonlDecodeFailure.failures[].reason", "public"],
   ]),
   // task #24 (apex v52/v53) cross-layer sign-of-life bridge — all fields non-secret observability.
   ...rulesFor("writer.subtask.progress", [

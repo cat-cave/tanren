@@ -215,6 +215,27 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
   }
 }
 
+export function answererJsonlFailureCost<TOutput>(
+  stage: { costCtx: SubtaskCostContext; adapter: AnswererAdapter<TOutput>; issueLoopId?: string },
+  role: AnswererCostInput<TOutput>["role"],
+  taskId: string,
+  startedAt: number,
+  rawUsage?: Record<string, unknown>,
+): () => Promise<void> {
+  const modelRole = role === "demoRun" ? "demo-run" : role === "designOracle" ? "design-oracle" : role;
+  return () =>
+    recordAnswererCost({
+      ctx: stage.costCtx,
+      adapter: stage.adapter,
+      role,
+      taskId,
+      model: `tanren-${modelRole}`,
+      runtimeSeconds: secondsSince(startedAt),
+      rawUsage: rawUsage ?? { role },
+      ...(stage.issueLoopId === undefined ? {} : { issueLoopId: stage.issueLoopId }),
+    });
+}
+
 export async function recordWriterCost(input: WriterCostInput): Promise<void> {
   const tokens = input.tokenUsage ?? emptyTokenUsage;
   // MANAGED OpenRouter run: query the REAL `usage.cost` for this call's generation

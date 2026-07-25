@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { projectPublicJsonlObjectDecodeFailure } from "../src/engine/contracts/jsonlDecodeFailure.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import {
   canViewRaw,
@@ -210,6 +211,30 @@ describe("redaction serializer (by scope)", () => {
     expect(isRedactionMarker(view.decisions[1]?.code)).toBe(true);
     expect(isRedactionMarker(view.toolCalls[0]?.args)).toBe(true);
     expect(out.redactedPaths).toEqual(expect.arrayContaining(["decisions[].code", "toolCalls[].args"]));
+  });
+
+  it("project_member sees only the safe task JSONL failure projection", () => {
+    const jsonlDecodeFailure = projectPublicJsonlObjectDecodeFailure({
+      kind: "jsonl_object_decode_failed",
+      failures: [{ lineNumber: 2, reason: "invalid_json" }],
+      raw: "provider-secret",
+    } as never);
+    const out = redactEventPayload({
+      eventName: "task.failed",
+      payload: {
+        taskKind: "plan",
+        failureKind: "jsonl_object_decode_failed",
+        message: "Codex JSONL object decode failed at line 2",
+        jsonlDecodeFailure,
+      },
+      actor: actor(["project:member"]),
+    });
+    expect((out.payload as { jsonlDecodeFailure: unknown }).jsonlDecodeFailure).toEqual({
+      kind: "jsonl_object_decode_failed",
+      failures: [{ lineNumber: 2, reason: "invalid_json" }],
+    });
+    expect(out.redactedPaths).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain("provider-secret");
   });
 
   it("clones the payload (does not mutate the input)", () => {

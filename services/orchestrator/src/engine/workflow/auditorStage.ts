@@ -26,9 +26,10 @@ import {
   classifyStageFailureKind,
   runStageBodyWithFinalizeGuard,
   stageFailureMessage,
+  stageJsonlDecodeFailurePayload,
   wrapEventAppend,
 } from "./stageFailureKind.js";
-import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
+import { answererJsonlFailureCost, recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDoneWithEvent, markTaskFailedWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
 import { createLogger } from "../observability/logger.js";
@@ -115,8 +116,10 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   try {
     // STAGE-LOCAL stall recovery: a TRANSIENT stall re-drives the auditor IN PLACE
     // (sibling progress preserved); a wedged auditor escalates loudly.
-    result = await runAnswererStageWithRecovery("auditor", () =>
-      invokeAuditor(args.adapter, { context: auditorContext, workspace: args.workspacePath }),
+    result = await runAnswererStageWithRecovery(
+      "auditor",
+      () => invokeAuditor(args.adapter, { context: auditorContext, workspace: args.workspacePath }),
+      answererJsonlFailureCost(args, "auditor", auditorTaskId, startedAt),
     );
   } catch (error) {
     if (error instanceof AnswererSchemaValidationError) {
@@ -218,6 +221,7 @@ async function emitAuditorAnswererThrow(
     envelope: auditorEventEnvelope(args),
     failureKind,
     message: stageFailureMessage(error),
+    ...stageJsonlDecodeFailurePayload(error),
   });
   throw error;
 }
