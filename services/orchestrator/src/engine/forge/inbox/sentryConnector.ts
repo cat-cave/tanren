@@ -130,9 +130,9 @@ export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthori
 }
 
 const SentryIssuePayload = z.object({
-  id: z.string().min(1),
-  shortId: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  project: z.object({ slug: z.string().trim().min(1) }).passthrough(),
   culprit: z.string().min(1).optional(),
   level: z.string().min(1).optional(),
   permalink: z.string().min(1).optional(),
@@ -141,6 +141,9 @@ const SentryIssuePayload = z.object({
   metadata: z.object({ value: z.string().min(1).optional(), type: z.string().min(1).optional() }).optional(),
 });
 type SentryIssuePayload = z.infer<typeof SentryIssuePayload>;
+function fetchError(detail: string): never {
+  throw new IntakeSourceFetchError("sentry", 200, detail);
+}
 
 // Map a Sentry `level` to the inbox severity. fatal/error → fail (a live
 // production error), warning → warn, everything else (info/debug/sample) → info.
@@ -158,12 +161,6 @@ function severityFromLevel(level: string | undefined): IngestedItem["severity"] 
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-// The candidate title prefers the issue title, then the human culprit, then the
-// metadata value — whichever first carries signal.
-function titleFor(issue: SentryIssuePayload): string | undefined {
-  return asString(issue.title) ?? asString(issue.culprit) ?? asString(issue.metadata?.value) ?? asString(issue.shortId);
 }
 
 // The candidate body is the permalink plus the metadata Sentry already
@@ -207,25 +204,21 @@ function assertSentryAuthorityBinding(grant: OrgGrant, config: ActiveSentryConfi
     lease.capability !== "errors" ||
     lease.operation !== "intake" ||
     lease.target.resourceId !== config.project
-  ) {
+  )
     throw new IntakeSourceAuthorityError("sentry", "the selected lease does not bind this project intake effect");
-  }
   const identity = SentryPrincipalIdentity.safeParse(grant.metadata);
-  if (!identity.success) {
+  if (!identity.success)
     throw new IntakeSourceAuthorityError("sentry", "the selected principal has no verified Sentry identity");
-  }
-  if (identity.data.orgSlug !== config.org) {
+  if (identity.data.orgSlug !== config.org)
     throw new IntakeSourceAuthorityError("sentry", "the source organization does not match the selected principal");
-  }
   let sourceBaseUrl: string;
   try {
     sourceBaseUrl = canonicalSentryEndpoint(config.baseUrl);
   } catch {
     throw new IntakeSourceAuthorityError("sentry", "the source endpoint is not a canonical HTTPS endpoint");
   }
-  if (sourceBaseUrl !== identity.data.baseUrl) {
+  if (sourceBaseUrl !== identity.data.baseUrl)
     throw new IntakeSourceAuthorityError("sentry", "the source endpoint does not match the selected principal");
-  }
   return identity.data.baseUrl;
 }
 
@@ -259,7 +252,9 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
 
       const issuesPath = buildPath(config);
       const issues: SentryIssuePayload[] = [];
+      const seenIssueIds = new Set<string>();
       const seenCursors = new Set<string>();
+      let currentCursor: string | undefined;
       let path: string | undefined = issuesPath;
       while (path !== undefined) {
         const response = await deps.sentryHttp.request({ method: "GET", path, token, baseUrl });
@@ -269,40 +264,41 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
           "provider response",
           retryAfterMs(response.headers?.["retry-after"]),
         );
-        if (!Array.isArray(response.body)) {
-          throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
+        if (!Array.isArray(response.body)) fetchError("200 body was not an issues array");
+        const page = z.array(SentryIssuePayload).parse(response.body);
+        for (const issue of page) {
+          if (issue.project.slug !== config.project) fetchError("issue project did not match the configured project");
+          if (seenIssueIds.has(issue.id)) fetchError("provider repeated an issue id");
+          seenIssueIds.add(issue.id);
+          issues.push(issue);
         }
-        issues.push(...z.array(SentryIssuePayload).parse(response.body));
         let next;
         try {
           next = sentryNextPage({
             link: response.headers?.["link"],
             baseUrl,
             resourcePath: issuesPath,
+            currentCursor,
             seenCursors,
           });
         } catch (error) {
-          if (error instanceof SentryPaginationError) {
-            throw new IntakeSourceFetchError("sentry", 200, error.message);
-          }
+          if (error instanceof SentryPaginationError) fetchError(error.message);
           throw error;
         }
-        if (next === undefined) {
-          path = undefined;
-        } else {
+        if (next === undefined) path = undefined;
+        else {
           seenCursors.add(next.cursor);
+          currentCursor = next.cursor;
           path = next.path;
         }
       }
 
       const items: IngestedItem[] = [];
       for (const issue of issues) {
-        const title = titleFor(issue);
-        if (title === undefined) continue;
         items.push({
           // Idempotent external id = the Sentry issue id.
           externalId: `sentry-${issue.id}`,
-          title: title.slice(0, 300),
+          title: issue.title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFromLevel(asString(issue.level)),
           projectId: source.projectId,

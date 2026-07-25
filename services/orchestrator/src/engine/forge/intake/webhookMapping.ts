@@ -7,7 +7,7 @@
 // and exact integration authority; a mapper is never credential authority.
 
 import { z } from "zod";
-import type { IngestedItem } from "../inbox/types.js";
+import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource } from "../inbox/types.js";
 
 /** A mapped event: the action GitHub reports + the raw item to ingest, or a skip. */
 export type WebhookMapResult = { kind: "ingest"; item: IngestedItem } | { kind: "skip"; reason: string };
@@ -25,29 +25,43 @@ function truncateTitle(title: string): string {
 
 // The GitHub `issues` event payload fields we read. `action` distinguishes
 // opened/edited/reopened (we ingest) from closed/deleted (we skip).
+const Nonempty = z.string().trim().min(1);
 const GithubIssueEventSchema = z
   .object({
-    action: z.string().min(1),
+    action: Nonempty,
     issue: z
       .object({
         number: z.number().int().positive(),
-        title: z.string().min(1),
+        title: Nonempty,
         body: z.string().nullable().optional(),
         updated_at: z.string().nullable().optional(),
-        labels: z.array(z.union([z.string().min(1), z.object({ name: z.string().min(1) }).passthrough()])).optional(),
+        labels: z.array(z.union([Nonempty, z.object({ name: Nonempty }).passthrough()])).optional(),
         pull_request: z.object({}).passthrough().optional(),
       })
       .passthrough(),
     repository: z
       .object({
-        owner: z.object({ login: z.string().min(1) }).passthrough(),
-        name: z.string().min(1),
+        owner: z.object({ login: Nonempty }).passthrough(),
+        name: Nonempty,
       })
       .passthrough(),
   })
   .passthrough();
 export type GithubIssueEvent = z.infer<typeof GithubIssueEventSchema>;
+type GithubWebhookSource = Pick<InboxSource, "kind" | "config" | "projectId">;
 export const decodeGithubIssueEvent = (payload: unknown) => ({ data: GithubIssueEventSchema.parse(payload) });
+export class GithubWebhookScopeMismatchError extends Error {}
+export function githubWebhookExternalId(event: GithubIssueEvent, source: GithubWebhookSource): string {
+  if (source.kind !== "issues" || source.config === null)
+    throw new GithubWebhookScopeMismatchError("GitHub webhook source has no repository scope");
+  const config = ActiveGitHubIssuesConfig.parse(source.config);
+  if (
+    event.repository.owner.login.toLowerCase() !== config.owner ||
+    event.repository.name.toLowerCase() !== config.repo
+  )
+    throw new GithubWebhookScopeMismatchError("GitHub webhook repository does not match its configured source");
+  return `gh-${config.owner}/${config.repo}#${event.issue.number}`;
+}
 
 // Actions that represent a live, ingest-worthy issue. A closed/deleted issue is
 // a no-op (it never becomes new work); the upsert keeps any prior candidate.
@@ -67,22 +81,21 @@ function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severi
  * and a later poll of the same issue UPSERT the same candidate — push + poll are
  * idempotent against each other.
  */
-export function mapGithubIssueWebhook(payload: unknown, projectId: string | null): WebhookMapResult {
+export function mapGithubIssueWebhook(payload: unknown, source: GithubWebhookSource): WebhookMapResult {
   const event = decodeGithubIssueEvent(payload).data;
+  const externalId = githubWebhookExternalId(event, source);
   if (event.issue.pull_request !== undefined) return { kind: "skip", reason: "pull request, not an issue" };
   if (!INGEST_ACTIONS.has(event.action)) return { kind: "skip", reason: `action not ingestable: ${event.action}` };
 
   const labels = (event.issue.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
-  const owner = event.repository.owner.login;
-  const repo = event.repository.name;
   return {
     kind: "ingest",
     item: {
-      externalId: `gh-${owner}/${repo}#${event.issue.number}`,
+      externalId,
       title: truncateTitle(event.issue.title),
       body: (event.issue.body ?? "").slice(0, 8000),
       severity: severityFromLabels(labels),
-      projectId,
+      projectId: source.projectId,
     },
   };
 }

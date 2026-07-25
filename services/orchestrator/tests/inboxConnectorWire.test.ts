@@ -84,7 +84,10 @@ function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; 
     client: {
       async request(input) {
         calls.push(input);
-        return { status, body, headers: { link: terminalSentryLink(input) } };
+        const rows = Array.isArray(body)
+          ? body.map((row) => (typeof row === "object" && row !== null ? { project: { slug: "app" }, ...row } : row))
+          : body;
+        return { status, body: rows, headers: { link: terminalSentryLink(input) } };
       },
     },
   };
@@ -327,12 +330,18 @@ describe("sentry connector — request wire shape", () => {
     );
   });
 
-  it("rejects cloned authority before secret or Sentry HTTP I/O", async () => {
+  it("rejects endpoint drift or cloned authority before secret or Sentry HTTP I/O", async () => {
     const { client, calls } = recordSentry([]);
     const authentic = await sentryAuthority({ orgId: "org_a", projectId: "project_a", resourceId: "app" });
     const cloned = { ...authentic, metadata: { ...authentic.metadata } } as typeof authentic;
     const secretRead = vi.spyOn(secrets, "get");
     try {
+      await expect(
+        sentryConnector(client).fetch({
+          ...sentrySource,
+          config: { ...sentrySource.config, baseUrl: "https://attacker.example" },
+        }),
+      ).rejects.toThrow(/endpoint does not match/u);
       await expect(sentryConnector(client, async () => cloned).fetch(sentrySource)).rejects.toThrow(
         /org grant does not match/u,
       );
@@ -403,34 +412,6 @@ describe("sentry connector — normalization", () => {
     expect((await sentryConnector(present.client).fetch(sentrySource))[0]!.body).toBe("users affected: 12");
     const absent = recordSentry([{ id: "9", title: "t" }]);
     expect((await sentryConnector(absent.client).fetch(sentrySource))[0]!.body).toBe("");
-  });
-
-  it("falls back title to culprit then metadata value then shortId and maps fatal/warning levels", async () => {
-    const { client } = recordSentry([
-      { id: "1", culprit: "from culprit", level: "fatal" },
-      { id: "2", metadata: { value: "from metadata" }, level: "warning" },
-      { id: "3", shortId: "APP-3", level: "debug" },
-    ]);
-    const items = await sentryConnector(client).fetch(sentrySource);
-    expect(items[0]!.title).toBe("from culprit");
-    // fatal
-    expect(items[0]!.severity).toBe("fail");
-    expect(items[1]!.title).toBe("from metadata");
-    // warning
-    expect(items[1]!.severity).toBe("warn");
-    expect(items[2]!.title).toBe("APP-3");
-    // debug
-    expect(items[2]!.severity).toBe("info");
-  });
-
-  it("skips a valid row without a title signal", async () => {
-    const { client } = recordSentry([
-      // no title signal
-      { id: "5" },
-      { id: "6", title: "kept" },
-    ]);
-    const items = await sentryConnector(client).fetch(sentrySource);
-    expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {

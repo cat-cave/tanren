@@ -4,21 +4,17 @@ export interface SentryNextPageInput {
   link: string | undefined;
   baseUrl: string;
   resourcePath: string;
+  currentCursor: string | undefined;
   seenCursors: ReadonlySet<string>;
 }
 function malformed(detail: string): never {
-  throw new SentryPaginationError(detail);
+  throw new SentryPaginationError(`malformed Sentry Link header: ${detail}`);
 }
-export class SentryPaginationError extends Error {
-  constructor(detail: string) {
-    super(`malformed Sentry Link header: ${detail}`);
-  }
-}
+export class SentryPaginationError extends Error {}
 function targetUrl(baseUrl: string, resourcePath: string, target: string): URL {
-  let configured: URL;
+  const configured = new URL(`${baseUrl.replace(/\/$/u, "")}${resourcePath}`);
   let next: URL;
   try {
-    configured = new URL(`${baseUrl.replace(/\/$/u, "")}${resourcePath}`);
     next = new URL(target, configured);
   } catch {
     return malformed("invalid page URL");
@@ -37,9 +33,8 @@ function validatedRelation(
   if (
     link.parameters.size !== 3 ||
     [...link.parameters.keys()].some((name) => name !== "rel" && name !== "results" && name !== "cursor")
-  ) {
+  )
     malformed(`${relation} relation must contain exactly rel, results, and cursor once`);
-  }
   const results = link.parameters.get("results")?.toLowerCase();
   if (results !== "true" && results !== "false") malformed(`${relation} relation has no boolean results parameter`);
   const url = targetUrl(input.baseUrl, input.resourcePath, link.target);
@@ -63,11 +58,11 @@ export function sentryNextPage(input: SentryNextPageInput): { path: string; curs
   const following = relation("next");
   if (previous.length !== 1 || following.length !== 1 || values.length !== 2)
     malformed("expected exactly one previous and one next relation");
-  validatedRelation(input, previous[0]!, "previous");
+  const prior = validatedRelation(input, previous[0]!, "previous");
   const next = validatedRelation(input, following[0]!, "next");
   if (!next.results) return undefined;
-  const cursor = next.cursor;
-  if (input.seenCursors.has(cursor)) malformed("next cursor did not make progress");
+  if (next.cursor === prior.cursor || next.cursor === input.currentCursor || input.seenCursors.has(next.cursor))
+    malformed("next cursor did not make progress");
   const requestPath = new URL(input.resourcePath, "https://sentry.invalid").pathname;
-  return { path: `${requestPath}${next.url.search}`, cursor };
+  return { path: `${requestPath}${next.url.search}`, cursor: next.cursor };
 }
