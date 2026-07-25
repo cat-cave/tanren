@@ -48,28 +48,23 @@ async function expectNoPersistence(
   input = source,
   error: RegExp = /Invalid input/u,
 ): Promise<void> {
-  const query = vi.fn<() => Promise<void>>(async () => {});
-  const triage = vi.fn<() => Promise<Record<string, never>>>(async () => ({}));
+  const effect = vi.fn<() => Promise<object>>(async () => ({}));
   await expect(
     ingestSource(
       {
-        pool: { query } as never,
+        pool: { query: effect } as never,
         connectors: new Map([["errors", connector]]),
-        answerer: { triage } as never,
+        answerer: { triage: effect } as never,
       },
       input,
     ),
   ).rejects.toThrow(error);
-  expect([query.mock.calls.length, triage.mock.calls.length]).toEqual([0, 0]);
+  expect(effect).not.toHaveBeenCalled();
 }
 describe("Sentry cursor pagination fail-closed", () => {
   it.each([
     ["a malformed later row", { ...issue("issue-2"), id: 2 }, /Invalid input/u],
-    [
-      "a whitespace title despite fallback fields",
-      { ...issue("issue-2"), title: " \t", culprit: "fallback" },
-      /Too small/u,
-    ],
+    ["a whitespace title", { ...issue("issue-2"), title: " \t", culprit: "fallback" }, /Too small/u],
     ["a mixed-project later row", { ...issue("issue-2"), project: { slug: "other" } }, /configured project/u],
     ["a duplicate id", { ...issue("issue-1"), title: "replayed" }, /repeated an issue id/u],
   ])("NEGATIVE CONTROL — rejects %s without exposing the valid prefix", async (_name, badRow, error) => {
@@ -90,6 +85,14 @@ describe("Sentry cursor pagination fail-closed", () => {
     const { connector, calls } = await harness([page([issue("issue-1")], link)]);
     await expectNoPersistence(connector, source, message);
     expect(calls).toHaveLength(1);
+  });
+  it("rejects a wrong previous replay before a third request or persistence", async () => {
+    const { connector, calls } = await harness([
+      page([issue("issue-1")], nextLink("0:100:0", true)),
+      page([issue("issue-2")], nextLink("0:200:0", true).replaceAll("0:0:1", "0:100:0")),
+    ]);
+    await expectNoPersistence(connector, source, /previous cursor did not match/u);
+    expect(calls).toHaveLength(2);
   });
   it("rejects an encoded-NUL structural query collision before another request or persistence", async () => {
     const configuredQuery = "query=is%3Aunresolved%00x&statsPeriod=14d";

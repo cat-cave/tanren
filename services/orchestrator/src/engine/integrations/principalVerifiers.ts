@@ -190,6 +190,7 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
     const organizations: z.infer<typeof SentryOrgSchema>[] = [];
     const seenCursors = new Set<string>();
     const resourcePath = "/api/0/organizations/?per_page=100";
+    let initialCursor: string | undefined;
     let currentCursor: string | undefined;
     let path: string | undefined = resourcePath;
     while (path !== undefined) {
@@ -209,12 +210,14 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
           link: response.headers.get("link") ?? undefined,
           baseUrl: this.endpoint,
           resourcePath,
+          initialCursor,
           currentCursor,
           seenCursors,
         });
         if (next === undefined) path = undefined;
         else {
           seenCursors.add(next.cursor);
+          initialCursor = next.initialCursor;
           currentCursor = next.cursor;
           path = next.path;
         }

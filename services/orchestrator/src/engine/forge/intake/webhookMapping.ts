@@ -7,21 +7,10 @@
 // and exact integration authority; a mapper is never credential authority.
 
 import { z } from "zod";
-import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource } from "../inbox/types.js";
+import { ActiveGitHubIssuesConfig, GithubIssueTitle, type IngestedItem, type InboxSource } from "../inbox/types.js";
 
 /** A mapped event: the action GitHub reports + the raw item to ingest, or a skip. */
 export type WebhookMapResult = { kind: "ingest"; item: IngestedItem } | { kind: "skip"; reason: string };
-
-// §3.6 issue-loop hardening: the candidate `title` column caps at 300 chars
-// (inbox/types.ts `Candidate.title.max(300)`). A GitHub issue title can be longer;
-// left untruncated it WRITES into the candidate row fine but then CRASHES the
-// `Candidate` zod decode on read-back — AFTER the row landed, so the candidate is
-// stranded undecodable. Truncate at the source (the mapper) so the persisted title
-// always satisfies the schema. Kept just under the cap with an ellipsis marker.
-const TITLE_MAX = 300;
-function truncateTitle(title: string): string {
-  return title.length <= TITLE_MAX ? title : `${title.slice(0, TITLE_MAX - 1)}…`;
-}
 
 // The GitHub `issues` event payload fields we read. `action` distinguishes
 // opened/edited/reopened (we ingest) from closed/deleted (we skip).
@@ -32,7 +21,7 @@ const GithubIssueEventSchema = z
     issue: z
       .object({
         number: z.number().int().positive(),
-        title: Nonempty,
+        title: GithubIssueTitle,
         body: z.string().nullable().optional(),
         updated_at: z.string().nullable().optional(),
         labels: z.array(z.union([Nonempty, z.object({ name: Nonempty }).passthrough()])).optional(),
@@ -92,7 +81,7 @@ export function mapGithubIssueWebhook(payload: unknown, source: GithubWebhookSou
     kind: "ingest",
     item: {
       externalId,
-      title: truncateTitle(event.issue.title),
+      title: event.issue.title,
       body: (event.issue.body ?? "").slice(0, 8000),
       severity: severityFromLabels(labels),
       projectId: source.projectId,

@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
@@ -16,9 +16,9 @@ import {
   type SourceConnector,
   type TriageAnswererContext,
 } from "../src/engine/forge/inbox/index.js";
+import { mapGithubIssueWebhook } from "../src/engine/forge/intake/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 import { terminalSentryLink, testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
-
 const actor: ActorContext = {
   userId: "user_a",
   orgId: "org_a",
@@ -26,7 +26,6 @@ const actor: ActorContext = {
   scopes: ["platform:admin"],
   source: "session",
 };
-
 const issuesSource: InboxSource = {
   id: "src_gh",
   orgId: "org_a",
@@ -35,14 +34,13 @@ const issuesSource: InboxSource = {
   name: "github · cat-cave",
   detail: "issues labeled spec-candidate",
   config: {
-    owner: "cat-cave",
-    repo: "app",
+    owner: "Cat-Cave",
+    repo: "App",
     labels: ["spec-candidate"],
   },
   enabled: true,
   autoRoute: false,
 };
-
 const auditSource: InboxSource = {
   ...issuesSource,
   id: "src_audit",
@@ -51,8 +49,6 @@ const auditSource: InboxSource = {
   config: {},
   autoRoute: true,
 };
-
-// A Sentry source wired under the `errors` kind (no enum/DB-CHECK change).
 const sentrySource: InboxSource = {
   id: "src_sentry",
   orgId: "org_a",
@@ -64,11 +60,9 @@ const sentrySource: InboxSource = {
   enabled: true,
   autoRoute: false,
 };
-
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_token" });
 await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
-
 const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
   orgSlug: "cat-cave",
   baseUrl: "https://sentry.io",
@@ -83,7 +77,6 @@ const githubConnector = (githubHttp: GitHubHttpClient) =>
     defaultStaticRef: "credential/github/org/org_a/default",
   });
 
-// A GitHubHttpClient returning two issues + one PR (which must be filtered).
 function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {
   const calls: GitHubHttpRequest[] = [];
   const client: GitHubHttpClient = {
@@ -119,8 +112,6 @@ function fakeSentry(issues: unknown[]): { client: SentryHttpClient; calls: Sentr
   return { client, calls };
 }
 
-// In-memory pool that tracks inbox_sources + candidates + specs so the ingest
-// upsert and the accept→discovery round-trip are observable.
 function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status: string }> = []): {
   pool: pg.Pool;
   candidates: Map<string, Record<string, unknown>>;
@@ -179,11 +170,9 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
       c.resolved_spec_id = specId;
       return { rows: [candidateRow(String(cid))], rowCount: 1 };
     }
-    // discovery acceptProposals → createSpec path
     if (sql.startsWith("SELECT project_id FROM projects")) {
       return { rows: [{ project_id: params[0] }], rowCount: 1 };
     }
-    // v68 fix: createSpec now loads org_id off projects (NOT NULL).
     if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_test" }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
       specs.set(String(params[0]), { metadata: {} });
@@ -202,19 +191,11 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     }
     return { rows: [], rowCount: 0 };
   };
-  // RLS R2 cohort-3: the accept → discovery hand-off's `createSpec` is now
-  // called with an org-carrying actor, so it runs through `runWithOrgScope`
-  // (checks out a client + opens a `SET LOCAL app.current_org_id` transaction)
-  // rather than a bare `pool.query`. The stub exposes `connect` (returning
-  // itself) + tolerates BEGIN/COMMIT/SET LOCAL (they hit the no-op branch). The
-  // observable round-trip — created spec + resolved candidate — is unchanged.
   const pool = { query, connect: async () => ({ query, release() {} }) };
   return { pool: pool as unknown as pg.Pool, candidates, specs };
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
-  // The deterministic triage fixture stands in for the real provider answerer so
-  // ingestion is exercised without a provider call.
   return { pool, connectors, answerer: createDeterministicTriageAnswerer() };
 }
 
@@ -239,9 +220,7 @@ describe("github issues connector (mocked)", () => {
     const items = await connector.fetch(issuesSource);
     expect(items).toHaveLength(2);
     expect(items[0]?.externalId).toBe("gh-cat-cave/app#88");
-    // bug label → fail severity.
     expect(items[1]?.severity).toBe("fail");
-    // label filter is forwarded to the Issues API.
     expect(calls[0]?.path).toContain("labels=spec-candidate");
     expect(calls[0]?.path).toContain("state=open");
   });
@@ -312,16 +291,46 @@ describe("deterministic triage answerer", () => {
 
 describe("ingestSource (connector → triage → upsert)", () => {
   it("triages each issue and persists external candidates as triaged", async () => {
-    const { client } = fakeGitHub([{ number: 88, title: "feature · CSV export", body: "x", labels: [] }]);
+    const rawTitle = `  ${"x".repeat(301)}  `;
+    const { client } = fakeGitHub([{ number: 88, title: rawTitle, body: "x", labels: [] }]);
     const { pool, candidates } = stubPool();
     const connectors = new Map<string, SourceConnector>([["issues", githubConnector(client)]]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), issuesSource);
+    const payload = {
+      action: "opened",
+      issue: { number: 88, title: rawTitle, labels: [] },
+      repository: { owner: { login: "cat-cave" }, name: "app" },
+    };
+    const pushed = mapGithubIssueWebhook(payload, issuesSource);
+    if (pushed.kind !== "ingest") throw new Error("expected ingest");
     expect(out).toHaveLength(1);
-    expect(out[0]?.status).toBe("triaged");
-    expect(out[0]?.triage?.verdict).toBe("needs_call");
-    expect(candidates.size).toBe(1);
+    expect([out[0]?.status, out[0]?.triage?.verdict, candidates.size]).toEqual(["triaged", "needs_call", 1]);
+    expect([out[0]?.externalId, out[0]?.title]).toEqual([pushed.item.externalId, pushed.item.title]);
+    expect(pushed.item.title).toBe(`${"x".repeat(299)}…`);
   });
-
+  it.each([false, true])("rejects a duplicate issue number with zero effects (split=%s)", async (split) => {
+    const first = { number: 7, title: "first" },
+      replay = { number: 7, title: "replay" };
+    const pages = split ? [[first], [replay]] : [[first, replay]];
+    const nextPath = "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate&page=2";
+    let calls = 0;
+    const client: GitHubHttpClient = {
+      request: async () => ({
+        status: 200,
+        body: githubRows(pages[calls++]!),
+        nextPagePath: calls < pages.length ? nextPath : undefined,
+      }),
+    };
+    const { pool, candidates } = stubPool();
+    const triage = vi.fn<() => never>();
+    await expect(
+      ingestSource(
+        { pool, connectors: new Map([["issues", githubConnector(client)]]), answerer: { triage } as never },
+        issuesSource,
+      ),
+    ).rejects.toThrow(/repeated an issue number/u);
+    expect([calls, candidates.size, triage.mock.calls.length]).toEqual([pages.length, 0, 0]);
+  });
   it("auto-routes a system source's findings (status auto_routed)", async () => {
     const connector: SourceConnector = {
       kind: "scheduled_audit",
@@ -355,7 +364,6 @@ describe("ingestSource (connector → triage → upsert)", () => {
     expect([...candidates.values()][0]?.body).toBe("v2");
   });
 });
-
 describe("accept → discovery hand-off", () => {
   it("creates a spec via the discovery accept path and resolves the candidate", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
@@ -386,7 +394,6 @@ describe("accept → discovery hand-off", () => {
     expect(result.candidate.status).toBe("accepted");
     expect(result.specId).toMatch(/^spec_/u);
     expect(result.candidate.resolvedSpecId).toBe(result.specId);
-    // a spec was actually created through the discovery accept path.
     expect(specs.size).toBe(1);
   });
 
@@ -429,14 +436,10 @@ describe("sentry connector (mocked)", () => {
     const items = await connector.fetch(sentrySource);
 
     expect(items).toHaveLength(2);
-    // externalId is the stable Sentry issue id (idempotency key).
     expect(items[0]?.externalId).toBe("sentry-4001");
     expect(items[0]?.title).toContain("TypeError");
-    // body carries the permalink + computed metadata for downstream triage.
     expect(items[0]?.body).toContain("https://sentry.io/organizations/cat-cave/issues/4001/");
     expect(items[0]?.body).toContain("users affected: 42");
-    // the request hit the org/project-scoped issues endpoint with the default
-    // unresolved query and the auth token from the secret store.
     expect(calls[0]?.path).toContain("/api/0/projects/cat-cave/app/issues/");
     expect(calls[0]?.path).toContain("is%3Aunresolved");
     expect(calls[0]?.token).toBe("sntrys_token");
@@ -445,9 +448,7 @@ describe("sentry connector (mocked)", () => {
   it("maps sentry level to severity (error→fail, warning→warn, else→info)", async () => {
     const { client } = fakeSentry(sentryIssues);
     const items = await sentryConnector(client).fetch(sentrySource);
-    // error
     expect(items[0]?.severity).toBe("fail");
-    // warning
     expect(items[1]?.severity).toBe("warn");
   });
 
@@ -468,7 +469,6 @@ describe("sentry connector (mocked)", () => {
     expect(out).toHaveLength(2);
     expect(out[0]?.status).toBe("triaged");
     expect(out[0]?.triage?.verdict).toBe("needs_call");
-    // a fail-severity sentry error proposes a bug discovery variant.
     expect(out[0]?.triage?.discoveryVariant).toBe("bug");
     expect(candidates.size).toBe(2);
   });

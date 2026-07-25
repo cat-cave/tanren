@@ -4,6 +4,7 @@ export interface SentryNextPageInput {
   link: string | undefined;
   baseUrl: string;
   resourcePath: string;
+  initialCursor: string | undefined;
   currentCursor: string | undefined;
   seenCursors: ReadonlySet<string>;
 }
@@ -44,7 +45,9 @@ function validatedRelation(
   if (link.parameters.get("cursor") !== cursor) malformed("cursor parameter disagrees with target");
   return { results: results === "true", url, cursor };
 }
-export function sentryNextPage(input: SentryNextPageInput): { path: string; cursor: string } | undefined {
+export function sentryNextPage(
+  input: SentryNextPageInput,
+): { path: string; cursor: string; initialCursor: string } | undefined {
   if (input.link === undefined || input.link.trim() === "") malformed("missing pagination proof");
   let values: ParsedLinkValue[];
   try {
@@ -60,9 +63,12 @@ export function sentryNextPage(input: SentryNextPageInput): { path: string; curs
     malformed("expected exactly one previous and one next relation");
   const prior = validatedRelation(input, previous[0]!, "previous");
   const next = validatedRelation(input, following[0]!, "next");
+  const initialCursor = input.initialCursor ?? prior.cursor;
+  if (input.currentCursor !== undefined && prior.cursor !== input.initialCursor)
+    malformed("previous cursor did not match the initial page");
   if (!next.results) return undefined;
   if (next.cursor === prior.cursor || next.cursor === input.currentCursor || input.seenCursors.has(next.cursor))
     malformed("next cursor did not make progress");
   const requestPath = new URL(input.resourcePath, "https://sentry.invalid").pathname;
-  return { path: `${requestPath}${next.url.search}`, cursor: next.cursor };
+  return { path: `${requestPath}${next.url.search}`, cursor: next.cursor, initialCursor };
 }
