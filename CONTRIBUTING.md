@@ -33,17 +33,18 @@ planning, read the [parallel orchestration playbook](docs/playbooks/parallel-orc
 
 ## Claiming an issue
 
-There is no claim bot, and external contributors do not have write access, so the
-mechanism is deliberately simple:
+Self-serve claims run through a GitHub Action on issue comments:
 
 1. **Pick a ready issue.** An issue is ready only when it is not `blocked_by` an
    open issue — check the issue's Dependencies panel ("blocked by"). Skip anything
    still blocked; its blocker lands first.
-2. **Comment to claim it.** Say you're taking it; a maintainer assigns it to you.
-   Hold **one** open claim at a time.
-3. **Release if you stall.** If you can't finish, comment to release it so someone
-   else can pick it up. Reclaiming an abandoned claim is currently manual — a
-   maintainer may reassign an issue whose claim is stale and has no PR activity.
+2. **Comment `/claim` on the issue.** The bot assigns you when the issue is open,
+   unassigned, and free of open `blocked_by` edges, then posts a confirmation.
+   Already-claimed or still-blocked issues are refused with a clear comment; a
+   claim on a closed issue is a no-op. Hold **one** open claim at a time.
+3. **Release if you stall.** Comment `/unclaim` to unassign yourself so someone
+   else can pick it up. Stale claims are also released by CRA abandonment
+   (CRA-09), which unassigns and comments that the issue is claimable again.
 
 ## Feature requests & questions
 
