@@ -20,7 +20,13 @@ export const SentryPrincipalIdentity = z
   })
   .catchall(z.string());
 export type SentryPrincipalIdentity = z.infer<typeof SentryPrincipalIdentity>;
+export class SentryPrincipalRelinkRequiredError extends Error {}
+export function requireSentryPrincipalIdentity(value: unknown): SentryPrincipalIdentity {
+  const identity = SentryPrincipalIdentity.safeParse(value);
+  if (!identity.success) throw new SentryPrincipalRelinkRequiredError("sentry_principal_relink_required");
+  return identity.data;
+}
 export function sentryPrincipalIdentity(orgSlug: string, baseUrl: string): SentryPrincipalIdentity {
   const endpoint = canonicalSentryEndpoint(baseUrl);
-  return SentryPrincipalIdentity.parse({ sentryIdentityVersion: "1", orgSlug, baseUrl: endpoint });
+  return requireSentryPrincipalIdentity({ sentryIdentityVersion: "1", orgSlug, baseUrl: endpoint });
 }

@@ -2,7 +2,7 @@
 // X-RateLimit-Reset) with bounded backoff instead of hammering, and the status
 // service reads branch-protection required contexts.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FetchGitHubHttpClient,
   GitHubStatusService,
@@ -86,6 +86,23 @@ describe("github rate-limit backoff (P3-0028)", () => {
 
     expect(response).toMatchObject({ status: 429, retryAfterMs: 73_000 });
     expect({ calls, slept }).toEqual({ calls: 1, slept: [] });
+  });
+
+  it("fails malformed, ambiguous, and off-origin Link headers without retrying", async () => {
+    const path = "/repos/cat-cave/app/issues";
+    for (const link of [
+      "malformed",
+      `<${path}?page=2>; rel=next, <${path}?page=3>; rel=next`,
+      "<https://attacker.invalid/page>; rel=next",
+    ]) {
+      const slept: number[] = [];
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response("[]", { status: 200, headers: { Link: link } }));
+      const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+      await expect(client.request({ method: "GET", path, token: "t" })).rejects.toThrow(
+        /invalid|ambiguous|off-origin/u,
+      );
+      expect({ calls: fetchImpl.mock.calls.length, slept }).toEqual({ calls: 1, slept: [] });
+    }
   });
 
   it("§4: honors a 429 Retry-After even AFTER a transient-503 burst", async () => {

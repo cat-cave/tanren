@@ -21,11 +21,7 @@ import {
   unavailableError,
 } from "./principalVerifierSupport.js";
 import { sentryNextPage, SentryPaginationError } from "./sentryPagination.js";
-import {
-  canonicalSentryEndpoint,
-  sentryPrincipalIdentity,
-  SentryPrincipalIdentity,
-} from "./sentryPrincipalIdentity.js";
+import * as sentryIdentity from "./sentryPrincipalIdentity.js";
 
 export type PrincipalVerificationResult =
   | { status: "verified"; principal: PrincipalCandidate; authKind: string; scopes: string[]; expiresAt?: string }
@@ -58,7 +54,7 @@ export async function scopesForSelectedPrincipal(
 ): Promise<string[]> {
   if (providerKind !== "sentry") return discoveredScopes;
   const token = await readStagedToken(permit, staged, secrets);
-  const identity = SentryPrincipalIdentity.parse(principal.metadata);
+  const identity = sentryIdentity.requireSentryPrincipalIdentity(principal.metadata);
   const scopes = await probeSentryScopes(fetchImpl, token, identity);
   if (scopes.length === 0) throw new Error("selected_principal_scopes_unproven");
   return scopes;
@@ -138,7 +134,7 @@ const SentryOrgSchema = z.object({
 async function probeSentryScopes(
   fetchImpl: FetchImpl,
   token: string,
-  identity: SentryPrincipalIdentity,
+  identity: sentryIdentity.SentryPrincipalIdentity,
 ): Promise<string[]> {
   const scopes = new Set<string>();
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
@@ -178,7 +174,7 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
     private readonly fetchImpl: FetchImpl,
     endpoint: string,
   ) {
-    this.endpoint = canonicalSentryEndpoint(endpoint);
+    this.endpoint = sentryIdentity.canonicalSentryEndpoint(endpoint);
   }
 
   async verify(
@@ -214,7 +210,7 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
           currentCursor,
           seenCursors,
         });
-        if (next === undefined) path = undefined;
+        if (next === null) path = undefined;
         else {
           seenCursors.add(next.cursor);
           initialCursor = next.initialCursor;
@@ -231,7 +227,7 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
       providerPrincipalId: organization.id,
       principalKind: "organization",
       displayName: organization.name ?? organization.slug,
-      metadata: sentryPrincipalIdentity(organization.slug, this.endpoint),
+      metadata: sentryIdentity.sentryPrincipalIdentity(organization.slug, this.endpoint),
     }));
     if (candidates.length === 0) return { status: "invalid", reason: "sentry_no_organizations" };
 

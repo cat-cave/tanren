@@ -1,6 +1,7 @@
 export type ParsedLinkValue = { target: string; parameters: ReadonlyMap<string, string> };
+export class LinkHeaderError extends Error {}
 function malformed(detail: string): never {
-  throw new Error(detail);
+  throw new LinkHeaderError(detail);
 }
 export function parseLinkHeader(header: string): ParsedLinkValue[] {
   return header.split(/,\s*(?=<)/u).map((rawValue) => {

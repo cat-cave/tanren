@@ -1,5 +1,5 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
-import { parseLinkHeader } from "../../integrations/linkHeader.js";
+import { LinkHeaderError, parseLinkHeader } from "../../integrations/linkHeader.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../github.js";
 import {
   buildErrorDetail,
@@ -51,6 +51,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       try {
         response = await this.send(input.path, input.method, token, input.body);
       } catch (error) {
+        if (error instanceof LinkHeaderError) throw error;
         // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is transient
         // by nature (no HTTP status) — retry on transient indefinitely while it makes progress,
         // surfacing the underlying throw LOUDLY only when the transport error is non-converging
@@ -144,22 +145,22 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
 }
 function githubNextPagePath(link: string | null, apiBaseUrl: string): string | undefined {
   if (link === null || link.trim() === "") return undefined;
-  const values = parseLinkHeader(link);
-  const nextLinks = values
+  const nextLinks = parseLinkHeader(link)
     .filter((value) => {
       const rel = value.parameters.get("rel");
       if (rel === undefined) return false;
       const relations = rel.toLowerCase().split(/\s+/u).filter(Boolean);
       if (relations.length === 0 || relations.some((relation) => !/^[a-z][a-z0-9.-]*$/u.test(relation))) {
-        throw new Error("GitHub Link header contained a malformed rel parameter");
+        throw new LinkHeaderError("GitHub Link header contained a malformed rel parameter");
       }
       return relations.includes("next");
     })
     .map((value) => value.target);
   if (nextLinks.length === 0) return undefined;
-  if (nextLinks.length !== 1) throw new Error("GitHub Link header contained ambiguous next-page links");
+  if (nextLinks.length !== 1) throw new LinkHeaderError("GitHub Link header contained ambiguous next-page links");
   const api = new URL(apiBaseUrl);
+  if (!URL.canParse(nextLinks[0]!, api)) throw new LinkHeaderError("GitHub Link header contained an invalid page URL");
   const url = new URL(nextLinks[0]!, api);
-  if (url.origin !== api.origin) throw new Error("GitHub Link header next-page URL was not API-origin scoped");
+  if (url.origin !== api.origin) throw new LinkHeaderError("GitHub Link header next page was off-origin");
   return `${url.pathname}${url.search}`;
 }
