@@ -25,6 +25,11 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+interface CacheFlight {
+  generation: number;
+  promise: Promise<string | undefined>;
+}
+
 /**
  * A process-local TTL + single-flight cache for default-branch head reads, keyed by
  * `owner/name/branch`. One shared instance (`sharedMainHeadCache`) backs the live host so
@@ -34,7 +39,8 @@ interface CacheEntry {
  */
 export class MainHeadCache {
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inflight = new Map<string, Promise<string | undefined>>();
+  private readonly inflight = new Map<string, CacheFlight>();
+  private readonly generations = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -49,34 +55,51 @@ export class MainHeadCache {
    * cached and propagates (a 403/transient must not be memoized).
    */
   async read(key: string, read: () => Promise<string | undefined>): Promise<string | undefined> {
+    const generation = this.generationOf(key);
     const cached = this.entries.get(key);
     if (cached !== undefined && cached.expiresAt > this.now()) {
       return cached.sha;
     }
     const existing = this.inflight.get(key);
-    if (existing !== undefined) {
-      return existing;
+    if (existing !== undefined && existing.generation === generation) {
+      return existing.promise;
     }
     const promise = read()
       .then((sha) => {
+        // A land invalidated this key while this request was in flight. Discard its
+        // result entirely and join (or start) the current generation instead.
+        if (this.generationOf(key) !== generation) {
+          return this.read(key, read);
+        }
         this.entries.set(key, { sha, expiresAt: this.now() + this.ttlMs });
         return sha;
       })
       .finally(() => {
-        this.inflight.delete(key);
+        // Do not delete a newer generation's flight when this stale one settles.
+        if (this.inflight.get(key)?.generation === generation) {
+          this.inflight.delete(key);
+        }
       });
-    this.inflight.set(key, promise);
+    this.inflight.set(key, { generation, promise });
     return promise;
   }
 
   /** Bust the cached head for `key` (call when a merge to that branch completes). */
   invalidate(key: string): void {
     this.entries.delete(key);
+    this.generations.set(key, this.generationOf(key) + 1);
   }
 
   /** Bust every cached head (a coarse reset; used by tests). */
   clear(): void {
+    for (const key of new Set([...this.entries.keys(), ...this.inflight.keys(), ...this.generations.keys()])) {
+      this.invalidate(key);
+    }
     this.entries.clear();
+  }
+
+  private generationOf(key: string): number {
+    return this.generations.get(key) ?? 0;
   }
 }
 

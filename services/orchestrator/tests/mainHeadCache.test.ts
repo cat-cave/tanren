@@ -56,6 +56,40 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
     expect(await cache.read("k", read)).toBe("sha-2");
   });
 
+  it("fences a stale in-flight read so neither reader returns or republishes its SHA", async () => {
+    const cache = new MainHeadCache();
+    let releaseStale!: () => void;
+    let releaseFresh!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const freshGate = new Promise<void>((resolve) => {
+      releaseFresh = resolve;
+    });
+    let staleReads = 0;
+    let freshReads = 0;
+
+    const staleReader = cache.read("k", async () => {
+      staleReads += 1;
+      await staleGate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    const postLandReader = cache.read("k", async () => {
+      freshReads += 1;
+      await freshGate;
+      return "fresh";
+    });
+
+    // Invalidation makes the post-land reader start a distinct generation, rather than
+    // joining the stale flight. When that old flight settles, it joins the fresh one.
+    expect([staleReads, freshReads]).toEqual([1, 1]);
+    releaseStale();
+    releaseFresh();
+    await expect(Promise.all([staleReader, postLandReader])).resolves.toEqual(["fresh", "fresh"]);
+    expect(await cache.read("k", async () => "unexpected")).toBe("fresh");
+  });
+
   it("does NOT cache a throw (a 403/transient must re-read, never memoize the failure)", async () => {
     const cache = new MainHeadCache();
     let attempts = 0;
@@ -74,7 +108,7 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
 /** A scripted HTTP client that records requested paths. */
 class RecordingHttp implements GitHubHttpClient {
   readonly paths: string[] = [];
-  constructor(private readonly responder: (path: string) => GitHubHttpResponse) {}
+  constructor(private readonly responder: (path: string) => GitHubHttpResponse | Promise<GitHubHttpResponse>) {}
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.paths.push(input.path);
     return this.responder(input.path);
@@ -135,5 +169,67 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
         idempotencyKey: "intent-mhc",
       }),
     ).rejects.toThrow(/stale compare-and-swap/u);
+  });
+
+  it("an idempotent retry fences a pre-land flight before reporting the authorized SHA", async () => {
+    let mainSha = "head1";
+    let refReads = 0;
+    let releaseStale!: () => void;
+    let staleReadStarted!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const staleStarted = new Promise<void>((resolve) => {
+      staleReadStarted = resolve;
+    });
+    const http = new RecordingHttp(async (path) => {
+      if (path.startsWith("/repos/o/r/git/ref/heads/")) {
+        refReads += 1;
+        if (refReads === 1) {
+          staleReadStarted();
+          await staleGate;
+          return refResponse("head1");
+        }
+        return refResponse(mainSha);
+      }
+      if (path.startsWith("/repos/o/r/git/refs/heads/")) {
+        mainSha = "head2";
+        throw new Error("transport lost after the ref update");
+      }
+      return refResponse(mainSha);
+    });
+    const cache = new MainHeadCache();
+    const host = new GitHubCodeHost(http, async () => ({ token: "t" }), cache);
+
+    const preLandReader = host.fetchRef({ repo, remoteBranch: "main" });
+    await staleStarted;
+    await expect(
+      host.landAuthorizedIntegration({
+        repo,
+        intoMain: "main",
+        expectedMainSha: "head1",
+        authorizedSha: "head2",
+        idempotencyKey: "transport-loss",
+      }),
+    ).rejects.toThrow(/transport lost/u);
+
+    // The retry reads main fresh, observes the already-landed authorized SHA, and must
+    // invalidate before it reports success. A following reader cannot join the old flight.
+    await expect(
+      host.landAuthorizedIntegration({
+        repo,
+        intoMain: "main",
+        expectedMainSha: "head1",
+        authorizedSha: "head2",
+        idempotencyKey: "transport-loss",
+      }),
+    ).resolves.toEqual({ mainSha: "head2" });
+    const postRetryReader = host.fetchRef({ repo, remoteBranch: "main" });
+    releaseStale();
+
+    await expect(Promise.all([preLandReader, postRetryReader])).resolves.toEqual(["head2", "head2"]);
+    expect(refReads).toBe(4); // stale flight + failed land + retry + post-retry fresh fetch
+    await expect(host.fetchRef({ repo, remoteBranch: "main" })).resolves.toBe("head2");
+    expect(refReads).toBe(4);
   });
 });
