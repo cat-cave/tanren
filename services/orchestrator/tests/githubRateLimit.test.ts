@@ -291,6 +291,27 @@ describe("github required-context awareness (P3-0028)", () => {
     expect(passedEffects).toBe(0);
   });
 
+  it("fails closed when the unprotected branch proof has no matching branch identity", async () => {
+    for (const proof of [{ protected: false }, { name: "release", protected: false }]) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 404, body: { message: "Not Found" } },
+        { status: 200, body: proof },
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(/branch response name did not match requested branch/u);
+      expect(passedEffects).toBe(0);
+    }
+  });
+
   it("fails closed when the branch proof is missing, denied, raced away, or malformed", async () => {
     const input = { repo: { owner: "o", name: "r" }, token: "t", baseBranch: "main" };
     for (const proof of [

@@ -50,12 +50,20 @@ export function parseRequiredContexts(value: unknown): string[] {
   throw new TypeError("GitHub required-status-checks response missing checks or contexts");
 }
 
-/** Parse the documented `protected` boolean from `GET /branches/{branch}`. */
-export function parseBranchProtected(value: unknown): boolean {
+/**
+ * Parse the documented branch identity and `protected` boolean from
+ * `GET /branches/{branch}`. The identity check prevents a redirect or rename
+ * race from authoritatively proving a different branch unprotected.
+ */
+export function parseBranchProtected(value: unknown, expectedBranch: string): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("GitHub branch response was not an object");
   }
-  const isProtected = (value as Record<string, unknown>)["protected"];
+  const object = value as Record<string, unknown>;
+  if (object["name"] !== expectedBranch) {
+    throw new TypeError("GitHub branch response name did not match requested branch");
+  }
+  const isProtected = object["protected"];
   if (typeof isProtected !== "boolean") {
     throw new TypeError("GitHub branch response missing protected boolean");
   }

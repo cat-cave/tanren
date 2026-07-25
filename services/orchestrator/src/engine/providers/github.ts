@@ -311,7 +311,7 @@ export class GitHubStatusService {
         ),
       );
     }
-    if (parseBranchProtected(branch.body)) {
+    if (parseBranchProtected(branch.body, input.baseBranch)) {
       throw new Error(
         `GitHub branch-protection read for ${input.baseBranch} was ambiguous: required-status-checks HTTP 404; branch proof protected=true`,
       );
