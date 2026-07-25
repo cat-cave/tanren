@@ -205,15 +205,21 @@ function main() {
     selftest();
     return;
   }
-  // Prior open/dismissed fingerprints: explicit args/files/env win; else read
-  // them from the PR's sticky ocr-state marker (#seam1 standalone marker reader).
-  let openRaw = args.open || (args.openFile && readFileSync(args.openFile, "utf8")) || process.env.OPEN_FPS;
+  // Prior open/dismissed fingerprints come from the PR's sticky ocr-state marker
+  // (#seam1). Any explicit args/files/env are UNIONed with the marker — never a
+  // replacement, so a prior dismissed fp is never lost, and the human-signal
+  // dismissed set (--dismissed, from gather-signal.mjs) drops this round too.
+  let openRaw = args.open || (args.openFile && readFileSync(args.openFile, "utf8")) || process.env.OPEN_FPS || "";
   let dismissedRaw =
-    args.dismissed || (args.dismissedFile && readFileSync(args.dismissedFile, "utf8")) || process.env.DISMISSED_FPS;
-  if (args.pr && openRaw === null && dismissedRaw === null) {
+    args.dismissed ||
+    (args.dismissedFile && readFileSync(args.dismissedFile, "utf8")) ||
+    process.env.DISMISSED_FPS ||
+    "";
+  if (args.pr) {
     const marker = readMarker(args.pr);
-    openRaw = marker.open.map((o) => (typeof o === "string" ? o : o.fp)).join(",");
-    dismissedRaw = marker.dismissed.join(",");
+    const mOpen = marker.open.map((o) => (typeof o === "string" ? o : o.fp)).join(",");
+    openRaw = [openRaw, mOpen].filter(Boolean).join(",");
+    dismissedRaw = [dismissedRaw, marker.dismissed.join(",")].filter(Boolean).join(",");
   }
   const openSet = parseFpList(openRaw);
   const dismissedSet = parseFpList(dismissedRaw);
