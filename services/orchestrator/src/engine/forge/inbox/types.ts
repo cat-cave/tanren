@@ -38,8 +38,8 @@ export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
 /** The sole active persisted shape for a GitHub issues source. */
 export const ActiveGitHubIssuesConfig = z
   .object({
-    owner: z.string().trim().min(1),
-    repo: z.string().trim().min(1),
+    owner: z.string().trim().toLowerCase().min(1),
+    repo: z.string().trim().toLowerCase().min(1),
     labels: z.array(z.string().trim().min(1)),
     pollIntervalMs: z.number().int().positive().optional(),
   })

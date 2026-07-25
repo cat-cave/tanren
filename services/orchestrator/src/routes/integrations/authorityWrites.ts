@@ -35,10 +35,7 @@ export interface IntegrationAuthorityRouteDatabase {
   withOrgScope<T>(orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T>;
 }
 
-const CredentialBody = z.object({
-  token: z.string().min(1).max(4096),
-  idempotencyKey: z.string().min(1).max(200),
-});
+const CredentialBody = z.object({ token: z.string().min(1).max(4096), idempotencyKey: z.string().min(1).max(200) });
 const LinkBody = CredentialBody.extend({ baseUrl: z.string().min(1).max(2048).optional() }).strict();
 const RotateBody = CredentialBody.strict();
 const SelectionBody = z
@@ -64,9 +61,8 @@ function linkVerifierEndpoint(providerKind: string, value: string | undefined): 
     return undefined;
   }
   if (value === undefined) throw new Error("Sentry endpoint is required");
-  const canonical = canonicalSentryEndpoint(value);
-  if (canonical !== value) throw new Error("Sentry endpoint must be canonical");
-  return canonical;
+  if (canonicalSentryEndpoint(value) !== value) throw new Error("Sentry endpoint must be canonical");
+  return value;
 }
 
 async function rotationVerifierEndpoint(
@@ -193,11 +189,8 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl, providerEndpoint).verify(
-        permit,
-        staged,
-        integrationSecrets,
-      );
+      const verifier = principalVerifierFor(providerKind, fetchImpl, providerEndpoint);
+      const verified = await verifier.verify(permit, staged, integrationSecrets);
       if (verified.status === "invalid") {
         const terminal = await terminalizeVerifierFailure(transitionContext, verified.reason);
         if (terminal.status === "completed") {
@@ -341,11 +334,8 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl, providerEndpoint).verify(
-        permit,
-        staged,
-        integrationSecrets,
-      );
+      const verifier = principalVerifierFor(providerKind, fetchImpl, providerEndpoint);
+      const verified = await verifier.verify(permit, staged, integrationSecrets);
       if (verified.status === "unavailable") {
         const unavailable = await recordVerifierUnavailable(transitionContext, verified.reason, verified.retryAfter);
         if (unavailable.status === "completed") {

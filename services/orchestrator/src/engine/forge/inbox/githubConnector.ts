@@ -42,6 +42,9 @@ const GithubIssuePayload = z
   })
   .passthrough();
 type GithubIssuePayload = z.infer<typeof GithubIssuePayload>;
+function paginationError(detail: string): never {
+  throw new IntakeSourceFetchError("github", 200, detail);
+}
 
 function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severity"] {
   const lowered = labels.map((l) => l.toLowerCase());
@@ -90,9 +93,7 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       let path: string | undefined = issuesPath;
       let page = 1;
       while (path !== undefined) {
-        if (seenPaths.has(path)) {
-          throw new IntakeSourceFetchError("github", 200, "issues pagination repeated a page path");
-        }
+        if (seenPaths.has(path)) paginationError("issues pagination repeated a page path");
         seenPaths.add(path);
         const response = await deps.githubHttp.request({
           method: "GET",
@@ -102,26 +103,12 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
           retryRateLimit: false,
         });
         assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
-        if (!Array.isArray(response.body)) {
-          throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
-        }
+        if (!Array.isArray(response.body)) paginationError("200 body was not an issues array");
         issues.push(...z.array(GithubIssuePayload).parse(response.body));
         if (response.nextPagePath !== undefined) {
           const nextPage = configuredIssuesPage(response.nextPagePath, issuesPath);
-          if (nextPage === undefined) {
-            throw new IntakeSourceFetchError(
-              "github",
-              response.status,
-              "next page changed the configured issues resource scope",
-            );
-          }
-          if (nextPage !== page + 1) {
-            throw new IntakeSourceFetchError(
-              "github",
-              response.status,
-              "issues pagination cursor did not advance contiguously",
-            );
-          }
+          if (nextPage === undefined) paginationError("next page changed the configured issues resource scope");
+          if (nextPage !== page + 1) paginationError("issues pagination cursor did not advance contiguously");
           page = nextPage;
         }
         path = response.nextPagePath;

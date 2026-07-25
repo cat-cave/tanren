@@ -31,8 +31,9 @@ export function sentryOrganizationsResponse(
 ): Response {
   const path = "/api/0/organizations/?per_page=100";
   const target = `${baseUrl}${path}&cursor=${cursor}`;
+  const previous = results ? "0:0:0" : cursor;
   const link =
-    `<${target}>; rel="previous"; results="false"; cursor="${cursor}", ` +
+    `<${baseUrl}${path}&cursor=${previous}>; rel="previous"; results="false"; cursor="${previous}", ` +
     `<${target}>; rel="next"; results="${String(results)}"; cursor="${cursor}"`;
   return Response.json(body, { headers: { link } });
 }

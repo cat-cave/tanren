@@ -1,19 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import { createGitHubIssuesConnector, ingestSource, type InboxSource } from "../src/engine/forge/inbox/index.js";
+import { createGitHubIssuesConnector, InboxSource, ingestSource } from "../src/engine/forge/inbox/index.js";
+import { mapGithubIssueWebhook } from "../src/engine/forge/intake/index.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
-const source: InboxSource = {
+const source = InboxSource.parse({
   id: "source-1",
   orgId: "org-1",
   projectId: "project-1",
   kind: "issues",
   name: "GitHub issues",
-  detail: "open issues",
   config: { owner: "cat-cave", repo: "tanren", labels: [] },
-  enabled: true,
-  autoRoute: false,
-};
+});
 const credentialRef = "credential/github/org/org-1/default";
 async function connector(githubHttp: GitHubHttpClient) {
   const secrets = new InMemorySecretStore();
@@ -65,5 +63,27 @@ describe("GitHub inbox connector fail-closed decoding", () => {
     await expect(result).rejects.toThrow(/configured issues resource scope/u);
     expect(query).not.toHaveBeenCalled();
     expect(calls).toBe(1);
+  });
+  it("canonicalizes mixed-case config so webhook and poll converge on one key", async () => {
+    const mixed = { ...source, config: { owner: "Cat-Cave", repo: "Tanren", labels: [] } };
+    const githubConnector = await connector({
+      async request() {
+        return {
+          status: 200,
+          body: [{ number: 1, title: "same issue", comments: 0, user: { login: "octocat" } }],
+        };
+      },
+    });
+    const [polled] = await githubConnector.fetch(mixed);
+    const webhook = mapGithubIssueWebhook(
+      {
+        action: "opened",
+        issue: { number: 1, title: "same issue", labels: [] },
+        repository: { owner: { login: "cat-cave" }, name: "tanren" },
+      },
+      mixed,
+    );
+    if (webhook.kind !== "ingest") throw new Error("expected ingest");
+    expect([polled?.externalId, webhook.item.externalId]).toEqual(["gh-cat-cave/tanren#1", "gh-cat-cave/tanren#1"]);
   });
 });
