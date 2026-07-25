@@ -254,6 +254,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
       const issues: SentryIssuePayload[] = [];
       const seenIssueIds = new Set<string>();
       const seenCursors = new Set<string>();
+      let initialCursor: string | undefined;
       let currentCursor: string | undefined;
       let path: string | undefined = issuesPath;
       while (path !== undefined) {
@@ -278,6 +279,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
             link: response.headers?.["link"],
             baseUrl,
             resourcePath: issuesPath,
+            initialCursor,
             currentCursor,
             seenCursors,
           });
@@ -288,23 +290,22 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         if (next === undefined) path = undefined;
         else {
           seenCursors.add(next.cursor);
+          initialCursor = next.initialCursor;
           currentCursor = next.cursor;
           path = next.path;
         }
       }
 
-      const items: IngestedItem[] = [];
-      for (const issue of issues) {
-        items.push({
+      return issues.map(
+        (issue): IngestedItem => ({
           // Idempotent external id = the Sentry issue id.
           externalId: `sentry-${issue.id}`,
           title: issue.title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFromLevel(asString(issue.level)),
           projectId: source.projectId,
-        });
-      }
-      return items;
+        }),
+      );
     },
   };
 }

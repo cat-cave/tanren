@@ -17,7 +17,8 @@ import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { z } from "zod";
 import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
-import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
+import { ActiveGitHubIssuesConfig, GithubIssueTitle } from "./types.js";
+import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 export interface GitHubConnectorDeps {
   secrets: SecretStore;
@@ -33,7 +34,7 @@ export interface GitHubConnectorDeps {
 const GithubIssuePayload = z
   .object({
     number: z.number().int().positive(),
-    title: z.string().min(1),
+    title: GithubIssueTitle,
     body: z.string().nullable().optional(),
     comments: z.number().int().nonnegative(),
     user: z.object({ login: z.string().min(1) }).passthrough(),
@@ -114,9 +115,12 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         path = response.nextPagePath;
       }
       const items: IngestedItem[] = [];
+      const seenIssueNumbers = new Set<number>();
       for (const issue of issues) {
         // The Issues API also returns PRs; drop them.
         if (issue.pull_request !== undefined) continue;
+        if (seenIssueNumbers.has(issue.number)) paginationError("provider repeated an issue number");
+        seenIssueNumbers.add(issue.number);
         const labels = labelNames(issue);
         items.push({
           externalId: `gh-${config.owner}/${config.repo}#${issue.number}`,

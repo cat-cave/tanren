@@ -241,6 +241,24 @@ describe("github issues connector — normalization", () => {
     const items = await githubConnector(client).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
   });
+  it.each([null, "bad", 1])("rejects a malformed pull-request marker %#", async (pull_request) => {
+    const { client } = recordGitHub([
+      { number: 1, title: "valid" },
+      { number: 2, title: "invalid", pull_request },
+    ]);
+    await expect(githubConnector(client).fetch(githubSource)).rejects.toThrow(/Invalid input/u);
+  });
+  it("rejects a structural NUL collision before another page request", async () => {
+    const nextPagePath = "/repos/cat-cave/app/issues?state=open&per_page=50&labels%00a=b&page=2";
+    const request = vi.fn<GitHubHttpClient["request"]>(async () => ({ status: 200, body: [], nextPagePath }));
+    await expect(
+      githubConnector({ request }).fetch({
+        ...githubSource,
+        config: { ...githubSource.config, labels: ["a\u0000b"] },
+      }),
+    ).rejects.toThrow(/configured issues resource scope/u);
+    expect(request).toHaveBeenCalledOnce();
+  });
   it("follows every advertised issues page instead of treating per_page=50 as complete", async () => {
     const calls: GitHubHttpRequest[] = [];
     const client: GitHubHttpClient = {

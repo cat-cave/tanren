@@ -35,6 +35,9 @@ export const InboxSourceAttention = z
   .strict();
 export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
 
+const truncateTitle = (title: string) => (title.length <= 300 ? title : `${title.slice(0, 299)}…`);
+export const GithubIssueTitle = z.string().trim().min(1).transform(truncateTitle);
+
 /** The sole active persisted shape for a GitHub issues source. */
 export const ActiveGitHubIssuesConfig = z
   .object({
