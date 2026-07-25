@@ -228,7 +228,8 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
     releaseStale();
 
     await expect(Promise.all([preLandReader, postRetryReader])).resolves.toEqual(["head2", "head2"]);
-    expect(refReads).toBe(4); // stale flight + failed land + retry + post-retry fresh fetch
+    // stale flight + failed land + retry + post-retry fresh fetch
+    expect(refReads).toBe(4);
     await expect(host.fetchRef({ repo, remoteBranch: "main" })).resolves.toBe("head2");
     expect(refReads).toBe(4);
   });
