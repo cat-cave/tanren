@@ -4,6 +4,7 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engi
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
+import { buildGitHubPushCommand } from "../src/engine/workspace/githubPush.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { RecordingPool } from "./helpers/githubDraftPrFakes.js";
 
@@ -42,6 +43,16 @@ class RefThenRaceHttp implements GitHubHttpClient {
 }
 
 describe("#1069 draft publication lease", () => {
+  it("uses an explicit empty expected-sha lease for a proven-absent first branch", () => {
+    expect(
+      buildGitHubPushCommand({
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        branch: "tanren/run_123",
+        forceWithLease: { expectedAbsent: true },
+      }),
+    ).toContain("--force-with-lease=refs/heads/tanren/run_123:");
+  });
+
   it("rejects a changed remote head without overwriting it or falsely publishing the PR", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });

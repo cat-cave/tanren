@@ -374,6 +374,14 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
     }
+    // First draft publication must prove the exact branch is absent before its
+    // force-with-lease push; do not consume the scripted PR/CI sequence.
+    if (
+      input.method === "GET" &&
+      input.path === "/repos/cat-cave/tanren-fixture-hard/git/ref/heads/tanren%2Fhard-tier"
+    ) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);

@@ -402,6 +402,14 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
     }
+    // The seeded worker run's initial draft branch is explicitly absent. This
+    // must remain out-of-band so the ordered PR/CI queue stays a strict proof.
+    if (
+      input.method === "GET" &&
+      input.path === "/repos/cat-cave/tanren-fixture-easy/git/ref/heads/tanren%2Fworker-test"
+    ) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
