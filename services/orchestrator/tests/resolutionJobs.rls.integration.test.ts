@@ -208,6 +208,68 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     ]);
   });
 
+  it("fences an expired owner's late complete/release before recovery", async () => {
+    await store.enqueue({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "rjob_expired_owner",
+      issueLoopId: a.loopId,
+      contractId: a.contractId,
+      stage: "baseline",
+      idempotencyKey: "iloop-a:expired-owner",
+    });
+    await expect(store.claimNext({ orgId: ORG_A, leaseOwner: "worker_a", leaseMs: 60_000 })).resolves.toMatchObject({
+      id: "rjob_expired_owner",
+      state: "running",
+      leaseOwner: "worker_a",
+    });
+
+    // Expire A's lease without recovering the row. The late operations below
+    // must be rejected while A is still the recorded owner.
+    await runWithOrgScope(app, ORG_A, (client) =>
+      client.query(
+        "UPDATE resolution_jobs SET lease_expiry = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
+        [ORG_A, "rjob_expired_owner"],
+      ),
+    );
+    const beforeLateMutation = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query(
+        `SELECT state, lease_owner, lease_expiry, attempt, idempotency_key, prior_attempt_id
+           FROM resolution_jobs
+          WHERE org_id = $1 AND id = $2`,
+        [ORG_A, "rjob_expired_owner"],
+      ),
+    );
+    expect(beforeLateMutation.rows[0]).toMatchObject({ state: "running", lease_owner: "worker_a" });
+
+    await expect(store.complete({ orgId: ORG_A, id: "rjob_expired_owner", leaseOwner: "worker_a" })).resolves.toBe(
+      false,
+    );
+    await expect(
+      store.release({
+        orgId: ORG_A,
+        id: "rjob_expired_owner",
+        leaseOwner: "worker_a",
+        state: "retryable",
+      }),
+    ).resolves.toBe(false);
+
+    const afterLateMutation = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query(
+        `SELECT state, lease_owner, lease_expiry, attempt, idempotency_key, prior_attempt_id
+           FROM resolution_jobs
+          WHERE org_id = $1 AND id = $2`,
+        [ORG_A, "rjob_expired_owner"],
+      ),
+    );
+    expect(afterLateMutation.rows).toEqual(beforeLateMutation.rows);
+
+    // Clean up the deliberately expired row only after the pre-recovery proof.
+    await expect(
+      store.recoverExpiredLeases({ orgId: ORG_A, leaseOwner: "cleanup_worker", leaseMs: 60_000 }),
+    ).resolves.toEqual([expect.objectContaining({ id: "rjob_expired_owner", leaseOwner: "cleanup_worker" })]);
+  });
+
   it("fences a stale worker's late complete/release after its lease expires and is re-claimed", async () => {
     await store.enqueue({
       orgId: ORG_A,
