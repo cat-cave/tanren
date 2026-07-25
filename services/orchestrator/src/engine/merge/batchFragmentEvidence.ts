@@ -8,12 +8,16 @@ import { z } from "zod";
 import { parseDigest } from "../contracts/cas.js";
 import { PgCasByteStore } from "../cas/pgCasByteStore.js";
 import type { LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
-import { FragmentContractSchema } from "../templates/fragments/fragmentEvidenceContract.js";
+import {
+  FragmentContractSchema,
+  type FragmentEvidenceManifestV1,
+} from "../templates/fragments/fragmentEvidenceContract.js";
 import { fragmentEvidenceContentBytes } from "../templates/fragments/fragmentEvidenceContract.js";
 import { isCandidateTestPath } from "../templates/fragments/functionalTestRecognizer.js";
 import {
   readComposedFragmentEvidenceManifest,
   readDeclaredFragmentEvidenceReport,
+  matchesFragmentEvidenceManifest,
   resolveFragmentEvidenceForBatch,
   type CapturedFragmentEvidenceArtifact,
   type FragmentEvidenceResolution,
@@ -43,6 +47,18 @@ const ARTIFACT_ROW_SCHEMA = z
     proof_unit_digest: z.null(),
   })
   .strict();
+
+/** Canonical org/project authority lookup shared by batch and eager proof admission. */
+export async function loadFragmentEvidenceAuthority(
+  pool: pg.Pool,
+  orgId: string,
+  projectId: string,
+  manifest: FragmentEvidenceManifestV1,
+): Promise<CapturedFragmentEvidenceArtifact | undefined> {
+  const fragment = await loadSelectedFragment(pool, orgId, manifest.fragment);
+  if (fragment === undefined || !matchesFragmentEvidenceManifest(manifest, fragment)) return undefined;
+  return loadCapturedArtifact(pool, orgId, projectId, manifest.evidence.contentDigest);
+}
 
 /** Construct the real resolver called by every production batch immediately before graph evaluation. */
 export function buildBatchFragmentEvidenceResolver(pool: pg.Pool): ResolveBatchFragmentEvidence {
@@ -121,7 +137,8 @@ async function loadSelectedFragment(
     const result = await client.query<Record<string, unknown>>(
       `SELECT kind, label, version, contract
          FROM fragments
-        WHERE org_id = $1 AND kind = $2 AND label = $3 AND version = $4 AND status = 'validated'`,
+        WHERE org_id = $1 AND kind = $2 AND label = $3 AND version = $4 AND status = 'validated'
+        FOR SHARE`,
       [orgId, manifestFragment.kind, label, manifestFragment.version],
     );
     if (result.rowCount !== 1) return null;
@@ -149,7 +166,10 @@ async function loadCapturedArtifact(
     const result = await client.query<Record<string, unknown>>(
       `SELECT cas_digest, proof_unit_digest
          FROM verification_artifacts
-        WHERE org_id = $1 AND project_id = $2 AND cas_digest = $3 AND proof_unit_digest IS NULL`,
+        WHERE org_id = $1 AND project_id = $2 AND cas_digest = $3 AND proof_unit_digest IS NULL
+          AND kind = 'fragment_evidence_contract'
+          AND media_type = 'application/vnd.tanren.fragment-evidence-contract+json'
+        FOR SHARE`,
       [orgId, projectId, digest],
     );
     if (result.rowCount !== 1) return null;

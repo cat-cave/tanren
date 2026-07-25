@@ -32,6 +32,8 @@ function plan() {
       appEnvHash: "e".repeat(64),
       quarantineVersion: "active_quarantine.v1:known",
     },
+    integration: { ref: "tanren/eager/run_frontier", headSha: frontierSha, treeHash: "d".repeat(40) },
+    fragmentEvidenceDigest: `sha256:${"f".repeat(64)}`,
   });
 }
 
