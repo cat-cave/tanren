@@ -19,6 +19,7 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
+import { readDraftPrPushLease } from "./githubDraftPrLease.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -231,6 +232,11 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
+    // Every draft-PR publication (including a post-review rework) must bind its
+    // force update to the exact remote state observed immediately before it.
+    // A changed head rejects at git's authoritative CAS; this catch records the
+    // failure and lets the run re-drive rather than report false publication.
+    const forceWithLease = await readDraftPrPushLease(http, repo, branch, resolved.token);
     await pushWorkspaceBranchToGitHub({
       ssh: input.ssh,
       target: input.target,
@@ -239,6 +245,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       branch,
       token: resolved.token,
       sourceRef: input.sourceRef,
+      forceWithLease,
     });
     await eventStore.append({
       ...context,

@@ -11,6 +11,8 @@ export interface DraftPrBranchInput {
   requestedBranch?: string;
 }
 
+export type GitHubPushLease = { expectedSha: string } | { expectedAbsent: true };
+
 export interface GitHubWorkspacePushInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
@@ -31,6 +33,11 @@ export interface GitHubWorkspacePushInput {
    * changes (no lockfile / node_modules).
    */
   sourceRef?: string;
+  /**
+   * Required for draft-PR publication.  Other workspace callers retain their
+   * existing explicit behavior; draft callers must never fall back to `--force`.
+   */
+  forceWithLease?: GitHubPushLease;
 }
 
 // The local ref the cleaned PR commits are staged onto before the push. Kept
@@ -328,7 +335,12 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
       cls: "vcs",
       workspace: input.workspacePath,
     }),
-    command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
+    command: buildGitHubPushCommand({
+      repoUrl: input.repoUrl,
+      branch: input.branch,
+      sourceRef: input.sourceRef,
+      ...(input.forceWithLease !== undefined && { forceWithLease: input.forceWithLease }),
+    }),
     stdin: input.token,
   });
 }
@@ -432,26 +444,32 @@ export function forceWithLeaseArg(branch: string, expectedSha: string): string {
   return `--force-with-lease=refs/heads/${validBranch}:${expectedSha}`;
 }
 
+export function forceWithLeaseAbsentArg(branch: string): string {
+  return `--force-with-lease=refs/heads/${validateGitBranchName(branch)}:`;
+}
+
 export function buildGitHubPushCommand(input: {
   repoUrl: string;
   branch: string;
   sourceRef?: string;
   /**
    * When set, the push is guarded by `--force-with-lease=refs/heads/<branch>:<expectedSha>`
-   * (#1059) instead of a blind `--force`: the dependent PR-head publish that a base-shift
-   * rebase/resolution rewrites. Absent ⇒ a blind `--force` — the INITIAL PR-branch push, whose
-   * branch Tanren is the sole writer of (no concurrent-write hazard) so a lease would only add a
-   * spurious first-push rejection.
+   * (#1059) instead of a blind `--force`: a rewritten dependent head. Draft-PR callers always
+   * supply a lease, including an explicit absence lease for first publication. The optional
+   * generic-builder fallback remains only for non-draft callers with their own write contract.
    */
-  forceWithLease?: { expectedSha: string };
+  forceWithLease?: GitHubPushLease;
 }): string {
   const branch = validateGitBranchName(input.branch);
   const sourceRef = validatePushSourceRef(input.sourceRef);
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
-  const forceArg =
+  const forceArg = quoteSshShellArg(
     input.forceWithLease === undefined
       ? "--force"
-      : quoteSshShellArg(forceWithLeaseArg(branch, input.forceWithLease.expectedSha));
+      : "expectedSha" in input.forceWithLease
+        ? forceWithLeaseArg(branch, input.forceWithLease.expectedSha)
+        : forceWithLeaseAbsentArg(branch),
+  );
 
   return [
     "set -eu",

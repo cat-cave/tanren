@@ -22,6 +22,12 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.requests.push({ ...input, token: "<redacted>" });
+    // Existing draft-PR fixtures model a first publication unless they explicitly
+    // exercise ref behavior. The production path still performs the ref read; this
+    // default keeps those fixtures focused on their PR API contract.
+    if (input.method === "GET" && input.path.includes("/git/ref/heads/")) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
