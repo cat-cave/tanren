@@ -287,7 +287,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
           if (error instanceof SentryPaginationError) fetchError(error.message);
           throw error;
         }
-        if (next === undefined) path = undefined;
+        if (next === null) path = undefined;
         else {
           seenCursors.add(next.cursor);
           initialCursor = next.initialCursor;

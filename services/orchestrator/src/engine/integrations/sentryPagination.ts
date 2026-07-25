@@ -26,11 +26,7 @@ function targetUrl(baseUrl: string, resourcePath: string, target: string): URL {
   if (!sameQueryMultiset(configured, next, "cursor")) malformed("page changed the configured query multiset");
   return next;
 }
-function validatedRelation(
-  input: SentryNextPageInput,
-  link: ParsedLinkValue,
-  relation: "previous" | "next",
-): { results: boolean; url: URL; cursor: string } {
+function validatedRelation(input: SentryNextPageInput, link: ParsedLinkValue, relation: "previous" | "next") {
   if (
     link.parameters.size !== 3 ||
     [...link.parameters.keys()].some((name) => name !== "rel" && name !== "results" && name !== "cursor")
@@ -45,9 +41,7 @@ function validatedRelation(
   if (link.parameters.get("cursor") !== cursor) malformed("cursor parameter disagrees with target");
   return { results: results === "true", url, cursor };
 }
-export function sentryNextPage(
-  input: SentryNextPageInput,
-): { path: string; cursor: string; initialCursor: string } | undefined {
+export function sentryNextPage(input: SentryNextPageInput) {
   if (input.link === undefined || input.link.trim() === "") malformed("missing pagination proof");
   let values: ParsedLinkValue[];
   try {
@@ -64,9 +58,9 @@ export function sentryNextPage(
   const prior = validatedRelation(input, previous[0]!, "previous");
   const next = validatedRelation(input, following[0]!, "next");
   const initialCursor = input.initialCursor ?? prior.cursor;
-  if (input.currentCursor !== undefined && prior.cursor !== input.initialCursor)
+  if (input.currentCursor && prior.cursor !== input.initialCursor)
     malformed("previous cursor did not match the initial page");
-  if (!next.results) return undefined;
+  if (!next.results) return null;
   if (next.cursor === prior.cursor || next.cursor === input.currentCursor || input.seenCursors.has(next.cursor))
     malformed("next cursor did not make progress");
   const requestPath = new URL(input.resourcePath, "https://sentry.invalid").pathname;

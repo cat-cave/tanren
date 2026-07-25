@@ -490,10 +490,10 @@ describe("verified principal link + multi-principal selection", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token: "unstaged", idempotencyKey: "legacy-rotate" }),
     });
-    expect([legacy.status, fetchImpl.mock.calls.length, (await secrets.list("secret://")).length]).toEqual([
-      409,
-      calls,
-      secretCount,
-    ]);
+    expect([
+      `${legacy.status}:${((await legacy.json()) as { error?: string }).error}`,
+      fetchImpl.mock.calls.length,
+      (await secrets.list("secret://")).length,
+    ]).toEqual(["409:verified_provider_identity_required", calls, secretCount]);
   });
 });
