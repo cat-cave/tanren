@@ -94,9 +94,34 @@ export function parseRulesWithoutRequiredStatusChecks(value: unknown): boolean {
     if (type === "required_status_checks") {
       throw new TypeError("GitHub branch rules require status checks that were not observed");
     }
+    if (!RULE_TYPES_WITHOUT_UNREPRESENTABLE_CHECK_REQUIREMENTS.has(type)) {
+      throw new TypeError(`GitHub branch rules contain unrepresentable or check-producing rule type ${type}`);
+    }
   }
   return value.length > 0;
 }
+
+// These are the documented rule types whose effects do not create a required
+// check context. Every other present or future type is rejected: returning an
+// empty context list is a proof claim, so an unfamiliar rule cannot be treated
+// as harmless. In particular workflows/code scanning/deployments cannot be
+// represented by this classic status-context reader.
+const RULE_TYPES_WITHOUT_UNREPRESENTABLE_CHECK_REQUIREMENTS = new Set([
+  "branch_name_pattern",
+  "commit_author_email_pattern",
+  "commit_message_pattern",
+  "committer_email_pattern",
+  "creation",
+  "deletion",
+  "file_path_restriction",
+  "max_file_path_length",
+  "non_fast_forward",
+  "pull_request",
+  "required_linear_history",
+  "required_signatures",
+  "tag_name_pattern",
+  "update",
+]);
 
 /**
  * Parse the documented branch identity and `protected` boolean from

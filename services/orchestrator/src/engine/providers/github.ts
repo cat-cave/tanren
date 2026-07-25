@@ -334,20 +334,12 @@ export class GitHubStatusService {
     baseBranch: string;
     refreshToken?: () => Promise<string>;
   }): Promise<string[]> {
-    const [protection, rules] = await Promise.all([
-      this.http.request({
-        method: "GET",
-        path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection`),
-        token: input.token,
-        refreshToken: input.refreshToken,
-      }),
-      this.http.request({
-        method: "GET",
-        path: repoPath(input.repo, `/rules/branches/${encodeURIComponent(input.baseBranch)}`),
-        token: input.token,
-        refreshToken: input.refreshToken,
-      }),
-    ]);
+    const protection = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
     if (protection.status !== 200 && protection.status !== 404) {
       throw new Error(
         withErrorDetail(
@@ -356,13 +348,7 @@ export class GitHubStatusService {
         ),
       );
     }
-    if (rules.status !== 200) {
-      throw new Error(
-        withErrorDetail(`GitHub branch rules read failed for ${input.baseBranch}: HTTP ${rules.status}`, rules),
-      );
-    }
-
-    const hasRulesetProof = parseRulesWithoutRequiredStatusChecks(rules.body);
+    const hasRulesetProof = await this.proveRulesWithoutRequiredStatusChecks(input);
     if (protection.status === 200) {
       parseNoClassicRequiredStatusChecks(protection.body);
       return [];
@@ -373,5 +359,42 @@ export class GitHubStatusService {
     throw new Error(
       `GitHub branch-protection read for ${input.baseBranch} was ambiguous: required-status-checks HTTP 404; no full protection or ruleset proof`,
     );
+  }
+
+  /**
+   * GitHub paginates branch rules. An empty first page (or a short final page)
+   * is the only proof of exhaustion: stopping after page one could overlook a
+   * later required-status or workflow rule and falsely publish an empty gate.
+   */
+  private async proveRulesWithoutRequiredStatusChecks(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<boolean> {
+    const pageSize = 100;
+    let page = 1;
+    let hasRulesetProof = false;
+    for (;;) {
+      const rules = await this.http.request({
+        method: "GET",
+        path: repoPath(
+          input.repo,
+          `/rules/branches/${encodeURIComponent(input.baseBranch)}?per_page=${pageSize}&page=${page}`,
+        ),
+        token: input.token,
+        refreshToken: input.refreshToken,
+      });
+      if (rules.status !== 200) {
+        throw new Error(
+          withErrorDetail(`GitHub branch rules read failed for ${input.baseBranch}: HTTP ${rules.status}`, rules),
+        );
+      }
+      const pageHasRules = parseRulesWithoutRequiredStatusChecks(rules.body);
+      hasRulesetProof ||= pageHasRules;
+      const rows = rules.body as unknown[];
+      if (rows.length < pageSize) return hasRulesetProof;
+      page += 1;
+    }
   }
 }
