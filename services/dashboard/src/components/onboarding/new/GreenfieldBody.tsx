@@ -30,6 +30,7 @@ export interface GreenfieldBodyProps {
     suggestions: InterviewSuggestion[];
     priorAnswer: string;
     capture: InterviewCapture;
+    state: string;
     complete: boolean;
     /** Derive-form prefill/validation (only meaningful once `complete`). */
     ownerDefault?: string;
@@ -92,6 +93,7 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
             suggestions={props.interview.suggestions}
             priorAnswer={props.interview.priorAnswer}
             capture={props.interview.capture}
+            state={props.interview.state}
             complete={props.interview.complete}
             csrfToken={props.csrfToken}
             ownerDefault={props.interview.ownerDefault}

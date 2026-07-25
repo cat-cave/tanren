@@ -14,7 +14,7 @@
  *     `DagCanvas` — the DAG is live, not a mock.
  *
  * State model (no migration, no session table): the running capture rides on a
- * hidden form field round-to-round; once derived, the projectId rides forward.
+ * signed, expiring state token round-to-round; once derived, the projectId rides forward.
  * Pause/resume = leave + return to the same step with the same hidden state.
  *
  * Routes:
@@ -31,6 +31,7 @@ import { OnboardingNewClient } from "../../../api/onboardingNewClient.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import { IntegrationsClient } from "../../../api/integrationsClient.js";
 import {
+  decodeInterviewStateForDisplay,
   emptyCapture,
   type DeriveAutonomy,
   type DeriveDeployInput,
@@ -52,15 +53,6 @@ function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
-}
-
-function parseCapture(raw: unknown): InterviewCapture {
-  if (typeof raw !== "string" || raw === "") return emptyCapture();
-  try {
-    return { ...emptyCapture(), ...(JSON.parse(raw) as Partial<InterviewCapture>) };
-  } catch {
-    return emptyCapture();
-  }
 }
 
 /** The derive form's prefill + linked-deploy options, resolved per request. */
@@ -125,6 +117,7 @@ function noOrgBody(error?: string, csrfToken?: string) {
         suggestions: [],
         priorAnswer: "",
         capture: emptyCapture(),
+        state: "",
         complete: false,
       }}
       error={error ?? "no org yet — finish org setup, then start a new project."}
@@ -151,7 +144,6 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
     ).round(ctx.org.id, {
       round: 1,
       answer: "",
-      capture: emptyCapture(),
     });
     return renderShell(
       c,
@@ -166,6 +158,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
           suggestions: result?.suggestions ?? [],
           priorAnswer: "",
           capture: result?.capture ?? emptyCapture(),
+          state: result?.state ?? "",
           complete: result?.complete ?? false,
         }}
         error={result === undefined ? "forge is unreachable — try again." : undefined}
@@ -208,8 +201,14 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
   const orgId = ctx.org!.id;
   const round = Number.parseInt(formField(form, "round", "1"), 10) || 1;
   const answer = formField(form, "answer");
-  const capture = parseCapture(form["capture"]);
-  const { result } = await (await writeNewClient(c, deps)).round(orgId, { round, answer, capture });
+  const state = formField(form, "state");
+  const { result } = await (
+    await writeNewClient(c, deps)
+  ).round(orgId, {
+    round,
+    answer,
+    ...(state === "" ? {} : { state }),
+  });
   const complete = result?.complete ?? false;
   // Only pay for the integrations read once the interview is actually ready to
   // derive (that is the only render where the owner/deploy form is shown).
@@ -226,8 +225,9 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
         say: result?.say ?? "tell me more.",
         suggestions: result?.suggestions ?? [],
         priorAnswer: answer,
-        capture: result?.capture ?? capture,
+        capture: result?.capture ?? decodeInterviewStateForDisplay(state)?.capture ?? emptyCapture(),
         complete,
+        state: result?.state ?? state,
         ...(prep === undefined ? {} : { ownerDefault: prep.ownerDefault, deployOptions: prep.deployOptions }),
       }}
       error={result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
@@ -238,7 +238,8 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
 
 async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgId = ctx.org!.id;
-  const capture = parseCapture(form["capture"]);
+  const state = formField(form, "state");
+  const capture = decodeInterviewStateForDisplay(state)?.capture ?? emptyCapture();
   const owner = formField(form, "owner").trim();
   const autonomy = parseAutonomy(formField(form, "autonomy"));
   const deploy = parseDeploy(formField(form, "deploy"));
@@ -249,7 +250,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form
   // derive call.
   if (owner === "") {
     const prep = await buildDerivePrep(c, ctx, deps);
-    return renderCompleteRetry(c, ctx, capture, {
+    return renderCompleteRetry(c, ctx, state, capture, {
       ownerError: "enter the github owner for the new repo before deriving.",
       ownerDefault: prep.ownerDefault,
       deployOptions: prep.deployOptions,
@@ -259,7 +260,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form
   const { ok, result } = await (
     await writeNewClient(c, deps)
   ).derive(orgId, {
-    capture,
+    state,
     owner,
     autonomy,
     ...(deploy === undefined ? {} : { deploy }),
@@ -268,7 +269,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form
     // Re-render step 1's completed state so the operator can retry the derive,
     // preserving the owner/deploy they entered.
     const prep = await buildDerivePrep(c, ctx, deps);
-    return renderCompleteRetry(c, ctx, capture, {
+    return renderCompleteRetry(c, ctx, state, capture, {
       error: "could not derive the spec dag — try again.",
       ownerDefault: owner === "" ? prep.ownerDefault : owner,
       deployOptions: prep.deployOptions,
@@ -282,6 +283,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, form
 function renderCompleteRetry(
   c: Context,
   ctx: ShellContext,
+  state: string,
   capture: InterviewCapture,
   opts: { error?: string; ownerError?: string; ownerDefault: string; deployOptions: DeployOption[] },
 ) {
@@ -302,6 +304,7 @@ function renderCompleteRetry(
         priorAnswer: "",
         capture,
         complete: true,
+        state,
         ownerDefault: opts.ownerDefault,
         ...(opts.ownerError === undefined ? {} : { ownerError: opts.ownerError }),
         deployOptions: opts.deployOptions,

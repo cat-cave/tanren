@@ -11,6 +11,7 @@ import {
   type InterviewAnswerer,
   type PreparedGreenfieldDeploy,
 } from "../../src/engine/forge/interview/index.js";
+import { OnboardingStateSigner } from "../../src/engine/forge/onboardingState.js";
 import type { MaterializeTemplate, SeededTemplate } from "../../src/engine/templates/index.js";
 import { GithubAppTokenMinter } from "../../src/engine/providers/githubAppTokenMinter.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware/auth.js";
@@ -25,6 +26,12 @@ import { RoutesPool } from "./routesPool.js";
 // real `resolveVcsToken` static read resolves (decomposition PR-3: the route builds a
 // real `GitHubCodeHost`, so the token resolution actually runs in tests now).
 const STATIC_GITHUB_TOKEN_REF = "credential/github/org/org_acme/default";
+const ONBOARDING_STATE_TEST_KEY = "issue-830-onboarding-state-test-key-0123456789";
+const ONBOARDING_STATE_REF = "platform/onboarding/state-signing";
+
+export async function signedInterviewState(capture: unknown, secrets: InMemorySecretStore): Promise<string> {
+  return new OnboardingStateSigner(secrets).signInterview({ orgId: "org_acme", nextRound: 1, capture });
+}
 
 // A fake App-installation minter: return a canned installation token so the App-org
 // repo-create path resolves WITHOUT signing a JWT / hitting the network (mirrors the
@@ -88,9 +95,14 @@ export function appWithGreenfieldRoutes(
 ) {
   const app = new Hono<ActorContextEnv>();
   const secrets = new InMemorySecretStore();
+  void secrets.put({ ref: ONBOARDING_STATE_REF, value: ONBOARDING_STATE_TEST_KEY });
+  const originalGet = secrets.get.bind(secrets);
   if (tokenResolutionInfraFailure) {
-    secrets.get = async () => {
-      throw new Error("vault unreachable: dial tcp 127.0.0.1:8200: connection refused");
+    secrets.get = async (ref) => {
+      if (ref === STATIC_GITHUB_TOKEN_REF) {
+        throw new Error("vault unreachable: dial tcp 127.0.0.1:8200: connection refused");
+      }
+      return originalGet(ref);
     };
   } else {
     // Seed the org-default static `github_token` secret so the static-credential
@@ -183,7 +195,7 @@ export function appWithGreenfieldRoutes(
   // `githubHttp` is the repo-create transport fake; its `createdRepositories` is the
   // assertable record of what the route created (the pre-decomposition tests asserted
   // on `vcsProvider.createdRepositories`).
-  return { app, githubHttp };
+  return { app, githubHttp, onboardingStateSecrets: secrets };
 }
 
 export function preparedDeploy(

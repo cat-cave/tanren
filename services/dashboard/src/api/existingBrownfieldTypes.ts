@@ -6,52 +6,58 @@
  * their own api modules so they never diverge a shared client).
  */
 
+import { z } from "zod";
+
 // Mirrors the orchestrator's `GovernancePosture` z.enum in
 // `services/orchestrator/src/engine/config/shared.ts` — extend both together.
 export type GovernancePosture = "strict" | "open" | "audit_only" | "lenient";
 
-export interface ReconPersona {
-  name: string;
-  description: string;
-  inferredFrom: string;
-}
+const ReconPersonaSchema = z.object({ name: z.string(), description: z.string(), inferredFrom: z.string() }).strict();
+const ReconBehaviorSchema = z.object({ persona: z.string(), title: z.string(), inferredFrom: z.string() }).strict();
+const ReconArchitectureLineSchema = z.object({ layer: z.string(), detail: z.string() }).strict();
+const ReconRiskSchema = z.object({ severity: z.enum(["info", "warn", "fail"]), note: z.string() }).strict();
+const ReconGapSchema = z
+  .object({
+    id: z.string(),
+    chapter: z.string(),
+    question: z.string(),
+    options: z.array(z.string()),
+  })
+  .strict();
 
-export interface ReconBehavior {
-  persona: string;
-  title: string;
-  inferredFrom: string;
-}
-
-export interface ReconArchitectureLine {
-  layer: string;
-  detail: string;
-}
-
-export interface ReconRisk {
-  severity: "info" | "warn" | "fail";
-  note: string;
-}
-
-export interface ReconGap {
-  id: string;
-  chapter: string;
-  question: string;
-  options: string[];
-}
-
-export interface ReconReport {
-  identity: { slug: string; purpose: string; inferredFrom: string };
-  personas: ReconPersona[];
-  behaviors: ReconBehavior[];
-  architecture: ReconArchitectureLine[];
-  risks: ReconRisk[];
-  gaps: ReconGap[];
-}
+export const ReconReportSchema = z
+  .object({
+    identity: z.object({ slug: z.string(), purpose: z.string(), inferredFrom: z.string() }).strict(),
+    personas: z.array(ReconPersonaSchema),
+    behaviors: z.array(ReconBehaviorSchema),
+    architecture: z.array(ReconArchitectureLineSchema),
+    risks: z.array(ReconRiskSchema),
+    gaps: z.array(ReconGapSchema),
+  })
+  .strict();
+export type ReconReport = z.infer<typeof ReconReportSchema>;
 
 export interface ReconResult {
   repoUrl: string;
   filesIndexed: number;
   report: ReconReport;
+  state: string;
+}
+
+/** Decode only for rendering; the orchestrator verifies the HMAC before use. */
+export function decodeReconStateForDisplay(raw: string): { repoUrl: string; report: ReconReport } | undefined {
+  const encoded = raw.split(".")[0];
+  if (encoded === undefined || encoded === "") return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    const state = z
+      .object({ kind: z.literal("recon"), repoUrl: z.string(), report: ReconReportSchema })
+      .passthrough()
+      .safeParse(parsed);
+    return state.success ? { repoUrl: state.data.repoUrl, report: state.data.report } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ConfigInjectionFile {

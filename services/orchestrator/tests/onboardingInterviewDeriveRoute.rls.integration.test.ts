@@ -213,10 +213,11 @@ describeDb("rv-21 — onboarding interview → DesignContract synthesis (real Po
     // assert the deterministic gate corrected it.
     type RoundBody = {
       capture: unknown;
+      state: string;
       complete: boolean;
       completion: { complete: boolean; missing: string[]; invalid: unknown[] };
     };
-    let capture: unknown;
+    let state: string | undefined;
     // Round 4 (index 3) claims complete:true while the capture still lacks the design seed
     // / interfaces / architecture / lifecycle — captured here to assert AFTER the loop.
     let earlyClaim: RoundBody | undefined;
@@ -225,11 +226,11 @@ describeDb("rv-21 — onboarding interview → DesignContract synthesis (real Po
       const res = await app.request(`/orgs/${ORG}/onboarding/interview/round`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ round, answer: "ok", ...(capture === undefined ? {} : { capture }) }),
+        body: JSON.stringify({ round, answer: "ok", ...(state === undefined ? {} : { state }) }),
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as RoundBody;
-      capture = body.capture;
+      state = body.state;
       if (round === 4) earlyClaim = body;
       finalComplete = body.complete;
     }
@@ -246,7 +247,7 @@ describeDb("rv-21 — onboarding interview → DesignContract synthesis (real Po
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        capture,
+        state,
         owner: OWNER,
         private: true,
         autonomy: "auto",
@@ -355,6 +356,7 @@ describeDb("rv-21 — onboarding interview → DesignContract synthesis (real Po
     expect(roundRes.status).toBe(200);
     const round = (await roundRes.json()) as {
       capture: unknown;
+      state: string;
       complete: boolean;
       completion: { complete: boolean; missing: string[]; invalid: Array<{ kind: string; ref: string }> };
     };
@@ -367,7 +369,7 @@ describeDb("rv-21 — onboarding interview → DesignContract synthesis (real Po
     const deriveRes = await app.request(`/orgs/${ORG}/onboarding/interview/derive`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capture: round.capture, owner: OWNER, deploy: { providerKind: "deploy.vercel" } }),
+      body: JSON.stringify({ state: round.state, owner: OWNER, deploy: { providerKind: "deploy.vercel" } }),
     });
     expect(deriveRes.status).toBe(409);
     const body = (await deriveRes.json()) as {

@@ -260,10 +260,12 @@ export class RoutesPool {
       return single(project === undefined ? undefined : { org_id: project.org_id });
     }
     // ProjectStore.getOwnership (the budget-route ownership guard).
-    if (trimmed.startsWith("SELECT org_id, default_branch FROM projects WHERE project_id = $1")) {
+    if (trimmed.startsWith("SELECT org_id, default_branch, repo_url FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
       return single(
-        project === undefined ? undefined : { org_id: project.org_id, default_branch: project.default_branch },
+        project === undefined
+          ? undefined
+          : { org_id: project.org_id, default_branch: project.default_branch, repo_url: project.repo_url },
       );
     }
     // PgBudgetGate: resolve the project's org + raw config in one read.

@@ -8,8 +8,8 @@
  *   4 spec dag + seed  — recon gaps + GitHub issues → seed specs
  *   5 governance       — strict/open/audit-only posture picker
  *
- * Steps 2-5 carry the recon report forward on hidden form fields (transient —
- * no session table), mirroring the greenfield capture model. The journey strip
+ * Steps 2-5 carry a signed, expiring recon state token on hidden form fields
+ * (transient — no session table), mirroring the greenfield capture model. The journey strip
  * mirrors the hi-fi `view-onboard-existing` step rail.
  */
 
@@ -54,6 +54,7 @@ export interface ExistingFullBodyProps {
   repoUrl?: string;
   recon?: ReconResult;
   report?: ReconReport;
+  state?: string;
   posture?: GovernancePosture;
   configInjection?: ConfigInjectionResult;
   configInjectionError?: string;
@@ -108,6 +109,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
           <ReconStep
             repoUrl={props.repoUrl}
             result={props.recon}
+            state={props.state ?? props.recon.state}
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
             csrfToken={props.csrfToken}
@@ -117,6 +119,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
           <ConfigInjectionStep
             repoUrl={props.repoUrl}
             report={props.report}
+            state={props.state ?? ""}
             posture={props.posture ?? "strict"}
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
@@ -129,6 +132,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
           <SeedDagStep
             repoUrl={props.repoUrl}
             report={props.report}
+            state={props.state ?? ""}
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
             seeded={props.seeded}

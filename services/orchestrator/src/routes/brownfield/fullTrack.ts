@@ -50,7 +50,6 @@ import {
   buildMigrationReport,
   classifyWorkflowIntents,
   BranchProtectionInput,
-  ReconReport,
   type ConfigInjectionGitHub,
   type ReconAnswerer,
   type RepoReader,
@@ -62,9 +61,13 @@ import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
-import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
+import {
+  InvalidOnboardingStateError,
+  OnboardingStateSigner,
+  type ReconStatePayload,
+} from "../../engine/forge/onboardingState.js";
 
 export interface BrownfieldFullTrackOptions {
   pool: pg.Pool;
@@ -87,9 +90,7 @@ const ReconBody = z.object({ repoUrl: z.string().min(1).max(400) }).strict();
 
 const ConfigInjectionBody = z
   .object({
-    repoUrl: z.string().min(1).max(400),
-    baseBranch: z.string().min(1).max(200).default("main"),
-    report: ReconReport,
+    state: z.string().min(1).max(500_000),
     posture: GovernancePosture.default("strict"),
     excludePaths: z.array(z.string().min(1).max(400)).default([]),
   })
@@ -97,8 +98,7 @@ const ConfigInjectionBody = z
 
 const SeedDagBody = z
   .object({
-    repoUrl: z.string().min(1).max(400),
-    report: ReconReport,
+    state: z.string().min(1).max(500_000),
     includeIssues: z.boolean().default(true),
   })
   .strict();
@@ -118,14 +118,20 @@ const MigrationBody = z
   })
   .strict();
 
+const systemActor = { kind: "system" } as const;
+
 export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOptions) {
   const app = new Hono<ActorContextEnv>();
+  const stateSigner = new OnboardingStateSigner(options.secrets);
 
   app.post("/:orgId/projects/:projectId/recon", async (c) => {
     const guard = await guardOrg(c, options.pool);
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
     const parsed = ReconBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_recon", issues: parsed.error.issues }, 400);
+    if (canonicalRepoUrl(parsed.data.repoUrl) !== canonicalRepoUrl(guard.repoUrl)) {
+      return c.json({ error: "repo_project_mismatch" }, 400);
+    }
     try {
       const resolved = await resolveTokenFor(options, guard.orgId);
       const reader =
@@ -142,7 +148,13 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
         },
         parsed.data.repoUrl,
       );
-      return c.json({ repoUrl: parsed.data.repoUrl, filesIndexed: index.filesIndexed, report }, 200);
+      const state = await stateSigner.signRecon({
+        orgId: guard.orgId,
+        projectId: guard.projectId,
+        repoUrl: guard.repoUrl,
+        report,
+      });
+      return c.json({ repoUrl: guard.repoUrl, filesIndexed: index.filesIndexed, report, state }, 200);
     } catch (error) {
       return c.json({ error: "recon_failed", message: messageOf(error) }, 502);
     }
@@ -153,13 +165,26 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
     const parsed = ConfigInjectionBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_config_injection", issues: parsed.error.issues }, 400);
-    const repo = parseGitHubRepository(parsed.data.repoUrl);
+    let state: ReconStatePayload;
+    try {
+      state = await stateSigner.verifyRecon(parsed.data.state, {
+        orgId: guard.orgId,
+        projectId: guard.projectId,
+        repoUrl: guard.repoUrl,
+      });
+    } catch (error) {
+      if (!(error instanceof InvalidOnboardingStateError)) {
+        return c.json({ error: "config_injection_failed", message: messageOf(error) }, 500);
+      }
+      return invalidStateResponse(error);
+    }
+    const repo = parseGitHubRepository(state.repoUrl);
     const files = proposeConfigFiles(
       {
         repoSlug: repo.name,
         orgLogin: repo.owner,
-        repoUrl: parsed.data.repoUrl,
-        report: parsed.data.report,
+        repoUrl: state.repoUrl,
+        report: state.report,
         posture: parsed.data.posture,
         generatedAt: new Date().toISOString(),
       },
@@ -176,8 +201,8 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
         });
       const pr = await openConfigInjectionPr({
         github,
-        repoUrl: parsed.data.repoUrl,
-        baseBranch: parsed.data.baseBranch,
+        repoUrl: state.repoUrl,
+        baseBranch: guard.defaultBranch,
         files,
       });
       return c.json(
@@ -198,14 +223,27 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
     const parsed = SeedDagBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_seed_dag", issues: parsed.error.issues }, 400);
+    let state: ReconStatePayload;
+    try {
+      state = await stateSigner.verifyRecon(parsed.data.state, {
+        orgId: guard.orgId,
+        projectId: guard.projectId,
+        repoUrl: guard.repoUrl,
+      });
+    } catch (error) {
+      if (!(error instanceof InvalidOnboardingStateError)) {
+        return c.json({ error: "seed_dag_failed", message: messageOf(error) }, 500);
+      }
+      return invalidStateResponse(error);
+    }
     try {
       const issues = parsed.data.includeIssues
-        ? await fetchIssuesFor(options, guard.orgId, guard.projectId, parsed.data.repoUrl)
+        ? await fetchIssuesFor(options, guard.orgId, guard.projectId, state.repoUrl)
         : [];
       const result = await seedDagFromReconAndIssues(options.pool, {
         projectId: guard.projectId,
         orgId: guard.orgId,
-        report: parsed.data.report,
+        report: state.report,
         issues,
         actor: { ...guard.actor, orgId: guard.orgId, projectId: guard.projectId },
       });
@@ -276,6 +314,7 @@ interface OrgGuard {
   orgId: string;
   projectId: string;
   defaultBranch: string;
+  repoUrl: string;
   actor: ActorContext;
   error?: string;
   status: 403 | 404;
@@ -292,6 +331,7 @@ async function guardOrg(
     orgId,
     projectId,
     defaultBranch: "main",
+    repoUrl: "",
     actor: actor as ActorContext,
     status: 403,
   };
@@ -301,7 +341,7 @@ async function guardOrg(
   if (ownership === undefined) return { ...base, error: "project_not_found", status: 404 };
   if (ownership.orgId !== null && ownership.orgId !== orgId)
     return { ...base, error: "project_access_denied", status: 403 };
-  return { ...base, defaultBranch: ownership.defaultBranch ?? "main" };
+  return { ...base, defaultBranch: ownership.defaultBranch ?? "main", repoUrl: ownership.repoUrl };
 }
 
 async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: string): Promise<ResolvedGithubToken> {
@@ -372,4 +412,16 @@ function externalPushPolicy(posture: GovernancePostureType): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function invalidStateResponse(error: unknown): Response {
+  const reason = error instanceof InvalidOnboardingStateError ? error.reason : "malformed";
+  return new Response(JSON.stringify({ error: "invalid_onboarding_state", reason }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function canonicalRepoUrl(repoUrl: string): string {
+  return repoUrl.replace(/\.git$/u, "");
 }

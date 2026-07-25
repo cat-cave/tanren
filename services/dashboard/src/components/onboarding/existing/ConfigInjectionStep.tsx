@@ -32,6 +32,7 @@ const PROPOSED: PreviewFile[] = [
 export function ConfigInjectionStep(props: {
   repoUrl: string;
   report: ReconReport;
+  state: string;
   posture: string;
   baseAction: string;
   projectId?: string;
@@ -45,6 +46,7 @@ export function ConfigInjectionStep(props: {
         opened={props.opened}
         repoUrl={props.repoUrl}
         report={props.report}
+        state={props.state}
         baseAction={props.baseAction}
         projectId={props.projectId}
         csrfToken={props.csrfToken}
@@ -76,9 +78,8 @@ export function ConfigInjectionStep(props: {
         <CsrfField token={props.csrfToken} />
         <input type="hidden" name="phase" value="open-pr" />
         <input type="hidden" name="step" value="3" />
-        <input type="hidden" name="repoUrl" value={props.repoUrl} />
         <input type="hidden" name="projectId" value={props.projectId ?? ""} />
-        <input type="hidden" name="report" value={JSON.stringify(props.report)} />
+        <input type="hidden" name="state" value={props.state} />
         <input type="hidden" name="posture" value={props.posture} />
         <div class="ex-cols-narrow">
           <div>
@@ -158,6 +159,7 @@ function OpenedView(props: {
   opened: ConfigInjectionResult;
   repoUrl: string;
   report: ReconReport;
+  state: string;
   baseAction: string;
   projectId?: string;
   csrfToken?: string;
@@ -198,9 +200,8 @@ function OpenedView(props: {
         <CsrfField token={props.csrfToken} />
         <input type="hidden" name="phase" value="advance" />
         <input type="hidden" name="step" value="3" />
-        <input type="hidden" name="repoUrl" value={props.repoUrl} />
         <input type="hidden" name="projectId" value={props.projectId ?? ""} />
-        <input type="hidden" name="report" value={JSON.stringify(props.report)} />
+        <input type="hidden" name="state" value={props.state} />
         <div class="foot">
           <div class="hint">↑ the integration pr is the one-time gate · all brownfield onboarding lands through it</div>
           <div class="grow"></div>

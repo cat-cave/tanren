@@ -169,9 +169,9 @@ export const ProjectStore = {
     client: QueryClient,
     projectId: string,
     _actor: ActorRef,
-  ): Promise<{ orgId: string | null; defaultBranch: string | null } | undefined> {
-    const result = await client.query<{ org_id?: unknown; default_branch?: unknown }>(
-      "SELECT org_id, default_branch FROM projects WHERE project_id = $1",
+  ): Promise<{ orgId: string | null; defaultBranch: string | null; repoUrl: string } | undefined> {
+    const result = await client.query<{ org_id?: unknown; default_branch?: unknown; repo_url?: unknown }>(
+      "SELECT org_id, default_branch, repo_url FROM projects WHERE project_id = $1",
       [projectId],
     );
     const row = result.rows[0];
@@ -181,6 +181,7 @@ export const ProjectStore = {
     return {
       orgId: nullableText(row.org_id),
       defaultBranch: nullableText(row.default_branch),
+      repoUrl: z.string().min(1).parse(row.repo_url),
     };
   },
 
