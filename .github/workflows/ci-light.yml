@@ -4,8 +4,11 @@
 # merge queue). This is the fast context the review waits on; the arch-checks here are the
 # mechanical violations the reviewer is told NOT to re-flag.
 #
-# CUTOVER: this replaces the per-PR run of the legacy `ci.yml` `check` job. Do not require
-# both — see ops/review/CUTOVER.md. Required status context: `ci-light`.
+# CUTOVER: this replaces the per-PR run of the legacy `ci.yml` `check` job. It gates queue
+# ENTRY. Its job is named `gate` (the shared required status context): on `pull_request` the
+# `gate` check is THIS fast job; on `merge_group` the `gate` check is ci-heavy's full job. One
+# required context, produced on both events by the workflow appropriate to that event — so the
+# merge queue never waits on a check that can't report. See ops/review/CUTOVER.md §queue.
 name: ci-light
 
 on:
@@ -16,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci-light:
+  gate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
