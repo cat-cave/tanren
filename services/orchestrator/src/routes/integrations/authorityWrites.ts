@@ -9,7 +9,7 @@ import type { EventStore } from "../../engine/eventStore.js";
 import type { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { integrationRequestFingerprint } from "../../engine/integrations/integrationOperationFingerprint.js";
 import { hasPrincipalVerifier, principalVerifierFor } from "../../engine/integrations/principalVerifiers.js";
-import { canonicalSentryEndpoint, SentryPrincipalIdentity } from "../../engine/integrations/sentryPrincipalIdentity.js";
+import * as sentry from "../../engine/integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../../engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -61,7 +61,7 @@ function linkVerifierEndpoint(providerKind: string, value: string | undefined): 
     return undefined;
   }
   if (value === undefined) throw new Error("Sentry endpoint is required");
-  if (canonicalSentryEndpoint(value) !== value) throw new Error("Sentry endpoint must be canonical");
+  if (sentry.canonicalSentryEndpoint(value) !== value) throw new Error("Sentry endpoint must be canonical");
   return value;
 }
 
@@ -75,7 +75,7 @@ async function rotationVerifierEndpoint(
   const metadata = await database.withOrgScope(orgId, (client) =>
     IntegrationConnectionsStore.getPrincipalMetadata(client, { orgId, providerKind, connectionId }),
   );
-  return SentryPrincipalIdentity.parse(metadata).baseUrl;
+  return sentry.requireSentryPrincipalIdentity(metadata).baseUrl;
 }
 async function projectAccess(
   database: IntegrationAuthorityRouteDatabase,
@@ -272,8 +272,10 @@ export function mountIntegrationAuthorityWrites(
     let providerEndpoint: string | undefined;
     try {
       providerEndpoint = await rotationVerifierEndpoint(database, orgId, providerKind, connectionId);
-    } catch {
-      return c.json({ error: "verified_provider_identity_required" }, 409);
+    } catch (error) {
+      if (error instanceof sentry.SentryPrincipalRelinkRequiredError)
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      throw error;
     }
 
     try {

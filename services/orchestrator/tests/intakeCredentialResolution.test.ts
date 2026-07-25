@@ -60,7 +60,6 @@ const fakeSecrets = {
   get: async (ref: string) => (ref === ORG_A_GITHUB_REF ? { ref, value: "ghs_fake" } : undefined),
 } as never;
 
-// Fake GitHub HTTP client returning one honest issue while capturing the token.
 function fakeGithubHttp(): { http: never; tokensSeen: string[] } {
   const tokensSeen: string[] = [];
   const http = {

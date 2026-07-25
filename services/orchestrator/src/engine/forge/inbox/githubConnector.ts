@@ -1,14 +1,3 @@
-// GitHub Issues source connector.
-//
-// Reads open issues for a repo through the SAME GitHub plumbing as the rest of
-// The `resolveGithubToken` (App installation token, static
-// fallback) + the injectable `GitHubHttpClient`. It maps each issue to a raw
-// `IngestedItem` the engine persists as a candidate. Pull requests (which the
-// Issues API also returns) are filtered out.
-//
-// Everything the connector needs to hit GitHub is injected, so tests drive it
-// with a fake `GitHubHttpClient` (no network) — see candidateInbox.test.ts.
-
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import { sameQueryMultiset } from "../../integrations/pageScope.js";
@@ -23,11 +12,8 @@ import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 export interface GitHubConnectorDeps {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // Optional org App installation; when present the resolver mints an App token.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
-  // The organization-bound static credential ref, resolved from the source's
-  // org by the intake seam. Source JSON can never override this coordinate.
   defaultStaticRef?: string;
 }
 
@@ -69,14 +55,8 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
   return {
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
-      // The clean-replaced Linear/Jira connectors must fail as unsupported at
-      // the authority boundary, before config parsing can look like a generic
-      // GitHub failure and before any credential/provider I/O occurs.
       assertSupportedIssuesProvider(source.config);
       const config = ActiveGitHubIssuesConfig.parse(source.config);
-      // Credential authority is bound to the source organization: an App
-      // installation or the org-default ref selected by the intake seam. The
-      // source config has no credential coordinate and cannot become a deputy.
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
         orgId: source.orgId,

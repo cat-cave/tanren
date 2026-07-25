@@ -43,17 +43,13 @@ import {
   type IntegrationOperationTarget,
   type IntegrationPrivilegedOperation,
 } from "../contracts/integrationAuthority.js";
-import {
-  SentryPrincipalIdentity,
-  type SentryPrincipalIdentity as SentryIdentity,
-} from "../integrations/sentryPrincipalIdentity.js";
+import * as sentryIdentity from "../integrations/sentryPrincipalIdentity.js";
 
 /**
  * The injectable Sentry transport for provisioning. Mirrors the runtime
  * `sentryConnector`'s `SentryHttpClient` but adds the write verb (`POST`) the
  * provisioner needs to create projects + client keys. `path` is API-root-relative
- * (`/api/0/...`); `token` is the resolved org grant token; `baseUrl` is the
- * provider-verified endpoint. A scripted fake of this seam is
+ * (`/api/0/...`); token + provider-verified baseUrl come from the org grant. A scripted fake is
  * what the conformance suite drives — no live Sentry call in CI.
  */
 export interface SentryProvisionHttpRequest {
@@ -114,8 +110,10 @@ export interface SentryProvisionerDeps {
 /** The capability the matrix names for an error-tracking source. */
 const CAPABILITY_ERRORS = "errors";
 
-/** Provider-verified durable identity plus optional provisioning selection. */
-type SentryGrantMetadata = Pick<SentryIdentity, "sentryIdentityVersion" | "orgSlug" | "baseUrl"> & {
+type SentryGrantMetadata = Pick<
+  sentryIdentity.SentryPrincipalIdentity,
+  "sentryIdentityVersion" | "orgSlug" | "baseUrl"
+> & {
   /** The Sentry team slug new projects are created under (provision/create path). */
   team?: string;
 };
@@ -192,7 +190,7 @@ function dsnSecretRef(orgId: string, projectSlug: string): string {
 }
 
 function readGrantMetadata(grant: OrgGrant): SentryGrantMetadata {
-  const identity = SentryPrincipalIdentity.parse(grant.metadata);
+  const identity = sentryIdentity.requireSentryPrincipalIdentity(grant.metadata);
   return { ...identity, team: asString(grant.metadata["team"]) };
 }
 
