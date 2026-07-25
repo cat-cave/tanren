@@ -74,9 +74,28 @@ function isGate(p) {
 }
 
 // ---- core lifecycle ---------------------------------------------------------
-export function reconcile({ findings = [], changedHunks = [], priorOpenFindings = [], marker = null, sha = "" }) {
+export function reconcile({
+  findings = [],
+  changedHunks = [],
+  priorOpenFindings = [],
+  marker = null,
+  sha = "",
+  newlyDismissed = [],
+}) {
   const prior = typeof marker === "string" || marker === null ? parseMarker(marker) : marker;
-  const dismissed = new Set(prior.dismissed);
+  // UNION the marker's prior dismissed set with newly-dismissed fps (human signal:
+  // resolved threads / 👎 reactions, via gather-signal.mjs). The union is written
+  // back into the new marker below, so a dismissed finding NEVER resurfaces (#59/#369).
+  const dismissed = new Set([
+    ...prior.dismissed,
+    ...(newlyDismissed || [])
+      .map((s) =>
+        String(s || "")
+          .trim()
+          .toLowerCase(),
+      )
+      .filter((x) => /^[0-9a-f]{40}$/u.test(x)),
+  ]);
   // prior.open is now an array of {fp,path,start_line,end_line} (v2) — legacy v1
   // markers parse to bare {fp, path:null}. Derive the fp set from either shape.
   const priorOpenEntries = (prior.open || [])
@@ -201,9 +220,13 @@ function selftest() {
     filed: [],
     extra: {},
   });
+  // A 40-hex fp newly dismissed by human signal this round (gather-signal.mjs).
+  const humanDismissed = "e".repeat(40);
   const out = reconcile({
     sha: "new222",
     marker: prior,
+    // non-hex entry must be filtered out
+    newlyDismissed: [humanDismissed, "not-a-hex-fp"],
     changedHunks: [
       // fpA's hunk changed → addressed
       { path: "a.ts", start: 10, end: 20 },
@@ -221,8 +244,10 @@ function selftest() {
       { fingerprint: "fpNew", path: "new.ts", start_line: 2, end_line: 3, priority: "P1", title: "new one" },
       // followup
       { fingerprint: "fpP2", path: "c.ts", priority: "P2", title: "minor" },
-      // dropped
+      // dropped (prior marker dismissed)
       { fingerprint: "fpD", path: "d.ts", priority: "P0", title: "dismissed reraise" },
+      // dropped (newly human-dismissed this round → must not resurface)
+      { fingerprint: humanDismissed, path: "h.ts", priority: "P0", title: "just dismissed" },
     ],
   });
 
@@ -247,6 +272,9 @@ function selftest() {
     [openByFp.fpU && openByFp.fpU.path === null, "unlocatable open entry has no location"],
     [st.followups.includes("fpP2") && st.followups.includes("fpF2"), "followups union prior+new P2/P3"],
     [st.dismissed.includes("fpD"), "dismissed carried forward"],
+    [st.dismissed.includes(humanDismissed), "newly human-dismissed fp UNIONed into marker dismissed"],
+    [!st.dismissed.includes("not-a-hex-fp"), "non-hex newlyDismissed entry filtered out"],
+    [!byFp[humanDismissed], "newly human-dismissed finding dropped, never resurfaced"],
     [st.last_reviewed_sha === "new222", "last_reviewed_sha stamped to reviewed sha"],
     [
       rt.open.length === st.open.length && rt.open.find((o) => o.fp === "fpNew")?.start_line > 0,
@@ -274,6 +302,8 @@ function parseArgs(argv) {
     else if (t === "--sha" || t === "--head") a.sha = argv[++i];
     // read the prior sticky marker standalone
     else if (t === "--pr") a.pr = argv[++i];
+    // newly-dismissed fps (human signal) to UNION into the marker's dismissed set
+    else if (t === "--dismissed") a.dismissed = argv[++i];
     else a._.push(t);
   }
   return a;
@@ -300,7 +330,9 @@ function main() {
   // from the marker alone, so absent prior-open fps stay OPEN conservatively (#247).
   const input = readInput(args.in);
   const marker = input.marker === null ? (args.pr ? readMarker(args.pr) : null) : input.marker;
-  const out = reconcile({ ...input, marker, sha: args.sha || input.sha || "" });
+  const cliDismissed = args.dismissed ? args.dismissed.split(/[\s,]+/u).filter(Boolean) : [];
+  const newlyDismissed = [...(Array.isArray(input.dismissed) ? input.dismissed : []), ...cliDismissed];
+  const out = reconcile({ ...input, marker, sha: args.sha || input.sha || "", newlyDismissed });
   process.stdout.write(JSON.stringify(out, null, 2) + "\n");
 }
 

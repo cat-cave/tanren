@@ -2,10 +2,11 @@
 // =============================================================================
 // verdict.mjs — set the MERGE GATE as a commit status (issue #16)
 // -----------------------------------------------------------------------------
-// The gate is a COMMIT STATUS, not a review approval. The bot cannot self-
-// approve, and an approval is an identity claim about a human reviewer; the
-// merge queue keys off the `review/verdict` status instead. This decouples the
-// authorization (status, machine-checkable, per-sha) from the advisory review.
+// The ENFORCED gate is a COMMIT STATUS, not the review approval — a
+// github-actions[bot] approval doesn't count toward required-review counts, so the
+// merge queue keys off the machine-checkable, per-sha `review/verdict` status.
+// post-review.mjs STILL posts a REAL Approve / Request-changes review (the actual
+// code review); this status just mirrors that decision as the enforceable gate.
 //
 //   state = success  iff  (open P0/P1 count == 0)  AND  (no rule_change)
 //           failure  otherwise
@@ -46,6 +47,8 @@ function ghSync(args) {
 
 function repoSlug() {
   if (process.env.GH_REPO) return process.env.GH_REPO;
+  if (process.env.GITHUB_REPOSITORY && process.env.GITHUB_REPOSITORY.includes("/"))
+    return process.env.GITHUB_REPOSITORY;
   return JSON.parse(ghSync(["repo", "view", "--json", "nameWithOwner"])).nameWithOwner;
 }
 
