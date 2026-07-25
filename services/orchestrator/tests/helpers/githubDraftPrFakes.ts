@@ -15,17 +15,31 @@ export class RecordingSsh implements CommandSubstrate {
   }
 }
 
+const DEFAULT_FIRST_PUBLICATION_ABSENT_REFS = [
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Fscaffold-8973ab2b",
+  "/repos/cat-cave/linky86/git/ref/heads/tanren%2Fscaffold-8973ab2b",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_legacy",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_42",
+] as const;
+
 export class ScriptedGitHubHttp implements GitHubHttpClient {
   readonly requests: GitHubHttpRequest[] = [];
+  private readonly firstPublicationAbsentRefs: Set<string>;
 
-  constructor(private readonly responses: GitHubHttpResponse[]) {}
+  constructor(
+    private readonly responses: GitHubHttpResponse[],
+    firstPublicationAbsentRefs: readonly string[] = DEFAULT_FIRST_PUBLICATION_ABSENT_REFS,
+  ) {
+    this.firstPublicationAbsentRefs = new Set(firstPublicationAbsentRefs);
+  }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.requests.push({ ...input, token: "<redacted>" });
-    // Existing draft-PR fixtures model a first publication unless they explicitly
-    // exercise ref behavior. The production path still performs the ref read; this
-    // default keeps those fixtures focused on their PR API contract.
-    if (input.method === "GET" && input.path.includes("/git/ref/heads/")) {
+    // Only explicitly declared first-publication refs are absent. Any other
+    // branch read remains in the strict response queue, so wrong refs, rework
+    // heads, malformed bodies, and non-404 responses cannot be hidden here.
+    if (input.method === "GET" && this.firstPublicationAbsentRefs.delete(input.path)) {
       return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();

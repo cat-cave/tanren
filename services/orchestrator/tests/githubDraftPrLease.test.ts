@@ -4,9 +4,10 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engi
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
+import { readDraftPrPushLease } from "../src/engine/workflow/githubDraftPrLease.js";
 import { buildGitHubPushCommand } from "../src/engine/workspace/githubPush.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import { RecordingPool } from "./helpers/githubDraftPrFakes.js";
+import { RecordingPool, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 
 const target: RunnerHandle = { backend: "ssh", host: "runner", port: 22, username: "tanren" } as RunnerHandle;
 const fetched = "a".repeat(40);
@@ -42,6 +43,17 @@ class RefThenRaceHttp implements GitHubHttpClient {
   }
 }
 
+class RefResponseHttp implements GitHubHttpClient {
+  constructor(private readonly response: GitHubHttpResponse) {}
+
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    if (input.path !== "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123") {
+      throw new Error(`unexpected GitHub request: ${input.path}`);
+    }
+    return this.response;
+  }
+}
+
 describe("#1069 draft publication lease", () => {
   it("uses an explicit empty expected-sha lease for a proven-absent first branch", () => {
     expect(
@@ -51,6 +63,41 @@ describe("#1069 draft publication lease", () => {
         forceWithLease: { expectedAbsent: true },
       }),
     ).toContain("--force-with-lease=refs/heads/tanren/run_123:");
+  });
+
+  it("retains the exact existing-head SHA instead of treating every ref as absent", async () => {
+    await expect(
+      readDraftPrPushLease(
+        new RefResponseHttp({ status: 200, body: { object: { sha: fetched } } }),
+        { owner: "cat-cave", name: "repo" },
+        "tanren/run_123",
+        "ghp_secret",
+      ),
+    ).resolves.toEqual({ expectedSha: fetched });
+  });
+
+  it.each([
+    ["malformed 200", { status: 200, body: { object: { sha: "not-a-sha" } } }],
+    ["forbidden", { status: 403, body: { message: "Forbidden" } }],
+  ])("fails closed for a %s ref response", async (_name, response) => {
+    await expect(
+      readDraftPrPushLease(
+        new RefResponseHttp(response),
+        { owner: "cat-cave", name: "repo" },
+        "tanren/run_123",
+        "ghp_secret",
+      ),
+    ).rejects.toThrow("GitHub draft branch read failed");
+  });
+
+  it("does not let an undeclared ref read bypass an ordered fixture queue", async () => {
+    await expect(
+      new ScriptedGitHubHttp([], []).request({
+        method: "GET",
+        path: "/repos/cat-cave/repo/git/ref/heads/tanren%2Funexpected",
+        token: "ghp_secret",
+      }),
+    ).rejects.toThrow("unexpected GitHub request");
   });
 
   it("rejects a changed remote head without overwriting it or falsely publishing the PR", async () => {
