@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
+import { checkSingleEventWriter } from "./check-architecture-event-writer.mjs";
 import { checkNoFixtureModeBranching } from "./check-architecture-fixture-mode.mjs";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
@@ -33,13 +34,6 @@ const roadmapDocs = [
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
-const p3bProof = /(direct INSERT INTO events|same event \(contrast\)|reported event is DENIED direct)/su;
-const p3cProof = /merge-LAND finalize \(events \+ specs\) by the data-plane role/su;
-const rawEventWriteProofs = [
-  ["services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts", p3bProof],
-  ["services/orchestrator/tests/planeSplitP3cDeprivilege.integration.test.ts", p3cProof],
-  ["scripts/smoke/plane-split-deprivilege.ts", /Assert a direct `events` INSERT by the de-privileged/su],
-];
 const requiredDocs = [
   "AGENTS.md",
   "docs/playbooks/spec-template.md",
@@ -130,47 +124,6 @@ function checkLineMax(projectFiles) {
     }
   }
   return diagnostics;
-}
-
-function checkSingleEventWriter(projectFiles) {
-  const diagnostics = [];
-  const sqlInsert = /[`"']\s*INSERT\s+INTO\s+events/giu;
-  const drizzleInsert = /db\.insert\s*\(\s*events\s*\)/gu;
-  for (const { file, text } of projectFiles) {
-    if (
-      invariantDocExclusions.has(file) ||
-      file === "services/orchestrator/src/engine/eventStore.ts" ||
-      // pgAllocatorEvents.ts is the allocator's SOLE events writer (separate de-priv service).
-      file === "services/allocator/src/pgAllocatorEvents.ts" ||
-      // allocatorEventStore.ts (#826) centralizes that de-priv allocator write behind
-      // appendAllocatorEvent — the single org-scoped path the allocator service uses.
-      file === "db/src/allocatorEventStore.ts" ||
-      file.startsWith("db/migrations/")
-    ) {
-      continue;
-    }
-    for (const pattern of [sqlInsert, drizzleInsert]) {
-      for (const match of text.matchAll(pattern)) {
-        if (isCommentOnlyMatch(text, match.index) || isRawEventWriteProof(file, text, match.index)) {
-          continue;
-        }
-        diagnostics.push(
-          diagnostic(
-            "single-event-writer",
-            file,
-            "events may only be written through eventStore",
-            lineFor(text, match.index),
-          ),
-        );
-      }
-    }
-  }
-  return diagnostics;
-}
-
-function isRawEventWriteProof(file, text, index) {
-  const contextBefore = text.slice(Math.max(0, index - 1_200), index);
-  return rawEventWriteProofs.some(([proofFile, proofBefore]) => proofFile === file && proofBefore.test(contextBefore));
 }
 
 function checkFailureVariants(projectFiles) {
