@@ -1,0 +1,72 @@
+# Auto-enqueue: the CRA "green + reviewed → enter the merge queue" step.
+#
+# GitHub's merge queue has NO auto-admit — a PR that is green + reviewed sits idle
+# until something explicitly adds it. This workflow is that something: when a PR
+# reaches `mergeStateStatus == CLEAN` (all required checks — `gate` + `review/verdict`
+# — green and mergeable), it enables auto-merge, which enqueues the PR. The queue
+# (ci-heavy on `merge_group`) is still the real gate; this only decides WHEN an
+# already-green PR is added, with no human in the loop.
+#
+# Safety: skips drafts and any PR labeled `no-auto-merge` (the manual park valve).
+# rule_change PRs never reach CLEAN on their own (review/verdict stays failure until
+# a maintainer stamps the reviewed SHA), so they are not auto-enqueued.
+name: auto-enqueue
+
+on:
+  # Fire whenever a check suite finishes (e.g. `gate`) or a commit status is set
+  # (e.g. `review/verdict`) — the two signals that a PR may have just gone green.
+  check_suite:
+    types: [completed]
+  status: {}
+
+permissions:
+  contents: write # enable auto-merge (queue add)
+  pull-requests: write # enable auto-merge
+
+concurrency:
+  # Dedupe re-fires for the same head SHA; the action is idempotent so cancelling
+  # an in-flight duplicate is safe.
+  group: auto-enqueue-${{ github.event.check_suite.head_sha || github.event.sha }}
+  cancel-in-progress: true
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enqueue CLEAN PRs for this head SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.check_suite.head_sha || github.event.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SHA:-}" ]; then echo "no head sha in event payload"; exit 0; fi
+          echo "evaluating head sha: $SHA"
+
+          # Open PRs whose HEAD is this SHA. (A merge_group / non-PR sha yields none.)
+          PRS="$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+                   --jq '.[] | select(.state=="open") | .number' 2>/dev/null || true)"
+          if [ -z "${PRS:-}" ]; then echo "no open PRs for $SHA — nothing to do"; exit 0; fi
+
+          for pr in $PRS; do
+            META="$(gh pr view "$pr" --repo "$REPO" \
+                      --json isDraft,labels,autoMergeRequest,mergeStateStatus 2>/dev/null || echo '{}')"
+            DRAFT="$(printf '%s' "$META"  | jq -r '.isDraft // false')"
+            OPTOUT="$(printf '%s' "$META" | jq -r '([.labels[].name] | index("no-auto-merge")) != null')"
+            HASAUTO="$(printf '%s' "$META" | jq -r '.autoMergeRequest != null')"
+            STATE="$(printf '%s' "$META"   | jq -r '.mergeStateStatus // "UNKNOWN"')"
+
+            if [ "$DRAFT"  = "true" ]; then echo "PR $pr: draft — skip"; continue; fi
+            if [ "$OPTOUT" = "true" ]; then echo "PR $pr: labeled no-auto-merge — skip"; continue; fi
+            if [ "$HASAUTO" = "true" ]; then echo "PR $pr: auto-merge already enabled — skip"; continue; fi
+
+            # CLEAN == mergeable AND every required check (gate + review/verdict) green.
+            # UNKNOWN is transient; a later event re-fires this workflow.
+            if [ "$STATE" = "CLEAN" ]; then
+              echo "PR $pr: CLEAN → enabling auto-merge (enqueue)"
+              gh pr merge "$pr" --repo "$REPO" --squash --auto \
+                || echo "PR $pr: could not enable auto-merge (non-fatal)"
+            else
+              echo "PR $pr: mergeStateStatus=$STATE — not ready, skip"
+            fi
+          done
