@@ -1,58 +1,73 @@
 # OCR review pipeline — cutover runbook
 
-The CI split + merge queue is a **coordinated cutover**: applied piecemeal it leaves `main`
-either double-gated (wasteful) or un-gated (unsafe). Do it in this order. Nothing here is
-auto-applied; each step is a deliberate maintainer action.
+**Status: DONE and LIVE.** The legacy `ci.yml` `check` job is deleted (#1312); review is
+mandatory on every PR; the dedicated reviewer App posts a real `Approved`; the native GitHub
+**merge queue is enabled and proven** (#1322 + #1323 both merged through it). Two-tier CI is the
+live topology (#1321 pass-through, #1323 finalize). This file documents the live config + the
+gotchas that had to be solved.
 
-## Invariant to preserve
+## What is live
 
-Today, the legacy `ci.yml` `check` job runs `just ci` + `just smoke` (full build + RLS smoke)
-on every PR — that is the _only_ thing keeping broken code off `main`. It must not be removed
-until `ci-heavy` is required on the merge queue and proven green. Until then, keep `check`.
+- **Required contexts on `main`: `gate` + `review/verdict`** (`strict=false`).
+  - `gate` is Actions-pinned (`app_id 15368`) — only CI can report it.
+  - `review/verdict` is **un-pinned** (any status-writer) so a maintainer can override a
+    `rule_change` PR by stamping the reviewed SHA (see §rule_change) without `--admin`. The
+    untrusted lane has no write token, so it cannot forge it.
+- **`gate` is a SHARED job name** produced on both events by the event-appropriate workflow:
+  `ci-light.yml`'s `gate` job (`just fast-check`) runs on `pull_request`; `ci-heavy.yml`'s `gate`
+  job (`just ci` + `just smoke`) runs on `merge_group` (+ `push:main` safety net). One required
+  context, always reportable on the current event → the queue never waits on a missing check.
+- **Merge queue**: ruleset `main-merge-queue` (`ops/review/merge-queue-ruleset.json`), SQUASH +
+  ALLGREEN grouping. The PR "Merge" button is "Merge when ready".
+- The reviewer App (`REVIEWER_APP_ID`/`REVIEWER_APP_PRIVATE_KEY`, `REVIEW_BOT_LOGIN`) posts the
+  native `Approved` / `Request changes`; the enforced gate is the `review/verdict` **status**.
+- Secrets: `OPENROUTER_API_KEY` (untrusted lane → OCR, spend-capped). Maintainer toggle still
+  recommended: Settings → Actions → General → **"Require approval for all outside collaborators"**.
 
-## Order
+## Merge-queue mechanics (the two-tier design)
 
-1. **Merge the review layer + workflows** to `main` (this branch): `ops/review/**`,
-   `.github/workflows/{ci-light,ci-heavy,ocr-review-untrusted,ocr-review-trusted}.yml`.
-   At this point `ci-light` and `ci-heavy` exist but are NOT yet required; legacy `check`
-   still gates. (`ci-heavy` will run on `push:main` from now on — verify it goes green there.)
+GitHub's merge queue splits gating into two events; a required check that does not report on the
+event it is evaluated on **deadlocks the queue**, and a check that only runs in-queue cannot gate
+entry. The `gate` shared-name trick + the `review/verdict` pass-through make every required
+context reportable on **both** events:
 
-2. **Set review secrets/vars** (repo Settings → Secrets/Variables):
-   - secret `OPENROUTER_API_KEY` = the OpenRouter key (value of `TANREN_E2E_MANAGED_ROUTER_KEY`).
-     The untrusted lane maps it to OCR's `OCR_LLM_AUTH_TOKEN` at the OCR-run step; the
-     endpoint (`OCR_LLM_URL` = `https://openrouter.ai/api/v1`) and protocol
-     (`OCR_LLM_PROTOCOL` = `openai`) are set inline as non-secret env, and the model comes
-     from `model-routing.json`. This is the ONLY secret the untrusted lane carries — a
-     spend-capped, low-value key, NOT a repo-write token (the write token lives in the
-     trusted lane, which never runs OCR/PR code).
-   - **Cap the blast radius of that key:** in the OpenRouter dashboard set a per-key
-     **monthly spend cap** on `OPENROUTER_API_KEY` (a leaked untrusted-lane key can then only
-     burn capped LLM spend, never touch the repo).
-   - **Require approval for outside runs:** repo Settings → Actions → General →
-     "Fork pull request workflows from outside collaborators" → set **"Require approval for
-     all outside collaborators"** so a fork PR cannot run any workflow (and thus cannot reach
-     even the untrusted lane) until a maintainer approves it.
-   - the review **identity** for posting (github-actions[bot] posts the review; the gate is the
-     `review/verdict` status it sets, not an approval).
+| gate            | event          | `gate` is…                        | `review/verdict` is…                    |
+| --------------- | -------------- | --------------------------------- | --------------------------------------- |
+| **queue entry** | `pull_request` | ci-light `just fast-check`        | set by the OCR trusted lane             |
+| **in queue**    | `merge_group`  | ci-heavy `just ci` + `just smoke` | stamped by the merge_group pass-through |
 
-3. **Shadow-run the review** on a few open PRs (the untrusted job produces the JSON artifact;
-   let the trusted job post but leave the verdict advisory / not-yet-required). Confirm finding
-   quality, grounding, dedup, and that no secrets leak to the untrusted lane. Tune the rule file
-   if needed. Cost target: ~$0.30–0.50/PR (luna); ensemble adds hy3 on high-stakes paths.
+- The heavy suite runs **only in the queue** (batched/rebased across the merge group), never
+  per-PR. Entry is fast: `gate`(fast-check) + `review/verdict`.
+- **`review-verdict-passthrough`** (`ci-heavy.yml`, merge_group only) stamps
+  `review/verdict=success` on the merge-group head. The review is enforced at ENTRY; only the
+  advisory LLM verdict is carried, not re-run per rebase. Code correctness IS re-verified on the
+  rebased merge group by the `gate` (ci-heavy) job.
 
-4. **Enable the merge queue + required checks** — run `ops/review/branch-protection-and-queue.sh`
-   (with `APPLY=1`, and `APPLY_QUEUE=1` or the UI for the queue). This makes `ci-light` +
-   `review/verdict` required on PRs and `ci-heavy` required on the merge group. Verify a test PR
-   flows: ci-light green + verdict green → auto-enters queue → ci-heavy green → merges; and that a
-   seeded P0 blocks, and a failing ci-heavy bisects/ejects.
+## Gotchas solved (do not regress)
 
-5. **Remove the legacy gate.** Only now delete `ci.yml` (or strip it to nothing) — `ci-light`
-   (PR) + `ci-heavy` (queue) fully replace it. Update the required-context list to drop `check`.
+- **App-pinning.** Setting required checks via the legacy `contexts` field auto-pins them to
+  whatever app last reported them (Actions, `15368`). That made a maintainer's `review/verdict`
+  status-stamp not count. Fix: set required checks via the `checks` array with explicit `app_id`
+  (`gate`→15368, `review/verdict`→`-1`/any).
+- **Push restriction vs the queue.** Branch protection "Restrict who can push" (an allowlist)
+  **rejects the merge queue's final merge-push** (the queue's actor isn't on the list), so a PR
+  passes every check then gets silently ejected ~after checks. Fix: remove the push allowlist;
+  "Require a pull request before merging" + `allow_force_pushes=false` preserve the protection.
+
+## rule_change PRs (reviewer-config changes)
+
+A PR touching `ops/review/**`, `.opencodereview/**`, or `.github/workflows/ocr-*` forces
+`review/verdict=failure` ("maintainer review required") — a PR cannot weaken its own reviewer.
+To land one: review the diff, confirm it doesn't weaken enforcement, then stamp
+`gh api -X POST repos/<o>/<r>/statuses/<head_sha> -f state=success -f context=review/verdict`
+(works because `review/verdict` is un-pinned) and let it merge through the queue. This is NOT a
+CI bypass — `gate` (ci-heavy) still runs for real.
 
 ## Rollback
 
-Re-add `check` as a required context (it still runs on `push:main` history) and set the merge
-queue ruleset `enforcement` to `disabled`; PRs merge directly again under `check`.
+Set the `main-merge-queue` ruleset `enforcement` to `disabled` (or delete it) and re-add
+`pull_request` to `ci-heavy.yml` so the `gate` heavy job runs per-PR again; PRs then merge
+directly under `gate` + `review/verdict`.
 
 ## Notes
 

@@ -15,10 +15,12 @@ import os from "node:os";
 import path from "node:path";
 
 // Mock gh: records WRITE calls (comment-create/patch/delete, review-submit,
-// sticky) to $MOCK_CAP, and serves READ calls (pr view, review-comment list,
-// review list) from pre-seeded JSON in $MOCK_SEED_DIR. Endpoint + method drive
-// the arm so the two `…/pulls/{pr}/comments` shapes (GET list vs POST create) and
-// the `…/pulls/comments/{id}` shape (PATCH vs DELETE) never collide.
+// sticky) to $MOCK_CAP, and serves READ calls (pr view = headRefOid only, review-
+// comment list, review list, issue-comment list) from pre-seeded JSON in
+// $MOCK_SEED_DIR. Endpoint + method drive the arm so the `…/pulls/{pr}/comments`
+// and `…/issues/{pr}/comments` shapes (GET list vs POST create) and the
+// `…/pulls/comments/{id}` / `…/issues/comments/{id}` shapes (PATCH vs DELETE) never
+// collide. Sticky READ is REST (numeric ids) — never `gh pr view --json comments`.
 function writeMockGh(dir) {
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -33,9 +35,16 @@ function stdin(){ try { return fs.readFileSync(0,"utf8"); } catch { return ""; }
 let method = "GET"; const xi = a.indexOf("-X"); if (xi>=0 && a[xi+1]) method = a[xi+1];
 const ep = a.find(t=>t.startsWith("repos/")) || "";
 if (joined.includes("repo view")) { out({ nameWithOwner: "cat-cave/tanren" }); process.exit(0); }
-if (joined.includes("pr view")) { out({ headRefOid: "headsha123456", comments: seed("seed-issue-comments.json") }); process.exit(0); }
+if (joined.includes("pr view")) { out({ headRefOid: "headsha123456" }); process.exit(0); }
 if (/\\/pulls\\/\\d+\\/reviews$/.test(ep)) {
-  if (method === "POST") { log({ kind: "review-submit", payload: JSON.parse(stdin()||"{}") }); out({ id: 1 }); process.exit(0); }
+  if (method === "POST") {
+    const p = JSON.parse(stdin()||"{}");
+    // Simulate GitHub barring an APPROVE from a non-approving identity (the
+    // github-actions[bot]/GITHUB_TOKEN 422): fail so post-review falls back to
+    // COMMENT. Not a rate-limit stderr, so the gh wrapper throws immediately.
+    if (process.env.MOCK_REJECT_APPROVE && p.event === "APPROVE") { process.stderr.write("HTTP 422: review cannot be approved by this token"); process.exit(1); }
+    log({ kind: "review-submit", payload: p }); out({ id: 1 }); process.exit(0);
+  }
   out(seed("seed-reviews.json")); process.exit(0);
 }
 if (/\\/pulls\\/\\d+\\/comments$/.test(ep)) {
@@ -46,13 +55,57 @@ if (/\\/pulls\\/comments\\/\\d+$/.test(ep)) {
   if (method === "DELETE") { log({ kind: "comment-delete", ep }); out(""); process.exit(0); }
   if (method === "PATCH") { log({ kind: "comment-patch", ep, payload: JSON.parse(stdin()||"{}") }); out({ id: 1 }); process.exit(0); }
 }
-if (/\\/issues\\/comments\\/\\d+$/.test(ep) || /\\/issues\\/\\d+\\/comments$/.test(ep)) { log({ kind: "sticky", args: a }); out({ id: 99 }); process.exit(0); }
+if (/\\/issues\\/\\d+\\/comments$/.test(ep)) {
+  if (method === "POST") { log({ kind: "sticky", op: "create", ep, args: a }); out({ id: Math.floor(Math.random()*1e6) }); process.exit(0); }
+  out(seed("seed-issue-comments.json")); process.exit(0);
+}
+if (/\\/issues\\/comments\\/\\d+$/.test(ep)) {
+  if (method === "PATCH") { log({ kind: "sticky", op: "update", ep, args: a }); out({ id: 1 }); process.exit(0); }
+}
 out("null");
 `;
   const p = path.join(dir, "mock-gh.cjs");
   fs.writeFileSync(p, script, { mode: 0o755 });
   return p;
 }
+
+// Must match post-review.mjs STICKY_HEADER.
+const STICKY_HEADER_LIT = "## OCR review";
+const botUser = { login: "github-actions[bot]" };
+// Grounded P0/P1 findings shared across rounds; g5 is the round-2 newcomer.
+const g1 = {
+  fingerprint: "g1",
+  path: "a.ts",
+  start_line: 10,
+  end_line: 12,
+  priority: "P0",
+  grounded: true,
+  title: "sqli",
+  body: "bad",
+  state: "new",
+};
+const g2 = {
+  fingerprint: "g2",
+  path: "b.ts",
+  start_line: 20,
+  end_line: 20,
+  priority: "P1",
+  grounded: true,
+  title: "authz",
+  body: "x",
+  state: "carried",
+};
+const g5 = {
+  fingerprint: "g5",
+  path: "f.ts",
+  start_line: 40,
+  end_line: 40,
+  priority: "P0",
+  grounded: true,
+  title: "new-bug",
+  body: "n",
+  state: "new",
+};
 
 export async function runSelftest(postReview) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-post-"));
@@ -63,43 +116,7 @@ export async function runSelftest(postReview) {
   process.env.REVIEW_BOT_LOGIN = "github-actions[bot]";
 
   const HEAD = "headsha123456";
-  const botUser = { login: "github-actions[bot]" };
   const marker = "<!-- ocr-state v1 last_reviewed_sha=headsha123456 open=g1,g2 dismissed= followups= -->";
-
-  // Grounded P0/P1 findings shared across rounds; g5 is the round-2 newcomer.
-  const g1 = {
-    fingerprint: "g1",
-    path: "a.ts",
-    start_line: 10,
-    end_line: 12,
-    priority: "P0",
-    grounded: true,
-    title: "sqli",
-    body: "bad",
-    state: "new",
-  };
-  const g2 = {
-    fingerprint: "g2",
-    path: "b.ts",
-    start_line: 20,
-    end_line: 20,
-    priority: "P1",
-    grounded: true,
-    title: "authz",
-    body: "x",
-    state: "carried",
-  };
-  const g5 = {
-    fingerprint: "g5",
-    path: "f.ts",
-    start_line: 40,
-    end_line: 40,
-    priority: "P0",
-    grounded: true,
-    title: "new-bug",
-    body: "n",
-    state: "new",
-  };
 
   // Seed a bot review comment for a finding at its anchor line (matches what R1 POSTs).
   const seedComment = (f, id) => ({
@@ -272,6 +289,64 @@ export async function runSelftest(postReview) {
     "R6: genuinely-gone fp's comment (603) IS deleted",
   );
 
+  // ---- ROUND 7: APPROVE blocked → COMMENT fallback body is NOT "Approved" -----
+  // No open P0/P1 → desired APPROVE; prior CHANGES_REQUESTED → submit; the mock
+  // 422s the APPROVE (identity cannot approve), so post-review re-submits as
+  // COMMENT — and the SUBMITTED body must match that event: no "Approved".
+  process.env.MAX_INLINE = "25";
+  process.env.MOCK_REJECT_APPROVE = "1";
+  writeSeeds({ comments: [seedComment(g1, 701)], reviews: [{ user: botUser, state: "CHANGES_REQUESTED" }] });
+  const r7res = await postReview({ pr: 42, sha: HEAD, findings: [], addressed: ["g1"], marker });
+  const r7 = tally();
+  delete process.env.MOCK_REJECT_APPROVE;
+  T(r7.reviewPost === 1 && r7.review.payload.event === "COMMENT", "R7 fallback: APPROVE 422 → ONE COMMENT review");
+  T(!/Approved/u.test(r7.review.payload.body), "R7 fallback: COMMENT fallback body does NOT claim 'Approved'");
+  T(/review\/verdict/u.test(r7.review.payload.body), "R7 fallback: COMMENT body states review/verdict passes");
+  T(r7res.submitted === true, "R7 fallback: result reports submitted=true");
+
+  // ---- ROUND 8: existing sticky → upsert PATCHes the NUMERIC id (the 404 guard) ----
+  // Extracted to a helper to keep runSelftest under the max-lines-per-function cap.
+  for (const c of await stickyUpsertRound(postReview, { HEAD, marker, seedComment, writeSeeds, tally })) checks.push(c);
+
+  return reportChecks(checks);
+}
+
+// ROUND 8 — the sticky-upsert 404 regression guard. The prior sticky is a REST
+// issue-comment with a NUMERIC databaseId; the upsert MUST PATCH that numeric id.
+// Reading the id from `gh pr view --json comments` yields a GraphQL node ID (IC_…)
+// on which a REST PATCH 404s — the production bug. R1–R7 (no seeded sticky) already
+// exercise the POST-a-new-one branch. Returns [pass, name] check tuples.
+async function stickyUpsertRound(postReview, ctx) {
+  const { HEAD, marker, seedComment, writeSeeds, tally } = ctx;
+  process.env.MAX_INLINE = "25";
+  const stickyExisting = {
+    id: 555123,
+    user: botUser,
+    body: `${STICKY_HEADER_LIT}\n\nprior round.\n\n<!-- ocr-state v1 last_reviewed_sha=old open= dismissed= followups= -->`,
+  };
+  writeSeeds({
+    comments: [seedComment(g1, 801)],
+    reviews: [{ user: botUser, state: "CHANGES_REQUESTED" }],
+    issueComments: [stickyExisting],
+  });
+  await postReview({ pr: 42, sha: HEAD, findings: [g1], addressed: [], marker });
+  const r8 = tally();
+  const sticky = r8.calls.filter((c) => c.kind === "sticky");
+  const patch = sticky.find((c) => c.op === "update");
+  const id = patch ? patch.ep.split("/").pop() : "";
+  return [
+    [sticky.length === 1 && !!patch, "R8: existing sticky → exactly ONE sticky op, a PATCH (update, not POST)"],
+    [
+      !!patch && patch.ep.endsWith("/issues/comments/555123"),
+      "R8: PATCH targets the existing NUMERIC issue-comment id",
+    ],
+    [/^\d+$/u.test(id), "R8: sticky PATCH id is all-digits (a node ID IC_… would have 404'd)"],
+  ];
+}
+
+// Print each check + the pass/fail banner; return whether all passed. Extracted
+// to keep runSelftest under the max-lines-per-function cap.
+function reportChecks(checks) {
   let ok = true;
   for (const [pass, name] of checks) {
     console.log(`${pass ? "ok  " : "FAIL"} ${name}`);
