@@ -11,9 +11,9 @@ export function parseRefObjectSha(value: unknown): string | undefined {
   return object !== undefined && typeof object.sha === "string" && object.sha !== "" ? object.sha : undefined;
 }
 
-export function parseRequiredContexts(value: unknown): string[] | undefined {
+export function parseRequiredContexts(value: unknown): string[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
+    throw new TypeError("GitHub required-status-checks response was not an object");
   }
   const object = value as Record<string, unknown>;
   // GitHub returns required contexts in two shapes: a `checks` array carrying
@@ -21,20 +21,45 @@ export function parseRequiredContexts(value: unknown): string[] | undefined {
   // `checks` shape first, then the flat `contexts` list.
   const checks = object["checks"];
   if (Array.isArray(checks)) {
-    const names = checks
-      .map((entry) =>
-        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined,
-      )
-      .filter((name): name is string => typeof name === "string");
+    const names = checks.map((entry) => {
+      const context =
+        typeof entry === "object" && entry !== null && !Array.isArray(entry)
+          ? (entry as Record<string, unknown>)["context"]
+          : undefined;
+      if (typeof context !== "string" || context === "") {
+        throw new TypeError("GitHub required-status-checks response had an invalid check context");
+      }
+      return context;
+    });
     if (names.length > 0) {
       return names;
     }
   }
   const contexts = object["contexts"];
   if (Array.isArray(contexts)) {
-    return contexts.filter((name): name is string => typeof name === "string");
+    return contexts.map((context) => {
+      if (typeof context !== "string" || context === "") {
+        throw new TypeError("GitHub required-status-checks response had an invalid context");
+      }
+      return context;
+    });
   }
-  return [];
+  if (Array.isArray(checks)) {
+    return [];
+  }
+  throw new TypeError("GitHub required-status-checks response missing checks or contexts");
+}
+
+/** Parse the documented `protected` boolean from `GET /branches/{branch}`. */
+export function parseBranchProtected(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("GitHub branch response was not an object");
+  }
+  const isProtected = (value as Record<string, unknown>)["protected"];
+  if (typeof isProtected !== "boolean") {
+    throw new TypeError("GitHub branch response missing protected boolean");
+  }
+  return isProtected;
 }
 
 export function parseCheckRuns(value: unknown): GitHubCheckRun[] {
