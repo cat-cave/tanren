@@ -382,11 +382,14 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
     }
-    // Draft publication now proves first-write absence before pushing. Keep that
-    // exact, out-of-band read out of this fixture's ordered PR/gate queue.
+    // Draft publication now proves first-write absence before pushing. Keep each
+    // lifecycle branch explicit and out of this fixture's ordered PR/gate queue.
+    // Do not widen this to a prefix: an unanticipated ref must still consume the
+    // strict queue (or fail when it is empty).
     if (
       input.method === "GET" &&
-      input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test"
+      (input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test" ||
+        input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Flifecycle")
     ) {
       return { status: 404, body: { message: "Not Found" } };
     }
