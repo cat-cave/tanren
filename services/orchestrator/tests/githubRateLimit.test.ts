@@ -262,7 +262,7 @@ describe("github required-context awareness (P3-0028)", () => {
     expect(evaluateCiObservation(checks)).toMatchObject({ status: "passed", reason: "all_checks_passed" });
   });
 
-  it("fails closed when a readable branch gets a generic protection 404", async () => {
+  it("accepts review/restriction protection with an explicit proof of no classic status checks", async () => {
     const http = new ScriptedHttp([
       { status: 200, body: { object: { sha: "deadbeef" } } },
       {
@@ -272,23 +272,71 @@ describe("github required-context awareness (P3-0028)", () => {
       { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
       { status: 404, body: { message: "Not Found" } },
       { status: 200, body: { name: "main", protected: true } },
+      {
+        status: 200,
+        body: {
+          required_status_checks: null,
+          required_pull_request_reviews: { required_approving_review_count: 1 },
+          restrictions: { users: [], teams: [], apps: [] },
+        },
+      },
+      { status: 200, body: [{ type: "pull_request" }] },
     ]);
+    const checks = await new GitHubStatusService(http).fetchBranchChecks({
+      repo: { owner: "o", name: "r" },
+      token: "t",
+      branch: "main",
+    });
+    expect(checks.requiredContexts).toEqual([]);
+    expect(evaluateCiObservation(checks)).toMatchObject({ status: "passed", reason: "all_checks_passed" });
+  });
 
-    let passedEffects = 0;
+  it("accepts ruleset-only protection only after the rules document proves no status requirement", async () => {
+    const http = new ScriptedHttp([
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: { name: "main", protected: true } },
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: [{ type: "pull_request" }, { type: "deletion" }] },
+    ]);
     await expect(
-      new GitHubStatusService(http)
-        .fetchBranchChecks({
-          repo: { owner: "o", name: "r" },
-          token: "t",
-          branch: "main",
-        })
-        .then((checks) => {
-          if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
-        }),
-    ).rejects.toThrow(
-      /branch-protection read for main was ambiguous: required-status-checks HTTP 404; branch proof protected=true/u,
-    );
-    expect(passedEffects).toBe(0);
+      new GitHubStatusService(http).fetchRequiredContexts({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        baseBranch: "main",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("fails closed on ambiguous or malformed protection proof and never emits a pass effect", async () => {
+    for (const [protection, rules, message] of [
+      [{ status: 404, body: {} }, { status: 200, body: [] }, /no full protection or ruleset proof/u],
+      [{ status: 200, body: { required_status_checks: {} } }, { status: 200, body: [] }, /did not prove/u],
+      [{ status: 404, body: {} }, { status: 200, body: [{}] }, /missing type/u],
+      [
+        { status: 404, body: {} },
+        { status: 200, body: [{ type: "required_status_checks" }] },
+        /require status checks/u,
+      ],
+    ] as const) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 404, body: { message: "Not Found" } },
+        { status: 200, body: { name: "main", protected: true } },
+        protection,
+        rules,
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(message);
+      expect(passedEffects).toBe(0);
+    }
   });
 
   it("fails closed when the unprotected branch proof has no matching branch identity", async () => {
@@ -337,6 +385,29 @@ describe("github required-context awareness (P3-0028)", () => {
         baseBranch: "main",
       }),
     ).rejects.toThrow(/invalid check context/u);
+  });
+
+  it("rejects every present malformed required-context sibling before a CI pass can escape", async () => {
+    for (const body of [
+      { checks: [], contexts: "not-an-array" },
+      { checks: "not-an-array", contexts: ["build"] },
+    ]) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 200, body },
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(/non-array (checks|contexts) field/u);
+      expect(passedEffects).toBe(0);
+    }
   });
 
   it("rejects a PR response without a base branch before assembling a check snapshot", async () => {

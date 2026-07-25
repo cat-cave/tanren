@@ -20,6 +20,16 @@ export function parseRequiredContexts(value: unknown): string[] {
   // per-check `context`, or a flat `contexts` string list. Read the structured
   // `checks` shape first, then the flat `contexts` list.
   const checks = object["checks"];
+  const contexts = object["contexts"];
+  // A present field is evidence, not a hint. Do not let one valid shape hide a
+  // malformed sibling: doing so could drop an unknown required context and turn
+  // an incomplete CI snapshot into a pass.
+  if (checks !== undefined && !Array.isArray(checks)) {
+    throw new TypeError("GitHub required-status-checks response had a non-array checks field");
+  }
+  if (contexts !== undefined && !Array.isArray(contexts)) {
+    throw new TypeError("GitHub required-status-checks response had a non-array contexts field");
+  }
   if (Array.isArray(checks)) {
     const names = checks.map((entry) => {
       const context =
@@ -35,7 +45,6 @@ export function parseRequiredContexts(value: unknown): string[] {
       return names;
     }
   }
-  const contexts = object["contexts"];
   if (Array.isArray(contexts)) {
     return contexts.map((context) => {
       if (typeof context !== "string" || context === "") {
@@ -48,6 +57,45 @@ export function parseRequiredContexts(value: unknown): string[] {
     return [];
   }
   throw new TypeError("GitHub required-status-checks response missing checks or contexts");
+}
+
+/**
+ * Prove that the full classic branch-protection document explicitly has no
+ * required status checks. Its abbreviated sibling endpoint returning 404 is
+ * not enough evidence on its own.
+ */
+export function parseNoClassicRequiredStatusChecks(value: unknown): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("GitHub full branch-protection response was not an object");
+  }
+  const required = (value as Record<string, unknown>)["required_status_checks"];
+  if (required !== null) {
+    throw new TypeError("GitHub full branch-protection response did not prove no required status checks");
+  }
+}
+
+/**
+ * Validate the rules currently governing a branch and reject a ruleset whose
+ * status requirements this classic-status reader cannot safely represent.
+ * Returns whether at least one ruleset rule positively explains protection.
+ */
+export function parseRulesWithoutRequiredStatusChecks(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    throw new TypeError("GitHub branch rules response was not an array");
+  }
+  for (const rule of value) {
+    if (typeof rule !== "object" || rule === null || Array.isArray(rule)) {
+      throw new TypeError("GitHub branch rules response had an invalid rule");
+    }
+    const type = (rule as Record<string, unknown>)["type"];
+    if (typeof type !== "string" || type === "") {
+      throw new TypeError("GitHub branch rules response had a rule missing type");
+    }
+    if (type === "required_status_checks") {
+      throw new TypeError("GitHub branch rules require status checks that were not observed");
+    }
+  }
+  return value.length > 0;
 }
 
 /**
