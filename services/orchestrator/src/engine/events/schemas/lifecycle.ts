@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JsonlObjectDecodeFailureSchema } from "../../contracts/jsonlDecodeFailure.js";
 
 // Lifecycle events (run.* and task.*) cover the orchestrator workflow's
 // terminal state transitions. Payloads are intentionally narrow so consumer
@@ -90,6 +91,7 @@ export const TaskFailedPayload = z
     jobId: z.string().optional(),
     kind: z.string().optional(),
     failureKind: z.string().optional(),
+    jsonlDecodeFailure: JsonlObjectDecodeFailureSchema.optional(),
     message: z.string().optional(),
     status: z.string().optional(),
     reason: z.string().optional(),

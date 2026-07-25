@@ -9,6 +9,7 @@ import {
   resolveOpencodeModel,
   ZAI_GLM_MODEL,
 } from "../src/engine/providers/opencode.js";
+import { MAX_JSONL_OBJECT_LINE_BYTES } from "../src/engine/providers/findTokenUsage.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -61,6 +62,7 @@ describe("opencode writer adapter", () => {
     expect(ssh.commands[0]?.command.command).toContain("/run_oc_1/opencode-home");
     expect(ssh.commands[0]?.command.stdin).toBe(authJson);
     expect(ssh.commands[2]?.command.command).toContain("opencode run");
+    expect(ssh.commands[2]?.command.command).toContain("--format json");
     expect(ssh.commands[2]?.command.command).toContain(`--model '${ZAI_GLM_MODEL}'`);
     expect(ssh.commands[2]?.command.command).toContain("--cwd '/workspace/repo'");
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
@@ -205,16 +207,42 @@ describe("opencode writer adapter", () => {
     });
   });
 
-  it("counts a JSON-shaped-but-malformed line LOUD, but treats human log text as BENIGN (quiet)", () => {
-    // `--print-logs` interleaves human log lines with JSON events: a plain-text log
-    // line is benign (NOT counted); only a `{`-leading line that fails to parse is
-    // contract drift, surfaced via malformedLineCount.
-    const out = parseOpencodeStreamTelemetry(
-      'INFO booting up\n{"usage":{"input_tokens":1,"output_tokens":1}}\n{ broken json\n',
-    );
-    expect(out.malformedLineCount).toBe(1);
-    // A run with only valid JSON + benign log text reports zero.
-    expect(parseOpencodeStreamTelemetry('INFO ready\n{"type":"x"}\n').malformedLineCount).toBe(0);
+  it.each([
+    ["human log on structured stdout", "INFO booting", "invalid_json"],
+    ["broken JSON", "{ broken", "invalid_json"],
+    ["non-object JSON", "[]", "non_object"],
+    ["multiple objects", "{}{}", "invalid_json"],
+  ] as const)("fails closed on %s", (_case, record, reason) => {
+    expect(parseOpencodeStreamTelemetry(`{"before":true}\n${record}\n{"after":true}\n`)).toMatchObject({
+      rawEventCount: 3,
+      jsonlDecodeFailure: { kind: "jsonl_object_decode_failed", failures: [{ lineNumber: 2, reason }] },
+    });
+  });
+  it("returns crashed—not completed—when an exit-0 stream has a malformed middle record", async () => {
+    const result = await runWith({
+      exitCode: 0,
+      stdout:
+        '{"usage":{"input_tokens":2,"output_tokens":1}}\n' +
+        " \t \n" +
+        '{"usage":{"input_tokens":7,"output_tokens":4}}\n',
+      stderr: "",
+    });
+    expect(result).toMatchObject({
+      exitReason: "crashed",
+      tokenUsage: { inputTokens: 7, outputTokens: 4, totalTokens: 11 },
+      telemetry: {
+        jsonlDecodeFailure: {
+          kind: "jsonl_object_decode_failed",
+          failures: [{ lineNumber: 2, reason: "invalid_json" }],
+        },
+      },
+    });
+  });
+  it("propagates the shared line-size boundary as a typed failure", () => {
+    const overBoundary = `{"value":"${"a".repeat(MAX_JSONL_OBJECT_LINE_BYTES)}"}`;
+    expect(parseOpencodeStreamTelemetry(overBoundary).jsonlDecodeFailure?.failures).toEqual([
+      { lineNumber: 1, reason: "line_too_large" },
+    ]);
   });
 });
 

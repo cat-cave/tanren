@@ -15,7 +15,7 @@ import {
   JsonlObjectDecodeError,
   type JsonlObjectDecodeFailure,
 } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
 
 // Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
 // contracts (same WriterAdapter/AnswererAdapter shapes, same SSH-execution +
@@ -105,16 +105,11 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
-      const gitState = await captureGitStateAfterWriter(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-        "claude writer",
+      const postProcessed = await postProcessPreservingJsonlFailure("claude", telemetry, () =>
+        captureGitStateAfterWriter(dependencies.ssh, dependencies.target, opts.workspace, baselineSha, "claude writer"),
       );
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
+      const gitState = postProcessed.gitState;
       if (claude.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }

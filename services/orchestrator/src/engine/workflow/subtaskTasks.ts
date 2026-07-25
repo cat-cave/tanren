@@ -5,6 +5,7 @@
 // attempts. No new table is required.
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { JsonlObjectDecodeFailure } from "../contracts/jsonlDecodeFailure.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { PlanAnswer } from "../answerers/schemas/index.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
@@ -186,6 +187,7 @@ export interface MarkTaskTerminalOpts {
   taskId: string;
   envelope: TerminalTaskEventEnvelope;
 }
+type JsonlTaskFailure = { jsonlDecodeFailure?: JsonlObjectDecodeFailure };
 
 /**
  * The atomic SUCCESS-terminal pair (task #39 + audit H3): move the task row
@@ -242,13 +244,14 @@ export async function markTaskDoneWithEvent(
  * response. The helper returns `void` either way.
  */
 export async function markTaskFailedWithEvent(
-  opts: MarkTaskTerminalOpts & { failureKind: string; message?: string },
+  opts: MarkTaskTerminalOpts & JsonlTaskFailure & { failureKind: string; message?: string },
 ): Promise<void> {
-  const { writer, taskId, envelope, failureKind, message } = opts;
+  const { writer, taskId, envelope, failureKind, message, jsonlDecodeFailure } = opts;
   const payload: Record<string, unknown> = { taskKind: envelope.taskKind, failureKind };
   if (message !== undefined) {
     payload["message"] = message;
   }
+  if (jsonlDecodeFailure !== undefined) payload["jsonlDecodeFailure"] = jsonlDecodeFailure;
   await writer.updateTaskWithEvent({
     task: { taskId, transition: "failed_with_kind", failureKind },
     event: {
@@ -289,10 +292,15 @@ export async function markTaskFailedWithEvent(
  * row state machine is the truth; the event timeline carries both).
  */
 export async function markTaskFailedIfRunningWithEvent(
-  opts: MarkTaskTerminalOpts & { failureKind: string; message: string },
+  opts: MarkTaskTerminalOpts & JsonlTaskFailure & { failureKind: string; message: string },
 ): Promise<void> {
-  const { writer, taskId, envelope, failureKind, message } = opts;
-  const payload = { taskKind: envelope.taskKind, failureKind, message };
+  const { writer, taskId, envelope, failureKind, message, jsonlDecodeFailure } = opts;
+  const payload = {
+    taskKind: envelope.taskKind,
+    failureKind,
+    message,
+    ...(jsonlDecodeFailure === undefined ? {} : { jsonlDecodeFailure }),
+  };
   await writer.updateTaskWithEvent({
     task: { taskId, transition: "failed_with_kind_if_running", failureKind },
     event: {

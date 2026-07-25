@@ -27,6 +27,7 @@
 // (the auditor's schema-miss → synthetic-P0, the usage-limit window escalation, etc.).
 
 import { AnswererStalledError } from "../providers/answererSchemaError.js";
+import { JsonlObjectDecodeError } from "../providers/findTokenUsage.js";
 import { type AttemptSignature, fixedPointRuleJudgment } from "./convergenceDetector.js";
 import { retryUntilConverged } from "./retryUntilConverged.js";
 import { createLogger } from "../observability/logger.js";
@@ -74,7 +75,11 @@ export class StageStallEscalationError extends Error {
  * the plan / writer / checker / auditor / triage / convergence / demo / designOracle
  * stages all route through this wrapper, so each of them inherits the observability.
  */
-export async function runAnswererStageWithRecovery<T>(stage: string, invoke: () => Promise<T>): Promise<T> {
+export async function runAnswererStageWithRecovery<T>(
+  stage: string,
+  invoke: () => Promise<T>,
+  recordJsonlFailureCost?: (error: JsonlObjectDecodeError) => Promise<void>,
+): Promise<T> {
   const outcome = await retryUntilConverged<T | undefined>({
     attempt: async (): Promise<{ result: T | undefined; signature: AttemptSignature; done: boolean }> => {
       try {
@@ -90,7 +95,16 @@ export async function runAnswererStageWithRecovery<T>(stage: string, invoke: () 
         // stage role): an identical stall on every attempt converges to a fixed point (a
         // genuinely-wedged stage → escalate), while a stall that then SUCCEEDS reads as
         // progress (the next attempt is `done`) and never escalates.
-        if (!(error instanceof AnswererStalledError)) throw error;
+        if (!(error instanceof AnswererStalledError)) {
+          if (error instanceof JsonlObjectDecodeError && recordJsonlFailureCost !== undefined) {
+            try {
+              await recordJsonlFailureCost(error);
+            } catch {
+              log.error("JSONL failure cost record failed before task terminalization", { stage });
+            }
+          }
+          throw error;
+        }
         log.warn("answerer stalled — re-driving the SAME stage (transient, sibling progress preserved)", { stage });
         return { result: undefined, signature: { failureSignature: `${stage}:stalled` }, done: false };
       }

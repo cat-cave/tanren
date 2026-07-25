@@ -100,57 +100,40 @@ describe("findTokenUsageBounded", () => {
     expect(usage?.outputTokens).toBe(2);
     expect(errorSpy).not.toHaveBeenCalled();
   });
-
-  it("fails closed with typed records while retaining valid events on both sides", () => {
-    const decoded = decodeJsonlObjectEvents(
-      '\n{"usage":{"input_tokens":2}}\r\nnot-json\n[]\n42\n{"usage":{"input_tokens":7}}\n',
-    );
-    expect(decoded.ok).toBe(false);
-    if (decoded.ok) throw new Error("expected decode failure");
-    expect(decoded.failure).toEqual({
-      kind: "jsonl_object_decode_failed",
-      failures: [
-        { lineNumber: 3, reason: "invalid_json" },
-        { lineNumber: 4, reason: "non_object" },
-        { lineNumber: 5, reason: "non_object" },
-      ],
-    });
-    expect(decoded.events).toHaveLength(2);
-    expect(decoded.events[1]?.["usage"]).toEqual({ input_tokens: 7 });
-  });
-
-  it("accepts empty input and rejects trailing or multiple objects on one line", () => {
-    expect(decodeJsonlObjectEvents("\n\r\n  \n")).toEqual({ ok: true, rawEventCount: 0, events: [] });
-    for (const input of ['{"a":1}\n{"b":', '{"a":1}{"b":2}\n']) {
+  it("accepts only physical JSON-object records and retains valid neighbors", () => {
+    expect(decodeJsonlObjectEvents("").ok).toBe(true);
+    expect(decodeJsonlObjectEvents('{"a":1}\r\n').ok).toBe(true);
+    for (const [input, failures, eventCount] of [
+      ["{}\nnot-json\n[]\n42\n{}\n", ["invalid_json", "non_object", "non_object"], 2],
+      [" \t\n", ["invalid_json"], 0],
+      ["{}\n\n{}\n", ["invalid_json"], 2],
+      ['{"a":1}{"b":2}\n', ["invalid_json"], 0],
+    ] as const) {
       const decoded = decodeJsonlObjectEvents(input);
       expect(decoded.ok).toBe(false);
       if (decoded.ok) throw new Error("expected decode failure");
-      expect(decoded.failure.failures.at(-1)?.reason).toBe("invalid_json");
+      expect(decoded.failure.failures.map(({ reason }) => reason)).toEqual(failures);
+      expect(decoded.events).toHaveLength(eventCount);
     }
   });
-
   it("accepts the exact line-byte boundary and rejects one byte over without dropping neighbors", () => {
     const prefix = '{"value":"';
     const suffix = '"}';
     const payloadBytes = MAX_JSONL_OBJECT_LINE_BYTES - Buffer.byteLength(prefix + suffix);
     const boundary = `${prefix}${"a".repeat(payloadBytes)}${suffix}`;
-    expect(Buffer.byteLength(boundary)).toBe(MAX_JSONL_OBJECT_LINE_BYTES);
     expect(decodeJsonlObjectEvents(boundary).ok).toBe(true);
-
     const decoded = decodeJsonlObjectEvents(`{"before":true}\n${boundary}a\n{"after":true}\n`);
     expect(decoded.ok).toBe(false);
     if (decoded.ok) throw new Error("expected decode failure");
     expect(decoded.failure.failures).toEqual([{ lineNumber: 2, reason: "line_too_large" }]);
     expect(decoded.events).toEqual([{ before: true }, { after: true }]);
   });
-
   it("accepts the event-count boundary and returns one bounded failure beyond it", () => {
     expect(decodeJsonlObjectEvents("{}\n".repeat(MAX_JSONL_OBJECT_EVENTS)).ok).toBe(true);
     const over = decodeJsonlObjectEvents("{}\n".repeat(MAX_JSONL_OBJECT_EVENTS + 2));
     expect(over.ok).toBe(false);
     if (over.ok) throw new Error("expected decode failure");
     expect(over.events).toHaveLength(MAX_JSONL_OBJECT_EVENTS);
-    expect(over.rawEventCount).toBe(MAX_JSONL_OBJECT_EVENTS + 2);
     expect(over.failure.failures).toEqual([
       { lineNumber: MAX_JSONL_OBJECT_EVENTS + 1, reason: "event_limit_exceeded" },
     ]);

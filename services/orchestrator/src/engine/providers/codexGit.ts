@@ -14,6 +14,11 @@ import { runWorkspaceSshCommand } from "../workspace/index.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { Commit, WriterResult } from "./types.js";
 
+export {
+  postProcessAnswererPreservingJsonlFailure,
+  postProcessPreservingJsonlFailure,
+} from "./jsonlWriterPostProcessing.js";
+
 export async function captureBaselineSha(
   ssh: CommandSubstrate,
   target: RunnerHandle,

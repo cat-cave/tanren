@@ -13,7 +13,12 @@ import {
   JsonlObjectDecodeError,
   type JsonlObjectDecodeFailure,
 } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
+import {
+  captureBaselineSha,
+  captureGitStateAfterCodex,
+  postProcessAnswererPreservingJsonlFailure,
+  postProcessPreservingJsonlFailure,
+} from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
@@ -143,25 +148,20 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // run authenticates with a static key (no token rotation), and its env/config
       // is not a codex bundle, so there is nothing to write back — skip it
       // (storeCodexAuthBundle would reject the non-codex ref anyway).
-      if (auth.bundleAuth) {
-        await persistRefreshedCodexAuth({
-          secrets: dependencies.secrets,
-          ssh: dependencies.ssh,
-          target: dependencies.target,
-          ref: dependencies.credentialRef,
-          codexHome: auth.CODEX_HOME,
-        });
-      }
-
-      const gitState = await captureGitStateAfterCodex(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-      );
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      const postProcessed = await postProcessPreservingJsonlFailure("codex", telemetry, async () => {
+        if (auth.bundleAuth) {
+          await persistRefreshedCodexAuth({
+            secrets: dependencies.secrets,
+            ssh: dependencies.ssh,
+            target: dependencies.target,
+            ref: dependencies.credentialRef,
+            codexHome: auth.CODEX_HOME,
+          });
+        }
+        return await captureGitStateAfterCodex(dependencies.ssh, dependencies.target, opts.workspace, baselineSha);
+      });
+      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
+      const gitState = postProcessed.gitState;
       if (codex.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
@@ -249,20 +249,22 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         const telemetry = parseCodexJsonlTelemetry(result.stdout);
         // Surface this call's per-call token usage for the cost path (lastTokenUsage).
         lastTokenUsage = telemetry.tokenUsage;
+        const decodeError =
+          telemetry.jsonlDecodeFailure === undefined
+            ? undefined
+            : new JsonlObjectDecodeError("Codex", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
         // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
-        // auth is a static key, so skip the write-back (mirrors the writer path).
-        if (auth.bundleAuth) {
-          await persistRefreshedCodexAuth({
-            secrets: dependencies.secrets,
-            ssh: dependencies.ssh,
-            target: dependencies.target,
-            ref: dependencies.credentialRef,
-            codexHome: auth.CODEX_HOME,
-          });
-        }
-        if (telemetry.jsonlDecodeFailure !== undefined) {
-          throw new JsonlObjectDecodeError("Codex", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
-        }
+        await postProcessAnswererPreservingJsonlFailure(decodeError, async () => {
+          if (auth.bundleAuth) {
+            await persistRefreshedCodexAuth({
+              secrets: dependencies.secrets,
+              ssh: dependencies.ssh,
+              target: dependencies.target,
+              ref: dependencies.credentialRef,
+              codexHome: auth.CODEX_HOME,
+            });
+          }
+        });
         // A TRANSIENT stall or SSH-connect failure → the typed transient the loop-stage recovery RE-DRIVES (not terminal).
         if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
@@ -324,11 +326,9 @@ export async function persistRefreshedCodexAuth(input: {
   try {
     await storeCodexAuthBundle(input.secrets, { ref: input.ref, authJson: result.stdout });
   } catch (error) {
-    log.error(
-      "failed to persist rotated auth bundle; the next run would reuse the stale token",
-      { ref: input.ref },
-      error,
-    );
+    log.error("failed to persist rotated auth bundle; the next run would reuse the stale token", {
+      ref: input.ref,
+    });
     throw error;
   }
 }
