@@ -44,6 +44,8 @@ export const eagerBeamPlanV1Schema = z
     ancestorStack: ancestorStackSchema,
     expectedMemberKey: z.string().regex(/^[0-9a-f]{64}$/u),
     proofReuseInput: proofReuseInputSchema,
+    integration: z.object({ ref: nonBlank, headSha: fullSha, treeHash: fullSha }).strict(),
+    fragmentEvidenceDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
   })
   .strict()
   .superRefine((plan, context) => {
@@ -98,6 +100,8 @@ export function createEagerBeamPlan(input: {
   ancestorStack: ReadonlyArray<IntegrationNodeMember>;
   frontier: IntegrationNodeMember;
   proofReuseInput: ProofReuseKeyInput;
+  integration: { ref: string; headSha: string; treeHash: string };
+  fragmentEvidenceDigest: string;
 }): EagerBeamPlanV1 {
   const members = [...input.ancestorStack, input.frontier];
   const expectedMemberKey = memberKey(
@@ -118,5 +122,7 @@ export function createEagerBeamPlan(input: {
     ancestorStack: input.ancestorStack,
     expectedMemberKey,
     proofReuseInput: { ...input.proofReuseInput, memberKey: expectedMemberKey },
+    integration: input.integration,
+    fragmentEvidenceDigest: input.fragmentEvidenceDigest,
   });
 }

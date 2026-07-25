@@ -59,6 +59,7 @@ class ModelPool {
       return this.proofRow === undefined ? { rows: [], rowCount: 0 } : { rows: [this.proofRow], rowCount: 1 };
     if (sql.includes("SELECT DISTINCT ON (r.spec_id)"))
       return { rows: this.speculativeRows, rowCount: this.speculativeRows.length };
+    if (sql.includes("SELECT 1 FROM merge_eager_beams")) return { rows: [], rowCount: 0 };
     return { rows: [], rowCount: 1 };
   }
 
@@ -120,6 +121,8 @@ describe("EAGER integration-node persistence fail closed", () => {
         appEnvHash: "f".repeat(64),
         quarantineVersion: "none",
       },
+      integration: { ref: "tanren/eager/run_frontier", headSha: "c".repeat(40), treeHash: "e".repeat(40) },
+      fragmentEvidenceDigest: `sha256:${"f".repeat(64)}`,
     });
 
     await expect(frozen.persistMaterialized(record)).rejects.toThrow("missing a frozen plan");

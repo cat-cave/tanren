@@ -39,6 +39,25 @@ interface StaleBeamRow {
   readonly plan_digest: string | null;
 }
 
+export interface EagerBeamProof {
+  readonly proofRoot: string;
+  readonly quarantineEpoch: number;
+  readonly toolchainHash: string;
+  readonly designContractVersion: string;
+  readonly behaviorManifestHash: string;
+  readonly proofUnitIds: readonly string[];
+}
+
+/** A competing exact coordinate won. This is not a materialization failure and
+ * must never trigger frontier-wide cleanup that could stale the winner. */
+export class EagerBeamReadyCasLostError extends Error {
+  public override readonly name = "EagerBeamReadyCasLostError";
+
+  public constructor() {
+    super("eager beam lost its exact building coordinate before ready transition");
+  }
+}
+
 /** PG reader/writer used exclusively by the production EAGER planner. */
 export class PgEagerBeamStore {
   public constructor(private readonly pool: pg.Pool) {}
@@ -120,44 +139,17 @@ export class PgEagerBeamStore {
     planDigest: string;
   }): Promise<{ readonly nodeId: string; readonly beamId: string; readonly generation: number }> {
     return runWithOrgScope(this.pool, input.record.orgId, async (client) => {
+      await lockFrontier(client, input.record.projectId, input.plan.frontierRunId);
+      const winner = await client.query(
+        `SELECT 1 FROM merge_eager_beams
+          WHERE project_id = $1 AND frontier_run_id = $2 AND state = 'ready'
+          LIMIT 1`,
+        [input.record.projectId, input.plan.frontierRunId],
+      );
+      if (winner.rowCount !== 0) throw new EagerBeamReadyCasLostError();
       const { memberKey: _memberKey, runId, specId, ...node } = input.record;
       const nodeId = await upsertIntegrationNodeOnClient(client, node);
-      const stale = await client.query<StaleBeamRow>(
-        `UPDATE merge_eager_beams
-            SET state = 'stale', stale_reason = 'plan_inputs_changed', updated_at = now()
-          WHERE project_id = $1 AND frontier_run_id = $2
-            AND plan_digest IS DISTINCT FROM $3
-            AND state IN ('building','ready')
-          RETURNING id, frontier_run_id, plan_digest`,
-        [input.record.projectId, input.plan.frontierRunId, input.planDigest],
-      );
       const events = new PgEventStore(client);
-      for (const prior of stale.rows) {
-        await events.append({
-          orgId: input.record.orgId,
-          projectId: input.record.projectId,
-          runId: prior.frontier_run_id,
-          eventType: "merge.beam.stale",
-          payload: {
-            projectId: input.record.projectId,
-            beamId: prior.id,
-            frontierRunId: prior.frontier_run_id,
-            reason: "plan_inputs_changed",
-            ...(prior.plan_digest === null ? {} : { planDigest: prior.plan_digest }),
-          },
-        });
-        await events.append({
-          orgId: input.record.orgId,
-          projectId: input.record.projectId,
-          runId: prior.frontier_run_id,
-          eventType: "integration.proof.invalidated",
-          payload: {
-            projectId: input.record.projectId,
-            reason: "base_shifted",
-            proofUnitDigest: prior.plan_digest ?? input.planDigest,
-          },
-        });
-      }
       const beam = await client.query<BeamRow>(
         `INSERT INTO merge_eager_beams
            (org_id, id, project_id, frontier_run_id, frontier_spec_id, plan_digest,
@@ -172,6 +164,7 @@ export class PgEagerBeamStore {
          WHERE merge_eager_beams.project_id = EXCLUDED.project_id
            AND merge_eager_beams.frontier_run_id = EXCLUDED.frontier_run_id
            AND merge_eager_beams.frontier_spec_id = EXCLUDED.frontier_spec_id
+           AND merge_eager_beams.state = 'building'
          RETURNING id, generation`,
         [
           input.record.orgId,
@@ -231,44 +224,33 @@ export class PgEagerBeamStore {
     frontierSpecId: string;
     rank: number;
     reason: string;
+    planDigest?: string;
   }): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, async (client) => {
+      await lockFrontier(client, input.projectId, input.frontierRunId);
       const events = new PgEventStore(client);
-      const stale = await client.query<StaleBeamRow>(
-        `UPDATE merge_eager_beams
-            SET state = 'stale', stale_reason = $3, updated_at = now()
-          WHERE project_id = $1 AND frontier_run_id = $2 AND state IN ('building','ready')
-          RETURNING id, frontier_run_id, plan_digest`,
-        [input.projectId, input.frontierRunId, input.reason],
-      );
-      for (const prior of stale.rows) {
-        await events.append({
-          orgId: input.orgId,
-          projectId: input.projectId,
-          runId: prior.frontier_run_id,
-          eventType: "merge.beam.stale",
-          payload: {
-            projectId: input.projectId,
-            beamId: prior.id,
-            frontierRunId: prior.frontier_run_id,
-            reason: input.reason,
-            ...(prior.plan_digest === null ? {} : { planDigest: prior.plan_digest }),
-          },
-        });
-        if (prior.plan_digest !== null) {
-          await events.append({
-            orgId: input.orgId,
-            projectId: input.projectId,
-            runId: prior.frontier_run_id,
-            eventType: "integration.proof.invalidated",
-            payload: {
-              projectId: input.projectId,
-              reason: "base_shifted",
-              proofUnitDigest: prior.plan_digest,
-            },
-          });
+      if (input.planDigest !== undefined) {
+        const stale = await client.query<StaleBeamRow>(
+          `UPDATE merge_eager_beams
+              SET state = 'stale', stale_reason = $5, updated_at = now()
+            WHERE project_id = $1 AND frontier_run_id = $2 AND frontier_spec_id = $3
+              AND plan_digest = $4 AND state = 'building'
+            RETURNING id, frontier_run_id, plan_digest`,
+          [input.projectId, input.frontierRunId, input.frontierSpecId, input.planDigest, input.reason],
+        );
+        const row = stale.rows[0];
+        if (row !== undefined) {
+          await appendStale(events, input, row);
         }
+        return;
       }
+      const winner = await client.query(
+        `SELECT 1 FROM merge_eager_beams
+          WHERE project_id = $1 AND frontier_run_id = $2 AND state = 'ready'
+          LIMIT 1`,
+        [input.projectId, input.frontierRunId],
+      );
+      if (winner.rowCount !== 0) return;
       const held = await client.query<{ id: string }>(
         `INSERT INTO merge_eager_beams
            (org_id, id, project_id, frontier_run_id, frontier_spec_id, rank, generation, state, stale_reason, updated_at)
@@ -292,36 +274,88 @@ export class PgEagerBeamStore {
       );
       const row = held.rows[0];
       if (row === undefined) throw new Error("eager beam hold was not durably recorded");
-      await events.append({
-        orgId: input.orgId,
-        projectId: input.projectId,
-        runId: input.frontierRunId,
-        eventType: "merge.beam.stale",
-        payload: {
-          projectId: input.projectId,
-          beamId: row.id,
-          frontierRunId: input.frontierRunId,
-          reason: input.reason,
-        },
+      await appendStale(events, input, {
+        id: row.id,
+        frontier_run_id: input.frontierRunId,
+        plan_digest: null,
       });
     });
   }
 
-  public async markReady(input: {
-    orgId: string;
-    projectId: string;
-    planDigest: string;
-    nodeId: string;
-  }): Promise<void> {
+  public async markReady(
+    input: {
+      orgId: string;
+      projectId: string;
+      planDigest: string;
+      nodeId: string;
+      plan: EagerBeamPlanV1;
+    },
+    evaluate: () => Promise<EagerBeamProof>,
+  ): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, async (client) => {
+      await lockFrontier(client, input.projectId, input.plan.frontierRunId);
+      const owned = await client.query(
+        `SELECT 1
+           FROM merge_eager_beams b
+           JOIN integration_nodes n ON n.org_id = b.org_id AND n.node_id = b.integration_node_id
+          WHERE b.project_id = $1 AND b.frontier_run_id = $2
+            AND b.plan_digest = $3 AND b.integration_node_id = $4 AND b.state = 'building'
+            AND n.ref = $5 AND n.head_sha = $6 AND n.tree_hash = $7
+            AND NOT EXISTS (
+              SELECT 1 FROM merge_eager_beams winner
+               WHERE winner.project_id = b.project_id
+                 AND winner.frontier_run_id = b.frontier_run_id
+                 AND winner.state = 'ready'
+            )`,
+        [
+          input.projectId,
+          input.plan.frontierRunId,
+          input.planDigest,
+          input.nodeId,
+          input.plan.integration.ref,
+          input.plan.integration.headSha,
+          input.plan.integration.treeHash,
+        ],
+      );
+      if (owned.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+      const proof = await evaluate();
       const result = await client.query(
         `UPDATE merge_eager_beams
             SET state = 'ready', updated_at = now()
-          WHERE project_id = $1 AND plan_digest = $2 AND integration_node_id = $3 AND state = 'building'`,
+          WHERE project_id = $1 AND plan_digest = $2
+            AND integration_node_id = $3 AND state = 'building'
+          RETURNING id`,
         [input.projectId, input.planDigest, input.nodeId],
       );
-      if (result.rowCount !== 1)
-        throw new Error("eager beam lost its exact building coordinate before ready transition");
+      if (result.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+      const stamped = await client.query(
+        `UPDATE integration_nodes
+            SET proof_root = $3, quarantine_epoch = $4, toolchain_hash = $5,
+                design_contract_version = $6, behavior_manifest_hash = $7, updated_at = now()
+          WHERE project_id = $1 AND node_id = $2
+          RETURNING node_id`,
+        [
+          input.projectId,
+          input.nodeId,
+          proof.proofRoot,
+          proof.quarantineEpoch,
+          proof.toolchainHash,
+          proof.designContractVersion,
+          proof.behaviorManifestHash,
+        ],
+      );
+      if (stamped.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+      await new PgEventStore(client).append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "integration.proof_root.composed",
+        payload: {
+          projectId: input.projectId,
+          integrationNodeId: input.nodeId,
+          proofRoot: proof.proofRoot,
+          proofUnitIds: [...proof.proofUnitIds].sort(),
+        },
+      });
     });
   }
 
@@ -352,4 +386,37 @@ export class PgEagerBeamStore {
       });
     });
   }
+}
+
+async function lockFrontier(client: pg.PoolClient, projectId: string, frontierRunId: string): Promise<void> {
+  const locked = await client.query("SELECT run_id FROM runs WHERE project_id = $1 AND run_id = $2 FOR UPDATE", [
+    projectId,
+    frontierRunId,
+  ]);
+  if (locked.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+}
+
+async function appendStale(
+  events: PgEventStore,
+  input: {
+    orgId: string;
+    projectId: string;
+    frontierRunId: string;
+    reason: string;
+  },
+  row: StaleBeamRow,
+): Promise<void> {
+  await events.append({
+    orgId: input.orgId,
+    projectId: input.projectId,
+    runId: row.frontier_run_id,
+    eventType: "merge.beam.stale",
+    payload: {
+      projectId: input.projectId,
+      beamId: row.id,
+      frontierRunId: row.frontier_run_id,
+      reason: input.reason,
+      ...(row.plan_digest === null ? {} : { planDigest: row.plan_digest }),
+    },
+  });
 }

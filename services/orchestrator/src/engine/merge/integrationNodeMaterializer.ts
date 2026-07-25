@@ -34,6 +34,7 @@ export interface AuthorizedSubsetMaterializationInput {
    * a half-known speculative proof identity rather than writing a reusable node.
    */
   readonly beforePersist?: (input: {
+    readonly localRef: string;
     readonly baseSha: string;
     readonly headSha: string;
     readonly treeHash: string;
@@ -117,6 +118,7 @@ export class IntegrationNodeMaterializer {
       input.beforePersist === undefined
         ? undefined
         : await input.beforePersist({
+            localRef: assembled.localRef,
             baseSha: assembled.baseSha,
             headSha: assembled.headSha,
             treeHash: assembled.treeHash,
