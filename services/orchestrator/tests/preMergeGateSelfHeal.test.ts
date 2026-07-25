@@ -66,6 +66,14 @@ class ReusablePrGitHubHttp implements GitHubHttpClient {
       this.created = true;
       return { status: 201, body: pr };
     }
+    // Draft publication verifies that its planner branch is absent before creating it.
+    // Keep this route exact: another ref must not accidentally receive an absence proof.
+    if (
+      input.method === "GET" &&
+      input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test"
+    ) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     // graphql (mark-ready node-id fetch + mutation), commit-status POST, everything else.
     return { status: 200, body: { data: { repository: { pullRequest: { id: "PR_node_7" } } } } };
   }
@@ -126,6 +134,22 @@ function selfHealAdapters() {
 }
 
 describe("pre-merge gate self-heal (apex v34)", () => {
+  it("proves only the planner draft ref absent; an unexpected ref remains unhandled", async () => {
+    const github = new ReusablePrGitHubHttp();
+    const absent = await github.request({
+      method: "GET",
+      path: "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test",
+    });
+    const unexpected = await github.request({
+      method: "GET",
+      path: "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Funexpected",
+    });
+
+    expect(absent.status).toBe(404);
+    // Negative control: the local fake must not grant absence for arbitrary refs.
+    expect(unexpected.status).toBe(200);
+  });
+
   it("a failed pre_merge ('merge'-tier) gate re-enters the WRITER with the failing step's output, NOT a code:internal strand", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
     // The cucumber/stryker error the writer must see to fix its own tier-3.
