@@ -84,7 +84,7 @@ describe("managed inbox source producer → persistence → connector", () => {
           calls.push(input);
           return {
             status: 200,
-            body: [{ id: "issue-1", title: "live defect" }],
+            body: [{ id: "issue-1", title: "live defect", project: { slug: "web" } }],
             headers: { link: terminalSentryLink(input) },
           };
         },

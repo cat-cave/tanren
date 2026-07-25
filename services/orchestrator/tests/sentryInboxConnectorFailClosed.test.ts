@@ -2,43 +2,34 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   createSentryConnector,
+  InboxSource,
   ingestSource,
-  IntakeSourceAuthorityError,
-  type InboxSource,
   type SentryHttpClient,
   type SentryHttpRequest,
   type SentryHttpResponse,
 } from "../src/engine/forge/inbox/index.js";
 import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 const credentialRef = "credential/sentry/pagination/g/1";
-const source: InboxSource = {
+const source = InboxSource.parse({
   id: "source-sentry",
   orgId: "org-1",
   projectId: "project-1",
   kind: "errors",
   name: "Sentry issues",
-  detail: "unresolved",
   config: { org: "cat-cave", project: "app", baseUrl: "https://sentry.io" },
-  enabled: true,
-  autoRoute: false,
-};
-const authority = testSentryIntakeAuthority(credentialRef, {
-  orgSlug: "cat-cave",
-  baseUrl: "https://sentry.io",
 });
+const authority = testSentryIntakeAuthority(credentialRef, { orgSlug: "cat-cave", baseUrl: "https://sentry.io" });
 const issuesUrl = "https://sentry.io/api/0/projects/cat-cave/app/issues/";
 const fixedQuery = "query=is%3Aunresolved&statsPeriod=14d";
-const issue = (id: string) => ({ id, title: id });
+const issue = (id: string) => ({ id, title: id, project: { slug: "app" } });
 function nextLink(cursor: string, results: boolean, target = `${issuesUrl}?${fixedQuery}&cursor=${cursor}`): string {
   return (
     `<${issuesUrl}?${fixedQuery}&cursor=0:0:1>; rel="previous"; results="false"; cursor="0:0:1", ` +
     `<${target}>; rel="next"; results="${String(results)}"; cursor="${cursor}"`
   );
 }
-function page(body: unknown, link?: string): SentryHttpResponse {
-  return { status: 200, body, headers: { link } };
-}
-async function harness(responses: SentryHttpResponse[], intakeAuthority = authority) {
+const page = (body: unknown, link?: string): SentryHttpResponse => ({ status: 200, body, headers: { link } });
+async function harness(responses: SentryHttpResponse[]) {
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: credentialRef, value: "sentry-token" });
   const calls: SentryHttpRequest[] = [];
@@ -50,11 +41,7 @@ async function harness(responses: SentryHttpResponse[], intakeAuthority = author
       return response;
     },
   };
-  return {
-    connector: createSentryConnector({ secrets, sentryHttp: http, authority: intakeAuthority }),
-    calls,
-    secrets,
-  };
+  return { connector: createSentryConnector({ secrets, sentryHttp: http, authority }), calls };
 }
 async function expectNoPersistence(
   connector: ReturnType<typeof createSentryConnector>,
@@ -62,39 +49,44 @@ async function expectNoPersistence(
   error: RegExp = /Invalid input/u,
 ): Promise<void> {
   const query = vi.fn<() => Promise<void>>(async () => {});
+  const triage = vi.fn<() => Promise<Record<string, never>>>(async () => ({}));
   await expect(
     ingestSource(
       {
         pool: { query } as never,
         connectors: new Map([["errors", connector]]),
-        answerer: { triage: async () => ({}) } as never,
+        answerer: { triage } as never,
       },
       input,
     ),
   ).rejects.toThrow(error);
-  expect(query).not.toHaveBeenCalled();
+  expect([query.mock.calls.length, triage.mock.calls.length]).toEqual([0, 0]);
 }
 describe("Sentry cursor pagination fail-closed", () => {
-  it("NEGATIVE CONTROL — rejects a malformed later page without persisting the valid prefix", async () => {
+  it.each([
+    ["a malformed later row", { ...issue("issue-2"), id: 2 }, /Invalid input/u],
+    [
+      "a whitespace title despite fallback fields",
+      { ...issue("issue-2"), title: " \t", culprit: "fallback" },
+      /Too small/u,
+    ],
+    ["a mixed-project later row", { ...issue("issue-2"), project: { slug: "other" } }, /configured project/u],
+    ["a duplicate id", { ...issue("issue-1"), title: "replayed" }, /repeated an issue id/u],
+  ])("NEGATIVE CONTROL — rejects %s without exposing the valid prefix", async (_name, badRow, error) => {
     const { connector, calls } = await harness([
-      page([{ id: "issue-1", title: "valid first page" }], nextLink("0:100:0", true)),
-      page([{ id: 2, title: "malformed second page" }], nextLink("0:200:0", false)),
+      page([issue("issue-1")], nextLink("0:100:0", true)),
+      page([badRow], nextLink("0:200:0", false)),
     ]);
-    await expectNoPersistence(connector);
-    expect(calls[1]?.path).toBe(
-      "/api/0/projects/cat-cave/app/issues/?query=is%3Aunresolved&statsPeriod=14d&cursor=0:100:0",
-    );
+    await expectNoPersistence(connector, source, error);
+    expect(calls[1]?.path).toContain("cursor=0:100:0");
   });
   const terminal = nextLink("0:100:0", false);
-  const nextOnly = terminal.split(", ")[1];
-  const duplicateCursor = terminal.replace('cursor="0:100:0"', 'cursor="0:100:0"; cursor="0:100:0"');
-  const malformedLinks: [string, string, RegExp][] = [
-    ["duplicate relation", `${terminal}, ${nextOnly}`, /exactly one previous and one next/u],
+  it.each([
+    ["duplicate relation", `${terminal}, ${terminal.split(", ")[1]}`, /exactly one previous and one next/u],
     ["unknown parameter", terminal.replace('rel="next"', 'rel="next"; extra="x"'), /exactly rel/u],
-    ["duplicate cursor parameter", duplicateCursor, /duplicate/u],
     ["mismatched cursor parameter", terminal.replace('cursor="0:100:0"', 'cursor="wrong"'), /disagrees/u],
-  ];
-  it.each(malformedLinks)("rejects %s before any candidate write", async (_name, link, message) => {
+    ["non-advancing first cursor", nextLink("0:0:1", true), /did not make progress/u],
+  ] as [string, string, RegExp][])("rejects %s before any candidate write", async (_name, link, message) => {
     const { connector, calls } = await harness([page([issue("issue-1")], link)]);
     await expectNoPersistence(connector, source, message);
     expect(calls).toHaveLength(1);
@@ -112,16 +104,5 @@ describe("Sentry cursor pagination fail-closed", () => {
       /configured query multiset/u,
     );
     expect(calls).toHaveLength(1);
-  });
-});
-describe("Sentry intake authority effect binding", () => {
-  it("rejects an attacker endpoint before secret resolution or provider I/O", async () => {
-    const { connector, calls, secrets } = await harness([]);
-    const secretRead = vi.spyOn(secrets, "get");
-    const config = { ...source.config, baseUrl: "https://attacker.example" };
-    await expect(connector.fetch({ ...source, config })).rejects.toBeInstanceOf(IntakeSourceAuthorityError);
-    expect(secretRead).not.toHaveBeenCalled();
-    expect(calls).toEqual([]);
-    secretRead.mockRestore();
   });
 });

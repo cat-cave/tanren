@@ -1,19 +1,8 @@
-type QueryTuple = readonly [string, string];
-function sortedQueryTuples(url: URL, omittedKey: string): QueryTuple[] {
+function sortedQueryTuples(url: URL, omittedKey: string): [string, string][] {
   return [...url.searchParams.entries()]
     .filter(([key]) => key !== omittedKey)
-    .sort((left, right) => {
-      const [leftKey, leftValue] = left;
-      const [rightKey, rightValue] = right;
-      if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
-      return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
-    });
+    .sort(([ak, av], [bk, bv]) => (ak < bk ? -1 : ak > bk ? 1 : av < bv ? -1 : av > bv ? 1 : 0));
 }
 export function sameQueryMultiset(left: URL, right: URL, omittedKey: string): boolean {
-  const expected = sortedQueryTuples(left, omittedKey);
-  const actual = sortedQueryTuples(right, omittedKey);
-  return (
-    expected.length === actual.length &&
-    actual.every(([key, value], index) => key === expected[index]?.[0] && value === expected[index]?.[1])
-  );
+  return JSON.stringify(sortedQueryTuples(left, omittedKey)) === JSON.stringify(sortedQueryTuples(right, omittedKey));
 }

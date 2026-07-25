@@ -202,7 +202,11 @@ async function proveIssueLoop(host: InMemoryCodeHost, baseSha: string): Promise<
     issue: { number: 7, title: "resolve returns 500 on an unknown slug", body: "repro: GET /x → 500", labels: ["bug"] },
     repository: { owner: { login: RUNTIME_BEHAVIOR_REPO.owner }, name: RUNTIME_BEHAVIOR_REPO.name },
   };
-  const mapped = mapGithubIssueWebhook(payload, "project_runtime_behavior");
+  const mapped = mapGithubIssueWebhook(payload, {
+    kind: "issues",
+    projectId: "project_runtime_behavior",
+    config: { owner: RUNTIME_BEHAVIOR_REPO.owner, repo: RUNTIME_BEHAVIOR_REPO.name, labels: [] },
+  });
   if (mapped.kind !== "ingest") {
     throw new Error(`runtime behavior driver: issue webhook did not ingest (${mapped.kind})`);
   }

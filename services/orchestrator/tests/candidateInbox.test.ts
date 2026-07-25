@@ -107,7 +107,13 @@ function fakeSentry(issues: unknown[]): { client: SentryHttpClient; calls: Sentr
   const client: SentryHttpClient = {
     async request(input) {
       calls.push(input);
-      return { status: 200, body: issues, headers: { link: terminalSentryLink(input) } };
+      return {
+        status: 200,
+        body: issues.map((issue) =>
+          typeof issue === "object" && issue !== null ? { project: { slug: "app" }, ...issue } : issue,
+        ),
+        headers: { link: terminalSentryLink(input) },
+      };
     },
   };
   return { client, calls };
@@ -415,8 +421,6 @@ describe("sentry connector (mocked)", () => {
       permalink: "https://sentry.io/organizations/cat-cave/issues/4002/",
       metadata: { value: "query exceeded 5s" },
     },
-    // A valid row with a stable provider id but no title signal — must be dropped.
-    { id: "4003", level: "info" },
   ];
 
   it("maps unresolved sentry issues to candidates with permalink + metadata body", async () => {

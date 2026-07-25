@@ -37,7 +37,7 @@ import {
 } from "../inbox/index.js";
 import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { intakeItem } from "./pipeline.js";
-import { decodeGithubIssueEvent, mapGithubIssueWebhook } from "./webhookMapping.js";
+import { GithubWebhookScopeMismatchError, mapGithubIssueWebhook } from "./webhookMapping.js";
 import { WebhookEventStore, type WebhookEvent } from "../../repositories/webhookEvents.js";
 import { loadRunnableInboxSource } from "./sourceValidation.js";
 
@@ -72,7 +72,7 @@ function mapEvent(event: WebhookEvent, source: InboxSource) {
   if (event.eventType !== "issues") {
     return { kind: "skip" as const, reason: `unsupported webhook event type: ${event.eventType}` };
   }
-  return mapGithubIssueWebhook(event.payload, source.projectId);
+  return mapGithubIssueWebhook(event.payload, source);
 }
 
 /**
@@ -111,11 +111,11 @@ export async function processWebhookEvent(deps: WebhookProcessorDeps, event: Web
     // bh-7 observes the exact delivery bh-3 already persisted and claimed. It
     // does not create a second webhook processor; a failed observation leaves
     // this event recoverable for this processor's normal sweeper retry.
-    decodeGithubIssueEvent(event.payload);
-    await deps.recordIssueObservation?.(source, event);
     mapped = mapEvent(event, source);
+    await deps.recordIssueObservation?.(source, event);
   } catch (error) {
-    await markFailure(deps, event, messageOf(error), error instanceof ZodError, workerId);
+    const poison = error instanceof ZodError || error instanceof GithubWebhookScopeMismatchError;
+    await markFailure(deps, event, messageOf(error), poison, workerId);
     return false;
   }
   if (mapped.kind === "skip") {

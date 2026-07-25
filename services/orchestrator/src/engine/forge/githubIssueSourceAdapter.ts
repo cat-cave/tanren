@@ -5,7 +5,7 @@ import { ActiveGitHubIssuesConfig, type InboxSource } from "./inbox/index.js";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { decodeGithubIssueEvent, type GithubIssueEvent } from "./intake/webhookMapping.js";
+import { decodeGithubIssueEvent, githubWebhookExternalId, type GithubIssueEvent } from "./intake/webhookMapping.js";
 import {
   ingestIssueObservation,
   type IssueObservation,
@@ -86,16 +86,7 @@ function normalizeWebhook(
   const status = actionStatus(parsed.data.action);
   if (status === undefined) return undefined;
   if (source.kind !== "issues" || source.config === null) return undefined;
-  const sourceConfig = ActiveGitHubIssuesConfig.parse(source.config);
-  const owner = parsed.data.repository.owner.login;
-  const repo = parsed.data.repository.name;
-  if (
-    owner.toLowerCase() !== sourceConfig.owner.toLowerCase() ||
-    repo.toLowerCase() !== sourceConfig.repo.toLowerCase()
-  ) {
-    throw new Error("GitHub webhook repository does not match its configured source");
-  }
-  const externalKey = `gh-${owner}/${repo}#${parsed.data.issue.number}`;
+  const externalKey = githubWebhookExternalId(parsed.data, source);
   return {
     orgId: source.orgId,
     sourceId: source.id,

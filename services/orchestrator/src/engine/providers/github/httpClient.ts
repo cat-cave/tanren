@@ -144,12 +144,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
 }
 function githubNextPagePath(link: string | null, apiBaseUrl: string): string | undefined {
   if (link === null || link.trim() === "") return undefined;
-  let values;
-  try {
-    values = parseLinkHeader(link);
-  } catch {
-    throw new Error("GitHub Link header contained malformed syntax");
-  }
+  const values = parseLinkHeader(link);
   const nextLinks = values
     .filter((value) => {
       const rel = value.parameters.get("rel");
@@ -162,18 +157,9 @@ function githubNextPagePath(link: string | null, apiBaseUrl: string): string | u
     })
     .map((value) => value.target);
   if (nextLinks.length === 0) return undefined;
-  if (nextLinks.length !== 1) {
-    throw new Error("GitHub Link header contained ambiguous next-page links");
-  }
-  let url: URL;
+  if (nextLinks.length !== 1) throw new Error("GitHub Link header contained ambiguous next-page links");
   const api = new URL(apiBaseUrl);
-  try {
-    url = new URL(nextLinks[0]!, api);
-  } catch {
-    throw new Error("GitHub Link header contained an invalid next-page URL");
-  }
-  if (url.origin !== api.origin) {
-    throw new Error("GitHub Link header next-page URL was not API-origin scoped");
-  }
+  const url = new URL(nextLinks[0]!, api);
+  if (url.origin !== api.origin) throw new Error("GitHub Link header next-page URL was not API-origin scoped");
   return `${url.pathname}${url.search}`;
 }

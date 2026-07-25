@@ -201,7 +201,7 @@ describe("webhook intake — auto_routable → spec in the DAG", () => {
       dependsOn: ["spec_dep1"],
       priority: "P1",
     };
-    const mapped = mapGithubIssueWebhook(issuePayload(7, "add per-link analytics"), issuesSource.projectId);
+    const mapped = mapGithubIssueWebhook(issuePayload(7, "add per-link analytics"), issuesSource);
     expect(mapped.kind).toBe("ingest");
     if (mapped.kind !== "ingest") throw new Error("unreachable");
 
@@ -238,8 +238,8 @@ describe("webhook intake — auto_routable → spec in the DAG", () => {
       priority: "P2",
     };
     const deps = { pool, answerer: fixedTriage("auto_routable", routableSpec), autoRoute: intakeAutoRouteDeps() };
-    const opened = mapGithubIssueWebhook(issuePayload(42, "dark mode"), issuesSource.projectId);
-    const labeled = mapGithubIssueWebhook(issuePayload(42, "dark mode", ["enhancement"]), issuesSource.projectId);
+    const opened = mapGithubIssueWebhook(issuePayload(42, "dark mode"), issuesSource);
+    const labeled = mapGithubIssueWebhook(issuePayload(42, "dark mode", ["enhancement"]), issuesSource);
     if (opened.kind !== "ingest" || labeled.kind !== "ingest") throw new Error("unreachable");
 
     const first = await intakeItem(deps, issuesSource, opened.item);
@@ -279,7 +279,7 @@ describe("webhook intake — auto_routable → spec in the DAG", () => {
       dependsOn: [],
       priority: "P1",
     };
-    const mapped = mapGithubIssueWebhook(issuePayload(99, "build everything"), issuesSource.projectId);
+    const mapped = mapGithubIssueWebhook(issuePayload(99, "build everything"), issuesSource);
     if (mapped.kind !== "ingest") throw new Error("unreachable");
     const { ingestSource } = await import("../src/engine/forge/inbox/index.js");
     const connectors = new Map<string, SourceConnector>([
@@ -310,7 +310,7 @@ describe("webhook intake — auto_routable → spec in the DAG", () => {
 describe("webhook intake — non-routable → inbox", () => {
   it("lands a needs_call candidate in the inbox without inserting a spec", async () => {
     const { pool, specInserts } = stubPool();
-    const mapped = mapGithubIssueWebhook(issuePayload(8, "vague idea"), issuesSource.projectId);
+    const mapped = mapGithubIssueWebhook(issuePayload(8, "vague idea"), issuesSource);
     if (mapped.kind !== "ingest") throw new Error("unreachable");
     const outcome = await intakeItem(
       { pool, answerer: fixedTriage("needs_call", null), autoRoute: intakeAutoRouteDeps() },

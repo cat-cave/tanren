@@ -190,6 +190,7 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
     const organizations: z.infer<typeof SentryOrgSchema>[] = [];
     const seenCursors = new Set<string>();
     const resourcePath = "/api/0/organizations/?per_page=100";
+    let currentCursor: string | undefined;
     let path: string | undefined = resourcePath;
     while (path !== undefined) {
       const response = await this.fetchImpl(`${this.endpoint}${path}`, {
@@ -208,17 +209,18 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
           link: response.headers.get("link") ?? undefined,
           baseUrl: this.endpoint,
           resourcePath,
+          currentCursor,
           seenCursors,
         });
         if (next === undefined) path = undefined;
         else {
           seenCursors.add(next.cursor);
+          currentCursor = next.cursor;
           path = next.path;
         }
       } catch (error) {
-        if (error instanceof SentryPaginationError) {
+        if (error instanceof SentryPaginationError)
           return { status: "unavailable", reason: "sentry_malformed_pagination" };
-        }
         throw error;
       }
     }
