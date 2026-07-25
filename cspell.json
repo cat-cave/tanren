@@ -787,6 +787,7 @@
         "fauth",
         "fcallback",
         "fhard",
+        "flifecycle",
         "fopaque",
         "fplanner",
         "fprojects",
