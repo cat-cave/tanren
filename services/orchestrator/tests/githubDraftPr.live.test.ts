@@ -52,6 +52,14 @@ describeLive("live GitHub draft PR contract", () => {
           `git commit -m ${shellQuote("tanren github draft pr smoke")}`,
         ].join(" && "),
       });
+      const publishedHeadSha = (
+        await runWorkspaceSshCommand(ssh, target, {
+          label: "resolve live draft PR head",
+          timeoutMs,
+          cwd: workspace,
+          command: "git rev-parse HEAD",
+        })
+      ).stdout.trim();
 
       const events = new FakeEventStore();
       const result = await publishDraftPullRequest({
@@ -68,6 +76,8 @@ describeLive("live GitHub draft PR contract", () => {
         repoUrl,
         targetBranch: baseBranch,
         runBranch: branch,
+        sourceRef: publishedHeadSha,
+        publishedHeadSha,
         title: `Tanren live draft PR smoke ${runId}`,
         body: "Created by Tanren's opt-in live GitHub draft PR smoke.",
         githubCredentialRef: "credential/github/live",

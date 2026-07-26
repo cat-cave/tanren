@@ -23,6 +23,7 @@
   "required": [
     "repoUrl",
     "branch",
+    "headSha",
     "credentialRef",
     "redacted"
   ],

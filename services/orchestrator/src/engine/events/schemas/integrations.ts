@@ -22,13 +22,9 @@ export const GithubBranchPushedPayload = z
   .object({
     repoUrl: z.string(),
     branch: z.string(),
-    // The cleaned PR head is the durable CAS witness for successor/re-drive
-    // publication. Older ledger rows predate this field; readers reject such a
-    // row rather than pretending its branch is absent.
-    headSha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/u)
-      .optional(),
+    // New branch-push effects must carry their immutable CAS witness. Older
+    // ledger rows are read defensively and rejected by the durable-head reader.
+    headSha: z.string().regex(/^[0-9a-f]{40}$/u),
     credentialRef: z.string(),
     redacted: z.literal(true),
   })

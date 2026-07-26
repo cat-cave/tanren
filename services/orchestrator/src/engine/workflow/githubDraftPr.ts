@@ -21,7 +21,7 @@ import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/git
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
 import { readDraftPrPushLease } from "./githubDraftPrLease.js";
 import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
-import { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
+import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 
 export { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 
@@ -149,12 +149,11 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
-  if (input.publishedHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(input.publishedHeadSha)) {
-    throw new Error(`GitHub draft branch published head is invalid for ${branch}`);
-  }
-  if (input.publishedHeadSha !== undefined && input.sourceRef !== input.publishedHeadSha) {
-    throw new Error(`GitHub draft branch source ref must equal its published head for ${branch}`);
-  }
+  const publishedHeadSha = requireDraftPrPublishedHead({
+    branch,
+    sourceRef: input.sourceRef,
+    publishedHeadSha: input.publishedHeadSha,
+  });
   // §3.1 stacked-PR base; the persisted target reflects the actual PR base.
   const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);
   // With an App installation the static ref is optional; the ledger label is
@@ -238,7 +237,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       payload: {
         repoUrl: input.repoUrl,
         branch,
-        ...(input.publishedHeadSha !== undefined && { headSha: input.publishedHeadSha }),
+        headSha: publishedHeadSha,
         credentialRef: ledgerRef,
         redacted: true,
       },
