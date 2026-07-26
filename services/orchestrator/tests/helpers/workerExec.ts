@@ -345,9 +345,14 @@ export class RecordingSsh implements CommandSubstrate {
     if (isJunitHarvestRead(command.command)) {
       return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
     }
+    if (isCleanHeadResolution(command.command)) {
+      return { exitCode: 0, stdout: `${CLEAN_HEAD_SHA}\n`, stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }
+
+const CLEAN_HEAD_SHA = "a".repeat(40);
 
 // One-test JUnit XML the harvester parses as `total: 1, failures: 0` — passes the
 // default `minTests: 1` evidence contract.
@@ -360,6 +365,13 @@ const PASSING_JUNIT_XML =
 // marker, so a non-harvest command never matches.
 function isJunitHarvestRead(command: string): boolean {
   return command.includes("__TANREN_FILE_ABSENT__");
+}
+
+function isCleanHeadResolution(command: string): boolean {
+  return (
+    command.includes("git rev-parse HEAD") ||
+    (command.includes("git rev-parse") && command.includes("refs/tanren/pr-clean"))
+  );
 }
 
 export function passingGitHub(): ScriptedGitHubHttp {

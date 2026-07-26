@@ -1,6 +1,41 @@
+import { z } from "zod";
 import { parseRefObjectSha } from "../providers/githubChecksParse.js";
 import { repoPath, withErrorDetail, type GitHubHttpClient, type GitHubRepository } from "../providers/github.js";
 import { validateGitBranchName, type GitHubPushLease } from "../workspace/githubPush.js";
+
+type QueryClient = { query(sql: string, params: readonly unknown[]): Promise<{ rows: readonly unknown[] }> };
+
+const PublishedHeadRow = z.object({ payload: z.unknown() });
+const PublishedHeadPayload = z.object({ headSha: z.string().regex(/^[0-9a-f]{40}$/u) }).passthrough();
+
+/**
+ * Reads the last Tanren-published head for the stable spec-derived PR branch.
+ * The immutable event ledger spans fresh successor runs, unlike in-process
+ * rework state. A prior branch-push event without a valid CAS witness is an
+ * unsafe history, not an absence proof.
+ */
+export async function readDurableDraftPrPublishedHead(
+  pool: QueryClient,
+  input: { orgId: string; specId: string; branch: string },
+): Promise<string | undefined> {
+  const branch = validateGitBranchName(input.branch);
+  const result = await pool.query(
+    `SELECT payload FROM events
+     WHERE org_id = $1 AND spec_id = $2 AND event_type = 'github.branch.pushed'
+       AND payload->>'branch' = $3
+     ORDER BY ts DESC, id DESC
+     LIMIT 1`,
+    [input.orgId, input.specId, branch],
+  );
+  const raw = result.rows[0];
+  if (raw === undefined) return undefined;
+  const row = PublishedHeadRow.safeParse(raw);
+  const payload = row.success ? PublishedHeadPayload.safeParse(row.data.payload) : undefined;
+  if (payload === undefined || !payload.success) {
+    throw new Error(`GitHub draft branch durable published head is invalid for ${branch}`);
+  }
+  return payload.data.headSha;
+}
 
 /**
  * Read the remote branch immediately before a draft/rework publication.  A 404

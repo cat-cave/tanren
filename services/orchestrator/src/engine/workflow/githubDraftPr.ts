@@ -76,24 +76,10 @@ export interface PublishDraftPullRequestInput {
   githubAppMinter?: GithubAppTokenMinter;
   /** The local gitref pushed as the PR branch (default "HEAD"). */
   sourceRef?: string;
+  /** The validated commit that was pushed from `sourceRef`, when the caller has one. */
+  publishedHeadSha?: string;
   expectedPublishedHeadSha?: string;
-  /**
-   * apex v67/v69 loop-close fix: fired immediately AFTER `github.pr.created` is
-   * appended. The PR's existence is the durable signal it should be tracked by the
-   * native merge queue; deferring the enqueue to the end of the writer chain
-   * (`mergeForRun → enqueueNative`) stranded PRs whenever the intervening
-   * gate/review steps halted (the apex v67 = 4 PRs / 0 queue rows + v69 = 2 PRs /
-   * 0 queue rows blocker). When provided, the caller (`publishCleanedDraftPr`) has
-   * resolved the project's `mergeIntegration === "native_queue"` AND wired the
-   * `nativeQueueEnqueuer`; this hook performs the idempotent `merge_queue` INSERT
-   * + emits `merge.scheduled`. The `MergeAuthority.authorizeLand` truth table still
-   * enforces every land precondition (gate/review/mergeability), so an early-
-   * scheduled entry HOLDS in the queue until those clear — never a premature land.
-   *
-   * MUTUALLY EXCLUSIVE with {@link postPrCreatedAtomicWrites}: the seam picks ONE
-   * (the atomic one when its on-client enqueuer is wired — the production path; this
-   * legacy one otherwise — tests / no-DB runs).
-   */
+  /** Legacy non-atomic post-create enqueue seam; mutually exclusive with the production atomic seam. */
   enqueueAfterCreate?: (input: { prUrl: string; prNumber: number }) => Promise<void>;
   /**
    * ATOMICITY (PR #724 follow-up — apex v67/v69 root cause #2): when wired (the
@@ -169,9 +155,10 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
-  // §3.1 stacked-PR base: the immediate-ancestor PR-head branch when flag-on + stacked,
-  // else today's `targetBranch`. The persisted/event `targetBranch` reflects the BASE the
-  // PR actually opened against.
+  if (input.publishedHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(input.publishedHeadSha)) {
+    throw new Error(`GitHub draft branch published head is invalid for ${branch}`);
+  }
+  // §3.1 stacked-PR base; the persisted target reflects the actual PR base.
   const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);
   // With an App installation the static ref is optional; the ledger label is
   // the App credential ref in that case.
@@ -251,7 +238,13 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     await eventStore.append({
       ...context,
       eventType: "github.branch.pushed",
-      payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true },
+      payload: {
+        repoUrl: input.repoUrl,
+        branch,
+        ...(input.publishedHeadSha !== undefined && { headSha: input.publishedHeadSha }),
+        credentialRef: ledgerRef,
+        redacted: true,
+      },
     });
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);

@@ -39,7 +39,10 @@ import { parseGitHubRepository } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
-import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
+import {
+  publishDraftPullRequestWithDurableLease,
+  type PublishedDraftPullRequest,
+} from "./githubDraftPrDurableLease.js";
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
 import { appTokenSeam, mergeQueueEarlyEnqueueSeam } from "./plannerRunSeams.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
@@ -100,6 +103,14 @@ export type PublishCleanedDraftPrResult =
   | { kind: "no_commits"; pushSource: CleanedPushSource; disposition: NoCommitsDisposition };
 
 type CleanedPushSource = Awaited<ReturnType<typeof prepareCleanPrBranch>>;
+
+function requirePublishedHeadSha(headSha: string): string {
+  if (!/^[0-9a-f]{40}$/u.test(headSha)) {
+    throw new Error("cleaned draft PR head is invalid; refusing to publish without a durable lease witness");
+  }
+  return headSha;
+}
+
 /**
  * Prepare the cleaned PR branch + publish the draft PR for one writer-loop pass. Replays
  * the writer commits onto the clone HEAD, dropping the synthetic bootstrap commit (+
@@ -122,7 +133,7 @@ export async function publishCleanedDraftPr(
   input: RunPlannerLoopInput,
   ctx: { target: RunnerHandle; workspacePath: string; eventStore: EventStore },
   context: PlannerRunContext,
-  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity; expectedPublishedHeadSha?: string },
+  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity },
 ): Promise<PublishCleanedDraftPrResult> {
   const pushSource = await prepareCleanPrBranch({
     ssh: input.ssh,
@@ -130,53 +141,54 @@ export async function publishCleanedDraftPr(
     workspacePath: ctx.workspacePath,
     cloneHeadSha: shas.cloneHeadSha,
     bootstrapSha: shas.bootstrapSha,
-    // Stamped into the composed commit's message so the PR head carries provenance
-    // back to the run whose writer produced it (apex v71 squash-then-rebase).
+    // Stamped into the composed commit's message for run provenance.
     runId: context.runId,
-    // MERGE-SAFETY (self-identity): author the composed PR-head commit as the run's
-    // resolved pushing identity so GitHub attributes it to the bot login the
-    // external-change gate treats as Tanren's own (never `<unknown>`, which blocks).
+    // Attribute the composed PR head to the resolved pushing identity.
     ...(shas.pushIdentity !== undefined && { pushIdentity: shas.pushIdentity }),
   });
+  const publishedHeadSha = requirePublishedHeadSha(pushSource.headSha);
   try {
     // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
     // the tenant-scope invariant), so the appended events stamp a real org id —
     // no empty-sentinel fallback.
     const appendEventOrgId = context.orgId;
-    const pullRequest = await publishDraftPullRequest({
-      pool: input.pool,
-      eventStore: ctx.eventStore,
-      runStateWriter: input.runStateWriter,
-      orgId: context.orgId,
-      appendEventOrgId,
-      secrets: input.secrets,
-      githubHttp: input.githubHttp,
-      ssh: input.ssh,
-      target: ctx.target,
-      sourceRef: pushSource.ref,
-      ...(shas.expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha: shas.expectedPublishedHeadSha }),
-      runId: context.runId,
-      specId: context.specId,
-      projectId: context.projectId,
-      workspacePath: ctx.workspacePath,
-      repoUrl: context.repoUrl,
-      targetBranch: context.targetBranch,
-      // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
-      // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
-      ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-      runBranch: context.runBranch,
-      title: `Tanren: ${context.specTitle}`,
-      body: context.specDescription,
-      githubCredentialRef: context.githubCredentialRef,
-      ...appTokenSeam(context, input),
-      // apex v67/v69 loop-close: when this project is `native_queue` AND the worker
-      // wired the enqueuer, fire the merge_queue INSERT + `merge.scheduled` event
-      // RIGHT AFTER `github.pr.created`. The PR is durable on GitHub the moment we
-      // get here; the merge coordinator must own it whether the writer's downstream
-      // gate/review chain succeeds, halts, or throws. The hook is idempotent (the
-      // late-path `mergeForRun → enqueueNative` becomes a no-op on the second call).
-      ...mergeQueueEarlyEnqueueSeam(input, context, ctx.eventStore, appendEventOrgId),
-    });
+    const pullRequest = await publishDraftPullRequestWithDurableLease(
+      {
+        pool: input.pool,
+        eventStore: ctx.eventStore,
+        runStateWriter: input.runStateWriter,
+        orgId: context.orgId,
+        appendEventOrgId,
+        secrets: input.secrets,
+        githubHttp: input.githubHttp,
+        ssh: input.ssh,
+        target: ctx.target,
+        sourceRef: pushSource.ref,
+        publishedHeadSha,
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        workspacePath: ctx.workspacePath,
+        repoUrl: context.repoUrl,
+        targetBranch: context.targetBranch,
+        // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
+        // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
+        ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
+        runBranch: context.runBranch,
+        title: `Tanren: ${context.specTitle}`,
+        body: context.specDescription,
+        githubCredentialRef: context.githubCredentialRef,
+        ...appTokenSeam(context, input),
+        // apex v67/v69 loop-close: when this project is `native_queue` AND the worker
+        // wired the enqueuer, fire the merge_queue INSERT + `merge.scheduled` event
+        // RIGHT AFTER `github.pr.created`. The PR is durable on GitHub the moment we
+        // get here; the merge coordinator must own it whether the writer's downstream
+        // gate/review chain succeeds, halts, or throws. The hook is idempotent (the
+        // late-path `mergeForRun → enqueueNative` becomes a no-op on the second call).
+        ...mergeQueueEarlyEnqueueSeam(input, context, ctx.eventStore, appendEventOrgId),
+      },
+      { orgId: context.orgId, specId: context.specId, branch: context.runBranch },
+    );
     return { kind: "published", pushSource, pullRequest };
   } catch (error) {
     if (error instanceof NoCommitsBetweenBaseAndHeadError) {
@@ -245,7 +257,7 @@ export type PublishGateStageResult =
       // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: a fixed point,
       // run finalized + spec parked LOUD (caller returns the terminal result).
       kind: "merged" | "rework" | "halt";
-      publishedHeadSha?: string;
+      publishedHeadSha: string;
     }
   // GRACEFUL EMPTY-BRANCH (v35): GitHub rejected the open with "No commits between base and
   // head" — the branch has NOTHING ahead of the base. NO PR was opened + NO gate ran. The stage
@@ -272,7 +284,6 @@ export async function runPublishGateStage(
     cloneHeadSha: string;
     bootstrapSha: string;
     pushIdentity?: ActorIdentity;
-    expectedPublishedHeadSha?: string;
     finalizeRunState: FinalizeRunState;
     appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
     seedRejections: PlannerRejectionFeedback[];
@@ -283,15 +294,9 @@ export async function runPublishGateStage(
     cloneHeadSha: stage.cloneHeadSha,
     bootstrapSha: stage.bootstrapSha,
     ...(stage.pushIdentity !== undefined && { pushIdentity: stage.pushIdentity }),
-    ...(stage.expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha: stage.expectedPublishedHeadSha }),
   });
   if (published.kind === "no_commits") {
-    // The branch had NOTHING ahead of the base: emit the OBSERVABLE disposition (never a
-    // silent relabel), then converge (work already present) or re-drive (empty writer output)
-    // — NEVER a hard internal strand. `converged` finalizes the run merged HERE (the spec is
-    // satisfied by the base, same terminal-success a normal merge takes — mirrors #586) and
-    // the caller returns; `redrive` THROWS the transient the unified finalize re-drives (#582;
-    // `empty_writer_output`, escalating LOUD only after K), never an escalating `internal`.
+    // Empty branches converge or re-drive observably; neither becomes an internal strand.
     await stage.appendEvent("github.pr.no_commits", {
       branch: context.runBranch,
       targetBranch: context.targetBranch,
@@ -319,7 +324,7 @@ export async function runPublishGateStage(
       pullRequest,
       mergeGate,
       kind: behaviorGate === "halt" ? "halt" : "merged",
-      ...publishedHeadSeam(pushSource.headSha),
+      publishedHeadSha: requirePublishedHeadSha(pushSource.headSha),
     };
   }
   const decision = await mergeGateSelfHeal(mergeGate, stage.budget.attempts);
@@ -332,11 +337,7 @@ export async function runPublishGateStage(
     stage.seedRejections,
     stage.budget,
   );
-  return { pullRequest, mergeGate, kind: move, ...publishedHeadSeam(pushSource.headSha) };
-}
-
-function publishedHeadSeam(headSha: string): { publishedHeadSha?: string } {
-  return /^[0-9a-f]{40}$/u.test(headSha) ? { publishedHeadSha: headSha } : {};
+  return { pullRequest, mergeGate, kind: move, publishedHeadSha: requirePublishedHeadSha(pushSource.headSha) };
 }
 
 /**
@@ -389,7 +390,6 @@ async function publishMergeVerdict(
       });
   }
 }
-
 /** The head-sha resolve + token mint + best-effort publish; wrapped non-throwing by {@link publishMergeVerdict}. */
 async function doPublishMergeVerdict(
   input: RunPlannerLoopInput,
@@ -427,9 +427,7 @@ async function doPublishMergeVerdict(
   });
   const repo = parseGitHubRepository(context.repoUrl);
   const { visibility } = buildProjectHostSeams(input.githubHttp, async () => token);
-  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
-  // the tenant-scope invariant), so the audit event stamps a real org id — the
-  // prior "skip on unset orgId" degrade is gone.
+  // Hydration guarantees this audit event has an org id.
   await publishGateVerdictBestEffort(
     {
       visibility,
@@ -455,7 +453,6 @@ async function doPublishMergeVerdict(
     },
   );
 }
-
 /**
  * Build the merge stage's native re-gate hook. After an auto-rebase the prior
  * verdict is stale, so re-run the in-loop `pre_merge` gate on the run's live runner

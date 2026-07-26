@@ -25,6 +25,7 @@ import {
   plannerAuthorityBundle,
   plannerAuthorityHost,
   cleanAudit,
+  cleanHeadStdout,
   completeCheck,
   passingGitHub,
   runPlannerLoopScoped,
@@ -473,7 +474,7 @@ class ConfigReadingSsh implements CommandSubstrate {
     if (isJunitHarvestRead(command.command)) {
       return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
     }
-    const stdout = command.command.includes(".tanren/ci.yml") ? this.configYaml : "";
+    const stdout = command.command.includes(".tanren/ci.yml") ? this.configYaml : cleanHeadStdout(command.command);
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
@@ -493,7 +494,6 @@ class CloneHeadSsh implements CommandSubstrate {
     if (isJunitHarvestRead(command.command)) {
       return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
     }
-    const isClonePrep = command.command.includes("git clone") && command.command.includes("git rev-parse HEAD");
-    return { exitCode: 0, stdout: isClonePrep ? `${this.cloneHead}\n` : "", stderr: "", timedOut: false };
+    return { exitCode: 0, stdout: cleanHeadStdout(command.command, this.cloneHead), stderr: "", timedOut: false };
   }
 }

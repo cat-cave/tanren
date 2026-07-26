@@ -4,7 +4,7 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engi
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
-import { readDraftPrPushLease } from "../src/engine/workflow/githubDraftPrLease.js";
+import { readDraftPrPushLease, readDurableDraftPrPublishedHead } from "../src/engine/workflow/githubDraftPrLease.js";
 import { buildGitHubPushCommand } from "../src/engine/workspace/githubPush.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { RecordingPool, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
@@ -12,6 +12,15 @@ import { RecordingPool, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.
 const target: RunnerHandle = { backend: "ssh", host: "runner", port: 22, username: "tanren" } as RunnerHandle;
 const fetched = "a".repeat(40);
 const concurrent = "b".repeat(40);
+const reworked = "c".repeat(40);
+
+class DurableHeadPool {
+  constructor(private readonly rows: readonly unknown[]) {}
+
+  async query(_sql: string, _params: readonly unknown[]) {
+    return { rows: this.rows };
+  }
+}
 
 class LeaseRaceSsh implements CommandSubstrate {
   remoteHead = fetched;
@@ -44,9 +53,11 @@ class RefThenRaceHttp implements GitHubHttpClient {
 }
 
 class RefResponseHttp implements GitHubHttpClient {
+  readonly requests: GitHubHttpRequest[] = [];
   constructor(private readonly response: GitHubHttpResponse) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    this.requests.push(input);
     if (input.path !== "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123") {
       throw new Error(`unexpected GitHub request: ${input.path}`);
     }
@@ -98,6 +109,85 @@ describe("#1069 draft publication lease", () => {
         token: "ghp_secret",
       }),
     ).rejects.toThrow("unexpected GitHub request");
+  });
+
+  it("rejects a malformed durable prior published head before any re-drive push or PR call", async () => {
+    const pool = new DurableHeadPool([{ payload: { headSha: "not-a-sha" } }]);
+    await expect(
+      readDurableDraftPrPublishedHead(pool, {
+        orgId: "org_fake",
+        specId: "spec_123",
+        branch: "tanren/run_123",
+      }),
+    ).rejects.toThrow("durable published head is invalid");
+  });
+
+  it("rejects a malformed cleaned published head before it can clear a prior lease", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new RefResponseHttp({ status: 200, body: { object: { sha: fetched } } });
+    await expect(
+      publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        target,
+        runId: "run_123",
+        specId: "spec_123",
+        projectId: "project_123",
+        appendEventOrgId: "org_fake",
+        workspacePath: "/workspace/runs/run_123/repo",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        targetBranch: "main",
+        title: "lease test",
+        publishedHeadSha: "malformed",
+        githubCredentialRef: "credential/github/org/org_fake/dev",
+        expectedPublishedHeadSha: fetched,
+      }),
+    ).rejects.toThrow("published head is invalid");
+    expect(ssh.commands).toHaveLength(0);
+    expect(http.requests).toHaveLength(0);
+  });
+
+  it("uses a durable predecessor across a re-drive and refuses a moved remote before push or PR publication", async () => {
+    const prior = await readDurableDraftPrPublishedHead(new DurableHeadPool([{ payload: { headSha: fetched } }]), {
+      orgId: "org_fake",
+      specId: "spec_123",
+      branch: "tanren/run_123",
+    });
+    expect(prior).toBe(fetched);
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new RefResponseHttp({ status: 200, body: { object: { sha: concurrent } } });
+
+    await expect(
+      publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        target,
+        runId: "run_123",
+        specId: "spec_123",
+        projectId: "project_123",
+        appendEventOrgId: "org_fake",
+        workspacePath: "/workspace/runs/run_123/repo",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        targetBranch: "main",
+        title: "lease test",
+        sourceRef: reworked,
+        publishedHeadSha: reworked,
+        githubCredentialRef: "credential/github/org/org_fake/dev",
+        expectedPublishedHeadSha: prior,
+      }),
+    ).rejects.toThrow("changed since workspace rework");
+    expect(ssh.commands).toHaveLength(0);
+    expect(http.requests).toHaveLength(1);
   });
 
   it("rejects a changed remote head without overwriting it or falsely publishing the PR", async () => {

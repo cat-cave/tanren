@@ -328,10 +328,17 @@ export class RecordingAllocator implements Allocator {
 }
 
 export class RecordingSsh implements CommandSubstrate {
-  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    const stdout =
+      command.command.includes("git rev-parse HEAD") ||
+      (command.command.includes("git rev-parse") && command.command.includes("refs/tanren/pr-clean"))
+        ? `${CLEAN_HEAD_SHA}\n`
+        : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
+
+const CLEAN_HEAD_SHA = "a".repeat(40);
 
 // PR publish + CI poll GitHub script (same tail the easy worker test uses). The
 // merge stage is driven by the injected mergeProbe, not this HTTP client.

@@ -366,9 +366,16 @@ export class RecordingSsh implements CommandSubstrate {
     this.commands.push({ target: sshTarget, command });
     const stdout = command.command.includes("__TANREN_FILE_ABSENT__")
       ? '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>'
-      : "";
+      : cleanHeadStdout(command.command);
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
+}
+
+export function cleanHeadStdout(command: string, sha = "a".repeat(40)): string {
+  return command.includes("git rev-parse HEAD") ||
+    (command.includes("git rev-parse") && command.includes("refs/tanren/pr-clean"))
+    ? `${sha}\n`
+    : "";
 }
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {

@@ -10,6 +10,10 @@ import type { PlannerRunContext } from "../../src/engine/workflow/plannerRun.js"
 
 const nonEmptyString = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 
+function hasBranch(payload: unknown, branch: unknown): boolean {
+  return typeof payload === "object" && payload !== null && "branch" in payload && payload.branch === branch;
+}
+
 export class PlannerRunPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   prUrl: string | null = null;
@@ -27,7 +31,10 @@ export class PlannerRunPool {
 
   /** FakeEventStore the fixture shares with this pool — INSERT INTO events
    * against fakePool (atomic seams' path) mirrors here; absent ⇒ dropped. */
-  eventSink?: { append(input: AppendEventInput): Promise<void> };
+  eventSink?: {
+    append(input: AppendEventInput): Promise<void>;
+    events: ReadonlyArray<{ orgId: string; specId?: string; eventType: string; payload: unknown }>;
+  };
 
   constructor(
     private readonly runContext: PlannerRunContext,
@@ -74,6 +81,19 @@ export class PlannerRunPool {
       return { rows: [{ config: { version: 1 } }], rowCount: 1 };
     if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd"))
       return { rows: [{ total: "0", notional: "0", unpriced: "0" }], rowCount: 1 };
+    if (trimmed.startsWith("SELECT payload FROM events") && trimmed.includes("github.branch.pushed")) {
+      const [orgId, specId, branch] = params;
+      const event = this.eventSink?.events
+        .toReversed()
+        .find(
+          (candidate) =>
+            candidate.eventType === "github.branch.pushed" &&
+            candidate.orgId === orgId &&
+            candidate.specId === specId &&
+            hasBranch(candidate.payload, branch),
+        );
+      return event === undefined ? { rows: [], rowCount: 0 } : { rows: [{ payload: event.payload }], rowCount: 1 };
+    }
     if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.")) {
       // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
       const row = {
