@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 import type { DeployAdapter } from "../src/engine/contracts/deployAdapter.js";
+import type { OrgGrant } from "../src/engine/contracts/integrationProvisioner.js";
 import type { GroupDeliveryAuthority } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryAuthority.js";
 import type { ReleaseInstanceRecord } from "../src/engine/contracts/deployAdapter.js";
 import type { ProofBackedWebDemo } from "../src/engine/demo/proofBackedWebDemo.js";
@@ -60,6 +61,25 @@ function deployer(proofBackedWebDemo: ProofBackedWebDemo): ProductionGroupDelive
     releaseInstances: { getByDeployment: async () => RELEASE } as never,
     intentStore: { writeIntent: async () => true, readIntent: async () => false },
   });
+}
+
+const EMPTY_POOL = {
+  connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+} as unknown as pg.Pool;
+
+function grant(grantId: string): OrgGrant {
+  return {
+    orgId: PLAN.orgId,
+    projectId: PLAN.projectId,
+    connectionId: "connection-a3",
+    grantId,
+    providerKind: TARGET.provider,
+    providerPrincipalId: "principal-a3",
+    authGeneration: 1,
+    grantGeneration: 1,
+    metadata: {},
+    eligibleOperation: {} as OrgGrant["eligibleOperation"],
+  };
 }
 
 describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
@@ -138,6 +158,93 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     expect(readIntent).not.toHaveBeenCalled();
     expect(writeIntent).not.toHaveBeenCalled();
     expect(promote).not.toHaveBeenCalled();
+  });
+
+  it("refreshes deploy authority after preview intent so an expired early grant cannot reach the provider", async () => {
+    const stale = grant("stale-deploy");
+    const refreshed = grant("refreshed-deploy");
+    const require = vi
+      .fn<GroupDeliveryAuthority["require"]>()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(refreshed);
+    const writeIntent = vi.fn<GroupIntentStore["writeIntent"]>().mockResolvedValue(true);
+    const applyPreview = vi.fn<DeployAdapter["applyPreview"]>(async (received) => {
+      if (received === stale) throw new Error("stale deploy grant reached provider");
+      expect(received).toBe(refreshed);
+      return { deploymentId: "preview-refreshed" };
+    });
+    const groupDeployer = new ProductionGroupDeliveryDeployer({
+      pool: EMPTY_POOL,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: { applyPreview } as unknown as DeployAdapter,
+      authority: { require },
+      intentStore: { writeIntent, readIntent: async () => false },
+      releaseInstances: {
+        getByDeployment: async () => ({ ...RELEASE, deploymentId: "preview-refreshed" }),
+      } as never,
+    });
+
+    await expect(
+      groupDeployer.applyPreview({
+        plan: PLAN,
+        target: TARGET,
+        artifact: { artifactDigest: `sha256:${"a".repeat(64)}`, deploymentId: "build-a3" },
+        token: "fence-a3",
+      }),
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    expect(require).toHaveBeenCalledTimes(2);
+    expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
+    expect(applyPreview).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
+  });
+
+  it("refreshes promote authority after promote intent so an expired early grant cannot reach the provider", async () => {
+    const stale = grant("stale-promote");
+    const refreshed = grant("refreshed-promote");
+    const require = vi
+      .fn<GroupDeliveryAuthority["require"]>()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(refreshed);
+    const writeIntent = vi.fn<GroupIntentStore["writeIntent"]>().mockResolvedValue(true);
+    const promote = vi.fn<DeployAdapter["promote"]>(async (received) => {
+      if (received === stale) throw new Error("stale promote grant reached provider");
+      expect(received).toBe(refreshed);
+      throw new Error("stop after refreshed promote");
+    });
+    const groupDeployer = new ProductionGroupDeliveryDeployer({
+      pool: EMPTY_POOL,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: { promote } as unknown as DeployAdapter,
+      authority: { require },
+      intentStore: { writeIntent, readIntent: async () => false },
+    });
+
+    await expect(
+      groupDeployer.promote({
+        plan: PLAN,
+        target: TARGET,
+        artifact: { artifactDigest: `sha256:${"a".repeat(64)}`, deploymentId: "build-a3" },
+        preview: {
+          release: {
+            releaseInstanceId: "preview-a3",
+            deploymentId: "preview-a3",
+            artifactDigest: `sha256:${"a".repeat(64)}`,
+          },
+          previewDeploymentId: "preview-a3",
+        },
+        token: "fence-a3",
+      }),
+    ).rejects.toThrow("stop after refreshed promote");
+
+    expect(require).toHaveBeenCalledTimes(2);
+    expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
+    expect(promote).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
   it("reserves A3 for the sealed production demo, never the preview proof", async () => {

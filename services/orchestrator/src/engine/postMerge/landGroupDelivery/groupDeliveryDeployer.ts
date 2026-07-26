@@ -132,7 +132,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     const { plan, target, artifact } = input;
     // Authority is the first operation. An absent/invalid grant rejects before either
     // the persistence completion check or any provider call.
-    const grant = await this.grant(plan, target, "deploy", {
+    await this.grant(plan, target, "deploy", {
       resourceId: target.appId,
       sourceRepo: target.repoSlug,
       sourceRef: plan.mainSha,
@@ -165,10 +165,17 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       });
       return { kind: "ambiguous" };
     }
+    const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
     // FIRE: write the preview intent FENCED (also the immediate fence-recheck, Finding C) COMMITTED
     // BEFORE the external deploy. A lost fence ⇒ abort before firing.
     await this.markIntentOrAbort(plan, input.token, "preview");
-    const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
+    // The early authority check above deliberately precedes all durable work, but its lease may
+    // expire while that work runs. Resolve the same exact grant again at the effect boundary.
+    const grant = await this.grant(plan, target, "deploy", {
+      resourceId: target.appId,
+      sourceRepo: target.repoSlug,
+      sourceRef: plan.mainSha,
+    });
     const preview = await this.effects.applyPreview(plan, target, artifact, behaviorRevisionIds, grant);
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
@@ -278,7 +285,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     const { plan, target, artifact, preview } = input;
     // Authority is the first operation. An absent/invalid promote grant rejects before
     // any durable release read, intent marker read/write, or provider effect.
-    const grant = await this.grant(plan, target, "promote", {
+    await this.grant(plan, target, "promote", {
       resourceId: target.appId,
       deploymentId: preview.previewDeploymentId,
     });
@@ -331,6 +338,12 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     // COMMITTED IMMEDIATELY BEFORE the external promote. A lost fence ⇒ abort before firing. This
     // is the tightest boundary — write intent, then the external call, then the durable completion.
     await this.markIntentOrAbort(plan, input.token, "promote");
+    // Preserve the early fail-closed authority check, then refresh the exact operation lease at
+    // the provider boundary so durable checks and intent persistence cannot consume its TTL.
+    const grant = await this.grant(plan, target, "promote", {
+      resourceId: target.appId,
+      deploymentId: preview.previewDeploymentId,
+    });
     const prior = current;
     const transition = await this.effects.promote(
       plan,
