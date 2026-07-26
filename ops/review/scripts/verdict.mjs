@@ -262,7 +262,7 @@ async function main() {
   const input = readInput(args.in);
   // Certify from the CLI flag when given, else from the artifact. Fail-closed:
   // a missing review_complete field (older/garbled artifact) is NOT certified.
-  const reviewComplete = args.reviewComplete !== undefined ? args.reviewComplete : input.review_complete === true;
+  const reviewComplete = args.reviewComplete === undefined ? input.review_complete === true : args.reviewComplete;
   const res = await setStatus({
     sha: args.sha,
     findings: input.findings || [],
