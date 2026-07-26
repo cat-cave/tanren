@@ -30,11 +30,11 @@ import type {
   ProvisionAutonomousProjectResult,
 } from "../../engine/workflow/provisionAutonomousProject.js";
 import type { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
-import type { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
+import type { prepareGreenfieldDeploy, prepareGreenfieldNotify } from "./greenfieldDeployPrepare.js";
 import { runDirectGreenfieldDerivation } from "./greenfieldCreateStateMachine.js";
 
 export { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
-export { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
+export { prepareGreenfieldDeploy, prepareGreenfieldNotify } from "./greenfieldDeployPrepare.js";
 
 export const SUPPORTED_DEPLOY_PROVIDER_KINDS = ["deploy.vercel", "deploy.flyio"] as const;
 
@@ -46,6 +46,26 @@ export const GreenfieldDeploySchema = z
     connectionId: z.string().min(1).max(200).optional(),
     grantId: z.string().min(1).max(200).optional(),
     stack: z.string().min(1).max(64).optional(),
+    name: z.string().min(1).max(200).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.connectionId === undefined) !== (value.grantId === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "connectionId and grantId must be supplied together",
+        path: value.connectionId === undefined ? ["connectionId"] : ["grantId"],
+      });
+    }
+  });
+
+export const GreenfieldNotifySchema = z
+  .object({
+    providerKind: z.literal("slack"),
+    mode: z.enum(["greenfield", "brownfield"]).default("greenfield"),
+    chosenResourceId: z.string().min(1).max(200).optional(),
+    connectionId: z.string().min(1).max(200).optional(),
+    grantId: z.string().min(1).max(200).optional(),
     name: z.string().min(1).max(200).optional(),
   })
   .strict()
@@ -78,6 +98,7 @@ export const GreenfieldCreateSchema = z
     runnerImage: z.string().min(1).optional(),
     allocator: z.string().min(1).optional(),
     deploy: GreenfieldDeploySchema.optional(),
+    notify: GreenfieldNotifySchema.optional(),
   })
   .strict();
 
@@ -93,7 +114,9 @@ export interface GreenfieldCreateDeps {
   input: GreenfieldCreateInput;
   bootstrapProject?: (input: ProvisionAutonomousProjectInput) => Promise<ProvisionAutonomousProjectResult>;
   preflightDeploy?: typeof preflightGreenfieldDeploy;
+  preflightNotify?: typeof preflightGreenfieldDeploy;
   prepareDeploy?: typeof prepareGreenfieldDeploy;
+  prepareNotify?: typeof prepareGreenfieldNotify;
 }
 
 // Public repo-create seam used by onboarding and template creation.
@@ -178,7 +201,10 @@ export async function handleGreenfieldCreate(
     if (result.kind === "unavailable") {
       return c.json(
         {
-          error: result.outcome.status === "not_linked" ? "deploy_not_linked" : "deploy_selection_required",
+          error:
+            result.outcome.status === "not_linked"
+              ? `${result.outcome.capability}_not_linked`
+              : `${result.outcome.capability}_selection_required`,
           ...result.outcome,
         },
         409,

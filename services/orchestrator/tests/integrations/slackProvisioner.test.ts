@@ -85,14 +85,16 @@ describe("SlackProvisioner.provision", () => {
     const grant = await provisionGrant(projectCtx);
     const artifact = await provisionerOver(transport).provision(grant, projectCtx);
 
-    // The credential ref is a pointer surfaced ONLY under secretRefs.botToken.
+    // The credential ref is a pointer surfaced under secretRefs and the explicit
+    // opaque bot target coordinates; it is never a webhook destination or value.
     expect(artifact.secretRefs?.["botToken"]).toBe(grant.eligibleOperation.credentialRef);
-    // It must NOT leak into the notification target config: the incoming-webhook
-    // persistence path reads the destination from that config, and a bot token is
-    // not a webhook — keeping it out is what stops an xoxb-… token being POSTed as
-    // a webhook (the provisioner ↔ channel contract fix).
-    expect(artifact.notificationTarget?.config["botTokenRef"]).toBeUndefined();
-    expect(JSON.stringify(artifact.notificationTarget)).not.toContain(grant.eligibleOperation.credentialRef);
+    expect(artifact.notificationTarget?.config).toMatchObject({
+      botTokenRef: grant.eligibleOperation.credentialRef,
+      channelId: "C_tanren-beta",
+      channelName: "tanren-beta",
+    });
+    expect(artifact.notificationTarget?.config["webhookRef"]).toBeUndefined();
+    expect(JSON.stringify(artifact.notificationTarget)).not.toContain("hooks.slack.com");
     expect(JSON.stringify(artifact)).not.toContain("xoxb-");
   });
 

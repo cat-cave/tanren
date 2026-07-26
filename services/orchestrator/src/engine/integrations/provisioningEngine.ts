@@ -52,10 +52,6 @@ const CAPABILITY_DEFAULT_PROVIDER: Readonly<Record<string, string>> = {
 /** The deploy provider kinds a `deploy` capability may resolve to. */
 const DEPLOY_PROVIDER_KINDS = new Set(["deploy.vercel", "deploy.flyio"]);
 
-export class SlackDeliveryAdapterUnavailableError extends Error {
-  public override readonly name = "SlackDeliveryAdapterUnavailableError";
-}
-
 /**
  * Resolve the provider kind for a (capability, optional explicit provider). An
  * explicit `providerKind` always wins (and is validated against the capability for
@@ -317,13 +313,6 @@ export async function provisionCapability(
     return lifecycle.result;
   }
   const providerKind = resolveProviderKind(request.capability, request.providerKind);
-  if (providerKind === "slack") {
-    // The current Slack notification channel accepts incoming-webhook refs; a
-    // linked bot token + channel id is a different credential model. Fail before
-    // authority/provider I/O until chat.postMessage is the real delivery adapter.
-    throw new SlackDeliveryAdapterUnavailableError("slack_bot_delivery_adapter_unavailable");
-  }
-
   // Resolve the immutable project coordinates first. Each provider stage below
   // obtains its own lease in a fresh short transaction immediately before I/O.
   const orgSlug = await deps.database.withOrgScope(request.orgId, async (client) => {
