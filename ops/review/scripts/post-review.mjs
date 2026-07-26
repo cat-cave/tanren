@@ -27,7 +27,19 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { parseMarker, serializeMarker } from "./lib.mjs";
+import { parseMarker } from "./lib.mjs";
+// Pure text/payload composition (extracted to stay under the 500-line cap).
+import {
+  anchorLine,
+  commentPayload,
+  inlineBody,
+  isGate,
+  partitionFindings,
+  relocateMarker,
+  reviewBody,
+  STICKY_HEADER,
+  summaryBody,
+} from "./review-bodies.mjs";
 
 const ghBin = () => process.env.GH || "gh";
 const MAX_INLINE = Number(process.env.MAX_INLINE || 25);
@@ -37,8 +49,6 @@ const THROTTLE_MS = Number(process.env.REVIEW_THROTTLE_MS || 0);
 // The reviewer identity the trusted lane posts as (a dedicated App login, else
 // github-actions[bot]) — scopes existing comments + prior review state to it.
 const BOT_LOGIN = process.env.REVIEW_BOT_LOGIN || "github-actions[bot]";
-
-const STICKY_HEADER = "## OCR review";
 
 const sleep = (ms) =>
   new Promise((r) => {
@@ -86,133 +96,12 @@ function repoSlug() {
   return JSON.parse(res.stdout).nameWithOwner;
 }
 
-// ---- body composition -------------------------------------------------------
-function isGate(p) {
-  return p === "P0" || p === "P1";
-}
-function isGrounded(f) {
-  return f.grounded === true && Number(f.start_line) > 0;
-}
-
-// Rewrite the sticky marker's `open` entries so each carries the LOCATION
-// (path + line range) of its finding, drawn from the reconciled finding records.
-// The prior round can then tell an ADDRESSED finding (its hunk changed) from a
-// nondeterministic disappearance (#247). Findings supply the authoritative
-// location; a marker fp with no matching finding keeps whatever it already had
-// (reconcile-provided location, or bare for legacy/unlocatable).
-export function relocateMarker(markerStr, findings) {
-  if (!markerStr) return markerStr;
-  const state = parseMarker(markerStr);
-  const locByFp = new Map();
-  for (const f of findings || []) {
-    if (!f || !f.fingerprint || f.state === "addressed") continue;
-    if (!isGate(f.priority)) continue;
-    const s = Number(f.start_line) || 0;
-    const e = Number(f.end_line) || s;
-    if (f.path && s > 0) locByFp.set(f.fingerprint, { path: f.path, start_line: s, end_line: e });
-  }
-  state.open = (state.open || []).map((o) => {
-    const entry = typeof o === "string" ? { fp: o } : { ...o };
-    const loc = locByFp.get(entry.fp);
-    return loc ? { fp: entry.fp, path: loc.path, start_line: loc.start_line, end_line: loc.end_line } : entry;
-  });
-  return serializeMarker(state);
-}
-
-export function partitionFindings(findings, maxInline) {
-  const open = findings.filter((f) => f.state !== "addressed");
-  const grounded = open.filter((f) => isGrounded(f));
-  const ungrounded = open.filter((f) => !isGrounded(f));
-  const inline = grounded.slice(0, Math.max(0, maxInline));
-  const overflow = grounded.slice(Math.max(0, maxInline));
-  return { open, inline, overflow, ungrounded };
-}
-
 // Every inline comment body embeds a hidden `<!-- ocr-finding:<fp> -->` marker —
 // the reconciliation KEY (distinct from the sticky ocr-state marker). The
 // `ocr-finding:` shape is matched by FINDING_FP_RE here and by assemble-context's
-// `ocr-finding[^>]*` title regex.
+// `ocr-finding[^>]*` title regex. (The body builders that WRITE this marker live
+// in review-bodies.mjs; this reader-side regex stays with fetchExisting below.)
 const FINDING_FP_RE = /ocr-finding:([^\s>]+)/u;
-
-function inlineBody(f) {
-  return `${prio(f)} ${bold(f.title)}\n\n${f.body || ""}\n\n<!-- ocr-finding:${f.fingerprint} -->`;
-}
-
-// The line a comment anchors to (the hunk end, or the single line). GitHub reports
-// this back as the comment's `line`, so it is the value we diff to detect a move.
-function anchorLine(f) {
-  const start = Number(f.start_line);
-  const end = Number(f.end_line) || start;
-  return end > start ? end : start;
-}
-
-// A standalone review comment payload (POST /pulls/{pr}/comments): carries its own
-// commit_id (a review-attached comment inherits the review's, a standalone one does
-// not), path, line/range, side, and the fp-marked body.
-function commentPayload(f, headSha) {
-  const start = Number(f.start_line);
-  const end = Number(f.end_line) || start;
-  const c = { commit_id: headSha, path: f.path, body: inlineBody(f), side: "RIGHT" };
-  if (end > start) {
-    c.start_line = start;
-    c.start_side = "RIGHT";
-    c.line = end;
-  } else {
-    c.line = start;
-  }
-  return c;
-}
-
-function prio(f) {
-  return `[${f.priority || "P?"}]`;
-}
-function bold(s) {
-  return `**${String(s || "").trim()}**`;
-}
-
-function summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker, stashB64 }) {
-  const lines = [STICKY_HEADER, "", `Reviewed head \`${String(sha).slice(0, 12)}\` for PR #${pr}.`, ""];
-
-  const gate = open.filter((f) => isGate(f.priority));
-  lines.push(
-    gate.length > 0
-      ? `**${gate.length} open P0/P1 finding(s) — \`review/verdict\` will FAIL.**`
-      : `No open P0/P1 findings — \`review/verdict\` may pass; P2/P3 stashed as follow-ups.`,
-    "",
-  );
-
-  if (open.length > 0) {
-    lines.push("### Findings this round");
-    for (const f of open) {
-      const loc = Number(f.start_line) > 0 ? `${f.path}:${f.start_line}` : `${f.path} (unlocatable)`;
-      lines.push(`- ${prio(f)} ${String(f.title || "").trim()} — \`${loc}\`${f.state ? ` _(${f.state})_` : ""}`);
-    }
-    lines.push("");
-  }
-
-  // Never drop: ungrounded + overflow inline findings live here in full.
-  const rolled = [...ungrounded, ...overflow];
-  if (rolled.length > 0) {
-    lines.push("### Findings not shown inline (rolled into summary — never dropped)");
-    for (const f of rolled) {
-      lines.push(`- ${prio(f)} ${bold(f.title)} — \`${f.path}${Number(f.start_line) > 0 ? ":" + f.start_line : ""}\``);
-      if (f.body) lines.push(`  ${String(f.body).replaceAll(/\s+/gu, " ").trim().slice(0, 500)}`);
-    }
-    lines.push("");
-  }
-
-  if (addressed && addressed.length > 0) {
-    lines.push(
-      `### Resolved since last review`,
-      `${addressed.length} prior finding(s) addressed (hunk changed, no longer raised).`,
-      "",
-    );
-  }
-
-  lines.push(`<!-- ocr-stash ${stashB64} -->`);
-  lines.push(marker);
-  return lines.join("\n");
-}
 
 // ---- existing-state fetch (bot review comments + last bot review) -----------
 // Read the bot's existing ocr-finding review comments (paginated, #158) into an
@@ -294,25 +183,19 @@ async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, d
   return plan;
 }
 
-// The short body a submitted review carries (NO inline comments[]). It MUST match
-// the ACTUAL submitted event: a COMMENT fallback (the identity cannot APPROVE —
-// e.g. github-actions[bot]) must NOT claim "Approved".
-function reviewBody(event, gateCount, stashCount) {
-  const fu = stashCount > 0 ? ` ${stashCount} P2/P3 filed as follow-ups.` : "";
-  if (event === "REQUEST_CHANGES")
-    return `${STICKY_HEADER}: **Changes requested** — ${gateCount} open P0/P1 finding(s). See the inline comments and the pinned summary.`;
-  if (event === "APPROVE") return `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${fu}`;
-  return `${STICKY_HEADER}: No open P0/P1 findings — \`review/verdict\` passes.${fu}`;
-}
-
 // ---- native review + sticky upsert ------------------------------------------
-async function postReview({ pr, sha, findings, addressed, marker, dryRun = false }) {
+async function postReview({ pr, sha, findings, addressed, marker, reviewComplete = true, dryRun = false }) {
   const maxInline = Number(process.env.MAX_INLINE || MAX_INLINE);
 
   const { open, inline, overflow, ungrounded } = partitionFindings(findings, maxInline);
   const gateFindings = open.filter((f) => isGate(f.priority));
   const gateOpen = gateFindings.length > 0;
-  const event = gateOpen ? "REQUEST_CHANGES" : "APPROVE";
+  // FAIL-CLOSED: never APPROVE a review that did not certify. An uncertified run
+  // (missing key / crash / partial) requests changes, so the advisory review
+  // surface agrees with the fail-closed `review/verdict` gate.
+  const certified = reviewComplete === true;
+  const event = !certified || gateOpen ? "REQUEST_CHANGES" : "APPROVE";
+  const incomplete = !certified;
   const stash = open.filter((f) => f.priority === "P2" || f.priority === "P3");
   const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
   const outMarker = relocateMarker(marker, findings);
@@ -320,7 +203,17 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // --dry-run: compute + print the intended inline plan + review decision + sticky body, ZERO gh calls (no read ⇒ empty state).
   if (dryRun) {
     if (!sha) throw new Error("--dry-run requires --sha/--head (no gh read to derive headRefOid)");
-    const body = summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
+    const body = summaryBody({
+      pr,
+      sha,
+      open,
+      overflow,
+      ungrounded,
+      addressed,
+      marker: outMarker,
+      stashB64,
+      reviewComplete: certified,
+    });
     const inlinePlan = await reconcileInline({
       owner: "?",
       repo: "?",
@@ -330,7 +223,11 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
       commentMap: new Map(),
       dryRun: true,
     });
-    const reviewPayload = { commit_id: sha, event, body: reviewBody(event, gateFindings.length, stash.length) };
+    const reviewPayload = {
+      commit_id: sha,
+      event,
+      body: reviewBody(event, gateFindings.length, stash.length, { incomplete }),
+    };
     process.stdout.write(
       JSON.stringify(
         {
@@ -374,17 +271,24 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // Submit a NEW review only on a STATE CHANGE (or when there is no prior bot review).
   const submit = !stateSatisfied(lastReviewState, event);
   if (submit) {
-    const reviewPayload = { commit_id: headSha, event, body: reviewBody(event, gateFindings.length, stash.length) };
+    const reviewPayload = {
+      commit_id: headSha,
+      event,
+      body: reviewBody(event, gateFindings.length, stash.length, { incomplete }),
+    };
     try {
       await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
         input: JSON.stringify(reviewPayload),
       });
     } catch (e) {
-      // APPROVE blocked (the identity cannot approve — e.g. github-actions[bot]):
-      // re-submit as COMMENT and rewrite the body so it no longer says "Approved".
-      if (reviewPayload.event === "APPROVE") {
+      // The identity may lack the rights for the desired event (github-actions[bot]
+      // cannot APPROVE or REQUEST_CHANGES). Downgrade to a COMMENT review whose body
+      // matches the situation — for APPROVE (no findings) and for the fail-closed
+      // "review did not complete" case. A genuine REQUEST_CHANGES on real findings
+      // still surfaces the error (the reviewer App is expected to have the rights).
+      if (reviewPayload.event === "APPROVE" || incomplete) {
         reviewPayload.event = "COMMENT";
-        reviewPayload.body = reviewBody("COMMENT", gateFindings.length, stash.length);
+        reviewPayload.body = reviewBody("COMMENT", gateFindings.length, stash.length, { incomplete });
         await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
           input: JSON.stringify(reviewPayload),
         });
@@ -396,7 +300,17 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
 
   // Upsert the sticky summary — always. Read comments via REST (NUMERIC ids); NOT `gh pr
   // view --json comments` (GraphQL node IDs IC_… a REST PATCH 404s on), as inline does.
-  const body = summaryBody({ pr, sha: headSha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
+  const body = summaryBody({
+    pr,
+    sha: headSha,
+    open,
+    overflow,
+    ungrounded,
+    addressed,
+    marker: outMarker,
+    stashB64,
+    reviewComplete: certified,
+  });
   const ic = await gh(["api", `repos/${owner}/${repo}/issues/${pr}/comments`, "--paginate"], { json: true });
   const existing = (ic || []).find(
     (c) => (c.body || "").includes("<!-- ocr-state") && (c.body || "").includes(STICKY_HEADER),
@@ -481,6 +395,8 @@ async function main() {
     findings: input.findings || [],
     addressed: input.addressed || [],
     marker: input.marker || "",
+    // Fail-closed: an artifact without review_complete is treated as NOT certified.
+    reviewComplete: input.review_complete === true,
     dryRun: args.dryRun,
   });
   const p = res.inlinePlan || { post: 0, patch: 0, delete: 0 };
