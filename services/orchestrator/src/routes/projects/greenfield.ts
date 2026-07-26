@@ -204,7 +204,9 @@ export async function handleGreenfieldCreate(
           error:
             result.outcome.status === "not_linked"
               ? `${result.outcome.capability}_not_linked`
-              : `${result.outcome.capability}_selection_required`,
+              : result.outcome.status === "ineligible"
+                ? `${result.outcome.capability}_capability_ineligible`
+                : `${result.outcome.capability}_selection_required`,
           ...result.outcome,
         },
         409,
