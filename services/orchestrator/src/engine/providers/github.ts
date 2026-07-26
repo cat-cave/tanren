@@ -375,6 +375,7 @@ export class GitHubStatusService {
     const pageSize = 100;
     let page = 1;
     let hasRulesetProof = false;
+    const seenPages = new Set<string>();
     for (;;) {
       const rules = await this.http.request({
         method: "GET",
@@ -393,6 +394,11 @@ export class GitHubStatusService {
       const pageHasRules = parseRulesWithoutRequiredStatusChecks(rules.body);
       hasRulesetProof ||= pageHasRules;
       const rows = rules.body as unknown[];
+      const pageFingerprint = JSON.stringify(rows);
+      if (seenPages.has(pageFingerprint)) {
+        throw new Error(`GitHub branch rules pagination made no progress for ${input.baseBranch}`);
+      }
+      seenPages.add(pageFingerprint);
       if (rows.length < pageSize) return hasRulesetProof;
       page += 1;
     }
