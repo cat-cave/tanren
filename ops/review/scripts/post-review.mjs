@@ -170,16 +170,27 @@ function bold(s) {
   return `**${String(s || "").trim()}**`;
 }
 
-function summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker, stashB64 }) {
+function summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker, stashB64, reviewComplete = true }) {
   const lines = [STICKY_HEADER, "", `Reviewed head \`${String(sha).slice(0, 12)}\` for PR #${pr}.`, ""];
 
   const gate = open.filter((f) => isGate(f.priority));
-  lines.push(
-    gate.length > 0
-      ? `**${gate.length} open P0/P1 finding(s) — \`review/verdict\` will FAIL.**`
-      : `No open P0/P1 findings — \`review/verdict\` may pass; P2/P3 stashed as follow-ups.`,
-    "",
-  );
+  if (reviewComplete !== true) {
+    // FAIL-CLOSED: the automated review could not run to completion (e.g. a fork
+    // PR has no LLM key, or OCR crashed / returned a partial stream). Zero
+    // findings here is "not reviewed", NOT "clean" — say so and fail the gate.
+    lines.push(
+      "**Review did not complete — `review/verdict` FAILS CLOSED.**",
+      "The automated reviewer could not run on this diff (missing LLM key on a fork PR, or an OCR error), so it **cannot certify** these changes. This is not an approval. A maintainer must run the review before merge.",
+      "",
+    );
+  } else {
+    lines.push(
+      gate.length > 0
+        ? `**${gate.length} open P0/P1 finding(s) — \`review/verdict\` will FAIL.**`
+        : `No open P0/P1 findings — \`review/verdict\` may pass; P2/P3 stashed as follow-ups.`,
+      "",
+    );
+  }
 
   if (open.length > 0) {
     lines.push("### Findings this round");
@@ -297,8 +308,10 @@ async function reconcileInline({ owner, repo, pr, headSha, inline, commentMap, d
 // The short body a submitted review carries (NO inline comments[]). It MUST match
 // the ACTUAL submitted event: a COMMENT fallback (the identity cannot APPROVE —
 // e.g. github-actions[bot]) must NOT claim "Approved".
-function reviewBody(event, gateCount, stashCount) {
+function reviewBody(event, gateCount, stashCount, { incomplete = false } = {}) {
   const fu = stashCount > 0 ? ` ${stashCount} P2/P3 filed as follow-ups.` : "";
+  if (incomplete)
+    return `${STICKY_HEADER}: **Review did not complete** — the automated reviewer could not run on this diff (missing LLM key on a fork PR, or an OCR error), so it cannot certify these changes. \`review/verdict\` fails closed; a maintainer must run the review before merge.`;
   if (event === "REQUEST_CHANGES")
     return `${STICKY_HEADER}: **Changes requested** — ${gateCount} open P0/P1 finding(s). See the inline comments and the pinned summary.`;
   if (event === "APPROVE") return `${STICKY_HEADER}: **Approved** — no open P0/P1 findings.${fu}`;
@@ -306,13 +319,18 @@ function reviewBody(event, gateCount, stashCount) {
 }
 
 // ---- native review + sticky upsert ------------------------------------------
-async function postReview({ pr, sha, findings, addressed, marker, dryRun = false }) {
+async function postReview({ pr, sha, findings, addressed, marker, reviewComplete = true, dryRun = false }) {
   const maxInline = Number(process.env.MAX_INLINE || MAX_INLINE);
 
   const { open, inline, overflow, ungrounded } = partitionFindings(findings, maxInline);
   const gateFindings = open.filter((f) => isGate(f.priority));
   const gateOpen = gateFindings.length > 0;
-  const event = gateOpen ? "REQUEST_CHANGES" : "APPROVE";
+  // FAIL-CLOSED: never APPROVE a review that did not certify. An uncertified run
+  // (missing key / crash / partial) requests changes, so the advisory review
+  // surface agrees with the fail-closed `review/verdict` gate.
+  const certified = reviewComplete === true;
+  const event = !certified || gateOpen ? "REQUEST_CHANGES" : "APPROVE";
+  const incomplete = !certified;
   const stash = open.filter((f) => f.priority === "P2" || f.priority === "P3");
   const stashB64 = Buffer.from(JSON.stringify(stash), "utf8").toString("base64");
   const outMarker = relocateMarker(marker, findings);
@@ -320,7 +338,17 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // --dry-run: compute + print the intended inline plan + review decision + sticky body, ZERO gh calls (no read ⇒ empty state).
   if (dryRun) {
     if (!sha) throw new Error("--dry-run requires --sha/--head (no gh read to derive headRefOid)");
-    const body = summaryBody({ pr, sha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
+    const body = summaryBody({
+      pr,
+      sha,
+      open,
+      overflow,
+      ungrounded,
+      addressed,
+      marker: outMarker,
+      stashB64,
+      reviewComplete: certified,
+    });
     const inlinePlan = await reconcileInline({
       owner: "?",
       repo: "?",
@@ -330,7 +358,11 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
       commentMap: new Map(),
       dryRun: true,
     });
-    const reviewPayload = { commit_id: sha, event, body: reviewBody(event, gateFindings.length, stash.length) };
+    const reviewPayload = {
+      commit_id: sha,
+      event,
+      body: reviewBody(event, gateFindings.length, stash.length, { incomplete }),
+    };
     process.stdout.write(
       JSON.stringify(
         {
@@ -374,17 +406,24 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
   // Submit a NEW review only on a STATE CHANGE (or when there is no prior bot review).
   const submit = !stateSatisfied(lastReviewState, event);
   if (submit) {
-    const reviewPayload = { commit_id: headSha, event, body: reviewBody(event, gateFindings.length, stash.length) };
+    const reviewPayload = {
+      commit_id: headSha,
+      event,
+      body: reviewBody(event, gateFindings.length, stash.length, { incomplete }),
+    };
     try {
       await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
         input: JSON.stringify(reviewPayload),
       });
     } catch (e) {
-      // APPROVE blocked (the identity cannot approve — e.g. github-actions[bot]):
-      // re-submit as COMMENT and rewrite the body so it no longer says "Approved".
-      if (reviewPayload.event === "APPROVE") {
+      // The identity may lack the rights for the desired event (github-actions[bot]
+      // cannot APPROVE or REQUEST_CHANGES). Downgrade to a COMMENT review whose body
+      // matches the situation — for APPROVE (no findings) and for the fail-closed
+      // "review did not complete" case. A genuine REQUEST_CHANGES on real findings
+      // still surfaces the error (the reviewer App is expected to have the rights).
+      if (reviewPayload.event === "APPROVE" || incomplete) {
         reviewPayload.event = "COMMENT";
-        reviewPayload.body = reviewBody("COMMENT", gateFindings.length, stash.length);
+        reviewPayload.body = reviewBody("COMMENT", gateFindings.length, stash.length, { incomplete });
         await gh(["api", "-X", "POST", `repos/${owner}/${repo}/pulls/${pr}/reviews`, "--input", "-"], {
           input: JSON.stringify(reviewPayload),
         });
@@ -396,7 +435,17 @@ async function postReview({ pr, sha, findings, addressed, marker, dryRun = false
 
   // Upsert the sticky summary — always. Read comments via REST (NUMERIC ids); NOT `gh pr
   // view --json comments` (GraphQL node IDs IC_… a REST PATCH 404s on), as inline does.
-  const body = summaryBody({ pr, sha: headSha, open, overflow, ungrounded, addressed, marker: outMarker, stashB64 });
+  const body = summaryBody({
+    pr,
+    sha: headSha,
+    open,
+    overflow,
+    ungrounded,
+    addressed,
+    marker: outMarker,
+    stashB64,
+    reviewComplete: certified,
+  });
   const ic = await gh(["api", `repos/${owner}/${repo}/issues/${pr}/comments`, "--paginate"], { json: true });
   const existing = (ic || []).find(
     (c) => (c.body || "").includes("<!-- ocr-state") && (c.body || "").includes(STICKY_HEADER),
@@ -481,6 +530,8 @@ async function main() {
     findings: input.findings || [],
     addressed: input.addressed || [],
     marker: input.marker || "",
+    // Fail-closed: an artifact without review_complete is treated as NOT certified.
+    reviewComplete: input.review_complete === true,
     dryRun: args.dryRun,
   });
   const p = res.inlinePlan || { post: 0, patch: 0, delete: 0 };

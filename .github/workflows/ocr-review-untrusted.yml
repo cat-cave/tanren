@@ -281,10 +281,12 @@ jobs:
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
           # OCR authenticates to the LLM endpoint with OCR_LLM_AUTH_TOKEN. On a
           # same-repo PR GitHub injects `secrets.OPENROUTER_API_KEY`; on a FORK
-          # PR the secret is empty by design (fork jobs get no secrets) — OCR
-          # then produces empty findings and a maintainer re-triggers the review
-          # (see the fork-review note in ocr-review-trusted.yml). The URL /
-          # protocol / model are non-secret routing config.
+          # PR the secret is empty (fork jobs get no secrets), so OCR cannot run
+          # and the completeness step below records review_complete=false — the
+          # gate then FAILS CLOSED (never a green on an unreviewed fork PR). A
+          # fork PR is reviewed via the maintainer-authorized path (see the
+          # fork-review note in ocr-review-trusted.yml), not by this auto lane.
+          # The URL / protocol / model are non-secret routing config.
           OCR_LLM_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
@@ -296,7 +298,15 @@ jobs:
           # Non-secret; surface the resolved model to OCR as well as the --model flag.
           export OCR_LLM_MODEL="$MODEL"
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
+          # -- FAIL-CLOSED completeness signal (do NOT regress) -----------------
+          # A review is CERTIFIED only if OCR exits 0 AND emits a valid JSON
+          # result. Anything else — a crash, a missing LLM key (fork PRs get no
+          # secret), a partial/garbled stream — must NOT be silently treated as
+          # "no findings": that is a merge-gate FAIL-OPEN (green verdict on
+          # unreviewed code). We record review_complete here; verdict.mjs turns
+          # review_complete=false into review/verdict=FAILURE downstream.
           # Absolute paths for --rule and --background-file (issues #287/#324).
+          set +e
           npx --yes --package "$OCR_PACKAGE" ocr review \
             --model "$MODEL" \
             --rule "$RULE_ABS" \
@@ -304,8 +314,22 @@ jobs:
             --to "$HEAD_SHA" \
             --background-file "${{ steps.context.outputs.context_md }}" \
             --format json \
-            > "$OCR_RAW" || echo "::warning::OCR exited non-zero; keeping partial JSON"
-          test -s "$OCR_RAW" || echo "{}" > "$OCR_RAW"
+            > "$OCR_RAW"
+          OCR_EXIT=$?
+          set -e
+          REVIEW_COMPLETE=false
+          if [ "$OCR_EXIT" -eq 0 ] && [ -s "$OCR_RAW" ] \
+             && node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' "$OCR_RAW" >/dev/null 2>&1; then
+            REVIEW_COMPLETE=true
+          else
+            echo "::warning::OCR did not complete a valid review (exit=$OCR_EXIT); review/verdict will FAIL CLOSED"
+            # Keep any partial bytes for debugging, but normalize to valid JSON so
+            # the downstream JSON pipeline still runs (findings will be empty and
+            # review_complete=false forces the gate to fail).
+            node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' "$OCR_RAW" >/dev/null 2>&1 || echo "{}" > "$OCR_RAW"
+          fi
+          echo "review_complete=$REVIEW_COMPLETE" >> "$GITHUB_OUTPUT"
+          echo "ocr_exit=$OCR_EXIT" >> "$GITHUB_OUTPUT"
 
       # --- JSON pipeline: ground -> dedup -> reconcile ------------------------
       # ground-findings needs the unified repo (git diff base..head); dedup +
@@ -381,6 +405,10 @@ jobs:
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
           RULE_CHANGE: ${{ steps.guard.outputs.rule_change }}
           RULE_CHANGE_PATHS: ${{ steps.guard.outputs.rule_change_paths }}
+          # Completeness signal from the OCR step. Absent/"false" ⇒ the review did
+          # not certify ⇒ verdict.mjs fails the gate closed (no green on a crash).
+          REVIEW_COMPLETE: ${{ steps.ocr.outputs.review_complete }}
+          OCR_EXIT: ${{ steps.ocr.outputs.ocr_exit }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -390,6 +418,10 @@ jobs:
           const reconciled = readJson(`${T}/reconciled.json`, { findings: [], marker: "" });
           const preflight = readJson(`${T}/preflight.json`, {});
           const model = readJson(`${T}/model.json`, {});
+          // FAIL CLOSED: certify ONLY on an explicit review_complete=true. A
+          // missing/false value (crash, missing key, partial stream) is NOT a
+          // clean review — the gate must fail, not pass on zero findings.
+          const reviewComplete = process.env.REVIEW_COMPLETE === "true";
           const out = {
             schema: "ocr-review-output/v1",
             pr_number: Number(process.env.PR_NUMBER),
@@ -397,6 +429,8 @@ jobs:
             head_sha: process.env.HEAD_SHA,       // trusted job binds to THIS sha
             rule_change: process.env.RULE_CHANGE === "true",
             rule_change_paths: (process.env.RULE_CHANGE_PATHS || "").split(",").filter(Boolean),
+            review_complete: reviewComplete,
+            ocr_exit: Number(process.env.OCR_EXIT ?? "-1"),
             oversized: !!preflight.oversized,
             preflight,
             model,
@@ -405,7 +439,7 @@ jobs:
             marker: reconciled.marker || "",
           };
           fs.writeFileSync(`${T}/review-output.json`, JSON.stringify(out, null, 2));
-          console.log(`review-output.json: pr=${out.pr_number} head=${out.head_sha} rule_change=${out.rule_change} findings=${out.findings.length}`);
+          console.log(`review-output.json: pr=${out.pr_number} head=${out.head_sha} rule_change=${out.rule_change} review_complete=${out.review_complete} findings=${out.findings.length}`);
           NODE
 
       # --- Upload the artifact (JSON + assembled context) ---------------------
