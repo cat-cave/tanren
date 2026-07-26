@@ -85,7 +85,7 @@ function refResponse(sha: string, branch = "main"): GitHubHttpResponse {
   return { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
 }
 
-describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
+describe("GitHubCodeHost fetchRef caching behavior", () => {
   const repo = { owner: "o", name: "r" };
 
   it("collapses repeated default-branch reads, then busts on a land", async () => {
