@@ -279,15 +279,16 @@ jobs:
           RULE_ABS: ${{ steps.base.outputs.rule_abs }}
           MODEL_JSON: ${{ runner.temp }}/model.json
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
-          # OCR authenticates to the LLM endpoint with OCR_LLM_AUTH_TOKEN. On a
-          # same-repo PR GitHub injects `secrets.OPENROUTER_API_KEY`; on a FORK
-          # PR the secret is empty (fork jobs get no secrets), so OCR cannot run
-          # and the completeness step below records review_complete=false — the
-          # gate then FAILS CLOSED (never a green on an unreviewed fork PR). A
-          # fork PR is reviewed via the maintainer-authorized path (see the
-          # fork-review note in ocr-review-trusted.yml), not by this auto lane.
-          # The URL / protocol / model are non-secret routing config.
-          OCR_LLM_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+          # OCR reads the bearer token from **OCR_LLM_TOKEN** (verified against the
+          # v1.7.15 binary: it checks OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there
+          # is NO OCR_LLM_AUTH_TOKEN). A wrong name here => "no valid LLM endpoint
+          # configured" => OCR never runs. On a same-repo PR GitHub injects
+          # `secrets.OPENROUTER_API_KEY`; on a FORK PR the secret is empty (fork
+          # jobs get no secrets), so OCR cannot run and the completeness step below
+          # records review_complete=false — the gate then FAILS CLOSED (never a
+          # green on an unreviewed fork PR). A fork PR is reviewed via the
+          # authorized /review path. The URL / protocol / model are non-secret.
+          OCR_LLM_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
         run: |
