@@ -916,7 +916,7 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
   # PRIVATE key via the mounted compose secret file (see up-dev); only the PUBLIC
   # authorized_keys line is env.
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat "$TANREN_RUNTIME_DIR/tanren_runner_key.pub")" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
-  internal_mtls_port="${TANREN_INTERNAL_MTLS_HOST_PORT:-$((3110 + ${TANREN_PORT_OFFSET:-0}))}"; postgres_port="${TANREN_POSTGRES_HOST_PORT:-$((5432 + ${TANREN_PORT_OFFSET:-0}))}"; TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 TANREN_CLAIM_ENDPOINT_SMOKE_URL="https://localhost:${internal_mtls_port}" TANREN_APP_DATABASE_URL="${TANREN_APP_DATABASE_URL:-postgres://tanren_app:tanren_app@localhost:${postgres_port}/tanren}" TANREN_DATAPLANE_DATABASE_URL="${TANREN_DATAPLANE_DATABASE_URL:-postgres://tanren_dataplane:tanren_dataplane@localhost:${postgres_port}/tanren}" DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:${postgres_port}/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+  bash scripts/smoke/plane-split-worker-remote-writes.sh
 
 # IN-1: fresh ephemeral database proof for all lifecycle RLS/FK boundaries and
 # for migration-chain ordering. The RLS file proves tenant isolation under the
