@@ -1,17 +1,3 @@
-// engine tests: the capability → grant → discover → smart-default →
-// provision/bind → persist → event flow, driven over an in-memory stub pool
-// (keyed by SQL substring, mirroring candidateInbox.test.ts) + a FAKE
-// IntegrationProvisioner (under tests/, never wired into prod) + an in-memory
-// SecretStore. NO real DB, NO live provider API.
-//
-// Asserts:
-//   - greenfield "enable sentry" → provisions a project + DSN + inbox_source,
-//     all persisted; the artifact carries the DSN REF (never the value).
-//   - brownfield "enable sentry" with a discovered match → BINDS it (no create).
-//   - a not-linked org → a structured link-first response (not a crash).
-//   - secret VALUES never appear in the outcome / event payload (refs only).
-//   - org-scope: the persisted rows carry the request's org_id.
-
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -25,9 +11,10 @@ import {
 } from "../src/engine/integrations/provisioningEngine.js";
 import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
-const ORG = "org_int_1";
-const PROJECT = "proj_int_1";
-const ACTOR = { kind: "operator", id: "user_a" } as const;
+import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
+export const ORG = "org_int_1";
+export const PROJECT = "proj_int_1";
+export const ACTOR = { kind: "operator", id: "user_a" } as const;
 const TOKEN_REF = "org/org_int_1/sentry/token/g/1";
 
 // The exact `inbox_sources_kind_check` set (migration 0024). The stub pool below
@@ -37,7 +24,7 @@ const INBOX_KIND_CHECK = new Set(["issues", "errors", "system", "manual", "sched
 
 // ---- in-memory stub pool ---------------------------------------------------
 
-interface StubState {
+export interface StubState {
   integrations: Array<{ org_id: string; provider_kind: string; credential_ref: string; metadata: unknown }>;
   inboxSources: Array<{ id: string; org_id: string; project_id: string; kind: string; name: string; config: string }>;
   notificationTargets: Array<{ id: string; org_id: string; channel_kind: string; destination: string; label: string }>;
@@ -84,9 +71,12 @@ function stubClient(state: StubState): IntegrationQueryClient {
           auth_status: "active",
           capabilities: ["errors", "notify", "deploy"],
           operations: ["discover", "provision", "bind"],
-          provider_scopes: ["project:read", "project:write"],
+          provider_scopes:
+            match.provider_kind === "slack"
+              ? ["chat:write", "channels:read", "channels:manage", "channels:join"]
+              : ["project:read", "project:write"],
           resource_constraints: defaultIntegrationResourceConstraints(),
-          policy_revision: "integration-catalog.v3",
+          policy_revision: integrationCatalogRevision(),
           consent_revision: "consent.test",
           grant_expires_at: null,
           grant_generation_status: "active",
@@ -222,7 +212,7 @@ function stubClient(state: StubState): IntegrationQueryClient {
   return { query };
 }
 
-class StubDatabase {
+export class StubDatabase {
   inScope = false;
   readonly client: IntegrationQueryClient;
 
@@ -270,13 +260,13 @@ class OutsideTransactionProvisioner implements IntegrationProvisioner {
   }
 }
 
-function freshState(linked: boolean): StubState {
+export function freshState(linked: boolean, providerKind = "sentry"): StubState {
   return {
     integrations: linked
       ? [
           {
             org_id: ORG,
-            provider_kind: "sentry",
+            provider_kind: providerKind,
             credential_ref: TOKEN_REF,
             metadata: { orgSlug: "acme", team: "core" },
           },

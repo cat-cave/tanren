@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SlackChannel } from "../src/engine/notifications/channels/slack.js";
+import { encodeSlackBotDestination } from "../src/engine/notifications/channels/slackBotDestination.js";
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
@@ -42,6 +43,67 @@ class MemorySecrets implements SecretStore {
 const resolvingSecrets = (): SecretStore => new MemorySecrets({ [WEBHOOK_REF]: WEBHOOK_URL });
 
 describe("SlackChannel", () => {
+  it("delivers a provisioned bot target through chat.postMessage", async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const channel = new SlackChannel({
+      secrets: new MemorySecrets({ "secret://org/slack/token/g/1": "xoxb-token" }),
+      fetch: async (url, init) => {
+        captured = { url: String(url), init: init as RequestInit };
+        return Response.json({ ok: true, channel: "C_NOTIFY", ts: "1.0" });
+      },
+    });
+    await channel.publish(
+      target({
+        destination: encodeSlackBotDestination({ botTokenRef: "secret://org/slack/token/g/1", channelId: "C_NOTIFY" }),
+      }),
+      { title: "t", body: "b", severity: "info", eventName: "run.started" },
+    );
+    expect(captured?.url).toBe("https://slack.com/api/chat.postMessage");
+    expect(captured?.init.headers).toMatchObject({ Authorization: "Bearer xoxb-token" });
+    expect(JSON.parse(captured?.init.body as string)).toMatchObject({
+      channel: "C_NOTIFY",
+      text: ":information_source: t",
+    });
+  });
+
+  it("rejects a missing bot credential before any provider call", async () => {
+    let fetchCalls = 0;
+    const channel = new SlackChannel({
+      secrets: new MemorySecrets({}),
+      fetch: async () => {
+        fetchCalls += 1;
+        return Response.json({ ok: true });
+      },
+    });
+    await expect(
+      channel.publish(
+        target({
+          destination: encodeSlackBotDestination({ botTokenRef: "secret://org/slack/missing", channelId: "C_NOTIFY" }),
+        }),
+        { title: "t", body: "b", severity: "info", eventName: "run.started" },
+      ),
+    ).rejects.toThrow(/missing Slack bot credential ref/u);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("rejects malformed bot provider output", async () => {
+    const channel = new SlackChannel({
+      secrets: new MemorySecrets({ "secret://org/slack/token/g/1": "xoxb-token" }),
+      fetch: async () => Response.json({ ok: false, error: "channel_not_found" }),
+    });
+    await expect(
+      channel.publish(
+        target({
+          destination: encodeSlackBotDestination({
+            botTokenRef: "secret://org/slack/token/g/1",
+            channelId: "C_NOTIFY",
+          }),
+        }),
+        { title: "t", body: "b", severity: "info", eventName: "run.started" },
+      ),
+    ).rejects.toThrow(/slack bot publish failed: channel_not_found/u);
+  });
+
   it("resolves a credential ref to the webhook URL and POSTs the message", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
     const fakeFetch: typeof fetch = async (url, init) => {

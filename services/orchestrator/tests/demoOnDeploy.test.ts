@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import type { Digest } from "../src/engine/contracts/cas.js";
 import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
+import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
 import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
@@ -146,7 +147,7 @@ function fakePool(state: PoolState): pg.Pool {
               operations: ["resolve_demo_surface"],
               provider_scopes: [],
               resource_constraints: defaultIntegrationResourceConstraints(),
-              policy_revision: "integration-catalog.v3",
+              policy_revision: integrationCatalogRevision(),
               consent_revision: "consent.test",
               grant_expires_at: null,
               grant_generation_status: "active",

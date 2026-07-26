@@ -7,6 +7,7 @@ import type { IntegrationQueryClient } from "../repositories/integrationQuery.js
 import { InboxStore } from "../repositories/inbox.js";
 import { SourceKind } from "../forge/inbox/types.js";
 import { ChannelKind } from "../notifications/schemas.js";
+import { encodeSlackBotDestination } from "../notifications/channels/slackBotDestination.js";
 import type { ActorRef } from "../state/actor.js";
 import type {
   CompleteIntegrationReconciliationInput,
@@ -177,20 +178,21 @@ async function upsertNotificationTarget(
 
 function notificationTargetDestination(kind: string, config: Record<string, unknown>): string {
   if (kind === "slack") {
-    // The runtime Slack channel is an INCOMING-WEBHOOK publisher: its target
-    // `destination` MUST be a webhook credential ref that resolves to an https
-    // webhook URL. A bot-token + channel-id artifact (the chat.postMessage
-    // model) is NOT deliverable by that channel — never persist the bot-token
-    // ref as a webhook destination (that mismatch is what caused an `xoxb-…`
-    // token to be POSTed as a webhook). Fail loud, mirroring the
-    // `provisionCapability` SlackDeliveryAdapterUnavailable guard.
+    const botTokenRef = config["botTokenRef"];
+    const channelId = config["channelId"];
+    if (typeof botTokenRef === "string" || typeof channelId === "string") {
+      if (typeof botTokenRef !== "string" || typeof channelId !== "string") {
+        throw new TypeError("slack bot notification target requires both botTokenRef and channelId");
+      }
+      return encodeSlackBotDestination({ botTokenRef, channelId });
+    }
+    // Legacy operator-configured Slack targets use incoming-webhook refs.
     const webhookRef = config["webhookRef"] ?? config["destination"];
     if (typeof webhookRef === "string" && webhookRef.length > 0) {
       return webhookRef;
     }
     throw new Error(
-      "slack notification target has no incoming-webhook credential ref (webhookRef/destination); " +
-        "the bot-token + channel-id model is not deliverable by the incoming-webhook channel",
+      "slack notification target has no incoming-webhook credential ref (webhookRef/destination) or bot delivery coordinates",
     );
   }
   // Non-Slack kinds carry a direct destination or credential ref. `botTokenRef`

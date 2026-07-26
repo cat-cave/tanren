@@ -31,7 +31,6 @@ import {
   productionProvisionerDeps,
   provisionCapability,
   resolveProviderKind,
-  SlackDeliveryAdapterUnavailableError,
 } from "../../engine/integrations/provisioningEngine.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import { IntegrationLifecycleInventoryStore } from "../../engine/repositories/integrationLifecycleInventory.js";
@@ -195,14 +194,10 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
 
     const parsed = ProvisionBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_provision", issues: parsed.error.issues }, 400);
-    let providerKind: string;
     try {
-      providerKind = resolveProviderKind(parsed.data.capability, parsed.data.providerKind);
-    } catch (error) {
-      return c.json({ error: "unresolvable_capability", message: messageOf(error) }, 400);
-    }
-    if (providerKind === "slack") {
-      return c.json({ error: "slack_bot_delivery_adapter_unavailable" }, 422);
+      resolveProviderKind(parsed.data.capability, parsed.data.providerKind);
+    } catch (resolveError) {
+      return c.json({ error: "unresolvable_capability", message: messageOf(resolveError) }, 400);
     }
     try {
       const outcome = await provisionCapability(
@@ -220,10 +215,7 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       if (outcome.status === "selection_required") return c.json(outcome, 409);
       if (outcome.status === "ineligible") return c.json(outcome, 409);
       return c.json(outcome, 201);
-    } catch (error) {
-      if (error instanceof SlackDeliveryAdapterUnavailableError) {
-        return c.json({ error: "slack_bot_delivery_adapter_unavailable" }, 422);
-      }
+    } catch {
       return c.json({ error: "provision_failed" }, 500);
     }
   });
