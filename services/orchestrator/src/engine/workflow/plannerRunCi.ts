@@ -159,7 +159,11 @@ export async function publishCleanedDraftPr(
         githubHttp: input.githubHttp,
         ssh: input.ssh,
         target: ctx.target,
-        sourceRef: pushSource.ref,
+        // `prepareCleanPrBranch` deliberately leaves the workspace HEAD at the
+        // writer tip (and PR_CLEAN_REF can be moved later). Publish the immutable
+        // resolved commit, so the git effect and github.branch.pushed witness
+        // remain bound to the same validated head.
+        sourceRef: publishedHeadSha,
         publishedHeadSha,
         runId: context.runId,
         specId: context.specId,
