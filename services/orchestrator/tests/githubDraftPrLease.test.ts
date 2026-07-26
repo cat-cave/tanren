@@ -138,4 +138,84 @@ describe("#1069 draft publication lease", () => {
     expect(http.requests).toHaveLength(1);
     expect(http.requests[0]).toMatchObject({ retryTransient: false, retryRateLimit: false });
   });
+
+  it("rejects a remote change seen before the exact ref read without push or PR publication", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new RefResponseHttp({ status: 200, body: { object: { sha: concurrent } } });
+    const events = new FakeEventStore();
+
+    await expect(
+      publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: events,
+        secrets,
+        githubHttp: http,
+        ssh,
+        target,
+        runId: "run_123",
+        specId: "spec_123",
+        projectId: "project_123",
+        appendEventOrgId: "org_fake",
+        workspacePath: "/workspace/runs/run_123/repo",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        targetBranch: "main",
+        title: "lease test",
+        githubCredentialRef: "credential/github/org/org_fake/dev",
+        expectedPublishedHeadSha: fetched,
+      }),
+    ).rejects.toThrow("changed since workspace rework");
+
+    expect(ssh.commands).toHaveLength(0);
+    expect(events.events.map((event) => event.eventType)).toEqual([
+      "credential.requested",
+      "credential.loaded",
+      "github.failed",
+    ]);
+  });
+
+  it("uses the pre-rework published head for a stateful repeat publication", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new ScriptedGitHubHttp([
+      { status: 200, body: [] },
+      {
+        status: 201,
+        body: { number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } },
+      },
+      { status: 200, body: { object: { sha: fetched } } },
+      {
+        status: 200,
+        body: [{ number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } }],
+      },
+    ]);
+    const input = (expectedPublishedHeadSha?: string) => ({
+      pool: new RecordingPool().asPgPool(),
+      eventStore: new FakeEventStore(),
+      secrets,
+      githubHttp: http,
+      ssh,
+      target,
+      runId: "run_123",
+      specId: "spec_123",
+      projectId: "project_123",
+      appendEventOrgId: "org_fake",
+      workspacePath: "/workspace/runs/run_123/repo",
+      repoUrl: "https://github.com/cat-cave/repo.git",
+      targetBranch: "main",
+      title: "lease test",
+      githubCredentialRef: "credential/github/org/org_fake/dev",
+      ...(expectedPublishedHeadSha === undefined ? {} : { expectedPublishedHeadSha }),
+    });
+
+    await publishDraftPullRequest(input());
+    await publishDraftPullRequest(input(fetched));
+
+    const refReads = http.requests.filter((request) => request.path.endsWith("/git/ref/heads/tanren%2Frun_123"));
+    expect(refReads).toHaveLength(2);
+    expect(ssh.commands[0]?.command).toContain("--force-with-lease=refs/heads/tanren/run_123:");
+    expect(ssh.commands[1]?.command).toContain(`--force-with-lease=refs/heads/tanren/run_123:${fetched}`);
+  });
 });

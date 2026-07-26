@@ -12,8 +12,12 @@ export async function readDraftPrPushLease(
   repo: GitHubRepository,
   branch: string,
   token: string,
+  expectedPublishedHeadSha?: string,
 ): Promise<GitHubPushLease> {
   const validBranch = validateGitBranchName(branch);
+  if (expectedPublishedHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(expectedPublishedHeadSha)) {
+    throw new Error(`GitHub draft branch expected published head is invalid for ${validBranch}`);
+  }
   const response = await http.request({
     method: "GET",
     path: repoPath(repo, `/git/ref/heads/${encodeURIComponent(validBranch)}`),
@@ -22,12 +26,15 @@ export async function readDraftPrPushLease(
     retryTransient: false,
     retryRateLimit: false,
   });
-  if (response.status === 404) return { expectedAbsent: true };
+  if (response.status === 404 && expectedPublishedHeadSha === undefined) return { expectedAbsent: true };
   const sha = parseRefObjectSha(response.body);
   if (response.status !== 200 || sha === undefined || !/^[0-9a-f]{40}$/u.test(sha)) {
     throw new Error(
       withErrorDetail(`GitHub draft branch read failed for ${validBranch}: HTTP ${response.status}`, response),
     );
+  }
+  if (expectedPublishedHeadSha !== undefined && sha !== expectedPublishedHeadSha) {
+    throw new Error(`GitHub draft branch changed since workspace rework for ${validBranch}`);
   }
   return { expectedSha: sha };
 }

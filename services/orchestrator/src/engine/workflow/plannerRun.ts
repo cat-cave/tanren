@@ -336,10 +336,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined, pullRequest: PublishedDraftPullRequest | undefined;
     let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
+    let expectedPublishedHeadSha: string | undefined;
 
-    // UNBOUNDED re-entry: each iteration re-authors then re-gates/re-reviews, continuing while
-    // it CONVERGES (gate error / review feedback keeps changing) and exiting only on a terminal
-    // outcome (merge / fixed-point halt / non-pass re-drive) — never a hardcoded rework count.
     for (;;) {
       outcome = await runSubtaskLoop({
         pool: input.pool,
@@ -397,12 +395,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...issueLoopProvenanceSeam(context),
       });
 
-      // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate
-      // (`runPublishGateStage`): `rework`/`halt`/`merged`/`converged_empty` (v35).
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
         ...(pushIdentity !== undefined && { pushIdentity }),
+        ...(expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha }),
         finalizeRunState,
         appendEvent,
         seedRejections,
@@ -414,6 +411,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       }
       pullRequest = stage.pullRequest;
       mergeGate = stage.mergeGate;
+      expectedPublishedHeadSha = stage.publishedHeadSha;
       if (stage.kind === "rework") continue;
       if (stage.kind === "halt") {
         releaseReason = "failed";

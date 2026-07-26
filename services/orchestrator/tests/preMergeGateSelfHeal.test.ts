@@ -37,9 +37,12 @@ import {
   noopMerge,
   plannerAuthorityBundle,
   plannerAuthorityHost,
+  RecordingSsh,
   runPlannerLoopScoped,
   setup,
 } from "./plannerRun.fixtures.js";
+
+const publishedHead = "a".repeat(40);
 
 // A method/path-AWARE GitHub fake (the positional `passingGitHub` queue assumes ONE
 // publish cycle; the self-heal re-entry publishes the PR each loop). It find-or-creates
@@ -49,7 +52,10 @@ import {
 // lets the PR-publish tail run cleanly across any number of writer self-heal loops.
 class ReusablePrGitHubHttp implements GitHubHttpClient {
   private created = false;
+  private branchReads = 0;
+  readonly requests: GitHubHttpRequest[] = [];
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    this.requests.push(input);
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
     }
@@ -72,10 +78,26 @@ class ReusablePrGitHubHttp implements GitHubHttpClient {
       input.method === "GET" &&
       input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test"
     ) {
-      return { status: 404, body: { message: "Not Found" } };
+      this.branchReads += 1;
+      return this.branchReads === 1
+        ? { status: 404, body: { message: "Not Found" } }
+        : { status: 200, body: { object: { sha: publishedHead } } };
     }
     // graphql (mark-ready node-id fetch + mutation), commit-status POST, everything else.
     return { status: 200, body: { data: { repository: { pullRequest: { id: "PR_node_7" } } } } };
+  }
+}
+
+class PublishedHeadSsh extends RecordingSsh {
+  override async run(...args: Parameters<RecordingSsh["run"]>) {
+    const [target, command] = args;
+    this.commands.push({ target, command });
+    const stdout = command.command.includes("__TANREN_FILE_ABSENT__")
+      ? '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>'
+      : command.command.includes("git rev-parse HEAD")
+        ? publishedHead
+        : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
 
@@ -201,6 +223,40 @@ describe("pre-merge gate self-heal (apex v34)", () => {
     expect(rePlanPrompt).toContain("from gate");
     // It is NOT a `code:internal` strand: no `planner-loop native gate failed` throw.
     expect(JSON.stringify(events.events)).not.toContain("planner-loop native gate failed");
+  });
+
+  it("threads the first published head into the self-heal rework lease", async () => {
+    const { ctx, pool, events, secrets, allocator } = await setup(nativeQueueConfig());
+    const ssh = new PublishedHeadSsh();
+    const github = new ReusablePrGitHubHttp();
+    const { runGate } = scriptedGate([failGate("tier-3", "pre_merge", "test", "first fail"), passGate]);
+    const { adapters } = selfHealAdapters();
+
+    await runPlannerLoopScoped({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: github,
+      context: ctx,
+      timeoutMs: 100,
+      sleep: async () => {},
+      runGate,
+      buildAdapters: () => adapters,
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
+      mergeAuthority: plannerAuthorityBundle(plannerAuthorityHost()),
+    });
+
+    const pushes = ssh.commands.filter(({ command }) => command.command.includes("git push"));
+    expect(pushes).toHaveLength(2);
+    expect(pushes[0]?.command.command).toContain("--force-with-lease=refs/heads/tanren/planner-test:");
+    expect(pushes[1]?.command.command).toContain(`--force-with-lease=refs/heads/tanren/planner-test:${publishedHead}`);
+    expect(
+      github.requests.filter((request) => request.path.endsWith("git/ref/heads/tanren%2Fplanner-test")),
+    ).toHaveLength(2);
   });
 
   it("a pre_merge gate failing the IDENTICAL way halts LOUD at a FIXED POINT (no count, never loops / never silently passes)", async () => {

@@ -74,12 +74,9 @@ export interface PublishDraftPullRequestInput {
   /** org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
-  /**
-   * The local gitref pushed as the PR branch (default "HEAD"). The planner run
-   * passes the cleaned PR ref (writer commits with the bootstrap commit dropped)
-   * so the PR excludes bootstrap-generated artifacts.
-   */
+  /** The local gitref pushed as the PR branch (default "HEAD"). */
   sourceRef?: string;
+  expectedPublishedHeadSha?: string;
   /**
    * apex v67/v69 loop-close fix: fired immediately AFTER `github.pr.created` is
    * appended. The PR's existence is the durable signal it should be tracked by the
@@ -201,10 +198,8 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         };
   const ledgerRef = installation?.credentialRef ?? staticRef ?? "github_app";
 
-  // §5a/PR-2: token resolution is credential PLUMBING, not a forge op — resolve through
-  // the standalone `resolveVcsToken(http, creds)` over the provider's existing client,
-  // over the shared client. §5c: the runner-workspace branch push stays a
-  // WORKSPACE HELPER (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
+  // §5a/PR-2: token resolution is credential plumbing. The runner-workspace branch push stays a
+  // workspace helper (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
   // (needs `ssh`/`target`/`workspacePath`), NOT a host-API op, so it is kept out of the
   // `CodeHost` seam. The draft-PR OPEN moves onto the `VisibilityProjection` (the raw
   // `GitHubVisibilityProjection.openOrUpdateChangeRequest`): the run-path open is the
@@ -236,7 +231,13 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     // force update to the exact remote state observed immediately before it.
     // A changed head rejects at git's authoritative CAS; this catch records the
     // failure and lets the run re-drive rather than report false publication.
-    const forceWithLease = await readDraftPrPushLease(http, repo, branch, resolved.token);
+    const forceWithLease = await readDraftPrPushLease(
+      http,
+      repo,
+      branch,
+      resolved.token,
+      input.expectedPublishedHeadSha,
+    );
     await pushWorkspaceBranchToGitHub({
       ssh: input.ssh,
       target: input.target,

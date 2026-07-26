@@ -95,13 +95,11 @@ export class EmptyWriterCommitError extends Error {
   }
 }
 
-/** The result of preparing + publishing the cleaned draft PR: a published PR, or a no-commits disposition. */
 export type PublishCleanedDraftPrResult =
   | { kind: "published"; pushSource: CleanedPushSource; pullRequest: PublishedDraftPullRequest }
   | { kind: "no_commits"; pushSource: CleanedPushSource; disposition: NoCommitsDisposition };
 
 type CleanedPushSource = Awaited<ReturnType<typeof prepareCleanPrBranch>>;
-
 /**
  * Prepare the cleaned PR branch + publish the draft PR for one writer-loop pass. Replays
  * the writer commits onto the clone HEAD, dropping the synthetic bootstrap commit (+
@@ -124,7 +122,7 @@ export async function publishCleanedDraftPr(
   input: RunPlannerLoopInput,
   ctx: { target: RunnerHandle; workspacePath: string; eventStore: EventStore },
   context: PlannerRunContext,
-  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity },
+  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity; expectedPublishedHeadSha?: string },
 ): Promise<PublishCleanedDraftPrResult> {
   const pushSource = await prepareCleanPrBranch({
     ssh: input.ssh,
@@ -156,6 +154,7 @@ export async function publishCleanedDraftPr(
       ssh: input.ssh,
       target: ctx.target,
       sourceRef: pushSource.ref,
+      ...(shas.expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha: shas.expectedPublishedHeadSha }),
       runId: context.runId,
       specId: context.specId,
       projectId: context.projectId,
@@ -246,6 +245,7 @@ export type PublishGateStageResult =
       // returned to in_flight, re-enter the writer (caller `continue`s). `halt`: a fixed point,
       // run finalized + spec parked LOUD (caller returns the terminal result).
       kind: "merged" | "rework" | "halt";
+      publishedHeadSha?: string;
     }
   // GRACEFUL EMPTY-BRANCH (v35): GitHub rejected the open with "No commits between base and
   // head" — the branch has NOTHING ahead of the base. NO PR was opened + NO gate ran. The stage
@@ -271,9 +271,8 @@ export async function runPublishGateStage(
   stage: {
     cloneHeadSha: string;
     bootstrapSha: string;
-    // MERGE-SAFETY (self-identity): the run's resolved pushing identity, threaded into the
-    // clean-PR prep so the composed PR-head commit attributes to the bot login (not `<unknown>`).
     pushIdentity?: ActorIdentity;
+    expectedPublishedHeadSha?: string;
     finalizeRunState: FinalizeRunState;
     appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
     seedRejections: PlannerRejectionFeedback[];
@@ -284,6 +283,7 @@ export async function runPublishGateStage(
     cloneHeadSha: stage.cloneHeadSha,
     bootstrapSha: stage.bootstrapSha,
     ...(stage.pushIdentity !== undefined && { pushIdentity: stage.pushIdentity }),
+    ...(stage.expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha: stage.expectedPublishedHeadSha }),
   });
   if (published.kind === "no_commits") {
     // The branch had NOTHING ahead of the base: emit the OBSERVABLE disposition (never a
@@ -309,16 +309,18 @@ export async function runPublishGateStage(
   const { pushSource, pullRequest } = published;
   const mergeGate = await runMergeGateForRun(input, ctx, pushSource.headSha);
   if (mergeGate.passed) {
-    // rv-premerge: OPT-IN pre-merge BEHAVIOR gate (default OFF). A passing CI gate is NOT
-    // yet a merge if the project opted into behavior gating and a declared product behavior
-    // fails on a preview of the PR head — fail-closed. No knob / no producer ⇒ a no-op.
     const behaviorGate = await runPreMergeBehaviorGate(
       input,
       context,
       { finalizeRunState: stage.finalizeRunState, appendEvent: stage.appendEvent },
       pushSource.headSha,
     );
-    return { pullRequest, mergeGate, kind: behaviorGate === "halt" ? "halt" : "merged" };
+    return {
+      pullRequest,
+      mergeGate,
+      kind: behaviorGate === "halt" ? "halt" : "merged",
+      ...publishedHeadSeam(pushSource.headSha),
+    };
   }
   const decision = await mergeGateSelfHeal(mergeGate, stage.budget.attempts);
   const move = await applyFailedMergeGate(
@@ -330,7 +332,11 @@ export async function runPublishGateStage(
     stage.seedRejections,
     stage.budget,
   );
-  return { pullRequest, mergeGate, kind: move };
+  return { pullRequest, mergeGate, kind: move, ...publishedHeadSeam(pushSource.headSha) };
+}
+
+function publishedHeadSeam(headSha: string): { publishedHeadSha?: string } {
+  return /^[0-9a-f]{40}$/u.test(headSha) ? { publishedHeadSha: headSha } : {};
 }
 
 /**
