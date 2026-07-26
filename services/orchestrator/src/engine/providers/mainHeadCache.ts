@@ -35,6 +35,7 @@ interface CacheEntry {
 export class MainHeadCache {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<string | undefined>>();
+  private readonly generations = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -57,13 +58,24 @@ export class MainHeadCache {
     if (existing !== undefined) {
       return existing;
     }
+    const generation = this.generations.get(key) ?? 0;
+    this.generations.set(key, generation);
     const promise = read()
       .then((sha) => {
-        this.entries.set(key, { sha, expiresAt: this.now() + this.ttlMs });
+        // An invalidation that happened while the read was in flight starts a
+        // newer generation; the stale result must never repopulate its cache.
+        if (this.generations.get(key) === generation) {
+          this.entries.set(key, { sha, expiresAt: this.now() + this.ttlMs });
+        }
         return sha;
       })
       .finally(() => {
         this.inflight.delete(key);
+        // Once the flight settles, a generation with no entry or flight has
+        // no stale observer left that could reuse it, so reclaim its metadata.
+        if (!this.entries.has(key) && !this.inflight.has(key)) {
+          this.generations.delete(key);
+        }
       });
     this.inflight.set(key, promise);
     return promise;
@@ -72,11 +84,18 @@ export class MainHeadCache {
   /** Bust the cached head for `key` (call when a merge to that branch completes). */
   invalidate(key: string): void {
     this.entries.delete(key);
+    if (this.inflight.has(key)) {
+      this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    } else {
+      this.generations.delete(key);
+    }
   }
 
   /** Bust every cached head (a coarse reset; used by tests). */
   clear(): void {
-    this.entries.clear();
+    for (const key of new Set([...this.entries.keys(), ...this.inflight.keys(), ...this.generations.keys()])) {
+      this.invalidate(key);
+    }
   }
 }
 

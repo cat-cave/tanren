@@ -56,6 +56,30 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
     expect(await cache.read("k", read)).toBe("sha-2");
   });
 
+  it("cannot publish a stale flight after invalidation and generation reclaim", async () => {
+    const cache = new MainHeadCache();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stale = cache.read("k", async () => {
+      await gate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    release();
+    await expect(stale).resolves.toBe("stale");
+
+    let reads = 0;
+    const fresh = async () => {
+      reads += 1;
+      return "fresh";
+    };
+    expect(await cache.read("k", fresh)).toBe("fresh");
+    expect(await cache.read("k", fresh)).toBe("fresh");
+    expect(reads).toBe(1);
+  });
+
   it("does NOT cache a throw (a 403/transient must re-read, never memoize the failure)", async () => {
     const cache = new MainHeadCache();
     let attempts = 0;
