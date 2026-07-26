@@ -15,11 +15,14 @@ import { OrganizationsStore } from "../../engine/repositories/organizations.js";
 import { systemActor } from "../../engine/state/actor.js";
 
 type DeployProviderKind = "deploy.vercel" | "deploy.flyio";
+type GreenfieldProviderKind = DeployProviderKind | "slack";
+type GreenfieldCapability = "deploy" | "notify";
 
 interface GreenfieldSelectionInput {
   client: IntegrationQueryClient;
   orgId: string;
-  providerKind: DeployProviderKind;
+  providerKind: GreenfieldProviderKind;
+  capability?: GreenfieldCapability;
   actorId: string;
   connectionId?: string;
   grantId?: string;
@@ -29,20 +32,29 @@ interface GreenfieldAuthorizeInput {
   client: IntegrationQueryClient;
   orgId: string;
   projectId: string;
-  providerKind: DeployProviderKind;
+  providerKind: GreenfieldProviderKind;
+  capability?: GreenfieldCapability;
   actorId: string;
   operation: IntegrationPrivilegedOperation;
   target: IntegrationOperationTarget;
 }
 
-function notLinked(orgId: string, providerKind: DeployProviderKind): NotLinkedResult {
+function capabilityOf(input: { capability?: GreenfieldCapability }): GreenfieldCapability {
+  return input.capability ?? "deploy";
+}
+
+function notLinked(
+  orgId: string,
+  providerKind: GreenfieldProviderKind,
+  capability: GreenfieldCapability,
+): NotLinkedResult {
   return {
     status: "not_linked",
-    capability: "deploy",
+    capability,
     providerKind,
     message:
-      `link ${providerKind} at the org level first — greenfield creation requires a real ` +
-      `deploy target, but org ${orgId} has no active ${providerKind} control grant.`,
+      `link ${providerKind} at the org level first — greenfield creation requires a real ${capability} ` +
+      `provider, but org ${orgId} has no active ${providerKind} control grant.`,
     linkAffordance: { kind: "org_integration_link", providerKind, orgId },
   };
 }
@@ -64,13 +76,14 @@ function asCandidates(
 }
 
 function selectionRequired(
-  providerKind: DeployProviderKind,
+  providerKind: GreenfieldProviderKind,
+  capability: GreenfieldCapability,
   reason: SelectionRequiredResult["reason"],
   candidates: Awaited<ReturnType<typeof IntegrationConnectionsStore.listExactControlGrants>>,
 ): SelectionRequiredResult {
   return {
     status: "selection_required",
-    capability: "deploy",
+    capability,
     providerKind,
     reason,
     message: `choose an exact active ${providerKind} account before greenfield provider operations run.`,
@@ -90,13 +103,14 @@ export async function preflightGreenfieldDeploy(
     input.orgId,
     input.providerKind,
   );
-  if (candidates.length === 0) return notLinked(input.orgId, input.providerKind);
+  const capability = capabilityOf(input);
+  if (candidates.length === 0) return notLinked(input.orgId, input.providerKind, capability);
   if (input.connectionId === undefined || input.grantId === undefined) {
-    return selectionRequired(input.providerKind, "selection_missing", candidates);
+    return selectionRequired(input.providerKind, capability, "selection_missing", candidates);
   }
   const match = candidates.find((item) => item.connectionId === input.connectionId && item.grantId === input.grantId);
   if (match === undefined) {
-    return selectionRequired(input.providerKind, "selected_grant_unavailable", candidates);
+    return selectionRequired(input.providerKind, capability, "selected_grant_unavailable", candidates);
   }
   return undefined;
 }
@@ -121,13 +135,14 @@ export async function resolveGreenfieldSelectionCandidate(input: GreenfieldSelec
     input.orgId,
     input.providerKind,
   );
-  if (candidates.length === 0) return notLinked(input.orgId, input.providerKind);
+  const capability = capabilityOf(input);
+  if (candidates.length === 0) return notLinked(input.orgId, input.providerKind, capability);
   if (input.connectionId === undefined || input.grantId === undefined) {
-    return selectionRequired(input.providerKind, "selection_missing", candidates);
+    return selectionRequired(input.providerKind, capability, "selection_missing", candidates);
   }
   const match = candidates.find((item) => item.connectionId === input.connectionId && item.grantId === input.grantId);
   if (match === undefined) {
-    return selectionRequired(input.providerKind, "selected_grant_unavailable", candidates);
+    return selectionRequired(input.providerKind, capability, "selected_grant_unavailable", candidates);
   }
   return {
     connectionId: match.connectionId,
@@ -150,16 +165,17 @@ export async function authorizeGreenfieldDeploy(
     orgId: input.orgId,
     projectId: input.projectId,
     providerKind: input.providerKind,
-    capability: "deploy",
+    capability: capabilityOf(input),
     operation: input.operation,
     target: input.target,
     actor: input.actorId === "system" ? systemActor : { kind: "operator", id: input.actorId },
   });
-  if (resolution.status === "not_linked") return notLinked(input.orgId, input.providerKind);
+  const capability = capabilityOf(input);
+  if (resolution.status === "not_linked") return notLinked(input.orgId, input.providerKind, capability);
   if (resolution.status === "selection_required") {
     return {
       status: "selection_required",
-      capability: "deploy",
+      capability,
       providerKind: input.providerKind,
       reason: resolution.reason,
       message: `choose an exact active ${input.providerKind} account for project ${input.projectId} before provider operations run.`,
@@ -169,10 +185,10 @@ export async function authorizeGreenfieldDeploy(
   if (resolution.status === "ineligible") {
     return {
       status: "ineligible",
-      capability: "deploy",
+      capability,
       providerKind: input.providerKind,
       reasons: resolution.reasons,
-      message: `deploy grant is not eligible for ${input.operation}: ${resolution.reasons.join(",")}`,
+      message: `${capability} grant is not eligible for ${input.operation}: ${resolution.reasons.join(",")}`,
     };
   }
   return IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);

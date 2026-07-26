@@ -2,6 +2,7 @@
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
+import { decodeSlackBotDestination } from "./slackBotDestination.js";
 
 // Slack channel — second wired channel after ntfy.
 //
@@ -45,6 +46,11 @@ export class SlackChannel implements NotificationChannel {
   }
 
   async publish(target: NotificationTargetRow, payload: NotificationPayload): Promise<void> {
+    const botTarget = decodeSlackBotDestination(target.destination);
+    if (botTarget !== undefined) {
+      await this.publishWithBot(botTarget, payload);
+      return;
+    }
     const url = await this.resolveWebhookUrl(target.destination);
     const body = JSON.stringify(buildSlackMessage(payload));
     const response = await this.fetchImpl(url, {
@@ -55,6 +61,31 @@ export class SlackChannel implements NotificationChannel {
     if (!response.ok) {
       const detail = await safeReadText(response);
       throw new Error(`slack publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
+    }
+  }
+
+  private async publishWithBot(
+    target: { botTokenRef: string; channelId: string },
+    payload: NotificationPayload,
+  ): Promise<void> {
+    const secret = await this.secrets.get(target.botTokenRef);
+    if (secret === undefined) {
+      throw new Error(`missing Slack bot credential ref: ${target.botTokenRef}`);
+    }
+    assertBotToken(secret.value);
+    const response = await this.fetchImpl("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret.value}` },
+      body: JSON.stringify({ channel: target.channelId, ...buildSlackMessage(payload) }),
+    });
+    if (!response.ok) {
+      const detail = await safeReadText(response);
+      throw new Error(`slack bot publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
+    }
+    const body = (await response.json().catch(() => null)) as { ok?: unknown; error?: unknown } | null;
+    if (body?.ok !== true) {
+      const detail = typeof body?.error === "string" ? body.error : "malformed_slack_response";
+      throw new Error(`slack bot publish failed: ${detail}`);
     }
   }
 
@@ -80,6 +111,12 @@ export class SlackChannel implements NotificationChannel {
 // error, so it fails closed here (the negative control for the provisioner ↔
 // channel contract: a bot token is never POSTed as a webhook).
 const SLACK_TOKEN_PREFIXES = ["xoxb-", "xoxp-", "xoxa-", "xoxr-", "xapp-", "xoxe-"];
+
+function assertBotToken(value: string): void {
+  if (!value.startsWith("xoxb-")) {
+    throw new Error("resolved Slack bot credential is not an xoxb bot token");
+  }
+}
 
 function assertIncomingWebhookUrl(value: string): void {
   if (SLACK_TOKEN_PREFIXES.some((prefix) => value.startsWith(prefix))) {

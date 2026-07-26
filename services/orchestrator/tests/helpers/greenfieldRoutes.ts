@@ -77,7 +77,9 @@ export function appWithGreenfieldRoutes(
     Pick<
       OnboardingRoutesOptions,
       | "preflightDeploy"
+      | "preflightNotify"
       | "prepareDeploy"
+      | "prepareNotify"
       | "persistDeploySelection"
       | "materializeTemplate"
       | "runFragmentAuthoring"
@@ -111,7 +113,9 @@ export function appWithGreenfieldRoutes(
   }
   const githubAppMinter = fakeGithubAppMinter();
   const preflightDeploy = onboardingOverrides.preflightDeploy;
+  const preflightNotify = onboardingOverrides.preflightNotify;
   const prepareDeploy = onboardingOverrides.prepareDeploy;
+  const prepareNotify = onboardingOverrides.prepareNotify;
   const bootstrapProject =
     onboardingOverrides.bootstrapProject ??
     (async (input) => pool.seedDerivationBootstrap(input.orgId, input.projectId));
@@ -169,6 +173,17 @@ export function appWithGreenfieldRoutes(
                 ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
               }),
           }),
+      ...(preflightNotify === undefined
+        ? {}
+        : {
+            greenfieldPreflightNotify: async (input) =>
+              preflightNotify({
+                orgId: input.orgId,
+                providerKind: input.providerKind,
+                ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+                ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
+              }),
+          }),
       ...(prepareDeploy === undefined
         ? {}
         : {
@@ -190,6 +205,7 @@ export function appWithGreenfieldRoutes(
                 ...(input.deploy.name === undefined ? {} : { name: input.deploy.name }),
               }),
           }),
+      ...(prepareNotify === undefined ? {} : { greenfieldPrepareNotify: prepareNotify }),
     }),
   );
   // `githubHttp` is the repo-create transport fake; its `createdRepositories` is the

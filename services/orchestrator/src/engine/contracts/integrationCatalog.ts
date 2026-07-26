@@ -3,9 +3,9 @@
  * Consent revision is issued by authenticated administrative action, not callers.
  */
 
-// v3 adds the direct product Slack channel-create/join scopes. Existing grants
-// remain ineligible until authority reissues consent against this exact policy.
-export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v3" as const;
+// v4 adds the control-plane bot delivery scopes. Existing grants remain
+// ineligible until authority reissues consent against this exact policy.
+export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v4" as const;
 
 export type IntegrationProviderKind =
   | "slack"
@@ -45,8 +45,16 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
         id: "notify",
         operations: [
           { id: "discover", requiredScopes: ["channels:read"], plane: "control" },
-          { id: "provision", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
-          { id: "bind", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
+          {
+            id: "provision",
+            requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+            plane: "control",
+          },
+          {
+            id: "bind",
+            requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+            plane: "control",
+          },
         ],
       },
       {
