@@ -37,6 +37,24 @@ export function parseRequiredContexts(value: unknown): string[] | undefined {
   return [];
 }
 
+/** Parse the exact required context → GitHub App identity bindings. */
+export function parseRequiredCheckAppIds(value: unknown): Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const checks = (value as Record<string, unknown>)["checks"];
+  if (!Array.isArray(checks)) return {};
+  const result: Record<string, number> = {};
+  for (const entry of checks) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const context = row["context"];
+    const appId = row["app_id"];
+    if (typeof context === "string" && context !== "" && typeof appId === "number" && Number.isInteger(appId)) {
+      result[context] = appId;
+    }
+  }
+  return result;
+}
+
 export function parseCheckRuns(value: unknown): GitHubCheckRun[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub check-runs response was not an object");
@@ -60,6 +78,12 @@ function parseCheckRun(value: unknown): GitHubCheckRun {
     name: object["name"],
     status: object["status"],
     conclusion: typeof object["conclusion"] === "string" ? object["conclusion"] : undefined,
+    appId:
+      typeof object["app"] === "object" &&
+      object["app"] !== null &&
+      typeof (object["app"] as Record<string, unknown>)["id"] === "number"
+        ? ((object["app"] as Record<string, unknown>)["id"] as number)
+        : undefined,
     url: typeof object["html_url"] === "string" ? object["html_url"] : undefined,
   };
 }
