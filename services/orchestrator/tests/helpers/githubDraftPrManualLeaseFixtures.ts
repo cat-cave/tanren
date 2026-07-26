@@ -33,14 +33,20 @@ export class PersistingManualEventStore extends FakeEventStore {
 
 export class ManualPublicationSsh implements CommandSubstrate {
   readonly commands: RunnerCommand[] = [];
+  /** Mutable workspace HEAD after the route captured its immutable publish source. */
+  workspaceHead: string | undefined;
 
-  constructor(private readonly heads: string[]) {}
+  constructor(
+    private readonly heads: string[],
+    private readonly headAfterResolution?: string,
+  ) {}
 
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     if (command.command === "git rev-parse HEAD") {
       const head = this.heads.shift();
       if (head === undefined) throw new Error("unexpected manual workspace-head read");
+      this.workspaceHead = this.headAfterResolution ?? head;
       return { exitCode: 0, stdout: `${head}\n`, stderr: "", timedOut: false };
     }
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };

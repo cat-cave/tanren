@@ -477,14 +477,18 @@ export function buildGitHubPushCommand(input: {
 }
 
 // The push source ref is operator/code-controlled, never user-derived: only the
-// working HEAD or the cleaned PR ref. Reject anything else so the push refspec
-// can never be smuggled into.
+// working HEAD, cleaned PR ref, or an immutable lowercase object id resolved by
+// the manual publication route. Reject anything else so the push refspec can
+// never be smuggled into.
 function validatePushSourceRef(sourceRef: string | undefined): string {
   if (sourceRef === undefined || sourceRef === "HEAD") {
     return "HEAD";
   }
   if (sourceRef === PR_CLEAN_REF) {
     return PR_CLEAN_REF;
+  }
+  if (/^[0-9a-f]{40}$/u.test(sourceRef)) {
+    return sourceRef;
   }
   throw new Error(`unsafe push source ref: ${sourceRef}`);
 }

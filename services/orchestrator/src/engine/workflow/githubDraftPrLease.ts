@@ -38,9 +38,10 @@ export async function readDurableDraftPrPublishedHead(
 }
 
 /**
- * Read the remote branch immediately before a draft/rework publication.  A 404
- * is an explicit absence proof; every other non-200 or malformed response fails
- * closed, so publication can be re-driven instead of overwriting unknown work.
+ * Read the remote branch immediately before a draft/rework publication. A first
+ * publication has no durable predecessor, so only an exact 404 proves it may use
+ * an absent-ref lease. An existing branch without that durable witness is unsafe:
+ * fail closed rather than adopting or overwriting unknown work.
  */
 export async function readDraftPrPushLease(
   http: GitHubHttpClient,
@@ -67,6 +68,9 @@ export async function readDraftPrPushLease(
     throw new Error(
       withErrorDetail(`GitHub draft branch read failed for ${validBranch}: HTTP ${response.status}`, response),
     );
+  }
+  if (expectedPublishedHeadSha === undefined) {
+    throw new Error(`GitHub draft branch exists without a durable published-head witness for ${validBranch}`);
   }
   if (expectedPublishedHeadSha !== undefined && sha !== expectedPublishedHeadSha) {
     throw new Error(`GitHub draft branch changed since workspace rework for ${validBranch}`);

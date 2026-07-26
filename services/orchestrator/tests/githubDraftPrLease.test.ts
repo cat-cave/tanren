@@ -81,15 +81,46 @@ describe("#1069 draft publication lease", () => {
     ).toContain("--force-with-lease=refs/heads/tanren/run_123:");
   });
 
-  it("retains the exact existing-head SHA instead of treating every ref as absent", async () => {
+  it("retains the exact existing-head SHA only with a durable witness", async () => {
     await expect(
       readDraftPrPushLease(
         new RefResponseHttp({ status: 200, body: { object: { sha: fetched } } }),
         { owner: "cat-cave", name: "repo" },
         "tanren/run_123",
         "ghp_secret",
+        fetched,
       ),
     ).resolves.toEqual({ expectedSha: fetched });
+  });
+
+  it("rejects an existing remote branch without a durable witness before SSH or PR publication", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new RefResponseHttp({ status: 200, body: { object: { sha: fetched } } });
+
+    await expect(
+      publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        target,
+        runId: "run_123",
+        specId: "spec_123",
+        projectId: "project_123",
+        appendEventOrgId: "org_fake",
+        workspacePath: "/workspace/runs/run_123/repo",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        targetBranch: "main",
+        title: "lease test",
+        githubCredentialRef: "credential/github/org/org_fake/dev",
+      }),
+    ).rejects.toThrow("exists without a durable published-head witness");
+
+    expect(ssh.commands).toHaveLength(0);
+    expect(http.requests).toHaveLength(1);
   });
 
   it.each([
@@ -200,7 +231,7 @@ describe("#1069 draft publication lease", () => {
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
     const pool = new ManualRouteDurableHeadPool();
     const events = new PersistingManualEventStore(pool);
-    const ssh = new ManualPublicationSsh([fetched, reworked, reworked]);
+    const ssh = new ManualPublicationSsh([fetched, reworked, reworked], concurrent);
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
       {
@@ -231,6 +262,10 @@ describe("#1069 draft publication lease", () => {
       headSha: fetched,
     });
     expect(ssh.commands[1]?.command).toContain("--force-with-lease=refs/heads/tanren/run_123:");
+    // The workspace HEAD advanced after the route resolved `fetched`; the push
+    // nevertheless names the immutable resolved commit, and the event records it.
+    expect(ssh.workspaceHead).toBe(concurrent);
+    expect(ssh.commands[1]?.command).toContain(`${fetched}:refs/heads/tanren/run_123`);
 
     await publishDraftPullRequestForRun(input);
     expect(pool.publishedHead).toBe(reworked);
@@ -286,6 +321,7 @@ describe("#1069 draft publication lease", () => {
         targetBranch: "main",
         title: "lease test",
         githubCredentialRef: "credential/github/org/org_fake/dev",
+        expectedPublishedHeadSha: fetched,
       }),
     ).rejects.toThrow("push workspace branch to GitHub failed");
 

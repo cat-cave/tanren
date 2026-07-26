@@ -348,6 +348,8 @@ export async function publishDraftPullRequestForRun(
       targetBranch: context.defaultBranch,
       ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
       runBranch: context.branch,
+      // Push the immutable resolved commit: mutable HEAD may advance during publication.
+      sourceRef: publishedHeadSha,
       publishedHeadSha,
       // GitHub rejects an empty title; coalesce blank input to the stored spec title or id.
       title:
@@ -364,7 +366,6 @@ export async function publishDraftPullRequestForRun(
     publishDraftPullRequest,
   );
 }
-
 async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {
   const result = await pool.query(
     // v68 fix: select runs.org_id (NOT NULL) so the operator PR-open route stamps

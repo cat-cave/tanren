@@ -65,6 +65,15 @@ describe("GitHub workspace push lease contract", () => {
     expect(clean).toContain(`${PR_CLEAN_REF}:refs/heads/tanren/run_123`);
     expect(clean).toContain("--force-with-lease=refs/heads/tanren/run_123:");
     expect(clean).not.toMatch(/(?:^|\s)--force(?:\s|$)/u);
+    const immutable = "a".repeat(40);
+    expect(
+      buildGitHubPushCommand({
+        repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+        branch: "tanren/run_123",
+        sourceRef: immutable,
+        forceWithLease: { expectedAbsent: true },
+      }),
+    ).toContain(`${immutable}:refs/heads/tanren/run_123`);
     expect(() =>
       buildGitHubPushCommand({
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
