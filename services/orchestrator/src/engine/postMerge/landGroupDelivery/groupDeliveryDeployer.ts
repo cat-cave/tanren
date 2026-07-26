@@ -51,6 +51,7 @@ import {
   type PriorGoodRelease,
   type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
+import { LandGroupDeliveryRetryableAuthorityError } from "./groupDeliveryRetryableAuthorityError.js";
 import { PgGroupDeliveryAuthority, type GroupDeliveryAuthority } from "./groupDeliveryAuthority.js";
 import { GroupDeliveryProviderEffects } from "./groupDeliveryProviderEffects.js";
 
@@ -250,7 +251,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       ) {
         throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
       }
-      throw error;
+      throw new LandGroupDeliveryRetryableAuthorityError(step, error);
     }
   }
 

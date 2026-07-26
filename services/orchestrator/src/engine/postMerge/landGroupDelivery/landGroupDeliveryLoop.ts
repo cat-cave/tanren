@@ -24,6 +24,7 @@ import {
   type GroupRegressionAttribution,
   type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
+import { LandGroupDeliveryRetryableAuthorityError } from "./groupDeliveryRetryableAuthorityError.js";
 import { resolveCompletedGroup, resolveGroupDeployTarget } from "./landGroupDeliveryReads.js";
 import { PgLandGroupDeliveryStore } from "./landGroupDeliveryStore.js";
 import { startClaimHeartbeat } from "./claimHeartbeat.js";
@@ -42,6 +43,10 @@ export interface LandGroupDeliveryLoopDeps {
   readonly heartbeatIntervalMs?: number;
   /** The takeover lease a STALE in_progress claim may be reclaimed past (SQL interval; tests tiny). */
   readonly claimLeaseInterval?: string;
+  /** Focused test seams; production uses the imported durable readers/driver. */
+  readonly resolveCompletedGroup?: typeof resolveCompletedGroup;
+  readonly resolveGroupDeployTarget?: typeof resolveGroupDeployTarget;
+  readonly drive?: typeof runGroupDelivery;
 }
 
 /** The fixed, non-secret reason each terminal disposition records on the delivery event. */
@@ -63,13 +68,16 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
   async check(runId: string): Promise<void> {
     if (runId === "") return;
     // 1. Detect + resolve a COMPLETED land group from its tail run (fail-closed to no-op).
-    const detection = await resolveCompletedGroup(this.deps.pool, runId);
+    const detection = await (this.deps.resolveCompletedGroup ?? resolveCompletedGroup)(this.deps.pool, runId);
     if (detection === undefined) return;
     const { plan } = detection;
 
     // 2. Resolve the group's deploy target. No resolvable target ⇒ nothing to deliver (a group
     //    with no deploy target would not be sealed by mq-15 either) — a clean no-op.
-    const resolution = await resolveGroupDeployTarget(this.deps.pool, detection.lineage);
+    const resolution = await (this.deps.resolveGroupDeployTarget ?? resolveGroupDeployTarget)(
+      this.deps.pool,
+      detection.lineage,
+    );
     if (resolution.kind !== "configured") {
       log.info("completed land group has no resolvable deploy target — skipping delivery (no-op)", {
         landGroupId: plan.landGroupId,
@@ -132,7 +140,7 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
       ...(this.deps.heartbeatIntervalMs !== undefined && { intervalMs: this.deps.heartbeatIntervalMs }),
     });
     try {
-      const outcome = await runGroupDelivery({
+      const outcome = await (this.deps.drive ?? runGroupDelivery)({
         deployer: this.deps.deployer,
         a3Gate: this.deps.a3Gate,
         attribution: this.deps.attribution,
@@ -148,6 +156,14 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
         disposition: outcome.disposition,
       });
     } catch (error) {
+      if (error instanceof LandGroupDeliveryRetryableAuthorityError) {
+        // The intent was fenced-clear after authority failed before provider I/O. Keep this
+        // delivery nonterminal so a later wake may safely reclaim and drive it once.
+        log.info("land group delivery authority unavailable before effect — leaving retryable", {
+          landGroupId: plan.landGroupId,
+        });
+        return;
+      }
       if (error instanceof LandGroupDeliveryClaimLostError) {
         // A fresh worker took over this stale claim — abort WITHOUT finalizing (the new owner
         // owns the terminal decision). The finalize below is fenced anyway, but returning here
