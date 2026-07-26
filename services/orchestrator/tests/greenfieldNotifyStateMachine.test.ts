@@ -122,4 +122,46 @@ describe("greenfield notify preparation state machine", () => {
     expect(notifySelectionWrites).toBe(0);
     expect(pool.projects.size).toBe(0);
   });
+
+  it("maps ineligible Slack to capability_ineligible before every derivation effect", async () => {
+    const pool = seed();
+    const githubHttp = new FakeRepoCreateHttp();
+    let deployPreparations = 0;
+    let notifyPreparations = 0;
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+      async preflightDeploy() {},
+      async preflightNotify() {
+        return {
+          status: "ineligible",
+          capability: "notify",
+          providerKind: "slack",
+          reasons: ["missing_scope:groups:read"],
+          message: "notify grant is not eligible for discover: missing_scope:groups:read",
+        };
+      },
+      async prepareDeploy() {
+        deployPreparations += 1;
+        return preparedDeploy();
+      },
+      async prepareNotify() {
+        notifyPreparations += 1;
+        throw new Error("ineligible Slack must not reach provider preparation");
+      },
+    });
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers,
+      body: body({ providerKind: "slack", connectionId: "slack_connection", grantId: "slack_grant" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "notify_capability_ineligible",
+      status: "ineligible",
+      reasons: ["missing_scope:groups:read"],
+    });
+    expect(githubHttp.createdRepositories).toEqual([]);
+    expect(deployPreparations).toBe(0);
+    expect(notifyPreparations).toBe(0);
+    expect(pool.projects.size).toBe(0);
+  });
 });

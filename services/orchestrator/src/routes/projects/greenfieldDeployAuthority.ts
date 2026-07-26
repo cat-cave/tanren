@@ -154,6 +154,49 @@ export async function resolveGreenfieldSelectionCandidate(input: GreenfieldSelec
 }
 
 /**
+ * Prove every Slack notify operation the provisioner may select before the
+ * derivation shell, repository, project selection, or provider is touched.
+ * This is read-only and checks the current policy revision, exact scopes,
+ * capability, operation, and grant generation through the authority.
+ */
+export async function preflightGreenfieldNotifyEligibility(
+  input: GreenfieldSelectionInput,
+): Promise<NotLinkedResult | SelectionRequiredResult | IneligibleResult | undefined> {
+  const candidate = await resolveGreenfieldSelectionCandidate(input);
+  if ("status" in candidate) return candidate;
+  const authority = new PgIntegrationAuthority();
+  for (const operation of ["discover", "provision", "bind"] as const) {
+    const result = await authority.preflightExactOperation(input.client, {
+      orgId: input.orgId,
+      providerKind: input.providerKind,
+      capability: capabilityOf(input),
+      operation,
+      target: operation === "discover" ? {} : { projectName: "greenfield-preflight", orgSlug: "greenfield-preflight" },
+      connectionId: candidate.connectionId,
+      grantId: candidate.grantId,
+    });
+    if (result.status === "eligible") continue;
+    if (result.status === "not_linked") return notLinked(input.orgId, input.providerKind, capabilityOf(input));
+    if (result.status === "selection_required") {
+      const candidates = await IntegrationConnectionsStore.listExactControlGrants(
+        input.client,
+        input.orgId,
+        input.providerKind,
+      );
+      return selectionRequired(input.providerKind, capabilityOf(input), "selected_grant_unavailable", candidates);
+    }
+    return {
+      status: "ineligible",
+      capability: capabilityOf(input),
+      providerKind: input.providerKind,
+      reasons: result.reasons,
+      message: `${capabilityOf(input)} grant is not eligible for ${operation}: ${result.reasons.join(",")}`,
+    };
+  }
+  return undefined;
+}
+
+/**
  * Sole production path for greenfield deploy provider I/O: authorizeOperation after
  * an exact project selection is persisted.
  */

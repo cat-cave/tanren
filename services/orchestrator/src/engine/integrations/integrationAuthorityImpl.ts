@@ -219,6 +219,43 @@ function toCandidate(row: EligibilityRow, reasons: string[]): SanitizedConnectio
 }
 
 export class PgIntegrationAuthority implements IntegrationAuthority {
+  /**
+   * Read-only proof for an exact, caller-selected grant before a greenfield
+   * derivation shell exists. It deliberately cannot issue a lease: the durable
+   * project selection is still required before any provider I/O.
+   */
+  async preflightExactOperation(
+    client: IntegrationQueryClient,
+    input: Omit<AuthorizeOperationInput, "projectId" | "actor"> & { connectionId: string; grantId: string },
+  ): Promise<
+    | { status: "eligible" }
+    | { status: "not_linked" }
+    | { status: "selection_required" }
+    | { status: "ineligible"; reasons: string[] }
+  > {
+    if (!isKnownProviderKind(input.providerKind)) return { status: "ineligible", reasons: ["unknown_provider_kind"] };
+    if (catalogOperation(input.providerKind, input.capability, input.operation) === undefined) {
+      return { status: "ineligible", reasons: ["unknown_catalog_operation"] };
+    }
+    const target = normalizeIntegrationOperationTarget(input.operation, input.target);
+    if (target === undefined) return { status: "ineligible", reasons: ["invalid_operation_target"] };
+    const result = await client.query(INTEGRATION_ELIGIBILITY_SQL, [
+      input.orgId,
+      "__greenfield_preflight__",
+      input.providerKind,
+    ]);
+    const rows = result.rows as EligibilityRow[];
+    if (rows.length === 0) return { status: "not_linked" };
+    const row = rows.find(
+      (candidate) => candidate.connection_id === input.connectionId && candidate.grant_id === input.grantId,
+    );
+    if (row === undefined) return { status: "selection_required" };
+    const evaluation = ineligibilityReasons(row, input.capability, input.operation, target, new Date());
+    return evaluation.reasons.length === 0
+      ? { status: "eligible" }
+      : { status: "ineligible", reasons: evaluation.reasons };
+  }
+
   async authorizePrincipalVerification(client: IntegrationQueryClient, input: AuthorizePrincipalVerificationInput) {
     if (!isKnownProviderKind(input.providerKind)) {
       throw new Error(`unknown provider kind '${input.providerKind}'`);

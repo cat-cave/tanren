@@ -73,7 +73,7 @@ function stubClient(state: StubState): IntegrationQueryClient {
           operations: ["discover", "provision", "bind"],
           provider_scopes:
             match.provider_kind === "slack"
-              ? ["chat:write", "channels:read", "channels:manage", "channels:join"]
+              ? ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"]
               : ["project:read", "project:write"],
           resource_constraints: defaultIntegrationResourceConstraints(),
           policy_revision: integrationCatalogRevision(),
