@@ -1181,7 +1181,7 @@ smoke-rls-proof-bundle:
 # cherry-pick conflict on every branch that added a smoke recipe. Keep it
 # one-per-line: `just` continues a dependency list across lines with a trailing
 # backslash, and a comment can never swallow more than its own line.
-smoke: \
+smoke-aggregate: \
   compose-build \
   compose-up \
   wait-for-stack \
@@ -1264,6 +1264,13 @@ smoke: \
   smoke-rls-verification-reads \
   smoke-rls-proof-dashboard
 
+smoke:
+  # Validate once and export through the nested just invocation so all leaves
+  # inherit the same mapped owner URL.
+  DATABASE_URL="$(scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL; exec just smoke-aggregate
+
+smoke-aggregate-config-test:
+  scripts/smoke/aggregate-database-url.test.sh
 # rv-22: runtime-verification HTTP read surface — real Hono route → real DB → real
 # response, a failed verdict stays failed, cross-org reads see zero rows.
 smoke-rls-verification-reads:
