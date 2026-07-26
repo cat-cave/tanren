@@ -277,6 +277,33 @@ describe("#1069 draft publication lease", () => {
     expect(http.requests.at(-1)?.path).toBe("/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123");
   });
 
+  it("manual route refuses an existing reviewer-owned branch without a durable prior publication", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const pool = new ManualRouteDurableHeadPool();
+    const ssh = new ManualPublicationSsh([fetched]);
+    const http = new ScriptedGitHubHttp([{ status: 200, body: { object: { sha: concurrent } } }], []);
+
+    await expect(
+      publishDraftPullRequestForRun({
+        pool: pool.asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        runId: "run_123",
+        identitySecretRef: "runner/local/identity",
+      }),
+    ).rejects.toThrow("exists without a durable published-head witness");
+
+    expect(pool.publishedHead).toBeUndefined();
+    expect(pool.durableReads).toEqual([["org_fake", "spec_123", "tanren/run_123"]]);
+    expect(ssh.commands).toHaveLength(1);
+    expect(ssh.commands[0]?.command).toBe("git rev-parse HEAD");
+    expect(http.requests).toHaveLength(1);
+    expect(http.requests[0]?.path).toBe("/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123");
+  });
+
   it.each(["", "not-a-sha"])("manual publication rejects a %j workspace head before GitHub or push", async (head) => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });

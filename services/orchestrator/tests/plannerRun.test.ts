@@ -276,7 +276,11 @@ describe("runPlannerLoopWorkflow", () => {
     expect(cleanPrep).toContain(`git commit-tree "$clean_tree" -p '${cloneHead}'`);
     expect(cleanPrep).not.toContain("git rebase");
     const push = ssh.commands.find((c) => c.includes("git push"));
-    expect(push).toContain("refs/tanren/pr-clean:refs/heads/");
+    // The cleanup seam resolves its transient ref to a commit before publish;
+    // the later effect must name that immutable SHA, never the symbolic ref.
+    expect(push).toContain(`${cloneHead}:refs/heads/${ctx.runBranch}`);
+    expect(push).not.toContain("refs/tanren/pr-clean:refs/heads/");
+    expect(push).toContain(`--force-with-lease=refs/heads/${ctx.runBranch}:`);
   });
 
   it("resolves the repo's .tanren/ci.yml bootstrap.run and feeds it to the bootstrap step", async () => {
