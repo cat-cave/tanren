@@ -218,6 +218,29 @@ export class PgLandGroupDeliveryStore {
   }
 
   /**
+   * The sole safe intent retraction: fresh authority failed before this owner invoked
+   * the provider. Fence on the still-owned token; a lost claim deliberately preserves
+   * the marker so a successor treats the external effect as ambiguous.
+   */
+  async clearPreEffectAuthorityFailure(
+    orgId: string,
+    landGroupId: string,
+    token: string,
+    step: "preview" | "promote",
+  ): Promise<boolean> {
+    const column = step === "preview" ? "preview_intent_at" : "promote_intent_at";
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const cleared = await client.query<{ id: string }>(
+        `UPDATE land_group_delivery_loops SET ${column} = NULL, updated_at = now()
+          WHERE org_id = $1 AND land_group_id = $2 AND fencing_token = $3 AND state = 'in_progress'
+          RETURNING id`,
+        [orgId, landGroupId, token],
+      );
+      return cleared.rows[0] !== undefined;
+    });
+  }
+
+  /**
    * Finalize an owned delivery: UPDATE the row (FENCED on the token, so a superseded owner cannot
    * clobber a terminal row) to its terminal state + the strict receipt JSON, then append the
    * frozen delivery event on the SAME client. Returns the persisted receipt.

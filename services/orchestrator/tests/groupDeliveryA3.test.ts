@@ -59,13 +59,19 @@ function deployer(proofBackedWebDemo: ProofBackedWebDemo): ProductionGroupDelive
     eventStore: {} as never,
     proofBackedWebDemo,
     releaseInstances: { getByDeployment: async () => RELEASE } as never,
-    intentStore: { writeIntent: async () => true, readIntent: async () => false },
+    intentStore: {
+      writeIntent: async () => true,
+      readIntent: async () => false,
+      clearPreEffectAuthorityFailure: async () => true,
+    },
   });
 }
 
 const EMPTY_POOL = {
   connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
 } as unknown as pg.Pool;
+
+const clearIntent: GroupIntentStore["clearPreEffectAuthorityFailure"] = async () => true;
 
 function grant(grantId: string): OrgGrant {
   return {
@@ -82,7 +88,7 @@ function grant(grantId: string): OrgGrant {
   };
 }
 
-function statefulIntentStore(): {
+function statefulIntentStore(afterWrite?: () => Promise<void>): {
   readonly store: GroupIntentStore;
   readonly hasIntent: (step: "preview" | "promote") => boolean;
 } {
@@ -90,10 +96,12 @@ function statefulIntentStore(): {
   return {
     store: {
       writeIntent: async (_orgId, _landGroupId, _token, step) => {
+        await afterWrite?.();
         intents.add(step);
         return true;
       },
       readIntent: async (_orgId, _landGroupId, step) => intents.has(step),
+      clearPreEffectAuthorityFailure: async (_orgId, _landGroupId, _token, step) => intents.delete(step),
     },
     hasIntent: (step) => intents.has(step),
   };
@@ -115,7 +123,11 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       eventStore: {} as never,
       deployAdapter: { applyPreview } as unknown as DeployAdapter,
       authority,
-      intentStore: { writeIntent: async () => true, readIntent: async () => false },
+      intentStore: {
+        writeIntent: async () => true,
+        readIntent: async () => false,
+        clearPreEffectAuthorityFailure: clearIntent,
+      },
     });
 
     await expect(
@@ -150,7 +162,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       eventStore: {} as never,
       deployAdapter: { promote } as unknown as DeployAdapter,
       authority,
-      intentStore: { writeIntent, readIntent },
+      intentStore: { writeIntent, readIntent, clearPreEffectAuthorityFailure: clearIntent },
     });
 
     await expect(
@@ -177,7 +189,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     expect(promote).not.toHaveBeenCalled();
   });
 
-  it("refreshes deploy authority before preview intent so the grant is exact at the effect boundary", async () => {
+  it("refreshes deploy authority after preview intent at the provider boundary", async () => {
     const stale = grant("stale-deploy");
     const refreshed = grant("refreshed-deploy");
     const require = vi
@@ -197,7 +209,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       eventStore: {} as never,
       deployAdapter: { applyPreview } as unknown as DeployAdapter,
       authority: { require },
-      intentStore: { writeIntent, readIntent: async () => false },
+      intentStore: { writeIntent, readIntent: async () => false, clearPreEffectAuthorityFailure: clearIntent },
       releaseInstances: {
         getByDeployment: async () => ({ ...RELEASE, deploymentId: "preview-refreshed" }),
       } as never,
@@ -214,11 +226,11 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
 
     expect(require).toHaveBeenCalledTimes(2);
     expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
-    expect(require.mock.invocationCallOrder[1]).toBeLessThan(writeIntent.mock.invocationCallOrder[0] ?? Infinity);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
     expect(applyPreview).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
-  it("refreshes promote authority before promote intent so the grant is exact at the effect boundary", async () => {
+  it("refreshes promote authority after promote intent at the provider boundary", async () => {
     const stale = grant("stale-promote");
     const refreshed = grant("refreshed-promote");
     const require = vi
@@ -238,7 +250,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       eventStore: {} as never,
       deployAdapter: { promote } as unknown as DeployAdapter,
       authority: { require },
-      intentStore: { writeIntent, readIntent: async () => false },
+      intentStore: { writeIntent, readIntent: async () => false, clearPreEffectAuthorityFailure: clearIntent },
     });
 
     await expect(
@@ -260,11 +272,11 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
 
     expect(require).toHaveBeenCalledTimes(2);
     expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
-    expect(require.mock.invocationCallOrder[1]).toBeLessThan(writeIntent.mock.invocationCallOrder[0] ?? Infinity);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
     expect(promote).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
-  it("negative control: failed preview renewal writes no false ambiguity and a retry may apply once", async () => {
+  it("negative control: delayed preview intent then expired boundary grant clears only the owned pre-effect marker", async () => {
     const stale = grant("stale-preview");
     const refreshed = grant("refreshed-preview");
     const require = vi
@@ -273,7 +285,12 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       .mockRejectedValueOnce(new Error("preview grant expired"))
       .mockResolvedValueOnce(stale)
       .mockResolvedValueOnce(refreshed);
-    const intents = statefulIntentStore();
+    let intentWriteCompleted = false;
+    const intents = statefulIntentStore(async () => {
+      // Simulate the durable intent write consuming the prior grant's validity.
+      await Promise.resolve();
+      intentWriteCompleted = true;
+    });
     const applyPreview = vi.fn<DeployAdapter["applyPreview"]>(async () => ({ deploymentId: "preview-retry" }));
     const groupDeployer = new ProductionGroupDeliveryDeployer({
       pool: EMPTY_POOL,
@@ -293,6 +310,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     };
 
     await expect(groupDeployer.applyPreview(input)).rejects.toThrow("preview grant expired");
+    expect(intentWriteCompleted).toBe(true);
     expect(intents.hasIntent("preview")).toBe(false);
     expect(applyPreview).not.toHaveBeenCalled();
 
@@ -302,7 +320,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     expect(applyPreview).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
-  it("negative control: failed promote renewal writes no false ambiguity and a retry reaches one effect", async () => {
+  it("negative control: delayed promote intent then expired boundary grant clears only the owned pre-effect marker", async () => {
     const stale = grant("stale-promote");
     const refreshed = grant("refreshed-promote");
     const require = vi
@@ -311,7 +329,12 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       .mockRejectedValueOnce(new Error("promote grant expired"))
       .mockResolvedValueOnce(stale)
       .mockResolvedValueOnce(refreshed);
-    const intents = statefulIntentStore();
+    let intentWriteCompleted = false;
+    const intents = statefulIntentStore(async () => {
+      // The post-intent authority read observes expiration, before provider I/O.
+      await Promise.resolve();
+      intentWriteCompleted = true;
+    });
     const promote = vi.fn<DeployAdapter["promote"]>(async () => {
       throw new Error("provider reached after safe retry");
     });
@@ -340,6 +363,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     };
 
     await expect(groupDeployer.promote(input)).rejects.toThrow("promote grant expired");
+    expect(intentWriteCompleted).toBe(true);
     expect(intents.hasIntent("promote")).toBe(false);
     expect(promote).not.toHaveBeenCalled();
 
@@ -347,6 +371,43 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
     expect(intents.hasIntent("promote")).toBe(true);
     expect(promote).toHaveBeenCalledTimes(1);
     expect(promote).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
+  });
+
+  it("never clears or re-fires when fenced pre-effect recovery lost ownership", async () => {
+    let intentPresent = false;
+    const require = vi
+      .fn<GroupDeliveryAuthority["require"]>()
+      .mockResolvedValueOnce(grant("early"))
+      .mockRejectedValueOnce(new Error("boundary grant expired"));
+    const applyPreview = vi.fn<DeployAdapter["applyPreview"]>();
+    const groupDeployer = new ProductionGroupDeliveryDeployer({
+      pool: EMPTY_POOL,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: { applyPreview } as unknown as DeployAdapter,
+      authority: { require },
+      intentStore: {
+        writeIntent: async () => {
+          intentPresent = true;
+          return true;
+        },
+        readIntent: async () => intentPresent,
+        // A successor owns the fence: this owner cannot prove a safe retraction.
+        clearPreEffectAuthorityFailure: async () => false,
+      },
+    });
+    const input = {
+      plan: PLAN,
+      target: TARGET,
+      artifact: { artifactDigest: `sha256:${"a".repeat(64)}`, deploymentId: "build-a3" },
+      token: "fence-a3",
+    };
+
+    await expect(groupDeployer.applyPreview(input)).rejects.toThrow(/taken over/iu);
+    expect(applyPreview).not.toHaveBeenCalled();
+    await expect(groupDeployer.applyPreview(input)).resolves.toEqual({ kind: "ambiguous" });
+    expect(applyPreview).not.toHaveBeenCalled();
   });
 
   it("reserves A3 for the sealed production demo, never the preview proof", async () => {

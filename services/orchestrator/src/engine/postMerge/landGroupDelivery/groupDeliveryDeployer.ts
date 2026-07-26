@@ -64,6 +64,16 @@ const log = createLogger("land-group-delivery-deployer");
 export interface GroupIntentStore {
   writeIntent(orgId: string, landGroupId: string, token: string, step: "preview" | "promote"): Promise<boolean>;
   readIntent(orgId: string, landGroupId: string, step: "preview" | "promote"): Promise<boolean>;
+  /**
+   * Clear only an intent this claimant just wrote when fresh authority fails BEFORE
+   * provider invocation. A lost fence leaves the marker intact and therefore ambiguous.
+   */
+  clearPreEffectAuthorityFailure(
+    orgId: string,
+    landGroupId: string,
+    token: string,
+    step: "preview" | "promote",
+  ): Promise<boolean>;
 }
 
 export interface ProductionGroupDeliveryDeployerDeps {
@@ -166,17 +176,23 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       return { kind: "ambiguous" };
     }
     const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
-    // The early authority check above deliberately precedes durable reads, but its lease may
-    // expire while those reads run. Refresh the exact org-scoped grant BEFORE recording intent:
-    // a failed refresh proves the provider was not called, so it must leave NO ambiguous marker
-    // that would falsely block a safe retry. Once this succeeds, intent is the final durable
-    // proof immediately before the non-idempotent effect (no await between intent and effect).
-    const grant = await this.grant(plan, target, "deploy", {
-      resourceId: target.appId,
-      sourceRepo: target.repoSlug,
-      sourceRef: plan.mainSha,
-    });
+    // Intent must precede the effect, but its fenced DB write is awaitable. Resolve the exact
+    // grant AFTER it, at the provider boundary. If that read proves authority unavailable before
+    // any provider call, clear ONLY this claimant's fenced intent; all other uncertainty stays
+    // ambiguous and is never re-fired.
     await this.markIntentOrAbort(plan, input.token, "preview");
+    const grant = await this.grantAfterOwnedIntent(
+      plan,
+      target,
+      "deploy",
+      {
+        resourceId: target.appId,
+        sourceRepo: target.repoSlug,
+        sourceRef: plan.mainSha,
+      },
+      input.token,
+      "preview",
+    );
     const preview = await this.effects.applyPreview(plan, target, artifact, behaviorRevisionIds, grant);
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
@@ -213,6 +229,28 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     }
     if (!(await this.deps.intentStore.writeIntent(plan.orgId, plan.landGroupId, token, step))) {
       throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+    }
+  }
+
+  /** Resolve fresh authority after intent, undoing only a proven pre-effect failure. */
+  private async grantAfterOwnedIntent(
+    plan: GroupDeliveryPlan,
+    target: ResolvedGroupDeployTarget,
+    operation: IntegrationPrivilegedOperation,
+    operationTarget: IntegrationOperationTarget,
+    token: string | undefined,
+    step: "preview" | "promote",
+  ): Promise<OrgGrant> {
+    try {
+      return await this.grant(plan, target, operation, operationTarget);
+    } catch (error) {
+      if (
+        token === undefined ||
+        !(await this.deps.intentStore.clearPreEffectAuthorityFailure(plan.orgId, plan.landGroupId, token, step))
+      ) {
+        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+      }
+      throw error;
     }
   }
 
@@ -335,15 +373,21 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       });
       return { kind: "ambiguous" };
     }
-    // Preserve the early fail-closed authority check, then refresh the exact org-scoped
-    // operation lease BEFORE persisting intent. If renewal fails, no provider effect happened;
-    // writing intent first would falsely turn that safely retryable failure into permanent
-    // ambiguity. After refresh, the fenced intent is the final durable proof before the effect.
-    const grant = await this.grant(plan, target, "promote", {
-      resourceId: target.appId,
-      deploymentId: preview.previewDeploymentId,
-    });
+    // As preview: write the fenced proof first, then acquire fresh exact authority directly at
+    // the provider boundary. Only a proven pre-effect authority failure may clear this owned
+    // marker; a crash, lost fence, or provider error remains ambiguous and never re-fires.
     await this.markIntentOrAbort(plan, input.token, "promote");
+    const grant = await this.grantAfterOwnedIntent(
+      plan,
+      target,
+      "promote",
+      {
+        resourceId: target.appId,
+        deploymentId: preview.previewDeploymentId,
+      },
+      input.token,
+      "promote",
+    );
     const prior = current;
     const transition = await this.effects.promote(
       plan,
