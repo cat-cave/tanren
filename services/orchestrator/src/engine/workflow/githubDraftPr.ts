@@ -238,6 +238,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         repoUrl: input.repoUrl,
         branch,
         headSha: publishedHeadSha,
+        sourceRef: publishedHeadSha,
         credentialRef: ledgerRef,
         redacted: true,
       },

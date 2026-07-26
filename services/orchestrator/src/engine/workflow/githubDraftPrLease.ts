@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GithubBranchPushedPayload } from "../events/schemas/integrations.js";
 import { parseRefObjectSha } from "../providers/githubChecksParse.js";
 import { repoPath, withErrorDetail, type GitHubHttpClient, type GitHubRepository } from "../providers/github.js";
 import { validateGitBranchName, type GitHubPushLease } from "../workspace/githubPush.js";
@@ -6,7 +7,6 @@ import { validateGitBranchName, type GitHubPushLease } from "../workspace/github
 type QueryClient = { query(sql: string, params: readonly unknown[]): Promise<{ rows: readonly unknown[] }> };
 
 const PublishedHeadRow = z.object({ payload: z.unknown() });
-const PublishedHeadPayload = z.object({ headSha: z.string().regex(/^[0-9a-f]{40}$/u) }).passthrough();
 
 /**
  * Reads the last Tanren-published head for the stable spec-derived PR branch.
@@ -16,7 +16,7 @@ const PublishedHeadPayload = z.object({ headSha: z.string().regex(/^[0-9a-f]{40}
  */
 export async function readDurableDraftPrPublishedHead(
   pool: QueryClient,
-  input: { orgId: string; specId: string; branch: string },
+  input: { orgId: string; specId: string; branch: string; repoUrl: string },
 ): Promise<string | undefined> {
   const branch = validateGitBranchName(input.branch);
   const result = await pool.query(
@@ -30,9 +30,12 @@ export async function readDurableDraftPrPublishedHead(
   const raw = result.rows[0];
   if (raw === undefined) return undefined;
   const row = PublishedHeadRow.safeParse(raw);
-  const payload = row.success ? PublishedHeadPayload.safeParse(row.data.payload) : undefined;
+  const payload = row.success ? GithubBranchPushedPayload.safeParse(row.data.payload) : undefined;
   if (payload === undefined || !payload.success) {
-    throw new Error(`GitHub draft branch durable published head is invalid for ${branch}`);
+    throw new Error(`GitHub draft branch durable source/ref witness is invalid for ${branch}`);
+  }
+  if (payload.data.branch !== branch || payload.data.repoUrl !== input.repoUrl) {
+    throw new Error(`GitHub draft branch durable ownership witness does not match ${branch}`);
   }
   return payload.data.headSha;
 }

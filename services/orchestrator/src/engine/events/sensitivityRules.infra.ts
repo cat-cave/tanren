@@ -173,6 +173,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["repoUrl", "public"],
     ["branch", "public"],
     ["headSha", "public"],
+    ["sourceRef", "public"],
     ["credentialRef", "redacted"],
     ["redacted", "public"],
   ]),

@@ -12,7 +12,21 @@ export class ManualRouteDurableHeadPool extends RecordingRunPool {
       this.durableReads.push(params);
       return this.publishedHead === undefined
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ payload: { headSha: this.publishedHead } }], rowCount: 1 };
+        : {
+            rows: [
+              {
+                payload: {
+                  repoUrl: "https://github.com/cat-cave/repo.git",
+                  branch: "tanren/run_123",
+                  headSha: this.publishedHead,
+                  sourceRef: this.publishedHead,
+                  credentialRef: "github_app",
+                  redacted: true,
+                },
+              },
+            ],
+            rowCount: 1,
+          };
     }
     return await super.query(sql, params);
   }

@@ -5,6 +5,7 @@ import { readDurableDraftPrPublishedHead } from "./githubDraftPrLease.js";
 
 type DurableLeaseInput = {
   pool: { query(sql: string, params: readonly unknown[]): Promise<{ rows: readonly unknown[] }> };
+  repoUrl: string;
 };
 
 /**
@@ -18,7 +19,10 @@ export async function publishDraftPullRequestWithDurableLease<T extends DurableL
   durable: { orgId: string; specId: string; branch: string },
   publish: (input: T & { expectedPublishedHeadSha?: string }) => Promise<R>,
 ): Promise<R> {
-  const expectedPublishedHeadSha = await readDurableDraftPrPublishedHead(input.pool, durable);
+  const expectedPublishedHeadSha = await readDurableDraftPrPublishedHead(input.pool, {
+    ...durable,
+    repoUrl: input.repoUrl,
+  });
   return await publish({ ...input, ...(expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha }) });
 }
 

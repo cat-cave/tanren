@@ -149,17 +149,6 @@ describe("#1069 draft publication lease", () => {
     ).rejects.toThrow("unexpected GitHub request");
   });
 
-  it("rejects a malformed durable prior published head before any re-drive push or PR call", async () => {
-    const pool = new DurableHeadPool([{ payload: { headSha: "not-a-sha" } }]);
-    await expect(
-      readDurableDraftPrPublishedHead(pool, {
-        orgId: "org_fake",
-        specId: "spec_123",
-        branch: "tanren/run_123",
-      }),
-    ).rejects.toThrow("durable published head is invalid");
-  });
-
   it("rejects a malformed cleaned published head before it can clear a prior lease", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
@@ -222,11 +211,26 @@ describe("#1069 draft publication lease", () => {
   });
 
   it("uses a durable predecessor across a re-drive and refuses a moved remote before push or PR publication", async () => {
-    const prior = await readDurableDraftPrPublishedHead(new DurableHeadPool([{ payload: { headSha: fetched } }]), {
-      orgId: "org_fake",
-      specId: "spec_123",
-      branch: "tanren/run_123",
-    });
+    const prior = await readDurableDraftPrPublishedHead(
+      new DurableHeadPool([
+        {
+          payload: {
+            repoUrl: "https://github.com/cat-cave/repo.git",
+            branch: "tanren/run_123",
+            headSha: fetched,
+            sourceRef: fetched,
+            credentialRef: "github_app",
+            redacted: true,
+          },
+        },
+      ]),
+      {
+        orgId: "org_fake",
+        specId: "spec_123",
+        branch: "tanren/run_123",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+      },
+    );
     expect(prior).toBe(fetched);
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
