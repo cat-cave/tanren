@@ -380,6 +380,7 @@ export function cleanHeadStdout(command: string, sha = "a".repeat(40)): string {
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {
   readonly requests: GitHubHttpRequest[] = [];
+  private initialBranchAbsenceConsumed = new Set<string>();
 
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
@@ -396,8 +397,10 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     if (
       input.method === "GET" &&
       (input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test" ||
-        input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Flifecycle")
+        input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Flifecycle") &&
+      !this.initialBranchAbsenceConsumed.has(input.path)
     ) {
+      this.initialBranchAbsenceConsumed.add(input.path);
       return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();

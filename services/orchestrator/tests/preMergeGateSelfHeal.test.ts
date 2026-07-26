@@ -168,6 +168,11 @@ describe("pre-merge gate self-heal (apex v34)", () => {
     });
 
     expect(absent.status).toBe(404);
+    const repeat = await github.request({
+      method: "GET",
+      path: "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test",
+    });
+    expect(repeat.status).toBe(200);
     // Negative control: the local fake must not grant absence for arbitrary refs.
     expect(unexpected.status).toBe(200);
   });

@@ -179,7 +179,7 @@ export async function publishCleanedDraftPr(
         body: context.specDescription,
         githubCredentialRef: context.githubCredentialRef,
         ...appTokenSeam(context, input),
-        // apex v67/v69 loop-close: when this project is `native_queue` AND the worker
+        // Loop-close: when this project is `native_queue` AND the worker
         // wired the enqueuer, fire the merge_queue INSERT + `merge.scheduled` event
         // RIGHT AFTER `github.pr.created`. The PR is durable on GitHub the moment we
         // get here; the merge coordinator must own it whether the writer's downstream

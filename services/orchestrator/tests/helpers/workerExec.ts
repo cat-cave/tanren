@@ -405,6 +405,7 @@ export function passingGitHub(): ScriptedGitHubHttp {
 }
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {
+  private workerBranchAbsenceConsumed = false;
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -418,8 +419,10 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     // must remain out-of-band so the ordered PR/CI queue stays a strict proof.
     if (
       input.method === "GET" &&
-      input.path === "/repos/cat-cave/tanren-fixture-easy/git/ref/heads/tanren%2Fworker-test"
+      input.path === "/repos/cat-cave/tanren-fixture-easy/git/ref/heads/tanren%2Fworker-test" &&
+      !this.workerBranchAbsenceConsumed
     ) {
+      this.workerBranchAbsenceConsumed = true;
       return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();

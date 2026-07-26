@@ -373,6 +373,7 @@ export function hardTierGitHub(): ScriptedGitHubHttp {
 }
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {
+  private hardTierBranchAbsenceConsumed = false;
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -385,8 +386,10 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     // force-with-lease push; do not consume the scripted PR/CI sequence.
     if (
       input.method === "GET" &&
-      input.path === "/repos/cat-cave/tanren-fixture-hard/git/ref/heads/tanren%2Fhard-tier"
+      input.path === "/repos/cat-cave/tanren-fixture-hard/git/ref/heads/tanren%2Fhard-tier" &&
+      !this.hardTierBranchAbsenceConsumed
     ) {
+      this.hardTierBranchAbsenceConsumed = true;
       return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();
