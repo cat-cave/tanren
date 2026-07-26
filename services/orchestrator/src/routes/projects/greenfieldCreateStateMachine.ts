@@ -1,4 +1,5 @@
 import { migrateProjectConfig } from "../../engine/config/index.js";
+import { runWithOrgScope } from "@tanren/db";
 import { mutateProjectConfig } from "../../engine/config/projectConfigMutate.js";
 import type { PreparedGreenfieldDeploy } from "../../engine/forge/interview/index.js";
 import {
@@ -17,7 +18,7 @@ import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/p
 import { createDerivationShell, loadExactDerivationShell } from "../../engine/workflow/projectDerivationShell.js";
 import type { ProjectContract } from "../../engine/workflow/projectSpec.js";
 import { createGreenfieldRepository } from "./greenfieldRepoCreate.js";
-import { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
+import { preflightGreenfieldDeploy, preflightGreenfieldNotifyEligibility } from "./greenfieldDeployAuthority.js";
 import { prepareGreenfieldDeploy, prepareGreenfieldNotify } from "./greenfieldDeployPrepare.js";
 import type { GreenfieldCreateDeps } from "./greenfield.js";
 
@@ -66,14 +67,22 @@ async function ensurePreflight(deps: GreenfieldCreateDeps): Promise<Unavailable 
 async function ensureNotifyPreflight(deps: GreenfieldCreateDeps): Promise<Unavailable | undefined> {
   const notify = deps.input.notify;
   if (notify === undefined) return undefined;
-  return (deps.preflightNotify ?? preflightGreenfieldDeploy)({
-    client: deps.pool,
-    orgId: deps.orgId,
-    providerKind: "slack",
-    capability: "notify",
-    actorId: deps.actor.userId,
-    ...(notify.connectionId === undefined ? {} : { connectionId: notify.connectionId }),
-    ...(notify.grantId === undefined ? {} : { grantId: notify.grantId }),
+  // This is the first Slack eligibility read. It must use the tenant runtime
+  // role with an explicit org GUC before any derivation shell or provider effect.
+  return runWithOrgScope(deps.pool, deps.orgId, (client) => {
+    const input = {
+      client,
+      orgId: deps.orgId,
+      providerKind: "slack" as const,
+      capability: "notify" as const,
+      actorId: deps.actor.userId,
+      ...(notify.connectionId === undefined ? {} : { connectionId: notify.connectionId }),
+      ...(notify.grantId === undefined ? {} : { grantId: notify.grantId }),
+    };
+    if (deps.preflightNotify !== undefined) {
+      return deps.preflightNotify(input);
+    }
+    return preflightGreenfieldNotifyEligibility(input);
   });
 }
 

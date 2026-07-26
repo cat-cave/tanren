@@ -50,7 +50,9 @@ function scopesFor(providerKind: string): string[] {
   // Direct PRODUCT Slack binds a bot into a product channel before confirming a
   // message. The fixture supplies the catalogued product scopes; individual tests
   // that need a missing-scope state construct it explicitly.
-  if (providerKind === "slack") return ["channels:read", "channels:manage", "channels:join", "chat:write"];
+  if (providerKind === "slack") {
+    return ["channels:read", "groups:read", "channels:manage", "channels:join", "chat:write"];
+  }
   if (providerKind === "sentry") return ["event:read", "project:read", "project:write"];
   return [];
 }

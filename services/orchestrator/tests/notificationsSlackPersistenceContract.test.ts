@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { persistProvisionedArtifact } from "../src/engine/integrations/provisioningPersistence.js";
+import { DEFAULT_ROUTE_EVENTS } from "../src/engine/notifications/seedDefaultRoute.js";
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import type { ProvisionedArtifact } from "../src/engine/contracts/integrationProvisioner.js";
 import { systemActor } from "../src/engine/state/actor.js";
@@ -40,6 +41,9 @@ describe("slack notification target persistence contract", () => {
     expect(surfaces.notificationTargetId).toBe("notif_target_persisted");
     const insert = client.queries.find((q) => q.sql.includes("INSERT INTO notification_targets"))!;
     expect(insert.params[3]).toBe(`slack-bot-v1:${encodeURIComponent("secret://org/slack-bot-token/g/1")}:C_tanren-x`);
+    const routes = client.queries.filter((q) => q.sql.includes("INSERT INTO notification_routes"));
+    expect(routes).toHaveLength(DEFAULT_ROUTE_EVENTS.length);
+    expect(routes.map((route) => route.params[2])).toEqual(DEFAULT_ROUTE_EVENTS);
   });
 
   it("persists a Slack target when it carries an incoming-webhook credential ref", async () => {
