@@ -166,16 +166,17 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       return { kind: "ambiguous" };
     }
     const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
-    // FIRE: write the preview intent FENCED (also the immediate fence-recheck, Finding C) COMMITTED
-    // BEFORE the external deploy. A lost fence ⇒ abort before firing.
-    await this.markIntentOrAbort(plan, input.token, "preview");
-    // The early authority check above deliberately precedes all durable work, but its lease may
-    // expire while that work runs. Resolve the same exact grant again at the effect boundary.
+    // The early authority check above deliberately precedes durable reads, but its lease may
+    // expire while those reads run. Refresh the exact org-scoped grant BEFORE recording intent:
+    // a failed refresh proves the provider was not called, so it must leave NO ambiguous marker
+    // that would falsely block a safe retry. Once this succeeds, intent is the final durable
+    // proof immediately before the non-idempotent effect (no await between intent and effect).
     const grant = await this.grant(plan, target, "deploy", {
       resourceId: target.appId,
       sourceRepo: target.repoSlug,
       sourceRef: plan.mainSha,
     });
+    await this.markIntentOrAbort(plan, input.token, "preview");
     const preview = await this.effects.applyPreview(plan, target, artifact, behaviorRevisionIds, grant);
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
@@ -334,16 +335,15 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       });
       return { kind: "ambiguous" };
     }
-    // FIRE: write the promote intent FENCED (the atomic immediate fence-recheck, Finding C)
-    // COMMITTED IMMEDIATELY BEFORE the external promote. A lost fence ⇒ abort before firing. This
-    // is the tightest boundary — write intent, then the external call, then the durable completion.
-    await this.markIntentOrAbort(plan, input.token, "promote");
-    // Preserve the early fail-closed authority check, then refresh the exact operation lease at
-    // the provider boundary so durable checks and intent persistence cannot consume its TTL.
+    // Preserve the early fail-closed authority check, then refresh the exact org-scoped
+    // operation lease BEFORE persisting intent. If renewal fails, no provider effect happened;
+    // writing intent first would falsely turn that safely retryable failure into permanent
+    // ambiguity. After refresh, the fenced intent is the final durable proof before the effect.
     const grant = await this.grant(plan, target, "promote", {
       resourceId: target.appId,
       deploymentId: preview.previewDeploymentId,
     });
+    await this.markIntentOrAbort(plan, input.token, "promote");
     const prior = current;
     const transition = await this.effects.promote(
       plan,
