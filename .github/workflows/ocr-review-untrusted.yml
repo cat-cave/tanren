@@ -63,10 +63,18 @@ on:
 # advertised `refs/pull/<n>/head`. The trusted `workflow_run` lane posts as usual.
 # ============================================================================
 
-# issue #58 — one in-flight review per PR; a new push (or a fresh /review)
-# cancels the stale run. PR number comes from whichever event fired.
+# issue #58 — for `pull_request`, one in-flight review per PR (a new push cancels
+# the stale run). For `issue_comment` (/review), a UNIQUE per-run group: the
+# concurrency group is evaluated BEFORE the job-level authorization `if:`, so a
+# shared PR group would let ANY unauthorized comment (fork author included) join
+# the group and cancel an in-flight authorized /review via cancel-in-progress —
+# a review DoS. Per-run isolation means a comment event can never cancel another
+# run (each authorized /review is a deliberate, standalone action).
 concurrency:
-  group: ocr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('ocr-review-pr-{0}', github.event.pull_request.number)
+        || format('ocr-review-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 # Least privilege. `contents: read` (checkouts) + `pull-requests: read`
@@ -84,12 +92,14 @@ jobs:
     # auto path). An `issue_comment` runs ONLY for a `/review` command on a PR
     # from a trusted human (OWNER/MEMBER/COLLABORATOR) OR the trevor-workstation[bot]
     # agent identity (so agents can audit fork PRs). A fork author (CONTRIBUTOR/
-    # NONE) or any other bot is rejected here.
+    # NONE) or any other bot is rejected here. The command must be EXACTLY
+    # `/review` or `/review <args>` — `/review-anything` is rejected (a command
+    # boundary, not a prefix) so an arbitrary slash-command can't start a keyed run.
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
-       startsWith(github.event.comment.body, '/review') &&
+       (github.event.comment.body == '/review' || startsWith(github.event.comment.body, '/review ')) &&
        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
         github.event.comment.user.login == 'trevor-workstation[bot]'))
     env:
@@ -339,13 +349,24 @@ jobs:
           export OCR_LLM_MODEL="$MODEL"
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
           # -- FAIL-CLOSED completeness signal (do NOT regress) -----------------
-          # A review is CERTIFIED only if OCR exits 0 AND emits a valid JSON
-          # result. Anything else — a crash, a missing LLM key (fork PRs get no
-          # secret), a partial/garbled stream — must NOT be silently treated as
-          # "no findings": that is a merge-gate FAIL-OPEN (green verdict on
-          # unreviewed code). We record review_complete here; verdict.mjs turns
-          # review_complete=false into review/verdict=FAILURE downstream.
+          # A review is CERTIFIED only if OCR exits 0 AND emits a well-formed OCR
+          # RESULT — a non-null object (not an array) whose findings live in an
+          # array `comments`. Merely-valid JSON is NOT enough: `{}`, `null`, `[]`,
+          # or `{comments:"x"}` all parse, and ground-findings.mjs would normalize
+          # them to zero findings, so certifying on JSON.parse alone leaves the
+          # merge-gate FAIL-OPEN (green verdict on an unreviewed diff). A clean
+          # review still emits `comments: []`, so this bounds fail-closed without
+          # rejecting a legitimately empty result. We record review_complete here;
+          # verdict.mjs turns review_complete=false into review/verdict=FAILURE.
           # Absolute paths for --rule and --background-file (issues #287/#324).
+          validate_ocr_result() {
+            node -e '
+              const fs = require("node:fs");
+              let o;
+              try { o = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(1); }
+              if (!o || typeof o !== "object" || Array.isArray(o) || !Array.isArray(o.comments)) process.exit(1);
+            ' "$1"
+          }
           set +e
           npx --yes --package "$OCR_PACKAGE" ocr review \
             --model "$MODEL" \
@@ -358,8 +379,7 @@ jobs:
           OCR_EXIT=$?
           set -e
           REVIEW_COMPLETE=false
-          if [ "$OCR_EXIT" -eq 0 ] && [ -s "$OCR_RAW" ] \
-             && node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' "$OCR_RAW" >/dev/null 2>&1; then
+          if [ "$OCR_EXIT" -eq 0 ] && [ -s "$OCR_RAW" ] && validate_ocr_result "$OCR_RAW"; then
             REVIEW_COMPLETE=true
           else
             echo "::warning::OCR did not complete a valid review (exit=$OCR_EXIT); review/verdict will FAIL CLOSED"
