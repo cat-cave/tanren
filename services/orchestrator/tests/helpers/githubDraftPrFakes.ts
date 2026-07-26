@@ -11,7 +11,12 @@ export class RecordingSsh implements CommandSubstrate {
 
   async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    return {
+      exitCode: 0,
+      stdout: command.command === "git rev-parse HEAD" ? `${"a".repeat(40)}\n` : "",
+      stderr: "",
+      timedOut: false,
+    };
   }
 }
 

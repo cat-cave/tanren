@@ -3,6 +3,8 @@ import type pg from "pg";
 import { resolveWritableClient } from "./data/orgScopedDb.js";
 import { assertEventName, EventRegistry, type EventName, type EventPayload } from "./events/index.js";
 
+export type { EventName, EventPayload } from "./events/index.js";
+
 type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 // AppendEventInput is generic over the event name so the compiler enforces

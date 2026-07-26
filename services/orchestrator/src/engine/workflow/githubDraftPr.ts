@@ -20,6 +20,7 @@ import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
 import { readDraftPrPushLease } from "./githubDraftPrLease.js";
+import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -314,49 +315,54 @@ export async function publishDraftPullRequestForRun(
   if (context.runner === undefined) {
     throw new DraftPrRunnerNotFoundError(input.runId);
   }
-
-  return await publishDraftPullRequest({
-    pool: input.pool,
-    eventStore: input.eventStore,
-    // v68 fix: tenant key (runs.org_id NOT NULL); stamped on every appended event.
-    orgId: context.orgId,
-    appendEventOrgId: context.orgId,
-    secrets: input.secrets,
-    githubHttp: input.githubHttp,
-    ssh: input.ssh,
-    target: sshRunnerHandle({
-      host: context.runner.sshHost,
-      port: context.runner.sshPort,
-      username: "tanren",
-      hostKeyFingerprint: context.runner.hostKeyFingerprint,
-      identitySecretRef: input.identitySecretRef,
-    }),
-    runId: context.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    workspacePath: input.workspacePath ?? workspaceRepoPathForRun(context.runId),
-    repoUrl: context.repoUrl,
-    // §3.1: the run's base is `default_branch`; when the run is stacked (a non-empty
-    // ancestor stack), `publishDraftPullRequest` re-resolves the base to the immediate
-    // ancestor's PR-head branch (a true stacked PR) — so the operator
-    // `POST /runs/:id/github/draft-pr` route opens the same base the autonomous loop does.
-    targetBranch: context.defaultBranch,
-    ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-    runBranch: context.branch,
-    // GitHub rejects an EMPTY PR title with 422 (`missing_field: title`) — proven live
-    // on apex v31. `??` does NOT catch an empty string, so an empty `input.title` (a
-    // deploy spec resolved one) flowed straight through. Coalesce on BLANK (trim), and
-    // end on a spec-id fallback that is structurally never empty.
-    title:
-      (input.title?.trim() ? input.title.trim() : undefined) ??
-      (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
-    body: input.body ?? context.specDescription,
-    // The credential coordinate is derived only from stored project/org authority;
-    // the operator body cannot override it.
-    githubCredentialRef: context.configuredGithubCredentialRef,
-    installation: context.installation,
-    githubAppMinter: input.githubAppMinter,
+  const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
+  const target = sshRunnerHandle({
+    host: context.runner.sshHost,
+    port: context.runner.sshPort,
+    username: "tanren",
+    hostKeyFingerprint: context.runner.hostKeyFingerprint,
+    identitySecretRef: input.identitySecretRef,
   });
+  const publishedHeadSha = await resolveManualDraftPrHead({ ssh: input.ssh, target, workspacePath });
+
+  return await publishDraftPullRequestWithDurableLease(
+    {
+      pool: input.pool,
+      eventStore: input.eventStore,
+      // v68 fix: tenant key (runs.org_id NOT NULL); stamped on every appended event.
+      orgId: context.orgId,
+      appendEventOrgId: context.orgId,
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      ssh: input.ssh,
+      target,
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      workspacePath,
+      repoUrl: context.repoUrl,
+      // §3.1: the run's base is `default_branch`; when the run is stacked (a non-empty
+      // ancestor stack), `publishDraftPullRequest` re-resolves the base to the immediate
+      // ancestor's PR-head branch (a true stacked PR) — so the operator
+      // `POST /runs/:id/github/draft-pr` route opens the same base the autonomous loop does.
+      targetBranch: context.defaultBranch,
+      ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
+      runBranch: context.branch,
+      publishedHeadSha,
+      // GitHub rejects an empty title; coalesce blank input to the stored spec title or id.
+      title:
+        (input.title?.trim() ? input.title.trim() : undefined) ??
+        (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
+      body: input.body ?? context.specDescription,
+      // The credential coordinate is derived only from stored project/org authority;
+      // the operator body cannot override it.
+      githubCredentialRef: context.configuredGithubCredentialRef,
+      installation: context.installation,
+      githubAppMinter: input.githubAppMinter,
+    },
+    { orgId: context.orgId, specId: context.specId, branch: context.branch },
+    publishDraftPullRequest,
+  );
 }
 
 async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {

@@ -30,19 +30,15 @@
 
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActorIdentity } from "../contracts/codeHostTypes.js";
-import { resolveWorkspaceHeadSha } from "../workspace/index.js";
-import { prepareCleanPrBranch } from "../workspace/githubPush.js";
+import { prepareCleanPrBranch, resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type CiWhen } from "../ci/index.js";
 import { type GateOutcome, publishGateVerdictBestEffort, runNativeMergeGate } from "./gate/index.js";
 import { buildProjectHostSeams } from "../providers/hostFactory.js";
 import { parseGitHubRepository } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
-import type { EventStore } from "../eventStore.js";
-import type { EventName, EventPayload } from "../events/index.js";
-import {
-  publishDraftPullRequestWithDurableLease,
-  type PublishedDraftPullRequest,
-} from "./githubDraftPrDurableLease.js";
+import type { EventName, EventPayload, EventStore } from "../eventStore.js";
+import { publishDraftPullRequestWithDurableLease } from "./githubDraftPrDurableLease.js";
+import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
 import { appTokenSeam, mergeQueueEarlyEnqueueSeam } from "./plannerRunSeams.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
@@ -188,6 +184,7 @@ export async function publishCleanedDraftPr(
         ...mergeQueueEarlyEnqueueSeam(input, context, ctx.eventStore, appendEventOrgId),
       },
       { orgId: context.orgId, specId: context.specId, branch: context.runBranch },
+      publishDraftPullRequest,
     );
     return { kind: "published", pushSource, pullRequest };
   } catch (error) {

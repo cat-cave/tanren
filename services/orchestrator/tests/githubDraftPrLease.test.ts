@@ -3,11 +3,16 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
+import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/engine/workflow/githubDraftPr.js";
 import { readDraftPrPushLease, readDurableDraftPrPublishedHead } from "../src/engine/workflow/githubDraftPrLease.js";
 import { buildGitHubPushCommand } from "../src/engine/workspace/githubPush.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { RecordingPool, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
+import {
+  ManualPublicationSsh,
+  ManualRouteDurableHeadPool,
+  PersistingManualEventStore,
+} from "./helpers/githubDraftPrManualLeaseFixtures.js";
 
 const target: RunnerHandle = { backend: "ssh", host: "runner", port: 22, username: "tanren" } as RunnerHandle;
 const fetched = "a".repeat(40);
@@ -188,6 +193,73 @@ describe("#1069 draft publication lease", () => {
     ).rejects.toThrow("changed since workspace rework");
     expect(ssh.commands).toHaveLength(0);
     expect(http.requests).toHaveLength(1);
+  });
+
+  it("manual publication persists its actual head, then leases repeat publication and rejects a moved remote", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const pool = new ManualRouteDurableHeadPool();
+    const events = new PersistingManualEventStore(pool);
+    const ssh = new ManualPublicationSsh([fetched, reworked, reworked]);
+    const http = new ScriptedGitHubHttp([
+      { status: 200, body: [] },
+      {
+        status: 201,
+        body: { number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } },
+      },
+      { status: 200, body: { object: { sha: fetched } } },
+      {
+        status: 200,
+        body: [{ number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } }],
+      },
+      { status: 200, body: { object: { sha: concurrent } } },
+    ]);
+    const input = {
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets,
+      githubHttp: http,
+      ssh,
+      runId: "run_123",
+      identitySecretRef: "runner/local/identity",
+    };
+
+    await publishDraftPullRequestForRun(input);
+    expect(pool.durableReads[0]).toEqual(["org_fake", "spec_123", "tanren/run_123"]);
+    expect(pool.publishedHead).toBe(fetched);
+    expect(events.events.find((event) => event.eventType === "github.branch.pushed")?.payload).toMatchObject({
+      headSha: fetched,
+    });
+    expect(ssh.commands[1]?.command).toContain("--force-with-lease=refs/heads/tanren/run_123:");
+
+    await publishDraftPullRequestForRun(input);
+    expect(pool.publishedHead).toBe(reworked);
+    expect(ssh.commands[3]?.command).toContain(`--force-with-lease=refs/heads/tanren/run_123:${fetched}`);
+
+    await expect(publishDraftPullRequestForRun(input)).rejects.toThrow("changed since workspace rework");
+    expect(ssh.commands).toHaveLength(5);
+    expect(ssh.commands.filter((command) => command.command.includes("git push"))).toHaveLength(2);
+    expect(http.requests.at(-1)?.path).toBe("/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123");
+  });
+
+  it.each(["", "not-a-sha"])("manual publication rejects a %j workspace head before GitHub or push", async (head) => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new ManualPublicationSsh([head]);
+    const http = new ScriptedGitHubHttp([], []);
+    await expect(
+      publishDraftPullRequestForRun({
+        pool: new ManualRouteDurableHeadPool().asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        runId: "run_123",
+        identitySecretRef: "runner/local/identity",
+      }),
+    ).rejects.toThrow(/workspace head(?: is invalid| resolution returned invalid sha)/u);
+    expect(ssh.commands).toHaveLength(1);
+    expect(http.requests).toHaveLength(0);
   });
 
   it("rejects a changed remote head without overwriting it or falsely publishing the PR", async () => {

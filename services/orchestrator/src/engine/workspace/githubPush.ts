@@ -33,11 +33,8 @@ export interface GitHubWorkspacePushInput {
    * changes (no lockfile / node_modules).
    */
   sourceRef?: string;
-  /**
-   * Required for draft-PR publication.  Other workspace callers retain their
-   * existing explicit behavior; draft callers must never fall back to `--force`.
-   */
-  forceWithLease?: GitHubPushLease;
+  /** Exact remote-state proof required before every GitHub branch update. */
+  forceWithLease: GitHubPushLease;
 }
 
 // The local ref the cleaned PR commits are staged onto before the push. Kept
@@ -339,7 +336,7 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
       repoUrl: input.repoUrl,
       branch: input.branch,
       sourceRef: input.sourceRef,
-      ...(input.forceWithLease !== undefined && { forceWithLease: input.forceWithLease }),
+      forceWithLease: input.forceWithLease,
     }),
     stdin: input.token,
   });
@@ -452,23 +449,19 @@ export function buildGitHubPushCommand(input: {
   repoUrl: string;
   branch: string;
   sourceRef?: string;
-  /**
-   * When set, the push is guarded by `--force-with-lease=refs/heads/<branch>:<expectedSha>`
-   * (#1059) instead of a blind `--force`: a rewritten dependent head. Draft-PR callers always
-   * supply a lease, including an explicit absence lease for first publication. The optional
-   * generic-builder fallback remains only for non-draft callers with their own write contract.
-   */
-  forceWithLease?: GitHubPushLease;
+  /** Exact remote-state proof required before every GitHub branch update. */
+  forceWithLease: GitHubPushLease;
 }): string {
   const branch = validateGitBranchName(input.branch);
   const sourceRef = validatePushSourceRef(input.sourceRef);
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
+  if (input.forceWithLease === undefined) {
+    throw new Error("GitHub push requires an explicit remote-state lease");
+  }
   const forceArg = quoteSshShellArg(
-    input.forceWithLease === undefined
-      ? "--force"
-      : "expectedSha" in input.forceWithLease
-        ? forceWithLeaseArg(branch, input.forceWithLease.expectedSha)
-        : forceWithLeaseAbsentArg(branch),
+    "expectedSha" in input.forceWithLease
+      ? forceWithLeaseArg(branch, input.forceWithLease.expectedSha)
+      : forceWithLeaseAbsentArg(branch),
   );
 
   return [
