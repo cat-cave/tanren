@@ -121,7 +121,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       generation: 1,
       capabilities: ["notify"],
       operations: ["discover", "provision", "bind"],
-      provider_scopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+      provider_scopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
       policy_revision: integrationCatalogRevision(),
       consent_revision: "consent.test",
       status: "active",
@@ -245,7 +245,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
           status: 200,
           headers: {
             "content-type": "application/json",
-            "x-oauth-scopes": "chat:write,channels:read,channels:manage,channels:join",
+            "x-oauth-scopes": "chat:write,channels:read,groups:read,channels:manage,channels:join",
           },
         }),
     );
@@ -256,7 +256,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     );
     expect(ok).toMatchObject({
       status: "verified",
-      scopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+      scopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
     });
 
     const fetchNoScopes = vi.fn<typeof fetch>(

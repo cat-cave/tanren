@@ -8,6 +8,7 @@ import { InboxStore } from "../repositories/inbox.js";
 import { SourceKind } from "../forge/inbox/types.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import { encodeSlackBotDestination } from "../notifications/channels/slackBotDestination.js";
+import { DEFAULT_ROUTE_EVENTS, DEFAULT_ROUTE_MIN_SEVERITY } from "../notifications/seedDefaultRoute.js";
 import type { ActorRef } from "../state/actor.js";
 import type {
   CompleteIntegrationReconciliationInput,
@@ -111,11 +112,24 @@ export async function persistProvisionedArtifact(
   }
   if (artifact.notificationTarget !== undefined) {
     result.notificationTargetId = await upsertNotificationTarget(client, request, artifact.notificationTarget);
+    await seedNotificationRoutes(client, result.notificationTargetId);
   }
   if (artifact.deployRef !== undefined) {
     result.deployRef = `${artifact.deployRef.provider}:${artifact.deployRef.appId}`;
   }
   return result;
+}
+
+/** Give a provisioned notification target a real, idempotent dispatch matrix. */
+async function seedNotificationRoutes(client: IntegrationQueryClient, targetId: string): Promise<void> {
+  for (const eventName of DEFAULT_ROUTE_EVENTS) {
+    await client.query(
+      `INSERT INTO notification_routes (id, target_id, event_name, enabled, min_severity)
+       VALUES ($1, $2, $3, 1, $4)
+       ON CONFLICT (target_id, event_name) DO NOTHING`,
+      [`notif_route_${randomUUID()}`, targetId, eventName, DEFAULT_ROUTE_MIN_SEVERITY],
+    );
+  }
 }
 
 /**

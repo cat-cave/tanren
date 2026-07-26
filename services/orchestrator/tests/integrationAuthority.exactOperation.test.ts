@@ -106,6 +106,37 @@ function principalOperationClient(row?: PrincipalOperationRow): IntegrationQuery
 }
 
 describe("exact integration operation authority", () => {
+  it("preflight rejects stale and under-scoped Slack grants without issuing a lease", async () => {
+    const base = {
+      provider_kind: "slack",
+      capabilities: ["notify"],
+      operations: ["discover", "provision", "bind"],
+      provider_scopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
+    } as const;
+    for (const [overrides, reason] of [
+      [
+        { provider_scopes: ["chat:write", "channels:read", "channels:manage", "channels:join"] },
+        "missing_scope:groups:read",
+      ],
+      [{ policy_revision: "integration-catalog.v4" }, "stale_policy_revision"],
+      [{ operations: ["discover", "bind"] }, "missing_operation"],
+    ] as const) {
+      const result = await new PgIntegrationAuthority().preflightExactOperation(
+        clientFor(eligibilityRow({ ...base, ...overrides })),
+        {
+          orgId: "org-test",
+          providerKind: "slack",
+          capability: "notify",
+          operation: "provision",
+          target: { projectName: "greenfield", orgSlug: "org-test" },
+          connectionId: "conn-1",
+          grantId: "grant-1",
+        },
+      );
+      expect(result).toEqual({ status: "ineligible", reasons: expect.arrayContaining([reason]) });
+    }
+  });
+
   it("rehydrates only the exact resumable stages from migration 0043", async () => {
     const migration = readFileSync(
       resolve(import.meta.dirname, "../../../db/migrations/0043_integration_lifecycle.sql"),

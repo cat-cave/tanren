@@ -3,9 +3,10 @@
  * Consent revision is issued by authenticated administrative action, not callers.
  */
 
-// v4 adds the control-plane bot delivery scopes. Existing grants remain
+// v5 adds groups:read because conversations.list can return private channels.
+// Existing grants remain
 // ineligible until authority reissues consent against this exact policy.
-export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v4" as const;
+export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v5" as const;
 
 export type IntegrationProviderKind =
   | "slack"
@@ -44,15 +45,15 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
       {
         id: "notify",
         operations: [
-          { id: "discover", requiredScopes: ["channels:read"], plane: "control" },
+          { id: "discover", requiredScopes: ["channels:read", "groups:read"], plane: "control" },
           {
             id: "provision",
-            requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
             plane: "control",
           },
           {
             id: "bind",
-            requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join"],
+            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
             plane: "control",
           },
         ],
