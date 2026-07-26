@@ -21,6 +21,9 @@ import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/git
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
 import { readDraftPrPushLease } from "./githubDraftPrLease.js";
 import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
+import { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
+
+export { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -142,22 +145,15 @@ export class DraftPrRunnerNotFoundError extends Error {
  * run's delta over its ancestor). An empty stack (a non-speculative run) ⇒ `fallbackBase`
  * (the run's `default_branch`).
  */
-export function resolveDraftPrBaseBranch(fallbackBase: string, ancestorStack: AncestorStack | undefined): string {
-  if (ancestorStack === undefined || ancestorStack.length === 0) {
-    return fallbackBase;
-  }
-  const immediateAncestor = ancestorStack.at(-1);
-  // A stack member with a blank branch cannot be a PR base — fall back rather than open
-  // against "" (the bootstrap write-back fills the branch, so this is defensive).
-  return immediateAncestor !== undefined && immediateAncestor.branch !== "" ? immediateAncestor.branch : fallbackBase;
-}
-
 export async function publishDraftPullRequest(input: PublishDraftPullRequestInput): Promise<PublishedDraftPullRequest> {
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
   if (input.publishedHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(input.publishedHeadSha)) {
     throw new Error(`GitHub draft branch published head is invalid for ${branch}`);
+  }
+  if (input.publishedHeadSha !== undefined && input.sourceRef !== input.publishedHeadSha) {
+    throw new Error(`GitHub draft branch source ref must equal its published head for ${branch}`);
   }
   // §3.1 stacked-PR base; the persisted target reflects the actual PR base.
   const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);

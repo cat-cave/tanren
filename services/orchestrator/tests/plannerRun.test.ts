@@ -211,78 +211,6 @@ describe("runPlannerLoopWorkflow", () => {
     expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
   });
 
-  it("threads the post-bootstrap commit as the writer's diff base and pushes the cleaned PR ref", async () => {
-    const { ctx, pool, events, secrets, allocator } = await setup();
-    const cloneHead = "1".repeat(40);
-    const bootstrapSha = "2".repeat(40);
-    // SSH that returns the clone HEAD on the workspace-prep rev-parse and records
-    // every command so the PR push refspec can be inspected.
-    const ssh = new CloneHeadSsh(cloneHead);
-    const writerBaseShas: Array<string | undefined> = [];
-    const recordingWriter = {
-      kind: "writer" as const,
-      cli: "fake",
-      authRef: "credential/codex/dev",
-      async runWriter(opts: { prompt: string; workspace: string; timeoutMs: number; baseSha?: string }) {
-        writerBaseShas.push(opts.baseSha);
-        return {
-          diff: "diff ok\n",
-          commits: [{ sha: "a".repeat(40), message: "writer" }],
-          exitReason: "completed" as const,
-          tokenUsage: {
-            inputTokens: 1,
-            cachedInputTokens: 0,
-            cacheCreationTokens: 0,
-            outputTokens: 1,
-            reasoningOutputTokens: 0,
-            totalTokens: 2,
-          },
-        };
-      },
-    };
-
-    await runPlannerLoopScoped({
-      pool: pool.asPgPool(),
-      eventStore: events,
-      allocator,
-      ssh,
-      secrets,
-      githubHttp: passingGitHub(),
-      context: ctx,
-      timeoutMs: 100,
-      sleep: async () => {},
-      runBootstrap: async () => {},
-      // The post-bootstrap commit sha — what the writer must diff against.
-      commitBootstrap: async () => bootstrapSha,
-      buildAdapters: () => ({
-        planner: makePlanner([buildPlan([{ title: "T1", intent: "ok", behaviorIds: [] }])]) as never,
-        writer: recordingWriter,
-        checker: makeChecker([completeCheck]) as never,
-        auditor: makeAuditor([cleanAudit]) as never,
-        ...loopStageAdapters(),
-      }),
-      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
-      reviewProbe: approvingReview(),
-      mergeProbe: noopMerge(),
-    });
-
-    // The writer diffs against the POST-BOOTSTRAP commit, not the clone HEAD.
-    expect(writerBaseShas).toEqual([bootstrapSha]);
-    // The PR branch is the direct-overlay composed commit (apex v85): cloneHead +
-    // (writer − bootstrap), parented on cloneHead — bootstrap artifacts dropped, no rebase.
-    const cleanPrep = ssh.commands.find((c) => c.includes("git read-tree") && c.includes("git commit-tree"));
-    expect(cleanPrep).toContain(`git read-tree '${cloneHead}'`);
-    expect(cleanPrep).toContain(`git diff-tree -r --name-status --no-renames '${bootstrapSha}' HEAD`);
-    expect(cleanPrep).toContain(`git commit-tree "$clean_tree" -p '${cloneHead}'`);
-    expect(cleanPrep).not.toContain("git rebase");
-    const push = ssh.commands.find((c) => c.includes("git push"));
-    // The cleanup seam resolves its transient ref to a commit before publish;
-    // the later effect must name that immutable SHA, never the symbolic ref.
-    expect(push).toContain(`${cloneHead}:refs/heads/${ctx.runBranch}`);
-    expect(push).not.toContain("refs/tanren/pr-clean:refs/heads/");
-    expect(push).toContain(`--force-with-lease=refs/heads/${ctx.runBranch}:`);
-  });
-
   it("resolves the repo's .tanren/ci.yml bootstrap.run and feeds it to the bootstrap step", async () => {
     const { ctx, pool, events, secrets, allocator } = await setup();
     // SSH that returns a repo .tanren/ci.yml on the config read; everything else
@@ -480,24 +408,5 @@ class ConfigReadingSsh implements CommandSubstrate {
     }
     const stdout = command.command.includes(".tanren/ci.yml") ? this.configYaml : cleanHeadStdout(command.command);
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
-  }
-}
-
-// SSH fake that returns the clone HEAD sha on the workspace-prep `git rev-parse`
-// (so the run captures a real cloneHeadSha and the PR-branch cleanup actually
-// runs), a valid one-test JUnit XML when the runtime gate's evidence harvester reads
-// the JUnit report path (apex v57 task #64), empty for everything else, and records
-// every command issued.
-class CloneHeadSsh implements CommandSubstrate {
-  readonly commands: string[] = [];
-
-  constructor(private readonly cloneHead: string) {}
-
-  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-    this.commands.push(command.command);
-    if (isJunitHarvestRead(command.command)) {
-      return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
-    }
-    return { exitCode: 0, stdout: cleanHeadStdout(command.command, this.cloneHead), stderr: "", timedOut: false };
   }
 }

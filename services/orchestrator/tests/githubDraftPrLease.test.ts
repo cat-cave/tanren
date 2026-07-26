@@ -188,6 +188,36 @@ describe("#1069 draft publication lease", () => {
     expect(http.requests).toHaveLength(0);
   });
 
+  it("rejects a mismatched immutable source and durable published head before SSH or PR effects", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
+    const ssh = new LeaseRaceSsh();
+    const http = new RefResponseHttp({ status: 200, body: { object: { sha: fetched } } });
+    await expect(
+      publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: new FakeEventStore(),
+        secrets,
+        githubHttp: http,
+        ssh,
+        target,
+        runId: "run_123",
+        specId: "spec_123",
+        projectId: "project_123",
+        appendEventOrgId: "org_fake",
+        workspacePath: "/workspace/runs/run_123/repo",
+        repoUrl: "https://github.com/cat-cave/repo.git",
+        targetBranch: "main",
+        title: "lease test",
+        sourceRef: fetched,
+        publishedHeadSha: reworked,
+        githubCredentialRef: "credential/github/org/org_fake/dev",
+      }),
+    ).rejects.toThrow("source ref must equal its published head");
+    expect(ssh.commands).toHaveLength(0);
+    expect(http.requests).toHaveLength(0);
+  });
+
   it("uses a durable predecessor across a re-drive and refuses a moved remote before push or PR publication", async () => {
     const prior = await readDurableDraftPrPublishedHead(new DurableHeadPool([{ payload: { headSha: fetched } }]), {
       orgId: "org_fake",
