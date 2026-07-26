@@ -158,7 +158,7 @@ export class LandGroupDeliveryLoop implements RunMergeWatcher {
     } catch (error) {
       if (error instanceof LandGroupDeliveryRetryableAuthorityError) {
         // The intent was fenced-clear after authority failed before provider I/O. Keep this
-        // delivery nonterminal so a later wake may safely reclaim and drive it once.
+        // delivery retryable so a later wake may safely reclaim and drive it once.
         log.info("land group delivery authority unavailable before effect — leaving retryable", {
           landGroupId: plan.landGroupId,
         });

@@ -9,6 +9,7 @@ import {
   ProductionGroupDeliveryDeployer,
   type GroupIntentStore,
 } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import { LandGroupDeliveryRetryableAuthorityError } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryRetryableAuthorityError.js";
 import type {
   GroupDeliveryPlan,
   ResolvedGroupDeployTarget,
@@ -226,7 +227,9 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
 
     expect(require).toHaveBeenCalledTimes(2);
     expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
-    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
+    expect(writeIntent).toHaveBeenCalledTimes(1);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1]);
+    expect(applyPreview).toHaveBeenCalledTimes(1);
     expect(applyPreview).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
@@ -272,7 +275,9 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
 
     expect(require).toHaveBeenCalledTimes(2);
     expect(require.mock.calls[0]).toEqual(require.mock.calls[1]);
-    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1] ?? Infinity);
+    expect(writeIntent).toHaveBeenCalledTimes(1);
+    expect(writeIntent.mock.invocationCallOrder[0]).toBeLessThan(require.mock.invocationCallOrder[1]);
+    expect(promote).toHaveBeenCalledTimes(1);
     expect(promote).toHaveBeenCalledWith(refreshed, expect.anything(), expect.anything());
   });
 
@@ -309,7 +314,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       token: "fence-a3",
     };
 
-    await expect(groupDeployer.applyPreview(input)).rejects.toThrow("preview grant expired");
+    await expect(groupDeployer.applyPreview(input)).rejects.toBeInstanceOf(LandGroupDeliveryRetryableAuthorityError);
     expect(intentWriteCompleted).toBe(true);
     expect(intents.hasIntent("preview")).toBe(false);
     expect(applyPreview).not.toHaveBeenCalled();
@@ -362,7 +367,7 @@ describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
       token: "fence-a3",
     };
 
-    await expect(groupDeployer.promote(input)).rejects.toThrow("promote grant expired");
+    await expect(groupDeployer.promote(input)).rejects.toBeInstanceOf(LandGroupDeliveryRetryableAuthorityError);
     expect(intentWriteCompleted).toBe(true);
     expect(intents.hasIntent("promote")).toBe(false);
     expect(promote).not.toHaveBeenCalled();

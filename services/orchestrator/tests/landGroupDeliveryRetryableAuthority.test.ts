@@ -29,7 +29,7 @@ const COMPLETED: GroupDeliveryOutcome = {
 };
 
 describe("LandGroupDeliveryLoop retryable pre-effect authority", () => {
-  it("leaves expired fresh authority nonterminal, then effects exactly once after recovery", async () => {
+  it("leaves expired fresh authority retryable, then effects exactly once after recovery", async () => {
     const finalized: GroupDeliveryOutcome[] = [];
     const claims = [
       { kind: "owned" as const, token: "fence-one" },

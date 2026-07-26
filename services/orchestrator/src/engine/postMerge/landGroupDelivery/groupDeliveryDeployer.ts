@@ -141,13 +141,14 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPreviewOutcome> {
     const { plan, target, artifact } = input;
-    // Authority is the first operation. An absent/invalid grant rejects before either
-    // the persistence completion check or any provider call.
-    await this.grant(plan, target, "deploy", {
+    const deployTarget = {
       resourceId: target.appId,
       sourceRepo: target.repoSlug,
       sourceRef: plan.mainSha,
-    });
+    };
+    // Authority is the first operation. An absent/invalid grant rejects before either
+    // the persistence completion check or any provider call.
+    await this.grant(plan, target, "deploy", deployTarget);
     // COMPLETION CHECK: a persisted release for THIS group's artifact already exists ⇒ REUSE it
     // (idempotent — a takeover after the prior owner persisted the preview).
     const existing = await findGroupRelease(this.deps.pool, plan, target, artifact.artifactDigest);
@@ -182,18 +183,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     // any provider call, clear ONLY this claimant's fenced intent; all other uncertainty stays
     // ambiguous and is never re-fired.
     await this.markIntentOrAbort(plan, input.token, "preview");
-    const grant = await this.grantAfterOwnedIntent(
-      plan,
-      target,
-      "deploy",
-      {
-        resourceId: target.appId,
-        sourceRepo: target.repoSlug,
-        sourceRef: plan.mainSha,
-      },
-      input.token,
-      "preview",
-    );
+    const grant = await this.grantAfterOwnedIntent(plan, target, "deploy", deployTarget, input.token, "preview");
     const preview = await this.effects.applyPreview(plan, target, artifact, behaviorRevisionIds, grant);
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
@@ -323,12 +313,13 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPromoteOutcome> {
     const { plan, target, artifact, preview } = input;
-    // Authority is the first operation. An absent/invalid promote grant rejects before
-    // any durable release read, intent marker read/write, or provider effect.
-    await this.grant(plan, target, "promote", {
+    const promoteTarget = {
       resourceId: target.appId,
       deploymentId: preview.previewDeploymentId,
-    });
+    };
+    // Authority is the first operation. An absent/invalid promote grant rejects before
+    // any durable release read, intent marker read/write, or provider effect.
+    await this.grant(plan, target, "promote", promoteTarget);
     const current = await currentLiveGroupRelease(this.deps.pool, plan, target);
     // COMPLETION CHECK: THIS group's artifact is ALREADY the live production release ⇒ the promote
     // has COMMITTED. NO-OP — but ENSURE `deploy.verified` is emitted (Finding B: a prior owner may
@@ -378,17 +369,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     // the provider boundary. Only a proven pre-effect authority failure may clear this owned
     // marker; a crash, lost fence, or provider error remains ambiguous and never re-fires.
     await this.markIntentOrAbort(plan, input.token, "promote");
-    const grant = await this.grantAfterOwnedIntent(
-      plan,
-      target,
-      "promote",
-      {
-        resourceId: target.appId,
-        deploymentId: preview.previewDeploymentId,
-      },
-      input.token,
-      "promote",
-    );
+    const grant = await this.grantAfterOwnedIntent(plan, target, "promote", promoteTarget, input.token, "promote");
     const prior = current;
     const transition = await this.effects.promote(
       plan,
