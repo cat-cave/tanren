@@ -30,6 +30,14 @@ import {
   type GitHubPullRequestChecks,
 } from "./github.js";
 import { mainHeadCacheKey, sharedMainHeadCache, type MainHeadCache } from "./mainHeadCache.js";
+import {
+  decodeBase64Content as decodeContents,
+  decodeCommit,
+  decodeCompare,
+  decodeCompareFiles,
+  decodeDefaultBranch,
+  decodeRefSha,
+} from "./githubCodeHostDto.js";
 // Re-export the pure repo-URL parser so a stage that already imports `GitHubCodeHost`
 // (the merge/percolation reads) sources `RepoRef` parsing here too — one fewer dep there.
 export { parseGitHubRepository } from "./github.js";
@@ -91,24 +99,6 @@ function isNonFastForward(body: unknown): boolean {
   }
   const message = (body as { message?: unknown }).message;
   return typeof message === "string" && /not a fast forward/iu.test(message);
-}
-
-/** Lift a `login` from a compare-commit `author`/`committer` user object (`""` if absent). */
-function loginOf(user: unknown): string {
-  if (typeof user !== "object" || user === null || Array.isArray(user)) {
-    return "";
-  }
-  const login = (user as Record<string, unknown>)["login"];
-  return typeof login === "string" ? login : "";
-}
-
-/** Lift `object.sha` from a `git/ref` / `git/refs` response body, or `undefined`. */
-function refObjectSha(body: unknown): string | undefined {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return undefined;
-  }
-  const object = (body as { object?: { sha?: unknown } }).object;
-  return object !== undefined && typeof object.sha === "string" ? object.sha : undefined;
 }
 
 /**
@@ -185,11 +175,7 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub repo read failed for ${repo.owner}/${repo.name}: HTTP ${response.status}`);
     }
-    const branch = (response.body as { default_branch?: unknown }).default_branch;
-    if (typeof branch !== "string" || branch === "") {
-      throw new TypeError(`GitHub repo read for ${repo.owner}/${repo.name} returned no default_branch`);
-    }
-    return branch;
+    return decodeDefaultBranch(response.body);
   }
 
   /**
@@ -265,22 +251,7 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub commit read failed for ${sha}: HTTP ${response.status}`);
     }
-    const body = response.body as {
-      sha?: unknown;
-      message?: unknown;
-      tree?: { sha?: unknown };
-      parents?: unknown;
-    };
-    const treeSha = body.tree?.sha;
-    if (typeof body.sha !== "string" || typeof body.message !== "string" || typeof treeSha !== "string") {
-      throw new TypeError(`GitHub commit read for ${sha} returned a malformed commit`);
-    }
-    const parents = Array.isArray(body.parents)
-      ? body.parents.flatMap((p) =>
-          typeof (p as { sha?: unknown }).sha === "string" ? [(p as { sha: string }).sha] : [],
-        )
-      : [];
-    return { sha: body.sha, message: body.message, treeSha, parents };
+    return decodeCommit(response.body, sha);
   }
 
   /**
@@ -300,19 +271,9 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub compare ${baseSha}...${headSha} failed: HTTP ${response.status}`);
     }
-    const files = (response.body as { files?: unknown }).files;
-    if (!Array.isArray(files)) {
-      return "";
-    }
     const sections: string[] = [];
-    for (const entry of files) {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        continue;
-      }
-      const object = entry as Record<string, unknown>;
-      const filename = typeof object["filename"] === "string" ? object["filename"] : "(unknown)";
-      const patch = typeof object["patch"] === "string" ? object["patch"] : undefined;
-      sections.push(patch === undefined ? `diff --git ${filename}` : `diff --git ${filename}\n${patch}`);
+    for (const file of decodeCompareFiles(response.body)) {
+      sections.push(`diff --git ${file.filename}\n${file.patch}`);
     }
     return sections.join("\n");
   }
@@ -351,11 +312,7 @@ export class GitHubCodeHost implements CodeHost {
     const commits = (await this.readCompare(repo, baseSha, headSha)).commits;
     const logins: string[] = [];
     for (const commit of commits) {
-      if (typeof commit !== "object" || commit === null || Array.isArray(commit)) {
-        continue;
-      }
-      const record = commit as Record<string, unknown>;
-      logins.push(loginOf(record["author"]), loginOf(record["committer"]));
+      logins.push(commit.authorLogin, commit.committerLogin);
     }
     return { logins };
   }
@@ -365,7 +322,7 @@ export class GitHubCodeHost implements CodeHost {
     repo: CodeHostRepoRef,
     baseSha: string,
     headSha: string,
-  ): Promise<{ status: string; commits: ReadonlyArray<unknown> }> {
+  ): Promise<ReturnType<typeof decodeCompare>> {
     const token = await this.resolveToken();
     const response = await this.http.request({
       method: "GET",
@@ -376,11 +333,7 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub compare ${baseSha}...${headSha} failed: HTTP ${response.status}`);
     }
-    const body = response.body as { status?: unknown; commits?: unknown };
-    return {
-      status: typeof body.status === "string" ? body.status : "",
-      commits: Array.isArray(body.commits) ? body.commits : [],
-    };
+    return decodeCompare(response.body);
   }
 
   async readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined> {
@@ -397,11 +350,7 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub contents fetch failed: HTTP ${response.status}`);
     }
-    const body = response.body as { content?: unknown; encoding?: unknown };
-    if (typeof body.content !== "string") {
-      return undefined;
-    }
-    return body.encoding === "base64" ? decodeBase64Content(body.content) : body.content;
+    return decodeBase64Content(decodeContents(response.body));
   }
 
   /**
@@ -469,7 +418,10 @@ export class GitHubCodeHost implements CodeHost {
     if (update.status !== 200) {
       throw new Error(`GitHub land of ${input.authorizedSha} onto ${input.intoMain} failed: HTTP ${update.status}`);
     }
-    const landedSha = refObjectSha(update.body) ?? input.authorizedSha;
+    const landedSha = decodeRefSha(update.body, `refs/heads/${input.intoMain}`);
+    if (landedSha !== input.authorizedSha) {
+      throw new TypeError("GitHub land response did not confirm the authorized sha");
+    }
     // The default-branch head MOVED — bust the cached head so the next batch/post-merge
     // read sees the new base immediately (never a stale-base merge decision).
     this.mainHeadCache.invalidate(mainHeadCacheKey(input.repo.owner, input.repo.name, input.intoMain));
@@ -491,6 +443,6 @@ export class GitHubCodeHost implements CodeHost {
     if (response.status !== 200) {
       throw new Error(withErrorDetail(`GitHub ref read for ${branch} failed: HTTP ${response.status}`, response));
     }
-    return refObjectSha(response.body);
+    return decodeRefSha(response.body, `refs/heads/${branch}`);
   }
 }

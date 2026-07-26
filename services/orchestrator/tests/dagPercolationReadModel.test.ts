@@ -122,7 +122,7 @@ const fetchRefGitHubHttp: GitHubHttpClient = {
     if (input.method === "GET" && match) {
       const branch = decodeURIComponent(match[1] ?? "");
       const sha = branch === DEFAULT_BRANCH ? MERGE_SHA : "sha-old";
-      return { status: 200, body: { object: { sha } } };
+      return { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
     }
     throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
   },

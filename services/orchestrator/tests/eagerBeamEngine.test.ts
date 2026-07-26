@@ -113,7 +113,9 @@ class RefHttp {
     const encoded = input.path.split("/heads/")[1];
     const branch = encoded === undefined ? "" : decodeURIComponent(encoded);
     const sha = this.refs.get(branch);
-    return sha === undefined ? { status: 404, body: {} } : { status: 200, body: { object: { sha } } };
+    return sha === undefined
+      ? { status: 404, body: {} }
+      : { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
   }
 }
 

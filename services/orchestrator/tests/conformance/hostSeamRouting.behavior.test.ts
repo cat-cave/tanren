@@ -180,7 +180,9 @@ class FetchRefGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && match) {
       const branch = decodeURIComponent(match[1] ?? "");
       const sha = this.shaByBranch[branch];
-      return sha === undefined ? { status: 404, body: {} } : { status: 200, body: { object: { sha } } };
+      return sha === undefined
+        ? { status: 404, body: {} }
+        : { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
     }
     throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
   }
