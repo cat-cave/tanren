@@ -1,8 +1,13 @@
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { DeployAdapter } from "../src/engine/contracts/deployAdapter.js";
+import type { GroupDeliveryAuthority } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryAuthority.js";
 import type { ReleaseInstanceRecord } from "../src/engine/contracts/deployAdapter.js";
 import type { ProofBackedWebDemo } from "../src/engine/demo/proofBackedWebDemo.js";
-import { ProductionGroupDeliveryDeployer } from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
+import {
+  ProductionGroupDeliveryDeployer,
+  type GroupIntentStore,
+} from "../src/engine/postMerge/landGroupDelivery/groupDeliveryDeployer.js";
 import type {
   GroupDeliveryPlan,
   ResolvedGroupDeployTarget,
@@ -58,6 +63,83 @@ function deployer(proofBackedWebDemo: ProofBackedWebDemo): ProductionGroupDelive
 }
 
 describe("ProductionGroupDeliveryDeployer — A3 delivery binding", () => {
+  it("negative control: missing deploy authority rejects before preview persistence or provider effect", async () => {
+    const connect = vi.fn<() => Promise<never>>();
+    const applyPreview = vi.fn<DeployAdapter["applyPreview"]>();
+    const authority: GroupDeliveryAuthority = {
+      require: async () => {
+        throw new Error("missing exact deploy authority");
+      },
+    };
+    const groupDeployer = new ProductionGroupDeliveryDeployer({
+      pool: { connect } as unknown as pg.Pool,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: { applyPreview } as unknown as DeployAdapter,
+      authority,
+      intentStore: { writeIntent: async () => true, readIntent: async () => false },
+    });
+
+    await expect(
+      groupDeployer.applyPreview({
+        plan: PLAN,
+        target: TARGET,
+        artifact: { artifactDigest: `sha256:${"a".repeat(64)}`, deploymentId: "build-a3" },
+        token: "fence-a3",
+      }),
+    ).rejects.toThrow("missing exact deploy authority");
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(applyPreview).not.toHaveBeenCalled();
+  });
+
+  it("negative control: missing promote authority rejects before persistence, intent, or provider effect", async () => {
+    const connect = vi.fn<() => Promise<never>>();
+    const readIntent = vi.fn<GroupIntentStore["readIntent"]>();
+    const writeIntent = vi.fn<GroupIntentStore["writeIntent"]>();
+    const promote = vi.fn<DeployAdapter["promote"]>();
+    const operations: string[] = [];
+    const authority: GroupDeliveryAuthority = {
+      require: async (_plan, _target, operation) => {
+        operations.push(operation);
+        throw new Error("missing exact promote authority");
+      },
+    };
+    const groupDeployer = new ProductionGroupDeliveryDeployer({
+      pool: { connect } as unknown as pg.Pool,
+      secrets: {} as never,
+      transport: {} as never,
+      eventStore: {} as never,
+      deployAdapter: { promote } as unknown as DeployAdapter,
+      authority,
+      intentStore: { writeIntent, readIntent },
+    });
+
+    await expect(
+      groupDeployer.promote({
+        plan: PLAN,
+        target: TARGET,
+        artifact: { artifactDigest: `sha256:${"a".repeat(64)}`, deploymentId: "build-a3" },
+        preview: {
+          release: {
+            releaseInstanceId: "preview-a3",
+            deploymentId: "preview-a3",
+            artifactDigest: `sha256:${"a".repeat(64)}`,
+          },
+          previewDeploymentId: "preview-a3",
+        },
+        token: "fence-a3",
+      }),
+    ).rejects.toThrow("missing exact promote authority");
+
+    expect(operations).toEqual(["promote"]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(readIntent).not.toHaveBeenCalled();
+    expect(writeIntent).not.toHaveBeenCalled();
+    expect(promote).not.toHaveBeenCalled();
+  });
+
   it("reserves A3 for the sealed production demo, never the preview proof", async () => {
     const targets: unknown[] = [];
     const proofBackedWebDemo = {
