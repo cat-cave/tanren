@@ -84,10 +84,16 @@ jobs:
           esac
           printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad head_sha: $HEAD_SHA"; exit 1; }
           printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || { echo "::error::bad pr_number: $PR_NUMBER"; exit 1; }
-          # Defense in depth: the artifact head SHA must match the SHA the
-          # untrusted run actually ran on (workflow_run.head_sha).
+          # Defense in depth: for a `pull_request`-triggered untrusted run, the
+          # artifact head SHA must match the SHA that run actually executed on
+          # (workflow_run.head_sha). This does NOT apply to a `/review`
+          # (issue_comment) run: issue_comment executes on the DEFAULT BRANCH, so
+          # workflow_run.head_sha is the base head, not the PR head — the untrusted
+          # lane instead resolved the PR head from the trusted PR API. Only enforce
+          # the equality for the pull_request case.
+          RUN_EVENT="${{ github.event.workflow_run.event }}"
           EVENT_HEAD="${{ github.event.workflow_run.head_sha }}"
-          if [ -n "$EVENT_HEAD" ] && [ "$EVENT_HEAD" != "$HEAD_SHA" ]; then
+          if [ "$RUN_EVENT" = "pull_request" ] && [ -n "$EVENT_HEAD" ] && [ "$EVENT_HEAD" != "$HEAD_SHA" ]; then
             echo "::error::artifact head_sha ($HEAD_SHA) != workflow_run head_sha ($EVENT_HEAD)"; exit 1
           fi
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"

@@ -38,44 +38,35 @@ name: ocr-review-untrusted
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # FORK-PR REVIEW (authorized-`/review` command) — see the block below.
+  issue_comment:
+    types: [created]
 
 # ============================================================================
-# FORK-PR REVIEW (maintainer-triggered) — do not auto-run OCR on fork code + key.
+# FORK-PR REVIEW (`/review` command) — run OCR-with-key on fork code, gated.
 #
-# The auto path above is for SAME-REPO PRs: GitHub only injects
-# `secrets.OPENROUTER_API_KEY` when the PR head is a branch of THIS repo, so a
-# fork PR's `pull_request` run has no key and OCR yields empty findings — safe
-# by design. Reviewing a fork requires running OCR (with the key) against
-# untrusted fork code, which a maintainer must consciously authorize AFTER
-# eyeballing the fork diff. That is a deliberate, gated action — never automatic.
+# The `pull_request` auto path only reviews SAME-REPO PRs: GitHub injects
+# `secrets.OPENROUTER_API_KEY` only when the PR head is a branch of THIS repo, so
+# a fork PR's `pull_request` run has NO key → OCR cannot run → the completeness
+# step records review_complete=false → `review/verdict` FAILS CLOSED (never a
+# green on an unreviewed fork PR; see DESIGN §SECURITY.6). Reviewing a fork means
+# running OCR (with the key) against untrusted fork code — the SAME blast radius
+# as the same-repo untrusted lane (LLM key only, NO write token → worst case is
+# capped LLM spend), so it must be consciously AUTHORIZED, never automatic.
 #
-# To wire it, add an `issue_comment`-triggered job that:
-#   on:
-#     issue_comment:
-#       types: [created]
-#   jobs:
-#     fork-review:
-#       # 1. Only PR comments, only the `/review` command.
-#       # 2. Only a trusted commenter — author_association MUST be one of
-#       #    OWNER / MEMBER / COLLABORATOR (a fork author is CONTRIBUTOR/NONE and
-#       #    is rejected). This is the authorization gate.
-#       if: >-
-#         github.event.issue.pull_request != null &&
-#         startsWith(github.event.comment.body, '/review') &&
-#         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-#                  github.event.comment.author_association)
-#       # 3. Resolve the PR head SHA via the API (never trust the comment text),
-#       #    sanitize it (^[0-9a-f]{7,40}$), then run the SAME sanitized,
-#       #    rules-from-base, read-only, no-write-token pipeline as the `review`
-#       #    job below — the key is present but the write token is NOT, so the
-#       #    blast radius stays "capped LLM spend". The trusted lane posts as usual.
-# Kept as a documented stub intentionally: the same-repo auto path covers the
-# common case; the fork path is a rare, maintainer-initiated action.
+# Authorization (job-level `if:`, so an unauthorized comment never starts the
+# job / never checks out fork code): a `/review` comment on a PR from EITHER a
+# trusted human (author_association OWNER/MEMBER/COLLABORATOR) OR the
+# `trevor-workstation[bot]` agent identity — so agents can audit fork PRs
+# autonomously. The head/base SHAs are resolved from the PR API (never the
+# comment text) and sanitized; the fork head is checked out READ-ONLY via the
+# advertised `refs/pull/<n>/head`. The trusted `workflow_run` lane posts as usual.
 # ============================================================================
 
-# issue #58 — one in-flight review per PR; a new push cancels the stale run.
+# issue #58 — one in-flight review per PR; a new push (or a fresh /review)
+# cancels the stale run. PR number comes from whichever event fired.
 concurrency:
-  group: ocr-review-${{ github.event.pull_request.number }}
+  group: ocr-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 # Least privilege. `contents: read` (checkouts) + `pull-requests: read`
@@ -88,13 +79,24 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest # ephemeral runner (DESIGN §SECURITY.5)
+    # AUTHORIZATION GATE (fail-safe: the job never starts — never checks out fork
+    # code — unless authorized). `pull_request` runs unconditionally (same-repo
+    # auto path). An `issue_comment` runs ONLY for a `/review` command on a PR
+    # from a trusted human (OWNER/MEMBER/COLLABORATOR) OR the trevor-workstation[bot]
+    # agent identity (so agents can audit fork PRs). A fork author (CONTRIBUTOR/
+    # NONE) or any other bot is rejected here.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '/review') &&
+       (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
+        github.event.comment.user.login == 'trevor-workstation[bot]'))
     env:
-      # Sanitized, GitHub-provided commit SHAs. These come from the trusted
-      # event context (not PR-controllable branch names) but are re-validated
-      # by a sanitize step before ANY use, per DESIGN §SECURITY.3.
-      RAW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      RAW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # PR number from whichever event fired (pull_request or the /review comment).
+      # All downstream steps read this; the head/base SHAs are resolved + sanitized
+      # by the `ctx` + `sha` steps (DESIGN §SECURITY.3), never taken from raw input.
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       # OCR install target. `npm i -g --prefix` fails on a standard runner global
       # path, so we invoke via `npx --package <pkg> ocr` (binary name != package).
       OCR_PACKAGE: "@alibaba-group/open-code-review"
@@ -104,6 +106,38 @@ jobs:
       MAX_DIFF_LINES: "8000"
       REVIEW_DEADLINE_SEC: "1800"
     steps:
+      # --- Resolve PR context (works for BOTH triggers) -----------------------
+      # pull_request: SHAs come from the trusted event context. issue_comment
+      # (/review): resolve them from the PR API — NEVER from the comment text.
+      # Emits raw base/head SHAs (sanitized by the next step) + the checkout ref:
+      # a fork head is not on a base branch, but GitHub advertises it as
+      # refs/pull/<n>/head, which is safe to check out (n is digits-validated).
+      - name: Resolve PR context
+        id: ctx
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }} # read-only: read the PR head/base SHA
+          REPO: ${{ github.repository }}
+          EV_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EV_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || { echo "::error::bad pr number: $PR_NUMBER"; exit 1; }
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            RAW_BASE="$EV_BASE_SHA"
+            RAW_HEAD="$EV_HEAD_SHA"
+            CHECKOUT_REF="$EV_HEAD_SHA"
+          else
+            # /review on a (possibly fork) PR: authoritative SHAs from the API.
+            RAW_BASE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')"
+            RAW_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+            # The fork head commit is advertised on the base repo as this ref.
+            CHECKOUT_REF="refs/pull/$PR_NUMBER/head"
+          fi
+          echo "raw_base=$RAW_BASE" >> "$GITHUB_OUTPUT"
+          echo "raw_head=$RAW_HEAD" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+
       # --- Unified checkout: PR head, with base fetched below ------------------
       # ONE checkout (issue #287 — OCR runs from a real git root). The tree is
       # UNTRUSTED (PR-head code), but nothing security-sensitive is READ from it:
@@ -116,7 +150,7 @@ jobs:
       - name: Checkout PR head (read-only, untrusted)
         uses: actions/checkout@v6 # actions/checkout (first-party)
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.ctx.outputs.checkout_ref }}
           path: repo
           fetch-depth: 0
           persist-credentials: false
@@ -132,6 +166,11 @@ jobs:
       # git or OCR. Export the clean values for later steps.
       - name: Sanitize base/head SHAs
         id: sha
+        env:
+          # Raw SHAs resolved by `ctx` (event context for pull_request, PR API for
+          # /review). Re-validated here before ANY use, per DESIGN §SECURITY.3.
+          RAW_BASE_SHA: ${{ steps.ctx.outputs.raw_base }}
+          RAW_HEAD_SHA: ${{ steps.ctx.outputs.raw_head }}
         run: |
           set -euo pipefail
           sanitize() {
