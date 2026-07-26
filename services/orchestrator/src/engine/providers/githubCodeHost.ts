@@ -273,7 +273,9 @@ export class GitHubCodeHost implements CodeHost {
     }
     const sections: string[] = [];
     for (const file of decodeCompareFiles(response.body)) {
-      sections.push(`diff --git ${file.filename}\n${file.patch}`);
+      sections.push(
+        file.patch === undefined ? `diff --git ${file.filename}` : `diff --git ${file.filename}\n${file.patch}`,
+      );
     }
     return sections.join("\n");
   }

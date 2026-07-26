@@ -61,6 +61,16 @@ export interface DecodedCompare {
   readonly commits: readonly { readonly authorLogin: string; readonly committerLogin: string }[];
 }
 
+/**
+ * GitHub represents a deleted or otherwise unavailable commit identity as
+ * `null`, while a missing or malformed identity is not a usable compare DTO.
+ * Preserve the former as the code-host contract's existing empty-login marker.
+ */
+function compareLogin(value: unknown, label: string): string {
+  if (value === null) return "";
+  return string(object(value, label)["login"], `${label} login`);
+}
+
 export function decodeCompare(value: unknown): DecodedCompare {
   const compare = object(value, "compare");
   const commits = array(compare["commits"], "compare commits");
@@ -72,8 +82,8 @@ export function decodeCompare(value: unknown): DecodedCompare {
     commits: commits.map((entry) => {
       const commit = object(entry, "compare commit");
       return {
-        authorLogin: string(object(commit["author"], "compare author")["login"], "compare author login"),
-        committerLogin: string(object(commit["committer"], "compare committer")["login"], "compare committer login"),
+        authorLogin: compareLogin(commit["author"], "compare author"),
+        committerLogin: compareLogin(commit["committer"], "compare committer"),
       };
     }),
   };
@@ -81,7 +91,8 @@ export function decodeCompare(value: unknown): DecodedCompare {
 
 export interface DecodedCompareFile {
   readonly filename: string;
-  readonly patch: string;
+  /** Omitted by GitHub for binary, renamed, or oversized files. */
+  readonly patch: string | undefined;
 }
 
 export function decodeCompareFiles(value: unknown): readonly DecodedCompareFile[] {
@@ -94,10 +105,11 @@ export function decodeCompareFiles(value: unknown): readonly DecodedCompareFile[
   }
   return files.map((entry) => {
     const file = object(entry, "compare file");
-    return {
-      filename: string(file["filename"], "compare filename"),
-      patch: string(file["patch"], "compare patch"),
-    };
+    const patch = file["patch"];
+    if (patch !== undefined && typeof patch !== "string") {
+      throw new TypeError("GitHub compare patch response was not a string");
+    }
+    return { filename: string(file["filename"], "compare filename"), patch };
   });
 }
 
