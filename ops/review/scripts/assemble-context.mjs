@@ -169,6 +169,26 @@ function oneLine(s) {
     .slice(0, 600);
 }
 
+// OCR HARD-ABORTS when the --background-file exceeds 8000 chars ("background
+// content is N characters, exceeding the hard limit of 8000 (aborting)"), which
+// silently killed every review on a PR with a long discussion/issue body. Clamp
+// to a byte budget safely under that (default 7000 — bytes >= chars, so this
+// bounds both the byte- and rune-count interpretations). Truncate the TAIL
+// (thread history is least critical; PR + linked-issue context lead the doc) and
+// leave a visible notice. Configurable via OCR_BACKGROUND_MAX_BYTES.
+const BACKGROUND_MAX_BYTES = Number(process.env.OCR_BACKGROUND_MAX_BYTES || 7000);
+
+export function clampBackground(md, maxBytes = BACKGROUND_MAX_BYTES) {
+  if (Buffer.byteLength(md, "utf8") <= maxBytes) return md;
+  const notice = "\n\n> _(prior context truncated to fit the reviewer's background-size limit)_\n";
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(notice, "utf8"));
+  // Cut to `budget` bytes without splitting a multibyte char: a split tail byte
+  // decodes to U+FFFD, which we drop.
+  let head = Buffer.from(md, "utf8").subarray(0, budget).toString("utf8");
+  if (head.endsWith("�")) head = head.slice(0, -1);
+  return head + notice;
+}
+
 function assemble({ pr, out, sha }) {
   const slug = repoSlug();
   const [owner, repo] = slug.split("/");
@@ -232,13 +252,15 @@ function assemble({ pr, out, sha }) {
     }
   }
 
-  const md = buildContextMarkdown({
-    pr: { number: view.number, title: view.title, url: view.url },
-    issue,
-    priorFindingTitles,
-    humanComments,
-    threadEntries,
-  });
+  const md = clampBackground(
+    buildContextMarkdown({
+      pr: { number: view.number, title: view.title, url: view.url },
+      issue,
+      priorFindingTitles,
+      humanComments,
+      threadEntries,
+    }),
+  );
 
   const dir = out || process.env.REVIEW_WORKDIR || os.tmpdir();
   fs.mkdirSync(dir, { recursive: true });
@@ -292,6 +314,11 @@ async function selftest() {
     [/### Required negative control/u.test(md), "linked-issue negative control extracted"],
     [/\*\*alice\*\*/u.test(md), "human comment retained"],
     [!/(^|\n)- .*ocr-state/u.test(md), "raw markers not dumped into thread"],
+    // Regression pin: OCR hard-aborts a background over 8000 chars. The clamp
+    // must bound the byte length (with margin) and leave a visible notice.
+    [Buffer.byteLength(clampBackground("x".repeat(20000)), "utf8") <= 7000, "background clamped under OCR hard limit"],
+    [/truncated to fit/u.test(clampBackground("x".repeat(20000))), "truncation notice present when clamped"],
+    [clampBackground("tiny") === "tiny", "small background left unchanged"],
   ];
   let ok = true;
   for (const [pass, name] of checks) {
