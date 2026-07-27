@@ -23,19 +23,27 @@ import {
   type IntegrationPhase,
   planSpeculativeDagTick,
   type PlannedEnqueue,
-  type ProjectBudgetState,
   shouldPauseOnBudget,
   type WalkResult,
 } from "../contracts/dagWalker.js";
 import type { DagLifecycleReadModel, DagLifecycleSnapshot } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
-import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
-import { decideAncestorWait, pruneAncestorWaitBackoff } from "./ancestorWaitGate.js";
 import { pauseDagOnBudget } from "./budgetPause.js";
 import { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
 import { ancestorLifecycleKey, HeldReDriveBackoff } from "./heldReDriveBackoff.js";
+import {
+  budgetMilestoneEvents,
+  completedWalkResult,
+  decideAncestorWait,
+  inactiveProjectWalkResult,
+  pruneAncestorWaitBackoff,
+  speculativeEnqueuedEvent,
+  standardEnqueuedEvent,
+  type AncestorStack,
+  unresolvedAncestorStack,
+} from "./walkerTransitions.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import {
@@ -136,8 +144,7 @@ export class EventEmittingDagWalker implements DagWalker {
 
     // Exact lifecycle gate: only a fully activated project may enter planning.
     if (snapshot.projectLifecycle !== "active") {
-      const status = snapshot.projectLifecycle === "missing" ? "inactive" : snapshot.projectLifecycle;
-      return { projectId, status, enqueuedSpecIds: [], enqueuedRunIds: [] };
+      return inactiveProjectWalkResult(projectId, snapshot.projectLifecycle);
     }
 
     // INTEGRATION PHASE (in-9/in-10): materialize + prepare the capability graph before
@@ -170,15 +177,16 @@ export class EventEmittingDagWalker implements DagWalker {
       return pauseDagOnBudget(this.deps.events, projectId, budget, plan.toEnqueue.length + plan.readyHeldBack);
     }
 
-    // Budget milestone heads-ups (the milestone-notifications chain): below the
-    // terminal pause, surface the 50% / 80% fraction crossings so the operator gets
-    // an "approaching your money ceiling" ping DURING the run (routes by default —
-    // `dag.budget.milestone` is `warn`). Idempotent per band per budget window (the
-    // emitter dedups against prior milestone events), so re-walks never re-ping.
-    await this.emitBudgetMilestones(projectId, budget);
+    for (const input of budgetMilestoneEvents(projectId, budget)) {
+      const emitted = await this.deps.events.emitBudgetMilestone(input);
+      if (!emitted) {
+        log.debug("budget milestone already recorded this window — deduped, no re-ping", {
+          projectId,
+          band: input.band,
+        });
+      }
+    }
 
-    // Surface every depth-capped HOLD (the "no silent caps" rule, §2c): the spec
-    // is not enqueued this tick; the walker re-evaluates on the next ancestor merge.
     await this.emitHeld(projectId, plan.held);
 
     const enqueuedSpecIds: string[] = [];
@@ -186,17 +194,8 @@ export class EventEmittingDagWalker implements DagWalker {
 
     if (plan.enqueues.length > 0) {
       const depsBySpec = new Map(snapshot.nodes.map((n) => [n.specId, n.dependsOn]));
-      // inFlightBefore reflects the count at plan time PLUS the specs this walk has
-      // already enqueued — the true headroom each spec scheduled into.
       let inFlightBefore = plan.inFlightCount;
       for (const enqueue of plan.enqueues) {
-        // PER-SPEC TOLERANCE (audit §3.13b): isolate each ready spec's enqueue so ONE
-        // poisoned spec (e.g. the ancestor-stack resolver throwing while resolving the
-        // unmerged ancestor branches) cannot abort the WHOLE tick and starve every spec
-        // ordered after it. A genuine (non-benign) failure on one spec is logged LOUD and skipped
-        // THIS tick — the OTHER ready specs still enqueue, and the next walk re-attempts
-        // the failed one. (The two benign typed conditions are still swallowed quietly
-        // inside `enqueueOrTolerate`; this catch is the backstop for everything else.)
         let enqueued: { runId: string } | undefined;
         try {
           enqueued = await this.enqueueOne(
@@ -244,57 +243,9 @@ export class EventEmittingDagWalker implements DagWalker {
       }
     }
 
-    return {
-      projectId,
-      status: enqueuedSpecIds.length > 0 ? "enqueued" : plan.status,
-      enqueuedSpecIds,
-      enqueuedRunIds,
-    };
+    return completedWalkResult(projectId, plan.status, enqueuedSpecIds, enqueuedRunIds);
   }
 
-  /**
-   * Emit the budget FRACTION milestones (50% / 80%) the cumulative spend has crossed —
-   * the "approaching your money ceiling" heads-up. Only fires when a POSITIVE ceiling is
-   * configured (an unlimited project, a zero ceiling, or a fail-closed pause crosses no
-   * fraction). We emit the HIGHEST crossed band whose event has not yet been recorded in
-   * the current budget window; the emitter dedups per band per window (so a re-walk after
-   * a crossing re-pings nothing). The 80% emit does NOT suppress a not-yet-recorded 50%:
-   * each band arms independently, so a run that jumps straight past 50% to 80% still gets
-   * BOTH bands recorded (the 80% ping is the one that reaches the human; the 50% row keeps
-   * the audit honest). A dedup is LOGGED, never silent.
-   */
-  private async emitBudgetMilestones(projectId: string, budget: ProjectBudgetState): Promise<void> {
-    if (budget.failClosed !== undefined) return;
-    const ceilingUsd = budget.ceilingUsd;
-    if (ceilingUsd === undefined || ceilingUsd <= 0) return;
-    const fraction = budget.spentUsd / ceilingUsd;
-    const bands: Array<50 | 80> = [];
-    if (fraction >= 0.5) bands.push(50);
-    if (fraction >= 0.8) bands.push(80);
-    for (const band of bands) {
-      const emitted = await this.deps.events.emitBudgetMilestone({
-        projectId,
-        band,
-        ceilingUsd,
-        spentUsd: budget.spentUsd,
-        period: budget.period,
-      });
-      if (!emitted) {
-        log.debug("budget milestone already recorded this window — deduped, no re-ping", { projectId, band });
-      }
-    }
-  }
-
-  /**
-   * Enqueue one planned spec. A NON-speculative spec (all deps merged) enqueues against `default_branch` and emits
-   * dag.spec.enqueued. A SPECULATIVE spec RESOLVES its ordered unmerged-ancestor stack (the real PR-head branches),
-   * persists it as `ancestor_stack`, and emits dag.spec.speculative. NO host integration ref is built — the dependent
-   * run jj-assembles its base LOCALLY at bootstrap from those refs (a spec-vs-spec conflict surfaces there, §4a).
-   *
-   * ANCESTOR-NOT-READY HOT-LOOP FIX (apex v35 + v45): a speculative attempt is GATED by `decideAncestorWait` (per-spec
-   * backoff + ancestor-progress check + cheap pre-check) BEFORE the expensive provisioning — see `ancestorWaitGate.ts`.
-   * `skip` is silent; `defer` emits the benign `dag.spec.ancestor_not_ready` (no provisioning); `proceed` enqueues.
-   */
   private async enqueueOne(
     projectId: string,
     enqueue: PlannedEnqueue,
@@ -307,14 +258,16 @@ export class EventEmittingDagWalker implements DagWalker {
     if (!enqueue.speculative) {
       const enqueued = await this.enqueueOrTolerate({ projectId, specId: enqueue.specId });
       if (enqueued === undefined) return undefined;
-      await this.deps.events.emitSpecEnqueued({
-        projectId,
-        specId: enqueue.specId,
-        runId: enqueued.runId,
-        satisfiedDependsOn: depsBySpec.get(enqueue.specId) ?? [],
-        inFlightBefore,
-        concurrencyCeiling: ceiling,
-      });
+      await this.deps.events.emitSpecEnqueued(
+        standardEnqueuedEvent(
+          projectId,
+          enqueue.specId,
+          enqueued.runId,
+          depsBySpec.get(enqueue.specId) ?? [],
+          inFlightBefore,
+          ceiling,
+        ),
+      );
       return { runId: enqueued.runId };
     }
 
@@ -351,16 +304,12 @@ export class EventEmittingDagWalker implements DagWalker {
       return undefined;
     }
 
-    // Resolve the ordered unmerged-ancestor stack — the real PR-head branches the
-    // dependent will jj-assemble its base from at bootstrap (DAG-ordered, org-scoped).
-    // NO host integration ref is built; the per-ancestor `headSha` is captured later, at
-    // bootstrap-assembly time (the PR-8c write-back), so it is an empty placeholder here.
-    const ancestorStack: AncestorStack = (
+    const ancestorStack = unresolvedAncestorStack(
       await this.deps.ancestorStackResolver.resolveStack({
         projectId,
         unmergedAncestorSpecIds: enqueue.unmergedAncestors,
-      })
-    ).map((member) => ({ specId: member.specId, runId: member.runId, branch: member.branch, headSha: "" }));
+      }),
+    );
 
     const enqueued = await this.enqueueOrTolerate({
       projectId,
@@ -375,13 +324,9 @@ export class EventEmittingDagWalker implements DagWalker {
       ancestorStateKey: ancestorLifecycleKey(enqueue.unmergedAncestors, lifecycle.bySpecId),
       projectId,
     });
-    await this.deps.events.emitSpecSpeculative({
-      projectId,
-      specId: enqueue.specId,
-      runId: enqueued.runId,
-      unmergedAncestors: enqueue.unmergedAncestors,
-      threshold,
-    });
+    await this.deps.events.emitSpecSpeculative(
+      speculativeEnqueuedEvent(projectId, enqueue.specId, enqueued.runId, enqueue.unmergedAncestors, threshold),
+    );
     return { runId: enqueued.runId };
   }
 
