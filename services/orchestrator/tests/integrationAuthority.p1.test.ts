@@ -10,6 +10,10 @@ import { sentryOrganizationsResponse } from "./helpers/sentryIntakeAuthority.js"
 import { requireSentryPrincipalIdentity } from "../src/engine/integrations/sentryPrincipalIdentity.js";
 import { parseLinkHeader } from "../src/engine/integrations/linkHeader.js";
 
+function digest(parts: unknown[]): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(parts), "utf8").digest("hex")}`;
+}
+
 describe("IN-1 P1 authority former-bug proofs", () => {
   it("accepts legacy Sentry identity metadata and normalizes it to version 1", () => {
     expect(requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example" })).toEqual({
@@ -17,13 +21,15 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       orgSlug: "o",
       baseUrl: "https://sentry.example",
     });
-    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow();
+    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow(
+      /sentry_principal_relink_required/u,
+    );
     expect(() =>
       requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", sentryIdentityVersion: "2" }),
-    ).toThrow();
+    ).toThrow(/sentry_principal_relink_required/u);
     expect(() =>
       requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", extra: "x" }),
-    ).toThrow();
+    ).toThrow(/sentry_principal_relink_required/u);
   });
   it("parses commas and semicolons inside quoted Link parameters", () => {
     const [link, next] = parseLinkHeader(
@@ -136,8 +142,6 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       actorId: "u",
       credential: "token",
     };
-    const digest = (parts: unknown[]) =>
-      `sha256:${createHash("sha256").update(JSON.stringify(parts), "utf8").digest("hex")}`;
     expect(integrationRequestFingerprint({ ...request, providerKind: "slack" })).toBe(
       digest(["tanren.integration-operation.v1", "o", "slack", "link", null, null, "u", "token"]),
     );
