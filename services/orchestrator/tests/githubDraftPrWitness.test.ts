@@ -46,6 +46,21 @@ describe("GitHub draft PR immutable publication witness", () => {
     ).resolves.toEqual({ expectedSha: sha, alreadyPublished: true });
   });
 
+  it("reconciles the intended head even when the durable ledger still names its predecessor", async () => {
+    const predecessor = "a".repeat(40);
+    const intended = "b".repeat(40);
+    await expect(
+      readDraftPrPushLease(
+        new ScriptedGitHubHttp([{ status: 200, body: { object: { sha: intended } } }], []),
+        { owner: "cat-cave", name: "repo" },
+        "tanren/run_123",
+        "ghp_secret",
+        predecessor,
+        intended,
+      ),
+    ).resolves.toEqual({ expectedSha: intended, alreadyPublished: true });
+  });
+
   it("does not duplicate the pushed witness when the first append response is lost", async () => {
     const secrets = new RecordingSecrets();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });

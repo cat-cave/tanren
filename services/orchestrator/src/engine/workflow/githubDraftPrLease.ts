@@ -80,6 +80,12 @@ export async function readDraftPrPushLease(
     throw new Error(`GitHub draft branch exists without a durable published-head witness for ${validBranch}`);
   }
   if (expectedPublishedHeadSha !== undefined && sha !== expectedPublishedHeadSha) {
+    // A worker may have crashed after GitHub accepted this run's immutable push
+    // but before its witness became durable. Reconcile that exact intended head
+    // before treating the remote change as an unsafe concurrent publication.
+    if (intendedPublishedHeadSha !== undefined && sha === intendedPublishedHeadSha) {
+      return { expectedSha: sha, alreadyPublished: true };
+    }
     throw new Error(`GitHub draft branch changed since workspace rework for ${validBranch}`);
   }
   return { expectedSha: sha };
