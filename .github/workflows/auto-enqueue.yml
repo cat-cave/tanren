@@ -7,6 +7,11 @@
 # (ci-heavy on `merge_group`) is still the real gate; this only decides WHEN an
 # already-green PR is added, with no human in the loop.
 #
+# Works for BOTH same-repo and FORK PRs: the head SHA is resolved by enumerating
+# open PRs and matching `head.sha` (the `commits/{sha}/pulls` association endpoint
+# does not resolve fork PRs from the base repo). Enabling auto-merge targets the
+# base-repo PR object, so `pull-requests: write` on GITHUB_TOKEN suffices for forks.
+#
 # Safety: skips drafts and any PR labeled `no-auto-merge` (the manual park valve).
 # rule_change PRs never reach CLEAN on their own (review/verdict stays failure until
 # a maintainer stamps the reviewed SHA), so they are not auto-enqueued.
@@ -43,9 +48,14 @@ jobs:
           if [ -z "${SHA:-}" ]; then echo "no head sha in event payload"; exit 0; fi
           echo "evaluating head sha: $SHA"
 
-          # Open PRs whose HEAD is this SHA. (A merge_group / non-PR sha yields none.)
-          PRS="$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
-                   --jq '.[] | select(.state=="open") | .number' 2>/dev/null || true)"
+          # Open PRs whose HEAD is this SHA. Enumerate open PRs and match head.sha:
+          # `commits/{sha}/pulls` does NOT resolve FORK PRs from the base repo (the
+          # fork head lives in the fork's object graph), so it silently skipped every
+          # cross-repo PR. Matching head.sha works for both same-repo and fork PRs.
+          # (A merge_group / non-PR sha simply matches nothing.) SHA passed via
+          # jq --arg — never interpolated into the filter.
+          PRS="$(gh api "repos/${REPO}/pulls?state=open&per_page=100" --paginate 2>/dev/null \
+                   | jq -r --arg sha "$SHA" '.[] | select(.head.sha == $sha) | .number' || true)"
           if [ -z "${PRS:-}" ]; then echo "no open PRs for $SHA — nothing to do"; exit 0; fi
 
           for pr in $PRS; do
