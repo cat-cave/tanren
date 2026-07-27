@@ -42,7 +42,10 @@ function validatedRelation(input: SentryNextPageInput, link: ParsedLinkValue, re
   return { results: results === "true", url, cursor };
 }
 export function sentryNextPage(input: SentryNextPageInput) {
-  if (input.link === undefined || input.link.trim() === "") malformed("missing pagination proof");
+  if (input.link === undefined || input.link.trim() === "") {
+    if (input.currentCursor === undefined) return null;
+    malformed("missing pagination proof");
+  }
   let values: ParsedLinkValue[];
   try {
     values = parseLinkHeader(input.link);
@@ -58,7 +61,7 @@ export function sentryNextPage(input: SentryNextPageInput) {
   const prior = validatedRelation(input, previous[0]!, "previous");
   const next = validatedRelation(input, following[0]!, "next");
   const initialCursor = input.initialCursor ?? prior.cursor;
-  if (input.currentCursor && prior.cursor !== input.initialCursor)
+  if (input.currentCursor !== undefined && prior.cursor !== input.initialCursor)
     malformed("previous cursor did not match the initial page");
   if (!next.results) return null;
   if (next.cursor === prior.cursor || next.cursor === input.currentCursor || input.seenCursors.has(next.cursor))

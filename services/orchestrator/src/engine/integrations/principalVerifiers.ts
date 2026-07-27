@@ -53,8 +53,8 @@ export async function scopesForSelectedPrincipal(
   discoveredScopes: string[],
 ): Promise<string[]> {
   if (providerKind !== "sentry") return discoveredScopes;
-  const token = await readStagedToken(permit, staged, secrets);
   const identity = sentryIdentity.requireSentryPrincipalIdentity(principal.metadata);
+  const token = await readStagedToken(permit, staged, secrets);
   const scopes = await probeSentryScopes(fetchImpl, token, identity);
   if (scopes.length === 0) throw new Error("selected_principal_scopes_unproven");
   return scopes;
