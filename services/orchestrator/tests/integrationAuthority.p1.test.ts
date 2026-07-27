@@ -18,6 +18,12 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       baseUrl: "https://sentry.example",
     });
     expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow();
+    expect(() =>
+      requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", sentryIdentityVersion: "2" }),
+    ).toThrow();
+    expect(() =>
+      requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", extra: "x" }),
+    ).toThrow();
   });
   it("parses commas and semicolons inside quoted Link parameters", () => {
     const [link, next] = parseLinkHeader(
