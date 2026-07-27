@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GcpSecretManagerStore } from "../src/engine/contracts/gcpSecretManager.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
-import { SentryProvisioner } from "../src/engine/providers/sentryProvisioner.js";
+import { SentryProvisioner, type SentryProvisionHttpClient } from "../src/engine/providers/sentryProvisioner.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { sentryOrganizationsResponse } from "./helpers/sentryIntakeAuthority.js";
 import { createIntegrationRoutes } from "../src/routes/integrations/index.js";
@@ -352,7 +352,7 @@ describe("verified principal link + multi-principal selection", () => {
   it("lists verified principals and lifecycle without secret material", async () => {
     const database = new RouteDatabase();
     const endpoint = "https://sentry.example/root";
-    const provisionHttp = { request: vi.fn() };
+    const provisionHttp: SentryProvisionHttpClient = { request: vi.fn<SentryProvisionHttpClient["request"]>() };
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       sentryOrganizationsResponse([{ id: "org_1", slug: "acme", name: "Acme" }], endpoint),
     ) as unknown as typeof fetch;
