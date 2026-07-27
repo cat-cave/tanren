@@ -20,7 +20,7 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../integrations/integrationSecretStoreImpl.js";
 import { sentryNextPage, SentryPaginationError } from "../../integrations/sentryPagination.js";
-import { canonicalSentryEndpoint, SentryPrincipalIdentity } from "../../integrations/sentryPrincipalIdentity.js";
+import { canonicalSentryEndpoint, requireSentryPrincipalIdentity } from "../../integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../repositories/integrationConnections.js";
 import { assertOrgGrantMatchesLease, secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
 import { systemActor } from "../../state/actor.js";
@@ -206,10 +206,13 @@ function assertSentryAuthorityBinding(grant: OrgGrant, config: ActiveSentryConfi
     lease.target.resourceId !== config.project
   )
     throw new IntakeSourceAuthorityError("sentry", "the selected lease does not bind this project intake effect");
-  const identity = SentryPrincipalIdentity.safeParse(grant.metadata);
-  if (!identity.success)
+  let identity;
+  try {
+    identity = requireSentryPrincipalIdentity(grant.metadata);
+  } catch {
     throw new IntakeSourceAuthorityError("sentry", "the selected principal has no verified Sentry identity");
-  if (identity.data.orgSlug !== config.org)
+  }
+  if (identity.orgSlug !== config.org)
     throw new IntakeSourceAuthorityError("sentry", "the source organization does not match the selected principal");
   let sourceBaseUrl: string;
   try {
@@ -217,9 +220,9 @@ function assertSentryAuthorityBinding(grant: OrgGrant, config: ActiveSentryConfi
   } catch {
     throw new IntakeSourceAuthorityError("sentry", "the source endpoint is not a canonical HTTPS endpoint");
   }
-  if (sourceBaseUrl !== identity.data.baseUrl)
+  if (sourceBaseUrl !== identity.baseUrl)
     throw new IntakeSourceAuthorityError("sentry", "the source endpoint does not match the selected principal");
-  return identity.data.baseUrl;
+  return identity.baseUrl;
 }
 
 export function createSentryConnector(deps: SentryConnectorDeps): SourceConnector {

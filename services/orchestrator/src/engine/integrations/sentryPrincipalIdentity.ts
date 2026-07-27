@@ -20,11 +20,23 @@ export const SentryPrincipalIdentity = z
   })
   .catchall(z.string());
 export type SentryPrincipalIdentity = z.infer<typeof SentryPrincipalIdentity>;
+const LegacySentryPrincipalIdentity = z.object({
+  orgSlug: z.string().min(1),
+  baseUrl: z.string().refine((value) => {
+    try {
+      return canonicalSentryEndpoint(value) === value;
+    } catch {
+      return false;
+    }
+  }),
+});
 export class SentryPrincipalRelinkRequiredError extends Error {}
 export function requireSentryPrincipalIdentity(value: unknown): SentryPrincipalIdentity {
   const identity = SentryPrincipalIdentity.safeParse(value);
-  if (!identity.success) throw new SentryPrincipalRelinkRequiredError("sentry_principal_relink_required");
-  return identity.data;
+  if (identity.success) return identity.data;
+  const legacy = LegacySentryPrincipalIdentity.safeParse(value);
+  if (legacy.success) return { ...legacy.data, sentryIdentityVersion: "1" };
+  throw new SentryPrincipalRelinkRequiredError("sentry_principal_relink_required");
 }
 export function sentryPrincipalIdentity(orgSlug: string, baseUrl: string): SentryPrincipalIdentity {
   const endpoint = canonicalSentryEndpoint(baseUrl);

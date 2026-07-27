@@ -23,7 +23,13 @@ const GithubIssuePayload = z
     title: GithubIssueTitle,
     body: z.string().nullable().optional(),
     comments: z.number().int().nonnegative(),
-    user: z.object({ login: z.string().min(1) }).passthrough(),
+    // GitHub can legitimately return a redacted/deleted author as null (or
+    // omit it); a present non-object is still rejected by the discriminator.
+    user: z
+      .object({ login: z.string().min(1) })
+      .passthrough()
+      .nullable()
+      .optional(),
     labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).optional(),
     pull_request: z.object({}).passthrough().optional(),
   })
