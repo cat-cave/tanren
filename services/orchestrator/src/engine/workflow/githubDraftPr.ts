@@ -1,8 +1,7 @@
 /* eslint-disable import/max-dependencies -- draft PR publication composes the canonical tenant, event, runner, and GitHub seams */
 import type pg from "pg";
 import { z } from "zod";
-import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
-import { bindProjectGithubCredentialRefs, migrateProjectConfig } from "../config/projectConfig.js";
+import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { sshRunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -22,6 +21,8 @@ import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.j
 import { readDraftPrPushLease } from "./githubDraftPrLease.js";
 import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
 import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
+import { appendPushedWitnessWithReconciliation } from "./githubDraftPrWitness.js";
+import { messageFromError, readGithubCredentialRef, readGithubInstallation } from "./githubDraftPrHelpers.js";
 
 export { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 
@@ -243,33 +244,16 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         redacted: true as const,
       },
     };
-    const pushedIdempotencyKey = `${input.runId}:github.branch.pushed:${branch}:${publishedHeadSha}`;
-    const appendPushedEvent = async () => {
-      if (eventStore.appendPriorIfAbsent !== undefined) {
-        return await eventStore.appendPriorIfAbsent({
-          ...pushedEvent,
-          idempotencyKey: pushedIdempotencyKey,
-          runId: input.runId,
-        });
-      }
-      await eventStore.append(pushedEvent);
-      return true;
-    };
-    try {
-      await appendPushedEvent();
-    } catch (appendError) {
-      // The remote push is already durable. Reconcile the witness append once so a
-      // transient event-store failure cannot leave an untracked GitHub branch.
-      const ref = await http.request({
-        method: "GET",
-        path: `/repos/${repo.owner}/${repo.name}/git/ref/heads/${encodeURIComponent(branch)}`,
-        token: resolved.token,
-      });
-      const remoteSha = (ref.body as { object?: { sha?: unknown } } | undefined)?.object?.sha;
-      if (ref.status !== 200 || remoteSha !== publishedHeadSha) throw appendError;
-      if (eventStore.appendPriorIfAbsent === undefined) throw appendError;
-      await appendPushedEvent();
-    }
+    await appendPushedWitnessWithReconciliation({
+      eventStore,
+      event: pushedEvent,
+      http,
+      repo,
+      branch,
+      token: resolved.token,
+      publishedHeadSha,
+      idempotencyKey: `${input.runId}:github.branch.pushed:${branch}:${publishedHeadSha}`,
+    });
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);
     const pr = await visibility.openOrUpdateChangeRequest({
@@ -506,17 +490,4 @@ interface DraftPrRunContext {
     sshPort: number;
     hostKeyFingerprint: string;
   };
-}
-
-function readGithubCredentialRef(config: unknown, orgId: string): string | undefined {
-  return bindProjectGithubCredentialRefs(migrateProjectConfig(config), orgId).credentials?.githubCredentialRef;
-}
-
-function readGithubInstallation(config: unknown, orgId: string): OrgGithubAppInstallation | undefined {
-  if (config === null || config === undefined) return undefined;
-  return bindOrgGithubCredentialRefs(migrateOrgConfig(config), orgId).github_app;
-}
-
-function messageFromError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
