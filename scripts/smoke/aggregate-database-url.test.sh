@@ -21,6 +21,11 @@ if TANREN_PORT_OFFSET=-1 DATABASE_URL= "$script" >/dev/null 2>&1; then
   exit 1
 fi
 
+if TANREN_PORT_OFFSET=18446744073709551615 DATABASE_URL= "$script" >/dev/null 2>&1; then
+  echo "negative control failed: overflowing offset was accepted" >&2
+  exit 1
+fi
+
 if TANREN_POSTGRES_HOST_PORT=70000 DATABASE_URL= "$script" >/dev/null 2>&1; then
   echo "negative control failed: out-of-range port was accepted" >&2
   exit 1
