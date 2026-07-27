@@ -24,13 +24,19 @@ import type { CausalEffectReader, CausalEffectReaderInput } from "../acceptance/
 import { compareCursor } from "../acceptance/causalCorrelation.js";
 import {
   FetchSlackHistoryTransport,
-  distinctSlackHistoryMessages,
+  type SlackHistoryBinding,
   type SlackHistoryMessage,
   type SlackHistorySnapshot,
   type SlackHistoryTransport,
 } from "./slackHistoryTransport.js";
 
-export { FetchSlackHistoryTransport, type SlackHistoryMessage, type SlackHistorySnapshot, type SlackHistoryTransport };
+export {
+  FetchSlackHistoryTransport,
+  type SlackHistoryBinding,
+  type SlackHistoryMessage,
+  type SlackHistorySnapshot,
+  type SlackHistoryTransport,
+};
 
 const SLACK_OBSERVER = "slack";
 const SLACK_PROVIDER = "slack";
@@ -195,7 +201,7 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
       observer: input.observer,
       provider: input.provider,
     });
-    const snapshot = await this.readCompleteHistory(input, coordinate);
+    const snapshot = await this.readCompleteHistory(input, coordinate, afterWatermark);
     const observations = await runWithOrgScope(this.pool, input.orgId, async (client) => {
       const appended: EffectObservation[] = [];
       for (const trigger of input.triggers) {
@@ -293,12 +299,30 @@ export class LiveSlackEffectProbe implements CausalEffectReader, CauseWatermarkP
   private async readCompleteHistory(
     input: { readonly orgId: string; readonly projectId: string },
     coordinate: LiveSlackEffectBindingCoordinate,
+    oldest?: string,
   ): Promise<SlackHistorySnapshot> {
     const token = await this.tokenResolver.resolve({ ...input, coordinate });
     if (!isNonBlankString(token)) throw new Error("A3 Slack history token is blank or malformed");
-    const snapshot = await this.transport.history({ token, channelId: coordinate.channelId });
+    const binding: SlackHistoryBinding = {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      bindingId: coordinate.bindingId,
+      bindingGeneration: coordinate.bindingGeneration,
+      channelId: coordinate.channelId,
+    };
+    const snapshot = await this.transport.history({
+      token,
+      channelId: coordinate.channelId,
+      binding,
+      ...(oldest === undefined ? {} : { oldest }),
+    });
     if (
       !snapshot.complete ||
+      snapshot.binding.orgId !== input.orgId ||
+      snapshot.binding.projectId !== input.projectId ||
+      snapshot.binding.bindingId !== coordinate.bindingId ||
+      snapshot.binding.bindingGeneration !== coordinate.bindingGeneration ||
+      snapshot.binding.channelId !== coordinate.channelId ||
       !Array.isArray(snapshot.messages) ||
       snapshot.messages.some((message) => invalidMessage(message))
     ) {
@@ -360,9 +384,7 @@ function matchingMessages(
   correlationId: string,
   after: string,
 ): readonly SlackHistoryMessage[] {
-  return distinctSlackHistoryMessages(messages).filter(
-    (message) => compareCursor(message.ts, after) > 0 && message.text.includes(correlationId),
-  );
+  return messages.filter((message) => compareCursor(message.ts, after) > 0 && message.text.includes(correlationId));
 }
 
 function observationInput(

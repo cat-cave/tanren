@@ -30,8 +30,14 @@ export const SLACK_PRODUCT_MESSAGE_PROVIDER_KIND = "slack.product.message.v1";
 const CAPABILITY_MESSAGING: CapabilityId = "messaging.send";
 const SLACK_CHANNEL_NAME_MAX = 80;
 const PRODUCT_CHANNEL_PREFIX = "tanren-product-";
-const DIRECT_REQUIRED_OPERATIONS = ["chat.postMessage"] as const;
-const DIRECT_REQUIRED_SCOPES = ["chat:write", "channels:read", "channels:manage", "channels:join"] as const;
+const DIRECT_REQUIRED_OPERATIONS = ["chat.postMessage", "conversations.history"] as const;
+const DIRECT_REQUIRED_SCOPES = [
+  "chat:write",
+  "channels:read",
+  "channels:manage",
+  "channels:join",
+  "channels:history",
+] as const;
 
 export interface SlackProductChannel {
   readonly id: string;
@@ -109,10 +115,6 @@ export class SlackProductProvisioner implements ApplicationIntegrationProvisione
         : { channel: found, created: false };
     const channel = await this.ensureMember(transport, result.channel, "provision");
 
-    // A newly-created channel is a real provider mutation. Slack confirms it again
-    // with a non-blank `(channel, ts)` receipt from chat.postMessage. We do not send
-    // a second setup message when the stable channel already exists, preserving
-    // provision's idempotent find-or-create behavior.
     const receipt = result.created ? await this.sendBindingMessage(transport, channel, plan, "provision") : undefined;
     return this.artifactFor(grant, plan, channel, result.created, receipt, "provision");
   }
@@ -134,9 +136,6 @@ export class SlackProductProvisioner implements ApplicationIntegrationProvisione
       );
     }
     const channel = await this.ensureMember(transport, found, "bind");
-    // Binding verifies the direct product bot can actually deliver to the exact
-    // channel it will ship into app env. The returned provider receipt is evidence
-    // of Slack's confirmed response, not product-reported success.
     const receipt = await this.sendBindingMessage(transport, channel, plan, "bind");
     return this.artifactFor(grant, plan, channel, false, receipt, "bind");
   }
@@ -168,8 +167,6 @@ export class SlackProductProvisioner implements ApplicationIntegrationProvisione
     _projectCtx: ProjectContext,
   ): Promise<ProvisionedApplicationArtifact> {
     validateDirectPlan(plan, "rotate");
-    // Credential rotation is an IntegrationAuthority operation. Reusing the same
-    // token and pretending it rotated would be a fabricated credential generation.
     throw new ProductProvisionFailedError(
       "rotate",
       "direct Slack bot credentials rotate through IntegrationAuthority; this binding cannot fabricate a rotation",
@@ -177,9 +174,6 @@ export class SlackProductProvisioner implements ApplicationIntegrationProvisione
   }
 
   async teardown(_grant: OrgGrant, _projectCtx: ProjectContext): Promise<void> {
-    // A direct channel can be operator-selected. No durable direct ownership marker
-    // exists in this node, so archiving by a mutable convention name would risk
-    // deleting user data. Block until an ownership-aware compensator exists.
     throw new ProductProvisionFailedError(
       "teardown",
       "direct Slack channel teardown requires durable ownership evidence and is not configured",
@@ -396,12 +390,17 @@ function assertRequiredPlanEntries(
   if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || value.trim() === "")) {
     throw new ProductProvisionFailedError(stage, `direct Slack plan has malformed required ${kind}s`);
   }
-  const actual = new Set(values);
-  const missing = required.filter((value) => !actual.has(value));
-  if (missing.length > 0) {
+  const expectedCounts = new Map<string, number>();
+  for (const value of required) expectedCounts.set(value, (expectedCounts.get(value) ?? 0) + 1);
+  const actualCounts = new Map<string, number>();
+  for (const value of values) actualCounts.set(value, (actualCounts.get(value) ?? 0) + 1);
+  const mismatches = [...new Set([...expectedCounts.keys(), ...actualCounts.keys()])].filter(
+    (value) => expectedCounts.get(value) !== actualCounts.get(value),
+  );
+  if (mismatches.length > 0) {
     throw new ProductProvisionFailedError(
       stage,
-      `direct Slack plan is missing required ${kind}(s): ${missing.join(", ")}`,
+      `direct Slack plan has an inexact required ${kind} multiset: ${mismatches.join(", ")}`,
     );
   }
 }
