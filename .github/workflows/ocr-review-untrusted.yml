@@ -44,9 +44,8 @@ on:
 
 # FORK-PR REVIEW (`/review` command) — see DESIGN §SECURITY.7. A fork
 # `pull_request` run has no LLM key → OCR can't run → review_complete=false →
-# `review/verdict` FAILS CLOSED. To review a fork, a `/review` comment runs OCR
-# WITH the key (same blast radius as the same-repo lane: LLM key only, no write
-# token), gated by the job-level `if:` to a trusted human or trevor-workstation[bot].
+# `review/verdict` FAILS CLOSED. A `/review` comment runs OCR WITH the key (LLM
+# key only, no write token), gated by the job `if:` to a trusted human or the bot.
 
 # issue #58 — for `pull_request`, one in-flight review per PR (a new push cancels
 # the stale run). For `issue_comment` (/review), a UNIQUE per-run group: the
@@ -112,34 +111,38 @@ jobs:
           GH_TOKEN: ${{ github.token }} # read-only: read the PR head/base SHA
           REPO: ${{ github.repository }}
           EV_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EV_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EV_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || { echo "::error::bad pr number: $PR_NUMBER"; exit 1; }
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            BASE_TIP="$EV_BASE_SHA"
+            BASE_REF="$EV_BASE_REF"
             RAW_HEAD="$EV_HEAD_SHA"
             CHECKOUT_REF="$EV_HEAD_SHA"
           else
-            # /review on a (possibly fork) PR: authoritative SHAs from the API.
-            BASE_TIP="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')"
+            # /review on a (possibly fork) PR: authoritative refs from the API.
+            BASE_REF="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')"
             RAW_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
             # The fork head commit is advertised on the base repo as this ref.
             CHECKOUT_REF="refs/pull/$PR_NUMBER/head"
           fi
-          # Two bases (do NOT conflate): raw_base = base-branch TIP, used ONLY to
-          # extract the TRUSTED rules+scripts (`git archive`) so we run the LATEST
-          # reviewer from main. raw_diff_base = MERGE-BASE, used for every DIFF
-          # (guard/preflight/OCR/ground) so a behind branch is reviewed for only
-          # its OWN changes — a base-tip two-dot diff would show main's newer
-          # ops/review + ocr-* commits (that the PR lacks) as reversions → FALSE
-          # rule_change + distorted review. Compare API gives the merge-base w/o
-          # local history; fail-safe to the base tip (fail-closed, never -open).
+          # base ref is the trusted, repo-controlled base BRANCH; validate before use.
+          printf '%s' "$BASE_REF" | grep -Eq '^[A-Za-z0-9._/-]+$' || { echo "::error::bad base ref: $BASE_REF"; exit 1; }
+          # Trusted base = the LIVE tip of the base branch — NOT the PR's recorded
+          # `.base.sha`, which LAGS for a behind PR and would extract a STALE
+          # reviewer (pre-fix scripts: no clamp / no validate-ocr-result → OCR
+          # aborts). The archived rules+scripts must match THIS workflow version.
+          BASE_TIP="$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')"
+          printf '%s' "$BASE_TIP" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::bad base tip for $BASE_REF: $BASE_TIP"; exit 1; }
+          # Diff base = MERGE-BASE of tip and head, so a behind branch is reviewed
+          # for ONLY its own changes (two-dot base_tip..head would show main's newer
+          # commits the PR lacks as reversions → false rule_change). Fail-safe to
+          # the tip (fail-closed, never -open).
           RAW_DIFF_BASE="$BASE_TIP"
           MERGE_BASE="$(gh api "repos/$REPO/compare/${BASE_TIP}...${RAW_HEAD}" --jq '.merge_base_commit.sha' 2>/dev/null || true)"
           if printf '%s' "$MERGE_BASE" | grep -Eq '^[0-9a-f]{40}$'; then
             RAW_DIFF_BASE="$MERGE_BASE"
-            echo "diff base = merge-base ${MERGE_BASE}; trusted base = tip ${BASE_TIP}"
+            echo "trusted base = live tip ${BASE_TIP} (${BASE_REF}); diff base = merge-base ${MERGE_BASE}"
           else
             echo "::warning::could not resolve merge-base for ${BASE_TIP}...${RAW_HEAD}; diffing from base tip"
           fi
@@ -327,15 +330,12 @@ jobs:
           RULE_ABS: ${{ steps.base.outputs.rule_abs }}
           MODEL_JSON: ${{ runner.temp }}/model.json
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
-          # OCR reads the bearer token from **OCR_LLM_TOKEN** (verified against the
-          # v1.7.15 binary: it checks OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there
-          # is NO OCR_LLM_AUTH_TOKEN). A wrong name here => "no valid LLM endpoint
-          # configured" => OCR never runs. On a same-repo PR GitHub injects
-          # `secrets.OPENROUTER_API_KEY`; on a FORK PR the secret is empty (fork
-          # jobs get no secrets), so OCR cannot run and the completeness step below
-          # records review_complete=false — the gate then FAILS CLOSED (never a
-          # green on an unreviewed fork PR). A fork PR is reviewed via the
-          # authorized /review path. The URL / protocol / model are non-secret.
+          # OCR reads the bearer token from OCR_LLM_TOKEN (the v1.7.15 binary checks
+          # OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there is NO OCR_LLM_AUTH_TOKEN;
+          # a wrong name => "no valid LLM endpoint configured" => OCR never runs).
+          # Same-repo PRs get secrets.OPENROUTER_API_KEY; a FORK pull_request gets
+          # an empty secret → review_complete=false → gate FAILS CLOSED (fork PRs
+          # are reviewed via the authorized /review path). URL/protocol non-secret.
           OCR_LLM_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
