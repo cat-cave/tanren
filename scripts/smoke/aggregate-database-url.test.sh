@@ -6,6 +6,12 @@ script="$(cd "$(dirname "$0")" && pwd)/aggregate-database-url.sh"
 actual="$(TANREN_PORT_OFFSET=1965 DATABASE_URL= "$script")"
 test "$actual" = "postgres://tanren:tanren@localhost:7397/tanren"
 
+actual="$(TANREN_PORT_OFFSET=08 DATABASE_URL= "$script")"
+test "$actual" = "postgres://tanren:tanren@localhost:5440/tanren"
+
+actual="$(TANREN_PORT_OFFSET=100 TANREN_POSTGRES_HOST_PORT=00009 DATABASE_URL= "$script")"
+test "$actual" = "postgres://tanren:tanren@localhost:9/tanren"
+
 explicit='postgres://custom:secret@example.invalid:6543/tenant'
 actual="$(DATABASE_URL="$explicit" TANREN_PORT_OFFSET=1965 "$script")"
 test "$actual" = "$explicit"
