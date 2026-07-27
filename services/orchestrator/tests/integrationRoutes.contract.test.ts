@@ -11,6 +11,7 @@ import type {
 import { GcpSecretManagerStore } from "../src/engine/contracts/gcpSecretManager.js";
 import { InMemorySecretStore, type SecretStore } from "../src/engine/contracts/secretStore.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
+import { SentryProvisioner } from "../src/engine/providers/sentryProvisioner.js";
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createIntegrationRoutes, type IntegrationRouteDatabase } from "../src/routes/integrations/index.js";
@@ -118,6 +119,8 @@ function harness(input: {
   database?: RouteDatabase;
   secrets?: SecretStore;
   provisioner?: RecordingProvisioner;
+  buildProvisioner?: (kind: string) => IntegrationProvisioner;
+  integrationSecrets?: GenerationAddressedIntegrationSecretStore;
   fetchImpl?: typeof fetch;
 }) {
   const database = input.database ?? new RouteDatabase();
@@ -133,8 +136,8 @@ function harness(input: {
     createIntegrationRoutes({
       database,
       secrets,
-      integrationSecrets: new GenerationAddressedIntegrationSecretStore(secrets),
-      buildProvisioner: () => provisioner,
+      integrationSecrets: input.integrationSecrets ?? new GenerationAddressedIntegrationSecretStore(secrets),
+      buildProvisioner: input.buildProvisioner ?? (() => provisioner),
       fetchImpl: input.fetchImpl,
     }),
   );
@@ -230,6 +233,28 @@ describe("integration routes auth + sanitization", () => {
   });
 });
 describe("verified principal link + multi-principal selection", () => {
+  it("replays a legacy-v1 Slack operation without staging or provider I/O", async () => {
+    const secrets = new InMemorySecretStore();
+    const integrationSecrets = new GenerationAddressedIntegrationSecretStore(secrets);
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ ok: true, team_id: "T1" }), {
+          headers: { "x-oauth-scopes": "channels:read" },
+        }),
+    ) as unknown as typeof fetch;
+    const { app } = harness({ actor: admin, secrets, integrationSecrets, fetchImpl });
+    const body = JSON.stringify({ token: "slack-token", idempotencyKey: "legacy-slack" });
+    expect((await app.request("/orgs/org_acme/integrations/slack", { method: "POST", body })).status).toBe(202);
+    const staged = vi.spyOn(integrationSecrets, "stage");
+    fetchImpl.mockClear();
+    const replay = await app.request("/orgs/org_acme/integrations/slack", { method: "POST", body });
+    expect([replay.status, await replay.json(), staged.mock.calls.length, fetchImpl.mock.calls.length]).toEqual([
+      202,
+      expect.objectContaining({ status: "completed" }),
+      0,
+      0,
+    ]);
+  });
   it("links via provider-verified principal and never echoes tokens", async () => {
     const database = new RouteDatabase();
     const secrets = new InMemorySecretStore();
@@ -319,6 +344,40 @@ describe("verified principal link + multi-principal selection", () => {
     expect(await selected.json()).toMatchObject({ status: "completed", providerPrincipalId: "org-b" });
     expect(database.memory.grantGenerations[0]?.provider_scopes).toEqual(["project:read", "project:write"]);
     expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith("/organizations/a/"))).toBe(false);
+  });
+  it("rejects a legacy selected Sentry candidate before secret or provider access", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      sentryOrganizationsResponse([
+        { id: "org-a", slug: "a" },
+        { id: "org-b", slug: "b" },
+      ]),
+    ) as unknown as typeof fetch;
+    const secrets = new InMemorySecretStore();
+    const { app, database } = harness({ actor: admin, secrets, fetchImpl });
+    const link = await app.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: "legacy-candidate",
+        idempotencyKey: "legacy-candidate",
+        baseUrl: "https://sentry.io",
+      }),
+    });
+    const pending = (await link.json()) as { operationId: string };
+    database.memory.operations[0]!.candidate_principals[0] = {
+      ...database.memory.operations[0]!.candidate_principals[0],
+      metadata: {},
+    };
+    const reads = vi.spyOn(secrets, "get");
+    fetchImpl.mockClear();
+    const selected = await app.request(`/orgs/org_acme/integrations/operations/${pending.operationId}/principal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerPrincipalId: "org-a" }),
+    });
+    expect(await selected.json()).toEqual({ error: "verified_provider_identity_required" });
+    expect(selected.status).toBe(409);
+    expect([reads.mock.calls.length, fetchImpl.mock.calls.length]).toEqual([0, 0]);
   });
   it("retains the awaiting Sentry operation when the selected-org scope probe is unavailable", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url: string | URL | Request) => {
@@ -433,6 +492,7 @@ describe("verified principal link + multi-principal selection", () => {
   it("lists verified principals and lifecycle without secret material", async () => {
     const database = new RouteDatabase();
     const endpoint = "https://sentry.example/root";
+    const provisionHttp = { request: vi.fn() };
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       sentryOrganizationsResponse([{ id: "org_1", slug: "acme", name: "Acme" }], endpoint),
     ) as unknown as typeof fetch;
@@ -440,6 +500,7 @@ describe("verified principal link + multi-principal selection", () => {
       actor: admin,
       database,
       fetchImpl,
+      buildProvisioner: () => new SentryProvisioner(provisionHttp, secrets),
     });
     const link = await app.request("/orgs/org_acme/integrations/sentry", {
       method: "POST",
@@ -477,14 +538,31 @@ describe("verified principal link + multi-principal selection", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token: "rotated-value", idempotencyKey: "sentry-rotate" }),
     });
-    expect({ status: rotated.status, body: await rotated.clone().json() }).toMatchObject({
+    const rotatedBody = (await rotated.json()) as { authGeneration: number; grantGeneration: number; status: string };
+    expect({ status: rotated.status, body: rotatedBody }).toMatchObject({
       status: 202,
       body: { status: "completed" },
     });
+    database.memory.selections[0]!.auth_generation = rotatedBody.authGeneration;
+    database.memory.selections[0]!.grant_generation = rotatedBody.grantGeneration;
     expect(fetchImpl.mock.calls.every(([url]) => String(url).startsWith(`${endpoint}/api/`))).toBe(true);
     const calls = fetchImpl.mock.calls.length;
     const secretCount = (await secrets.list("secret://")).length;
     database.memory.connections[0]!.principal_metadata = {};
+    const reads = vi.spyOn(secrets, "get");
+    const discover = await app.request("/orgs/org_acme/projects/proj_1/integrations/discover?capability=errors");
+    const provision = await app.request(provisionPath, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capability: "errors", mode: "greenfield" }),
+    });
+    expect([discover.status, await discover.json(), provision.status, await provision.json()]).toEqual([
+      409,
+      { error: "verified_provider_identity_required" },
+      409,
+      { error: "verified_provider_identity_required" },
+    ]);
+    expect([reads.mock.calls.length, provisionHttp.request.mock.calls.length]).toEqual([0, 0]);
     const legacy = await app.request(`/orgs/org_acme/integrations/sentry/connections/${linked.connectionId}/rotate`, {
       method: "POST",
       headers: { "content-type": "application/json" },

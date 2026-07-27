@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { integrationRequestFingerprint } from "../src/engine/integrations/integrationOperationFingerprint.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
@@ -6,8 +7,25 @@ import { SentryPrincipalVerifier, SlackPrincipalVerifier } from "../src/engine/i
 import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
 import { testOrgGrant, testPrincipalVerificationPermit } from "./helpers/orgGrant.js";
 import { sentryOrganizationsResponse } from "./helpers/sentryIntakeAuthority.js";
+import { requireSentryPrincipalIdentity } from "../src/engine/integrations/sentryPrincipalIdentity.js";
+import { parseLinkHeader } from "../src/engine/integrations/linkHeader.js";
 
 describe("IN-1 P1 authority former-bug proofs", () => {
+  it("accepts legacy Sentry identity metadata and normalizes it to version 1", () => {
+    expect(requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example" })).toEqual({
+      sentryIdentityVersion: "1",
+      orgSlug: "o",
+      baseUrl: "https://sentry.example",
+    });
+    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow();
+  });
+  it("parses commas and semicolons inside quoted Link parameters", () => {
+    const [link, next] = parseLinkHeader(
+      '<https://example.test/a>; title="a, b; c", <https://example.test/b>; rel="next"',
+    );
+    expect(link?.parameters.get("title")).toBe("a, b; c");
+    expect(next?.parameters.get("rel")).toBe("next");
+  });
   it("caller-labelled identity cannot be stored — provider response is authoritative", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-1", "xoxb-token");
@@ -104,7 +122,7 @@ describe("IN-1 P1 authority former-bug proofs", () => {
     expect(result).toEqual({ status: "unavailable", reason });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
-  it("binds the explicit provider endpoint into the operation fingerprint", () => {
+  it("preserves the legacy tuple without an endpoint and versions the bound tuple", () => {
     const request = {
       orgId: "o",
       providerKind: "sentry",
@@ -112,8 +130,22 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       actorId: "u",
       credential: "token",
     };
-    expect(integrationRequestFingerprint({ ...request, providerEndpoint: "https://sentry.example/a" })).not.toBe(
-      integrationRequestFingerprint({ ...request, providerEndpoint: "https://sentry.example/b" }),
+    const digest = (parts: unknown[]) =>
+      `sha256:${createHash("sha256").update(JSON.stringify(parts), "utf8").digest("hex")}`;
+    expect(integrationRequestFingerprint({ ...request, providerKind: "slack" })).toBe(
+      digest(["tanren.integration-operation.v1", "o", "slack", "link", null, null, "u", "token"]),
+    );
+    expect(integrationRequestFingerprint({ ...request, providerEndpoint: "https://sentry.example/a" })).toBe(
+      digest([
+        "tanren.integration-operation.v2",
+        "o",
+        "sentry",
+        "link",
+        null,
+        "https://sentry.example/a",
+        "u",
+        "token",
+      ]),
     );
   });
 

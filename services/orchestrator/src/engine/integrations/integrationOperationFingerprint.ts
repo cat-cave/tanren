@@ -18,13 +18,26 @@ export function integrationRequestFingerprint(input: {
   actorId: string;
   credential: string;
 }): string {
+  // Durable operations emitted before endpoint binding used this exact v1 tuple.
+  // Preserve it for endpoint-less providers so retries resume, not re-effect.
+  if (input.providerEndpoint === undefined)
+    return sha256([
+      "tanren.integration-operation.v1",
+      input.orgId,
+      input.providerKind,
+      input.operationKind,
+      input.connectionId ?? null,
+      null,
+      input.actorId,
+      input.credential,
+    ]);
   return sha256([
-    "tanren.integration-operation.v1",
+    "tanren.integration-operation.v2",
     input.orgId,
     input.providerKind,
     input.operationKind,
     input.connectionId ?? null,
-    input.providerEndpoint ?? null,
+    input.providerEndpoint,
     input.actorId,
     input.credential,
   ]);
