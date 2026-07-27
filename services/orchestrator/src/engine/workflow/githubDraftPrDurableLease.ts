@@ -16,13 +16,18 @@ type DurableLeaseInput = {
  */
 export async function publishDraftPullRequestWithDurableLease<T extends DurableLeaseInput, R>(
   input: T,
-  durable: { orgId: string; specId: string; branch: string },
+  durable: {
+    orgId: string;
+    specId: string;
+    branch: string;
+    expectedPublishedHeadSha?: string;
+    predecessorEstablished?: boolean;
+  },
   publish: (input: T & { expectedPublishedHeadSha?: string }) => Promise<R>,
 ): Promise<R> {
-  const expectedPublishedHeadSha = await readDurableDraftPrPublishedHead(input.pool, {
-    ...durable,
-    repoUrl: input.repoUrl,
-  });
+  const expectedPublishedHeadSha = durable.predecessorEstablished
+    ? durable.expectedPublishedHeadSha
+    : await readDurableDraftPrPublishedHead(input.pool, { ...durable, repoUrl: input.repoUrl });
   return await publish({ ...input, ...(expectedPublishedHeadSha !== undefined && { expectedPublishedHeadSha }) });
 }
 

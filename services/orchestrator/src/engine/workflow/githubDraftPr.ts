@@ -18,7 +18,7 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
-import { readDraftPrPushLease } from "./githubDraftPrLease.js";
+import { readDraftPrPushLease, readDurableDraftPrPublishedHead } from "./githubDraftPrLease.js";
 import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
 import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 import { appendPushedWitnessWithReconciliation } from "./githubDraftPrWitness.js";
@@ -221,17 +221,20 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       branch,
       resolved.token,
       input.expectedPublishedHeadSha,
+      publishedHeadSha,
     );
-    await pushWorkspaceBranchToGitHub({
-      ssh: input.ssh,
-      target: input.target,
-      workspacePath: input.workspacePath,
-      repoUrl: input.repoUrl,
-      branch,
-      token: resolved.token,
-      sourceRef: input.sourceRef,
-      forceWithLease,
-    });
+    if (!("alreadyPublished" in forceWithLease)) {
+      await pushWorkspaceBranchToGitHub({
+        ssh: input.ssh,
+        target: input.target,
+        workspacePath: input.workspacePath,
+        repoUrl: input.repoUrl,
+        branch,
+        token: resolved.token,
+        sourceRef: input.sourceRef,
+        forceWithLease,
+      });
+    }
     const pushedEvent = {
       ...context,
       eventType: "github.branch.pushed" as const,
@@ -330,6 +333,15 @@ export async function publishDraftPullRequestForRun(
     hostKeyFingerprint: context.runner.hostKeyFingerprint,
     identitySecretRef: input.identitySecretRef,
   });
+  // Establish the durable predecessor before observing mutable workspace HEAD.
+  // A concurrent publication can then only advance the remote lease and reject
+  // this stale snapshot; it cannot be mistaken for the predecessor after read.
+  const durablePredecessor = await readDurableDraftPrPublishedHead(input.pool, {
+    orgId: context.orgId,
+    specId: context.specId,
+    branch: context.branch,
+    repoUrl: context.repoUrl,
+  });
   const publishedHeadSha = await resolveManualDraftPrHead({ ssh: input.ssh, target, workspacePath });
 
   return await publishDraftPullRequestWithDurableLease(
@@ -369,7 +381,13 @@ export async function publishDraftPullRequestForRun(
       installation: context.installation,
       githubAppMinter: input.githubAppMinter,
     },
-    { orgId: context.orgId, specId: context.specId, branch: context.branch },
+    {
+      orgId: context.orgId,
+      specId: context.specId,
+      branch: context.branch,
+      expectedPublishedHeadSha: durablePredecessor,
+      predecessorEstablished: true,
+    },
     publishDraftPullRequest,
   );
 }

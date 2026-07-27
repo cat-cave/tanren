@@ -93,6 +93,19 @@ describe("#1069 draft publication lease", () => {
     ).resolves.toEqual({ expectedSha: fetched });
   });
 
+  it("recognizes a remote head matching the immutable intended SHA after a crashed witness append", async () => {
+    await expect(
+      readDraftPrPushLease(
+        new RefResponseHttp({ status: 200, body: { object: { sha: reworked } } }),
+        { owner: "cat-cave", name: "repo" },
+        "tanren/run_123",
+        "ghp_secret",
+        undefined,
+        reworked,
+      ),
+    ).resolves.toEqual({ expectedSha: reworked, alreadyPublished: true });
+  });
+
   it("rejects an existing remote branch without a durable witness before SSH or PR publication", async () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });

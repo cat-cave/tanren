@@ -11,7 +11,7 @@ export interface DraftPrBranchInput {
   requestedBranch?: string;
 }
 
-export type GitHubPushLease = { expectedSha: string } | { expectedAbsent: true };
+export type GitHubPushLease = { expectedSha: string; alreadyPublished?: true } | { expectedAbsent: true };
 
 export interface GitHubWorkspacePushInput {
   ssh: CommandSubstrate;

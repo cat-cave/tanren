@@ -52,6 +52,7 @@ export async function readDraftPrPushLease(
   branch: string,
   token: string,
   expectedPublishedHeadSha?: string,
+  intendedPublishedHeadSha?: string,
 ): Promise<GitHubPushLease> {
   const validBranch = validateGitBranchName(branch);
   if (expectedPublishedHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(expectedPublishedHeadSha)) {
@@ -73,6 +74,9 @@ export async function readDraftPrPushLease(
     );
   }
   if (expectedPublishedHeadSha === undefined) {
+    if (intendedPublishedHeadSha !== undefined && sha === intendedPublishedHeadSha) {
+      return { expectedSha: sha, alreadyPublished: true };
+    }
     throw new Error(`GitHub draft branch exists without a durable published-head witness for ${validBranch}`);
   }
   if (expectedPublishedHeadSha !== undefined && sha !== expectedPublishedHeadSha) {
