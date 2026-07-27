@@ -1,0 +1,130 @@
+# Auto-review: run the keyed `/review` on a fork PR once its gate goes green.
+#
+# A fork PR gets NO LLM key on its `pull_request` run, so the keyless review can't
+# certify → `review/verdict` FAILS CLOSED, and it stays failed until someone runs
+# an authorized `/review`. This workflow is that someone: when a fork PR's
+# `gate` (ci-light) concludes success AND the PR is still unreviewed at its
+# current head, it posts `/review` — authored as the reviewer App
+# (`tanren-reviewer[bot]`, an allowlisted `/review` identity) — which triggers the
+# keyed review in ocr-review-untrusted. No human in the loop for the fork fleet.
+#
+# WHY workflow_run (not check_suite/status): a `status` event never fires for the
+# `gate` CHECK, and `check_suite.pull_requests` omits fork PRs in the base repo.
+# `workflow_run` on ci-light fires reliably for a fork's pull_request run and gives
+# `head_sha`; the fork PR is then resolved by head SHA via `gh pr list` (which,
+# unlike `commits/<sha>/pulls`, DOES surface cross-repo PRs).
+#
+# SECURITY: this lane never checks out or runs PR-head code and holds no LLM key.
+# It only reads PR metadata + posts one `/review` comment via a minted reviewer
+# App token. The keyed review still runs in the untrusted lane under its own
+# security model (LLM key only, no write token, rules+scripts from the trusted base).
+#
+# LOOP-SAFETY: posting a comment does not run ci-light, so this never re-triggers
+# itself; and it only fires while the verdict is the fail-closed "did not complete"
+# (unreviewed) — once a keyed review lands (success, real P0/P1, or rule_change) it
+# stops. A new head SHA (a push) is a fresh, deliberate review.
+name: ocr-fork-autoreview
+
+on:
+  workflow_run:
+    workflows: [ci-light]
+    types: [completed]
+
+# Least privilege: read PR metadata + statuses. The WRITE (posting the comment)
+# uses a minted reviewer App token, not this default GITHUB_TOKEN.
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  # Dedupe re-fires for the same head SHA (the decision is idempotent).
+  group: ocr-fork-autoreview-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  autoreview:
+    runs-on: ubuntu-latest
+    # Only a SUCCESSFUL ci-light run from a `pull_request` (ci-light only runs on
+    # pull_request; be explicit). merge_group / failed runs never reach here.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    env:
+      # Map "is the reviewer App configured?" to an env (the `secrets` context is
+      # not allowed in a step `if:`), so the decision can gate on it.
+      REVIEW_HAS_APP: ${{ secrets.REVIEWER_APP_ID != '' }}
+    steps:
+      # Decide whether this gate-green belongs to an unreviewed fork PR, and if so
+      # which one. Emits `pr` (the number) only when an auto-/review is warranted.
+      - name: Decide whether to auto-review
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$REVIEW_HAS_APP" != "true" ]; then
+            echo "reviewer App not configured — cannot post an allowlisted /review; skip"; exit 0
+          fi
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "no/invalid head sha ($SHA); skip"; exit 0; }
+          echo "ci-light gate went green for $SHA"
+
+          # Resolve the OPEN, non-draft FORK PR whose head is this SHA. `gh pr list`
+          # surfaces cross-repo PRs (commits/<sha>/pulls does not). Skip drafts and
+          # the `no-auto-review` opt-out label. SHA is validated hex above.
+          PR="$(gh pr list --repo "$REPO" --state open --limit 200 \
+                  --json number,headRefOid,isCrossRepository,isDraft,labels \
+                  --jq ".[] | select(.headRefOid==\"$SHA\" and .isCrossRepository==true and .isDraft==false and ([.labels[].name] | index(\"no-auto-review\") | not)) | .number" \
+                | head -1)"
+          if [ -z "${PR:-}" ]; then echo "no eligible fork PR for $SHA — nothing to do"; exit 0; fi
+
+          # Only auto-review when the PR is UNREVIEWED at this head: verdict absent,
+          # or the fail-closed "review did not complete" (keyless fork run). A
+          # verdict of success, or a completed keyed review (open P0/P1 / rule_change),
+          # means a keyed review already ran — do NOT re-review (agent fixes + pushes).
+          VERDICT="$(gh api "repos/$REPO/commits/$SHA/statuses" \
+                       --jq 'map(select(.context=="review/verdict")) | sort_by(.created_at) | last // {}')"
+          STATE="$(printf '%s' "$VERDICT" | jq -r '.state // "none"')"
+          DESC="$(printf '%s' "$VERDICT" | jq -r '.description // ""')"
+          if [ "$STATE" = "success" ]; then echo "PR $PR: verdict already success — skip"; exit 0; fi
+          if [ "$STATE" = "failure" ] && ! printf '%s' "$DESC" | grep -qi "did not complete"; then
+            echo "PR $PR: keyed review already ran (verdict: $DESC) — skip"; exit 0
+          fi
+
+          # Belt-and-suspenders: if the sticky marker already records this SHA as
+          # reviewed, a keyed review completed (the verdict may just lag) — skip.
+          MARKER_SHA="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                          --jq 'map(.body) | map(select(test("ocr-state"))) | last // ""' 2>/dev/null \
+                        | grep -oE 'last_reviewed_sha=[0-9a-f]+' | head -1 | cut -d= -f2 || true)"
+          if [ -n "${MARKER_SHA:-}" ] && [ "$MARKER_SHA" = "$SHA" ]; then
+            echo "PR $PR: sticky marker already reviewed $SHA — skip"; exit 0
+          fi
+
+          echo "PR $PR: fork gate green + unreviewed at $SHA → auto-/review"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+
+      # Mint a reviewer App token so the /review comment is authored by an
+      # allowlisted identity (tanren-reviewer[bot]); github-actions[bot] is NOT
+      # allowlisted and would be rejected by the untrusted lane's authz `if:`.
+      # Third-party action ⇒ pinned to a full commit SHA (v3.2.0), matching the
+      # trusted lane.
+      - name: Mint reviewer App token
+        id: token
+        if: ${{ steps.decide.outputs.pr != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.REVIEWER_APP_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+      - name: Post /review as the reviewer bot
+        if: ${{ steps.decide.outputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.decide.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body='/review' >/dev/null
+          echo "posted /review to PR #$PR (authored as the reviewer App) — keyed review will run"

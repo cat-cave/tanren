@@ -74,9 +74,9 @@ jobs:
     # AUTHORIZATION GATE (fail-safe: the job never starts — never checks out fork
     # code — unless authorized). `pull_request` runs unconditionally (same-repo
     # auto path). An `issue_comment` runs ONLY for a `/review` command on a PR
-    # from a trusted human (OWNER/MEMBER/COLLABORATOR) OR the trevor-workstation[bot]
-    # agent identity (so agents can audit fork PRs). A fork author (CONTRIBUTOR/
-    # NONE) or any other bot is rejected here. The command must be EXACTLY
+    # from a trusted human (OWNER/MEMBER/COLLABORATOR) OR an allowlisted agent bot
+    # (trevor-workstation[bot] / tanren-reviewer[bot], the auto-review). A fork author
+    # (CONTRIBUTOR/NONE) or any other bot is rejected here. The command must be EXACTLY
     # `/review` or `/review <args>` — `/review-anything` is rejected (a command
     # boundary, not a prefix) so an arbitrary slash-command can't start a keyed run.
     if: >-
@@ -85,7 +85,7 @@ jobs:
        github.event.issue.pull_request != null &&
        (github.event.comment.body == '/review' || startsWith(github.event.comment.body, '/review ')) &&
        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
-        github.event.comment.user.login == 'trevor-workstation[bot]'))
+        contains(fromJSON('["trevor-workstation[bot]","tanren-reviewer[bot]"]'), github.event.comment.user.login)))
     env:
       # PR number from whichever event fired (pull_request or the /review comment).
       # All downstream steps read this; the head/base SHAs are resolved + sanitized
