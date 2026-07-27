@@ -25,6 +25,11 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+interface InflightEntry {
+  readonly generation: number;
+  readonly promise: Promise<string | undefined>;
+}
+
 /**
  * A process-local TTL + single-flight cache for default-branch head reads, keyed by
  * `owner/name/branch`. One shared instance (`sharedMainHeadCache`) backs the live host so
@@ -34,7 +39,7 @@ interface CacheEntry {
  */
 export class MainHeadCache {
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inflight = new Map<string, Promise<string | undefined>>();
+  private readonly inflight = new Map<string, InflightEntry>();
   private readonly generations = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
@@ -54,13 +59,17 @@ export class MainHeadCache {
     if (cached !== undefined && cached.expiresAt > this.now()) {
       return cached.sha;
     }
-    const existing = this.inflight.get(key);
-    if (existing !== undefined) {
-      return existing;
-    }
     const generation = this.generations.get(key) ?? 0;
     this.generations.set(key, generation);
-    const promise = read()
+    const existing = this.inflight.get(key);
+    if (existing !== undefined && existing.generation === generation) {
+      return existing.promise;
+    }
+    // Register the flight before invoking the reader. Besides making the
+    // single-flight boundary explicit, this covers a reentrant invalidation
+    // triggered synchronously by a reader: invalidate() must see and fence it.
+    const promise = Promise.resolve()
+      .then(read)
       .then((sha) => {
         // An invalidation that happened while the read was in flight starts a
         // newer generation; the stale result must never repopulate its cache.
@@ -70,14 +79,18 @@ export class MainHeadCache {
         return sha;
       })
       .finally(() => {
-        this.inflight.delete(key);
+        // An older flight may settle after a newer generation has started;
+        // never let its finalizer delete the newer flight's record.
+        if (this.inflight.get(key)?.promise === promise) {
+          this.inflight.delete(key);
+        }
         // Once the flight settles, a generation with no entry or flight has
         // no stale observer left that could reuse it, so reclaim its metadata.
         if (!this.entries.has(key) && !this.inflight.has(key)) {
           this.generations.delete(key);
         }
       });
-    this.inflight.set(key, promise);
+    this.inflight.set(key, { generation, promise });
     return promise;
   }
 

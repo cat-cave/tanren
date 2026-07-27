@@ -67,17 +67,80 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
       return "stale";
     });
     cache.invalidate("k");
-    release();
-    await expect(stale).resolves.toBe("stale");
-
     let reads = 0;
+    let releaseFresh!: () => void;
+    const freshGate = new Promise<void>((resolve) => {
+      releaseFresh = resolve;
+    });
     const fresh = async () => {
       reads += 1;
+      await freshGate;
       return "fresh";
     };
-    expect(await cache.read("k", fresh)).toBe("fresh");
+    // A read begun after invalidation must not join the stale generation,
+    // even while that older flight is still blocked.
+    const freshRead = cache.read("k", fresh);
+    await Promise.resolve();
+    expect(reads).toBe(1);
+    releaseFresh();
+    await expect(freshRead).resolves.toBe("fresh");
+    release();
+    await expect(stale).resolves.toBe("stale");
     expect(await cache.read("k", fresh)).toBe("fresh");
     expect(reads).toBe(1);
+  });
+
+  it("does not let an old finalizer remove a newer in-flight generation", async () => {
+    const cache = new MainHeadCache();
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let releaseFresh!: () => void;
+    const freshGate = new Promise<void>((resolve) => {
+      releaseFresh = resolve;
+    });
+    let reads = 0;
+    const stale = cache.read("k", async () => {
+      await staleGate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    const fresh = cache.read("k", async () => {
+      reads += 1;
+      await freshGate;
+      return "fresh";
+    });
+
+    // Let the old generation settle while the replacement is still blocked.
+    // A subsequent read must join the replacement, not start a third flight.
+    releaseStale();
+    await expect(stale).resolves.toBe("stale");
+    const joined = cache.read("k", async () => {
+      reads += 1;
+      return "wrong";
+    });
+    expect(reads).toBe(1);
+    releaseFresh();
+    await expect(Promise.all([fresh, joined])).resolves.toEqual(["fresh", "fresh"]);
+  });
+
+  it("fences an invalidation re-entered by the reader before it resolves", async () => {
+    const cache = new MainHeadCache();
+    let reads = 0;
+    const stale = cache.read("k", async () => {
+      reads += 1;
+      cache.invalidate("k");
+      return "stale";
+    });
+    await expect(stale).resolves.toBe("stale");
+    expect(
+      await cache.read("k", async () => {
+        reads += 1;
+        return "fresh";
+      }),
+    ).toBe("fresh");
+    expect(reads).toBe(2);
   });
 
   it("does NOT cache a throw (a 403/transient must re-read, never memoize the failure)", async () => {
