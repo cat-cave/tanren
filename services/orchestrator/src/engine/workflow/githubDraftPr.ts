@@ -333,9 +333,6 @@ export async function publishDraftPullRequestForRun(
     hostKeyFingerprint: context.runner.hostKeyFingerprint,
     identitySecretRef: input.identitySecretRef,
   });
-  // Establish the durable predecessor before observing mutable workspace HEAD.
-  // A concurrent publication can then only advance the remote lease and reject
-  // this stale snapshot; it cannot be mistaken for the predecessor after read.
   const durablePredecessor = await readDurableDraftPrPublishedHead(input.pool, {
     orgId: context.orgId,
     specId: context.specId,
@@ -348,7 +345,6 @@ export async function publishDraftPullRequestForRun(
     {
       pool: input.pool,
       eventStore: input.eventStore,
-      // v68 fix: tenant key (runs.org_id NOT NULL); stamped on every appended event.
       orgId: context.orgId,
       appendEventOrgId: context.orgId,
       secrets: input.secrets,
@@ -360,23 +356,15 @@ export async function publishDraftPullRequestForRun(
       projectId: context.projectId,
       workspacePath,
       repoUrl: context.repoUrl,
-      // §3.1: the run's base is `default_branch`; when the run is stacked (a non-empty
-      // ancestor stack), `publishDraftPullRequest` re-resolves the base to the immediate
-      // ancestor's PR-head branch (a true stacked PR) — so the operator
-      // `POST /runs/:id/github/draft-pr` route opens the same base the autonomous loop does.
       targetBranch: context.defaultBranch,
       ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
       runBranch: context.branch,
-      // Push the immutable resolved commit: mutable HEAD may advance during publication.
       sourceRef: publishedHeadSha,
       publishedHeadSha,
-      // GitHub rejects an empty title; coalesce blank input to the stored spec title or id.
       title:
         (input.title?.trim() ? input.title.trim() : undefined) ??
         (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
       body: input.body ?? context.specDescription,
-      // The credential coordinate is derived only from stored project/org authority;
-      // the operator body cannot override it.
       githubCredentialRef: context.configuredGithubCredentialRef,
       installation: context.installation,
       githubAppMinter: input.githubAppMinter,

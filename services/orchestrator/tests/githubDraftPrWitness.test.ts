@@ -3,6 +3,7 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";
 import type { PriorEventInput } from "../src/engine/eventStore.js";
+import { readDraftPrPushLease } from "../src/engine/workflow/githubDraftPrLease.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { RecordingPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 
@@ -31,6 +32,20 @@ class RecordingSecrets extends FakeSecretStore {
 }
 
 describe("GitHub draft PR immutable publication witness", () => {
+  it("reconciles a remote intended head after a crashed witness append", async () => {
+    const sha = "c".repeat(40);
+    await expect(
+      readDraftPrPushLease(
+        new ScriptedGitHubHttp([{ status: 200, body: { object: { sha } } }], []),
+        { owner: "cat-cave", name: "repo" },
+        "tanren/run_123",
+        "ghp_secret",
+        undefined,
+        sha,
+      ),
+    ).resolves.toEqual({ expectedSha: sha, alreadyPublished: true });
+  });
+
   it("does not duplicate the pushed witness when the first append response is lost", async () => {
     const secrets = new RecordingSecrets();
     await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secret" });
