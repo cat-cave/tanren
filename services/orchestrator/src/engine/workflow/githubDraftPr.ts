@@ -234,17 +234,41 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     const pushedEvent = {
       ...context,
       eventType: "github.branch.pushed" as const,
-      payload: { repoUrl: input.repoUrl, branch, headSha: publishedHeadSha, sourceRef: publishedHeadSha, credentialRef: ledgerRef, redacted: true },
+      payload: {
+        repoUrl: input.repoUrl,
+        branch,
+        headSha: publishedHeadSha,
+        sourceRef: publishedHeadSha,
+        credentialRef: ledgerRef,
+        redacted: true as const,
+      },
+    };
+    const pushedIdempotencyKey = `${input.runId}:github.branch.pushed:${branch}:${publishedHeadSha}`;
+    const appendPushedEvent = async () => {
+      if (eventStore.appendPriorIfAbsent !== undefined) {
+        return await eventStore.appendPriorIfAbsent({
+          ...pushedEvent,
+          idempotencyKey: pushedIdempotencyKey,
+          runId: input.runId,
+        });
+      }
+      await eventStore.append(pushedEvent);
+      return true;
     };
     try {
-      await eventStore.append(pushedEvent);
+      await appendPushedEvent();
     } catch (appendError) {
       // The remote push is already durable. Reconcile the witness append once so a
       // transient event-store failure cannot leave an untracked GitHub branch.
-      const ref = await http.request({ method: "GET", path: `/repos/${repo.owner}/${repo.name}/git/ref/heads/${encodeURIComponent(branch)}`, token: resolved.token });
+      const ref = await http.request({
+        method: "GET",
+        path: `/repos/${repo.owner}/${repo.name}/git/ref/heads/${encodeURIComponent(branch)}`,
+        token: resolved.token,
+      });
       const remoteSha = (ref.body as { object?: { sha?: unknown } } | undefined)?.object?.sha;
       if (ref.status !== 200 || remoteSha !== publishedHeadSha) throw appendError;
-      await eventStore.append(pushedEvent);
+      if (eventStore.appendPriorIfAbsent === undefined) throw appendError;
+      await appendPushedEvent();
     }
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);
