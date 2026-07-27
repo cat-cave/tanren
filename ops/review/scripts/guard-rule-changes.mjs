@@ -53,9 +53,12 @@ function main() {
   const head = sanitizeSha("head", arg("--head", "HEAD_SHA"));
 
   // `--` terminates option parsing; the two shas are already sanitized to pure
-  // hex, so they cannot be interpreted as flags. Two-dot range = changes on head
-  // relative to the merge base is intentionally NOT used here; we want the exact
-  // base..head file set the reviewer sees.
+  // hex, so they cannot be interpreted as flags. `--base` is the MERGE-BASE of
+  // the PR's base branch and head (computed by the workflow), so two-dot
+  // `base..head` here equals three-dot `base_tip...head` = exactly the files the
+  // PR itself changed. (Passing the base-branch TIP instead would false-flag a
+  // behind-branch: main's own ops/review/ocr-* commits it lacks would appear as
+  // reversions and trip rule_change — see the merge-base note in the workflow.)
   let out = "";
   try {
     out = execFileSync("git", ["diff", "--name-only", "--no-color", `${base}..${head}`, "--"], {
