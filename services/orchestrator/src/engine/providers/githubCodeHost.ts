@@ -33,7 +33,8 @@ import { mainHeadCacheKey, sharedMainHeadCache, type MainHeadCache } from "./mai
 import {
   decodeBase64Content as decodeContents,
   decodeCommit,
-  decodeCompare,
+  decodeComparePage,
+  decodeCompareStatus,
   decodeCompareFiles,
   decodeDefaultBranch,
   decodeRefSha,
@@ -289,7 +290,7 @@ export class GitHubCodeHost implements CodeHost {
    * required; never silently read as up-to-date).
    */
   async compareRefs(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<RefAncestry> {
-    const status = (await this.readCompare(repo, baseSha, headSha)).status;
+    const status = await this.readCompareStatus(repo, baseSha, headSha);
     switch (status) {
       case "identical":
         return "identical";
@@ -311,7 +312,16 @@ export class GitHubCodeHost implements CodeHost {
    * forge-PR-shaped `listContributors`.
    */
   async readCommitAuthors(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<CommitAuthors> {
-    const commits = (await this.readCompare(repo, baseSha, headSha)).commits;
+    const first = await this.readComparePage(repo, baseSha, headSha, 1);
+    const commits = [...first.commits];
+    const pages = Math.ceil(first.totalCommits / 100);
+    for (let page = 2; page <= pages; page += 1) {
+      const next = await this.readComparePage(repo, baseSha, headSha, page);
+      commits.push(...next.commits);
+    }
+    if (commits.length !== first.totalCommits) {
+      throw new TypeError("GitHub compare response had incomplete paginated commits");
+    }
     const logins: string[] = [];
     for (const commit of commits) {
       logins.push(commit.authorLogin, commit.committerLogin);
@@ -319,23 +329,37 @@ export class GitHubCodeHost implements CodeHost {
     return { logins };
   }
 
-  /** Read the raw `/compare/:base...:head` body once (status + commits), JSON-shaped. */
-  private async readCompare(
+  private async readCompareStatus(repo: CodeHostRepoRef, baseSha: string, headSha: string): Promise<string> {
+    const response = await this.requestCompare(repo, baseSha, headSha);
+    return decodeCompareStatus(response.body);
+  }
+
+  /** Read one raw `/compare` page (status + commits), JSON-shaped. */
+  private async readComparePage(
     repo: CodeHostRepoRef,
     baseSha: string,
     headSha: string,
-  ): Promise<ReturnType<typeof decodeCompare>> {
+    page: number,
+  ): Promise<ReturnType<typeof decodeComparePage>> {
+    const response = await this.requestCompare(repo, baseSha, headSha, page);
+    return decodeComparePage(response.body, false);
+  }
+
+  private async requestCompare(repo: CodeHostRepoRef, baseSha: string, headSha: string, page?: number) {
     const token = await this.resolveToken();
     const response = await this.http.request({
       method: "GET",
-      path: repoPath(repo, `/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`),
+      path: repoPath(
+        repo,
+        `/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}${page === undefined ? "" : `?per_page=100&page=${page}`}`,
+      ),
       token: token.token,
       ...(token.refresh !== undefined && { refreshToken: token.refresh }),
     });
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub compare ${baseSha}...${headSha} failed: HTTP ${response.status}`);
     }
-    return decodeCompare(response.body);
+    return response;
   }
 
   async readFile(input: { repo: CodeHostRepoRef; ref: string; path: string }): Promise<string | undefined> {

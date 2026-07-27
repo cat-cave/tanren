@@ -3,6 +3,8 @@ import {
   decodeBase64Content,
   decodeCommit,
   decodeCompare,
+  decodeComparePage,
+  decodeCompareStatus,
   decodeCompareFiles,
   decodeDefaultBranch,
   decodeRefSha,
@@ -59,9 +61,9 @@ describe("GitHubCodeHost read DTOs", () => {
     ]);
     expect(() => decodeCompareFiles({ files: [{ filename: "a.ts", patch: null }] })).toThrow(/patch response/iu);
     expect(() => decodeCompareFiles({ files: [{ patch: "p" }] })).toThrow(/filename/iu);
-    expect(() =>
-      decodeCompareFiles({ files: Array.from({ length: 300 }, () => ({ filename: "a", patch: "p" })) }),
-    ).toThrow(/files limit/iu);
+    expect(
+      decodeCompareFiles({ files: [{ filename: "large.diff", patch: "x".repeat(200_000) }] })[0]?.patch,
+    ).toHaveLength(200_000);
     expect(() => decodeBase64Content({ encoding: "utf-8", content: "text" })).toThrow(/unsupported encoding/iu);
     expect(() => decodeBase64Content({ encoding: "base64", content: "not base64?" })).toThrow(/malformed base64/iu);
   });
@@ -75,5 +77,12 @@ describe("GitHubCodeHost read DTOs", () => {
         commits: [{ author: { login: "alice" }, committer: { login: "alice" } }],
       }),
     ).toEqual({ status: "ahead", commits: [{ authorLogin: "alice", committerLogin: "alice" }] });
+  });
+
+  it("keeps status reads valid when compare commits are paginated, while author pages remain strict", () => {
+    const partial = { status: "ahead", total_commits: 101, commits: [] };
+    expect(decodeCompareStatus(partial)).toBe("ahead");
+    expect(decodeComparePage(partial, false)).toMatchObject({ status: "ahead", totalCommits: 101, commits: [] });
+    expect(() => decodeCompare(partial)).toThrow(/total_commits/iu);
   });
 });

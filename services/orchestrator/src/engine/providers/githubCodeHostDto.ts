@@ -2,7 +2,6 @@
 // value: every field consumed by the code-host mapper is decoded first.
 
 type GithubObject = Readonly<Record<string, unknown>>;
-const GITHUB_COMPARE_FILE_LIMIT = 300;
 
 function object(value: unknown, label: string): GithubObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -61,6 +60,10 @@ export interface DecodedCompare {
   readonly commits: readonly { readonly authorLogin: string; readonly committerLogin: string }[];
 }
 
+interface DecodedComparePage extends DecodedCompare {
+  readonly totalCommits: number;
+}
+
 /**
  * GitHub represents a deleted or otherwise unavailable commit identity as
  * `null`, while a missing or malformed identity is not a usable compare DTO.
@@ -72,13 +75,29 @@ function compareLogin(value: unknown, label: string): string {
 }
 
 export function decodeCompare(value: unknown): DecodedCompare {
+  const decoded = decodeComparePage(value, true);
+  return { status: decoded.status, commits: decoded.commits };
+}
+
+/** Status-only compare read: GitHub may paginate commits, but status is complete. */
+export function decodeCompareStatus(value: unknown): string {
+  return string(object(value, "compare")["status"], "compare status");
+}
+
+/** Decode a compare page, optionally requiring all commits to be present. */
+export function decodeComparePage(value: unknown, requireComplete = true): DecodedComparePage {
   const compare = object(value, "compare");
   const commits = array(compare["commits"], "compare commits");
-  if (!Number.isSafeInteger(compare["total_commits"]) || (compare["total_commits"] as number) !== commits.length) {
+  const totalCommits = compare["total_commits"];
+  if (!Number.isSafeInteger(totalCommits) || (totalCommits as number) < commits.length) {
+    throw new TypeError("GitHub compare response had incomplete total_commits");
+  }
+  if (requireComplete && totalCommits !== commits.length) {
     throw new TypeError("GitHub compare response had incomplete total_commits");
   }
   return {
     status: string(compare["status"], "compare status"),
+    totalCommits: totalCommits as number,
     commits: commits.map((entry) => {
       const commit = object(entry, "compare commit");
       return {
@@ -97,12 +116,6 @@ export interface DecodedCompareFile {
 
 export function decodeCompareFiles(value: unknown): readonly DecodedCompareFile[] {
   const files = array(object(value, "compare")["files"], "compare files");
-  // GitHub returns at most 300 file entries from this endpoint. Exactly the cap
-  // cannot prove the diff was complete, so never hand a truncated review diff to
-  // the domain layer as if it were authoritative.
-  if (files.length >= GITHUB_COMPARE_FILE_LIMIT) {
-    throw new TypeError("GitHub compare response reached the incomplete files limit");
-  }
   return files.map((entry) => {
     const file = object(entry, "compare file");
     const patch = file["patch"];
