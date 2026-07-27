@@ -231,18 +231,21 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       sourceRef: input.sourceRef,
       forceWithLease,
     });
-    await eventStore.append({
+    const pushedEvent = {
       ...context,
-      eventType: "github.branch.pushed",
-      payload: {
-        repoUrl: input.repoUrl,
-        branch,
-        headSha: publishedHeadSha,
-        sourceRef: publishedHeadSha,
-        credentialRef: ledgerRef,
-        redacted: true,
-      },
-    });
+      eventType: "github.branch.pushed" as const,
+      payload: { repoUrl: input.repoUrl, branch, headSha: publishedHeadSha, sourceRef: publishedHeadSha, credentialRef: ledgerRef, redacted: true },
+    };
+    try {
+      await eventStore.append(pushedEvent);
+    } catch (appendError) {
+      // The remote push is already durable. Reconcile the witness append once so a
+      // transient event-store failure cannot leave an untracked GitHub branch.
+      const ref = await http.request({ method: "GET", path: `/repos/${repo.owner}/${repo.name}/git/ref/heads/${encodeURIComponent(branch)}`, token: resolved.token });
+      const remoteSha = (ref.body as { object?: { sha?: unknown } } | undefined)?.object?.sha;
+      if (ref.status !== 200 || remoteSha !== publishedHeadSha) throw appendError;
+      await eventStore.append(pushedEvent);
+    }
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);
     const pr = await visibility.openOrUpdateChangeRequest({

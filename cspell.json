@@ -98,5 +98,12 @@
       "name": "tanren",
       "path": "./cspell-words.txt"
     }
-  ]
+  ],
+  "dictionaryDefinitions": [
+    {
+      "name": "tanren",
+      "path": "./cspell-words.txt"
+    }
+  ],
+  "dictionaryDefinitions": [{ "name": "tanren", "path": "./cspell-words.txt" }]
 }
