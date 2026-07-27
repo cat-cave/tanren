@@ -2,6 +2,7 @@
 // value: every field consumed by the code-host mapper is decoded first.
 
 type GithubObject = Readonly<Record<string, unknown>>;
+const GITHUB_COMPARE_FILE_LIMIT = 300;
 
 function object(value: unknown, label: string): GithubObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -116,6 +117,11 @@ export interface DecodedCompareFile {
 
 export function decodeCompareFiles(value: unknown): readonly DecodedCompareFile[] {
   const files = array(object(value, "compare")["files"], "compare files");
+  // GitHub caps this endpoint at 300 files; without a pagination API for files,
+  // a response at the cap cannot prove the diff is complete.
+  if (files.length >= GITHUB_COMPARE_FILE_LIMIT) {
+    throw new TypeError("GitHub compare response reached the incomplete files limit");
+  }
   return files.map((entry) => {
     const file = object(entry, "compare file");
     const patch = file["patch"];
