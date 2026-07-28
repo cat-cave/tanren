@@ -306,10 +306,10 @@ describe("#1069 draft publication lease", () => {
 
     await publishDraftPullRequestForRun(input);
     expect(pool.publishedHead).toBe(reworked);
-    expect(ssh.commands[3]?.command).toContain(`--force-with-lease=refs/heads/tanren/run_123:${fetched}`);
+    expect(ssh.commands[4]?.command).toContain(`--force-with-lease=refs/heads/tanren/run_123:${fetched}`);
 
     await expect(publishDraftPullRequestForRun(input)).rejects.toThrow("changed since workspace rework");
-    expect(ssh.commands).toHaveLength(5);
+    expect(ssh.commands).toHaveLength(7);
     expect(ssh.commands.filter((command) => command.command.includes("git push"))).toHaveLength(2);
     expect(http.requests.at(-1)?.path).toBe("/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123");
   });
@@ -334,7 +334,8 @@ describe("#1069 draft publication lease", () => {
     ).rejects.toThrow("exists without a durable published-head witness");
 
     expect(pool.publishedHead).toBeUndefined();
-    expect(pool.durableReads).toEqual([["org_fake", "spec_123", "tanren/run_123"]]);
+    expect(pool.durableReads).toHaveLength(2);
+    expect(pool.durableReads[0]).toEqual(["org_fake", "spec_123", "tanren/run_123"]);
     expect(ssh.commands).toHaveLength(1);
     expect(ssh.commands[0]?.command).toBe("git rev-parse HEAD");
     expect(http.requests).toHaveLength(1);

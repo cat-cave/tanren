@@ -18,8 +18,8 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
-import { readDraftPrPushLease, readDurableDraftPrPublishedHead } from "./githubDraftPrLease.js";
-import { publishDraftPullRequestWithDurableLease, resolveManualDraftPrHead } from "./githubDraftPrDurableLease.js";
+import { readDraftPrPushLease } from "./githubDraftPrLease.js";
+import { publishDraftPullRequestWithDurableLease, resolveBoundManualDraftPrHead } from "./githubDraftPrDurableLease.js";
 import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 import { appendPushedWitnessWithReconciliation } from "./githubDraftPrWitness.js";
 import { messageFromError, readGithubCredentialRef, readGithubInstallation } from "./githubDraftPrHelpers.js";
@@ -333,13 +333,16 @@ export async function publishDraftPullRequestForRun(
     hostKeyFingerprint: context.runner.hostKeyFingerprint,
     identitySecretRef: input.identitySecretRef,
   });
-  const durablePredecessor = await readDurableDraftPrPublishedHead(input.pool, {
+  const { predecessorSha: durablePredecessor, headSha: publishedHeadSha } = await resolveBoundManualDraftPrHead({
+    pool: input.pool,
     orgId: context.orgId,
     specId: context.specId,
     branch: context.branch,
     repoUrl: context.repoUrl,
+    ssh: input.ssh,
+    target,
+    workspacePath,
   });
-  const publishedHeadSha = await resolveManualDraftPrHead({ ssh: input.ssh, target, workspacePath });
 
   return await publishDraftPullRequestWithDurableLease(
     {
@@ -447,10 +450,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
 }
 
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
-  // Callers MUST pass `githubCredentialRef` directly — the previous
-  // `input.projectConfig?.["githubCredentialRef"]` fallback branch was removed to keep the
-  // credential resolution on a single seam (the caller resolves credentials before
-  // calling; passing through projectConfig invited drift with `resolveCredentials`).
+  // Callers MUST pass githubCredentialRef directly; projectConfig fallback was removed.
   if (typeof input.githubCredentialRef !== "string") {
     throw new TypeError("GitHub credential ref is required");
   }
@@ -458,10 +458,7 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
 }
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
-  // App-installed run: the static ref is OPTIONAL. The App sentinel is an
-  // EMPTY-STRING ref (a present-but-empty string, not `undefined`) — collapse it
-  // (and any whitespace-only value) to "no static ref" so the run mints the App
-  // token, NEVER pushing `""` through the grammar validator (apex v30 crash).
+  // Collapse the App's empty sentinel so it mints a token instead of reaching ref validation.
   return normalizeStaticGithubRef(input.githubCredentialRef);
 }
 
