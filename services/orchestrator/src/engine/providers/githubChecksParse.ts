@@ -37,7 +37,9 @@ function parseRequiredCheckPayload(value: unknown): { contexts: string[]; appIds
     throw new TypeError("GitHub required-status-checks response missing checks or contexts");
   }
 
-  const appIds: Record<string, number> = {};
+  // Context names come from the forge, so this must not inherit object-prototype
+  // keys: a required `__proto__` check is still a real required check.
+  const appIds: Record<string, number> = Object.create(null) as Record<string, number>;
   const appBindings = new Map<string, number | null | undefined>();
   const checkNames = Array.isArray(checks)
     ? checks.map((entry) => {

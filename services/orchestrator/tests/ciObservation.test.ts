@@ -27,6 +27,25 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
       }),
     ).toThrow(/invalid app_id/u);
   });
+  it("preserves a prototype-named app binding through required-check gating", () => {
+    const requiredCheckAppIds = parseRequiredCheckAppIds({
+      checks: [{ context: "__proto__", app_id: 123 }],
+    });
+    expect(Object.getPrototypeOf(requiredCheckAppIds)).toBeNull();
+    expect(requiredCheckAppIds["__proto__"]).toBe(123);
+
+    const observation = evaluateCiObservation(
+      {
+        head: { sha: "abc" },
+        checkRuns: [{ name: "__proto__", status: "completed", conclusion: "success", appId: 999 }],
+        statuses: [],
+        requiredCheckAppIds,
+      },
+      { quarantinedCheckNames: new Set(["__proto__"]) },
+    );
+    expect(observation.status).toBe("failed");
+    expect(observation.failingChecks[0]).toMatchObject({ name: "__proto__", state: "wrong_app_identity" });
+  });
   it("rejects conflicting duplicate required context/app bindings", () => {
     expect(() =>
       parseRequiredCheckAppIds({
