@@ -41,16 +41,17 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
     );
   });
   it("fails closed on malformed or conflicting required-protection evidence", () => {
-    for (const payload of [
-      null,
-      [],
-      { checks: {} },
-      { contexts: {} },
-      { checks: [{ context: 7 }] },
-      { checks: [null] },
-    ]) {
-      expect(() => parseRequiredContexts(payload)).toThrow();
-      expect(() => parseRequiredCheckAppIds(payload)).toThrow();
+    const malformedPayloads: ReadonlyArray<readonly [unknown, RegExp]> = [
+      [null, /not an object/u],
+      [[], /not an object/u],
+      [{ checks: {} }, /non-array checks/u],
+      [{ contexts: {} }, /non-array contexts/u],
+      [{ checks: [{ context: 7 }] }, /missing context/u],
+      [{ checks: [null] }, /not an object/u],
+    ];
+    for (const [payload, reason] of malformedPayloads) {
+      expect(() => parseRequiredContexts(payload)).toThrow(reason);
+      expect(() => parseRequiredCheckAppIds(payload)).toThrow(reason);
     }
     expect(() => parseRequiredContexts({ checks: [{ context: "build", app_id: 123 }], contexts: ["e2e"] })).toThrow(
       /disagreed/u,
