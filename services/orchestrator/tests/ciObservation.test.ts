@@ -40,6 +40,29 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
       /duplicate contexts/u,
     );
   });
+  it("fails closed on malformed or conflicting required-protection evidence", () => {
+    for (const payload of [
+      null,
+      [],
+      { checks: {} },
+      { contexts: {} },
+      { checks: [{ context: 7 }] },
+      { checks: [null] },
+    ]) {
+      expect(() => parseRequiredContexts(payload)).toThrow();
+      expect(() => parseRequiredCheckAppIds(payload)).toThrow();
+    }
+    expect(() => parseRequiredContexts({ checks: [{ context: "build", app_id: 123 }], contexts: ["e2e"] })).toThrow(
+      /disagreed/u,
+    );
+    expect(() => parseRequiredContexts({ checks: [], contexts: ["build"] })).toThrow(/disagreed/u);
+    // An explicit empty array is the only valid no-required-check proof; the
+    // two response representations cannot disagree about it.
+    expect(parseRequiredContexts({ checks: [] })).toEqual([]);
+    expect(parseRequiredContexts({ contexts: [] })).toEqual([]);
+    expect(parseRequiredContexts({ contexts: ["legacy"] })).toEqual(["legacy"]);
+    expect(parseRequiredCheckAppIds({ contexts: ["legacy"] })).toEqual({});
+  });
   it("parses GitHub PR URLs and classifies pending, passing, and failing checks", () => {
     expect(parseGitHubPullRequestUrl("https://github.com/cat-cave/tanren-fixture-easy/pull/1")).toEqual({
       repo: { owner: "cat-cave", name: "tanren-fixture-easy" },
