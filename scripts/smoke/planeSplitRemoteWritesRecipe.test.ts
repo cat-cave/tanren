@@ -28,11 +28,25 @@ describe("remote-writes smoke recipe", () => {
       TANREN_PORT_OFFSET: "100",
     });
     expect(probe).toMatchObject({
-      TANREN_DATAPLANE_DATABASE_URL: "postgres://tanren_dataplane:tanren_dataplane@localhost:5532/tanren",
+      TANREN_DATAPLANE_DATABASE_URL: "postgres://localhost:5532/tanren",
+      DATABASE_URL: "postgres://localhost:5532/tanren",
+      TANREN_APP_DATABASE_URL: "postgres://localhost:5532/tanren",
     });
     expect(await readFile(justfile, "utf8")).toContain(
       "bash scripts/smoke/plane-split-worker-remote-writes.sh --validate",
     );
+  });
+
+  it("accepts a valid explicit URL during the pre-compose validation phase", async () => {
+    await expect(
+      execFileAsync("bash", [script, "--validate"], {
+        env: {
+          ...process.env,
+          DATABASE_URL: "postgres://user:secret@localhost:5532/tanren",
+          TANREN_PORT_OFFSET: "100",
+        },
+      }),
+    ).resolves.toMatchObject({ stdout: "" });
   });
 
   it("rejects malformed URLs and offsets before any probe", async () => {

@@ -22,7 +22,9 @@ validate_port() {
 validate_database_url() {
   local name="$1" value="$2"
   if ! node --input-type=module - "$value" >/dev/null 2>&1 <<'NODE'
-const raw = process.argv[2];
+// `node - <arg>` has used both argv[1] and argv[2] across supported launchers;
+// the final argument is the only stable position after the stdin script marker.
+const raw = process.argv.at(-1);
 let parsed;
 try { parsed = new URL(raw); } catch { process.exit(2); }
 if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !parsed.pathname || parsed.pathname === '/') process.exit(2);
@@ -34,6 +36,13 @@ NODE
     echo "remote-writes smoke: ${name} must be an explicit postgres URL with a valid host, database, and port" >&2
     return 2
   fi
+}
+
+redact_database_url() {
+  node --input-type=module - "$1" <<'NODE'
+const parsed = new URL(process.argv.at(-1));
+process.stdout.write(`${parsed.protocol}//${parsed.hostname}:${parsed.port}${parsed.pathname}`);
+NODE
 }
 
 resolve_config() {
@@ -97,9 +106,9 @@ if [[ "${TANREN_SMOKE_REMOTE_WRITES_DRY_RUN:-0}" == "1" ]]; then
   printf '%s\n' \
     "TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=${TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE}" \
     "TANREN_CLAIM_ENDPOINT_SMOKE_URL=${TANREN_CLAIM_ENDPOINT_SMOKE_URL}" \
-    "TANREN_APP_DATABASE_URL=${TANREN_APP_DATABASE_URL}" \
-    "TANREN_DATAPLANE_DATABASE_URL=${TANREN_DATAPLANE_DATABASE_URL}" \
-    "DATABASE_URL=${DATABASE_URL}"
+    "TANREN_APP_DATABASE_URL=$(redact_database_url "$TANREN_APP_DATABASE_URL")" \
+    "TANREN_DATAPLANE_DATABASE_URL=$(redact_database_url "$TANREN_DATAPLANE_DATABASE_URL")" \
+    "DATABASE_URL=$(redact_database_url "$DATABASE_URL")"
   exit 0
 fi
 exec corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
