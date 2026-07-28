@@ -46,9 +46,13 @@ export function evaluateCiObservation(
   options: EvaluateCiObservationOptions = {},
 ): CiObservation {
   const quarantined = options.quarantinedCheckNames ?? new Set<string>();
-  const required = checks.requiredContexts;
-  const gated = required !== undefined && required.length > 0;
-  const requiredSet = new Set(required ?? []);
+  // An app binding is itself an exact required-check declaration. Treat its
+  // context as gated even if a caller accidentally omits the parallel
+  // `requiredContexts` list; otherwise quarantine could suppress a wrong-app
+  // failure and turn the snapshot green.
+  const required = [...new Set([...(checks.requiredContexts ?? []), ...Object.keys(checks.requiredCheckAppIds ?? {})])];
+  const gated = required.length > 0;
+  const requiredSet = new Set(required);
   const allFailing = [
     ...checks.checkRuns
       .filter(

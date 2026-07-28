@@ -185,5 +185,20 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
     });
     expect(legacyStatus.status).toBe("pending");
     expect(legacyStatus.pendingChecks[0]).toMatchObject({ name: "build", state: "expected" });
+
+    const appBoundWithoutContextList = evaluateCiObservation(
+      {
+        head: { sha: "abc" },
+        checkRuns: [{ name: "build", status: "completed", conclusion: "success", appId: 999 }],
+        statuses: [],
+        requiredCheckAppIds: { build: 123 },
+      },
+      { quarantinedCheckNames: new Set(["build"]) },
+    );
+    expect(appBoundWithoutContextList.status).toBe("failed");
+    expect(appBoundWithoutContextList.failingChecks[0]).toMatchObject({
+      name: "build",
+      state: "wrong_app_identity",
+    });
   });
 });
