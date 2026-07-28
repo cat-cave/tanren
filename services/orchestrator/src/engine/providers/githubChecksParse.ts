@@ -21,18 +21,33 @@ export function parseRequiredContexts(value: unknown): string[] | undefined {
   // `checks` shape first, then the flat `contexts` list.
   const checks = object["checks"];
   if (Array.isArray(checks)) {
-    const names = checks
-      .map((entry) =>
-        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined,
-      )
-      .filter((name): name is string => typeof name === "string");
-    if (names.length > 0) {
-      return names;
+    const names = checks.map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new TypeError("GitHub required check was not an object");
+      }
+      const name = (entry as Record<string, unknown>)["context"];
+      if (typeof name !== "string" || name.trim() === "") {
+        throw new TypeError("GitHub required check missing context");
+      }
+      return name;
+    });
+    if (new Set(names).size !== names.length) {
+      throw new Error("GitHub required checks contained duplicate contexts");
     }
+    if (names.length > 0) return names;
   }
   const contexts = object["contexts"];
   if (Array.isArray(contexts)) {
-    return contexts.filter((name): name is string => typeof name === "string");
+    const names = contexts.map((name) => {
+      if (typeof name !== "string" || name.trim() === "") {
+        throw new TypeError("GitHub required contexts contained an invalid context");
+      }
+      return name;
+    });
+    if (new Set(names).size !== names.length) {
+      throw new Error("GitHub required contexts contained duplicate contexts");
+    }
+    return names;
   }
   return [];
 }
@@ -48,7 +63,19 @@ export function parseRequiredCheckAppIds(value: unknown): Record<string, number>
     const row = entry as Record<string, unknown>;
     const context = row["context"];
     const appId = row["app_id"];
-    if (typeof context === "string" && context !== "" && typeof appId === "number" && Number.isInteger(appId)) {
+    if (typeof context !== "string" || context.trim() === "") continue;
+    if (
+      appId !== undefined &&
+      appId !== null &&
+      (typeof appId !== "number" || !Number.isSafeInteger(appId) || appId < 0)
+    ) {
+      throw new TypeError(`GitHub required check ${context} had an invalid app_id`);
+    }
+    if (typeof appId === "number") {
+      const previous = result[context];
+      if (previous !== undefined && previous !== appId) {
+        throw new Error(`GitHub required check ${context} had conflicting app_id bindings`);
+      }
       result[context] = appId;
     }
   }

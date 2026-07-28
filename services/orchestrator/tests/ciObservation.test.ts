@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parseGitHubPullRequestUrl } from "../src/engine/providers/github.js";
-import { parseRequiredCheckAppIds } from "../src/engine/providers/githubChecksParse.js";
+import { parseRequiredCheckAppIds, parseRequiredContexts } from "../src/engine/providers/githubChecksParse.js";
 import { evaluateCiObservation } from "../src/engine/workflow/ciObservation.js";
 
 describe("evaluateCiObservation — forge check snapshot reducer", () => {
@@ -19,6 +19,26 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
         ],
       }),
     ).toEqual({ build: 123 });
+  });
+  it("rejects malformed required app identities instead of dropping the binding", () => {
+    expect(() =>
+      parseRequiredCheckAppIds({
+        checks: [{ context: "build", app_id: "123" }],
+      }),
+    ).toThrow(/invalid app_id/u);
+  });
+  it("rejects conflicting duplicate required context/app bindings", () => {
+    expect(() =>
+      parseRequiredCheckAppIds({
+        checks: [
+          { context: "build", app_id: 123 },
+          { context: "build", app_id: 456 },
+        ],
+      }),
+    ).toThrow(/conflicting app_id/u);
+    expect(() => parseRequiredContexts({ checks: [{ context: "build" }, { context: "build" }] })).toThrow(
+      /duplicate contexts/u,
+    );
   });
   it("parses GitHub PR URLs and classifies pending, passing, and failing checks", () => {
     expect(parseGitHubPullRequestUrl("https://github.com/cat-cave/tanren-fixture-easy/pull/1")).toEqual({
