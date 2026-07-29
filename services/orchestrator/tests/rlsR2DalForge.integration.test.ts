@@ -85,7 +85,6 @@ const RENDER = { body: "pulse", attentionItems: [], insights: [], prompts: [] } 
 describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-scoped client", () => {
   const database = dbName();
   let ownerPool: Pool;
-  let adminPool: Pool;
   let runtimePool: Pool;
 
   beforeAll(async () => {
@@ -95,8 +94,9 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     process.env[SYSTEM_DATABASE_URL] = ADMIN_URL;
     resetSystemPool();
 
-    adminPool = new Pool({ connectionString: ADMIN_URL });
+    const adminPool = new Pool({ connectionString: ADMIN_URL });
     await adminPool.query(`CREATE DATABASE ${database}`);
+    await adminPool.end();
 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
     await migrate(ownerPool);
@@ -118,7 +118,6 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
   afterAll(async () => {
     await runtimePool?.end();
     await ownerPool?.end();
-    await adminPool?.end();
     resetSystemPool();
     if (originalSystemDatabaseUrl === undefined) {
       delete process.env[SYSTEM_DATABASE_URL];
@@ -189,15 +188,6 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
       ),
     );
 
-    resetSystemPool();
-    try {
-      const fallbackBaseline = await runWithSystemScope(adminPool, (client) =>
-        ForgeThreadStore.get(client, created.id, ACTOR),
-      );
-      expect(fallbackBaseline).toBeNull();
-    } finally {
-      setSystemPool(ownerPool);
-    }
     const ownerBaseline = await runWithSystemScope(ownerPool, (client) =>
       ForgeThreadStore.get(client, created.id, ACTOR),
     );

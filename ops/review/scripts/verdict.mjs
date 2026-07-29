@@ -8,8 +8,16 @@
 // post-review.mjs STILL posts a REAL Approve / Request-changes review (the actual
 // code review); this status just mirrors that decision as the enforceable gate.
 //
-//   state = success  iff  (open P0/P1 count == 0)  AND  (no rule_change)
+//   state = success  iff  review_complete==true            (the review CERTIFIED)
+//                     AND  (open P0/P1 count == 0)
+//                     AND  (no rule_change)
 //           failure  otherwise
+//
+// FAIL-CLOSED (do not regress): zero findings is "clean" ONLY when OCR actually
+// ran and certified. A crash, a missing LLM key (fork PRs get no secret), or a
+// partial stream also yields zero findings — so an absent/false review_complete
+// forces FAILURE. The historical fail-open was treating empty ⇒ success, which
+// green-lit unreviewed code. review_complete is stamped by the untrusted lane.
 //
 // A `rule_change` (the PR touches ops/review/**, .opencodereview/**, or the
 // ocr-* workflows) always FAILs the gate — a PR cannot weaken its own reviewer
@@ -56,25 +64,38 @@ function isGate(p) {
   return p === "P0" || p === "P1";
 }
 
-export function computeVerdict({ findings = [], ruleChange = false }) {
+// FAIL CLOSED. `reviewComplete` must be EXPLICITLY true for the gate to pass:
+// zero findings is "clean" only if OCR actually ran and certified. A crash, a
+// missing LLM key (fork PRs get no secret), or a partial stream yields zero
+// findings too — treating that as success is a merge-gate fail-open. So an
+// absent/false reviewComplete forces failure regardless of the finding count.
+export function computeVerdict({ findings = [], ruleChange = false, reviewComplete = false }) {
+  const certified = reviewComplete === true;
   const active = findings.filter((f) => f.state !== "addressed");
   const openGate = active.filter((f) => isGate(f.priority));
   const ruleChangeFinding = active.some(
     (f) => f.category === "rule_change" || f.priority === "rule_change" || f.rule_change === true,
   );
   const rc = Boolean(ruleChange) || ruleChangeFinding;
-  const pass = openGate.length === 0 && !rc;
+  const pass = certified && openGate.length === 0 && !rc;
   const reasons = [];
+  if (!certified) reasons.push("review did not complete — cannot certify (fail-closed)");
   if (openGate.length > 0) reasons.push(`${openGate.length} open P0/P1`);
   if (rc) reasons.push("reviewer-config change (rule_change) — maintainer review required");
   const description = pass ? "OCR review: no open P0/P1" : `OCR review: ${reasons.join("; ")}`.slice(0, 140);
-  return { state: pass ? "success" : "failure", description, openGate: openGate.length, ruleChange: rc };
+  return {
+    state: pass ? "success" : "failure",
+    description,
+    openGate: openGate.length,
+    ruleChange: rc,
+    reviewComplete: certified,
+  };
 }
 
-function setStatus({ sha, findings, marker, ruleChange, targetUrl, dryRun = false }) {
+function setStatus({ sha, findings, marker, ruleChange, reviewComplete, targetUrl, dryRun = false }) {
   if (!sha || !SHA_RE.test(sha))
     throw new Error(`refusing to set status on invalid/unsanitized sha: ${JSON.stringify(sha)}`);
-  const { state, description } = computeVerdict({ findings, marker, ruleChange });
+  const { state, description } = computeVerdict({ findings, marker, ruleChange, reviewComplete });
   // --dry-run: compute the verdict and print it, but set NO commit status (no gh).
   if (dryRun) {
     process.stdout.write(JSON.stringify({ dryRun: true, context: CONTEXT, sha, state, description }, null, 2) + "\n");
@@ -124,24 +145,38 @@ process.stdout.write("null");
 }
 
 async function selftest() {
-  // Pure verdict logic.
+  // Pure verdict logic. A pass REQUIRES reviewComplete:true (fail-closed).
   const passCase = computeVerdict({
+    reviewComplete: true,
     findings: [
       { priority: "P2", state: "new" },
       { priority: "P0", state: "addressed" },
     ],
   });
-  const failGate = computeVerdict({ findings: [{ priority: "P1", state: "carried" }] });
-  const failRule = computeVerdict({ findings: [], ruleChange: true });
+  const failGate = computeVerdict({ reviewComplete: true, findings: [{ priority: "P1", state: "carried" }] });
+  const failRule = computeVerdict({ reviewComplete: true, findings: [], ruleChange: true });
+  // THE fail-open regression pin: a review that did NOT complete must FAIL even
+  // with zero findings (crash / missing LLM key / partial stream ⇒ empty ≠ clean).
+  const failIncomplete = computeVerdict({ reviewComplete: false, findings: [] });
+  // And the historical bug shape exactly: no args at all ⇒ not certified ⇒ fail.
+  const failDefault = computeVerdict({ findings: [] });
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-verdict-"));
   const capture = path.join(dir, "calls.jsonl");
   fs.writeFileSync(capture, "");
   process.env.GH = writeMockGh(dir, capture);
 
-  const set = await setStatus({ sha: "abc1234", findings: [{ priority: "P1", state: "carried" }], ruleChange: false });
+  const set = await setStatus({
+    sha: "abc1234",
+    findings: [{ priority: "P1", state: "carried" }],
+    ruleChange: false,
+    reviewComplete: true,
+  });
   const call = JSON.parse(fs.readFileSync(capture, "utf8").trim().split("\n")[0]);
   const flat = call.join(" ");
+
+  // setStatus with reviewComplete omitted ⇒ must post FAILURE (fail-closed path).
+  const setIncomplete = await setStatus({ sha: "def5678", findings: [] });
 
   let badSha = false;
   try {
@@ -151,13 +186,19 @@ async function selftest() {
   }
 
   const checks = [
-    [passCase.state === "success", "success iff open P0/P1 == 0 (addressed P0 does not gate)"],
+    [passCase.state === "success", "success iff certified AND open P0/P1 == 0 (addressed P0 does not gate)"],
     [failGate.state === "failure", "failure on open P1"],
     [
       failRule.state === "failure" && /rule_change/iu.test(failRule.description),
       "rule_change forces failure (#SECURITY-4)",
     ],
+    [
+      failIncomplete.state === "failure" && /did not complete/iu.test(failIncomplete.description),
+      "FAIL-CLOSED: uncertified review fails even with zero findings",
+    ],
+    [failDefault.state === "failure", "FAIL-CLOSED: reviewComplete defaults to not-certified"],
     [set.state === "failure", "setStatus posted failure"],
+    [setIncomplete.state === "failure", "setStatus fails closed when reviewComplete omitted"],
     [/statuses\/abc1234/u.test(flat), "status bound to the exact sha (#16)"],
     [/context=review\/verdict/u.test(flat), "context=review/verdict"],
     [badSha, "rejects an unsanitized/leading-dash sha"],
@@ -184,6 +225,9 @@ function parseArgs(argv) {
     // accepted for workflow symmetry (unused: status is per-sha)
     else if (t === "--pr") a.pr = argv[++i];
     else if (t === "--rule-change") a.ruleChange = true;
+    // Explicit completeness override (else read from the artifact's review_complete).
+    else if (t === "--review-complete") a.reviewComplete = true;
+    else if (t === "--no-review-complete") a.reviewComplete = false;
     else if (t === "--target-url") a.targetUrl = argv[++i];
     else if (t === "--dry-run") a.dryRun = true;
     else a._.push(t);
@@ -195,12 +239,15 @@ function help() {
   console.log(
     `verdict.mjs — set the review/verdict commit status (the merge gate, per-sha #16)\n\n` +
       `  --sha <sha>        head sha to bind the status to (required, validated ^[0-9a-f]{7,40}$)\n` +
-      `  --in <file>        reconcile JSON {findings,marker} (else stdin)\n` +
+      `  --in <file>        review-output JSON {findings,marker,review_complete} (else stdin)\n` +
       `  --rule-change      force failure (PR modifies the reviewer config)\n` +
+      `  --review-complete  force-certify (else read review_complete from --in)\n` +
       `  --target-url <url> optional status details URL\n` +
       `  --selftest         run offline fixture test\n` +
       `  --help             this text\n\n` +
-      `success iff open P0/P1 == 0 AND no rule_change. The gate is a STATUS, not an approval.\n`,
+      `success iff review_complete AND open P0/P1 == 0 AND no rule_change. FAIL-CLOSED:\n` +
+      `an uncertified review (crash / missing key / partial) never passes. The gate is a\n` +
+      `STATUS, not an approval.\n`,
   );
 }
 
@@ -213,11 +260,15 @@ async function main() {
     process.exit(2);
   }
   const input = readInput(args.in);
+  // Certify from the CLI flag when given, else from the artifact. Fail-closed:
+  // a missing review_complete field (older/garbled artifact) is NOT certified.
+  const reviewComplete = args.reviewComplete === undefined ? input.review_complete === true : args.reviewComplete;
   const res = await setStatus({
     sha: args.sha,
     findings: input.findings || [],
     marker: input.marker,
     ruleChange: args.ruleChange || process.env.RULE_CHANGE === "true",
+    reviewComplete,
     targetUrl: args.targetUrl,
     dryRun: args.dryRun,
   });

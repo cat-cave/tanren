@@ -1,5 +1,7 @@
 import type { SensitivityRule } from "./sensitivity.js";
 
+export { dagSensitivityRules } from "./sensitivityRules.dag.js";
+
 // SPEC-LOOP REDESIGN sensitivity rules (docs/roadmap/spec-loop-redesign.md): the new
 // per-spec stage events — demo-run, triage, convergence. All public: findings,
 // work-items, and convergence reads are product-quality narration (a finding id /

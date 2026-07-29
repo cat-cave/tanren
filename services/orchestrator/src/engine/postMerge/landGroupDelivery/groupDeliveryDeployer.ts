@@ -10,15 +10,12 @@ import {
   fetchUrlReachabilityProbe,
 } from "../../deploy/buildDeployAdapter.js";
 import { EventReapFailureReporter } from "../../deploy/reapFailureReporter.js";
-import { parseDigest } from "../../contracts/cas.js";
-import type {
-  DeployAdapter,
-  DeployRef,
-  UrlReachabilityProbe,
-  VerifyPollPolicy,
-} from "../../contracts/deployAdapter.js";
+import type { DeployAdapter, UrlReachabilityProbe, VerifyPollPolicy } from "../../contracts/deployAdapter.js";
 import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
-import type { DeploySource } from "../../provisioners/deployProvisioner.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../contracts/integrationAuthority.js";
 import type { EventStore } from "../../eventStore.js";
 import type { ReleaseInstancesRepository } from "../../repositories/releaseInstances.js";
 import { PgBehaviorRevisionResolver } from "../../repositories/behaviorRevisionResolver.js";
@@ -29,8 +26,6 @@ import {
   type ProofBackedWebDemo,
 } from "../../demo/proofBackedWebDemo.js";
 import { createLogger } from "../../observability/logger.js";
-import { pollUntilTerminal } from "../../deploy/pollUntilTerminal.js";
-import { loadDeployOperationGrant, missingDeployGrantError } from "../deployOnMergeAuthority.js";
 import type { SecretStore, DeployHttpTransport } from "../deployOnMergeDeployDeps.js";
 import {
   currentLiveGroupRelease,
@@ -40,7 +35,6 @@ import {
   readBackGroupRelease,
   findGroupLiveProductionRelease,
   findGroupRelease,
-  isHealthySmokeStatus,
   resolveGroupBehaviorRevisionIds,
 } from "./groupDeliveryDeployerHelpers.js";
 import {
@@ -57,6 +51,9 @@ import {
   type PriorGoodRelease,
   type ResolvedGroupDeployTarget,
 } from "./groupDeliveryCore.js";
+import { LandGroupDeliveryRetryableAuthorityError } from "./groupDeliveryRetryableAuthorityError.js";
+import { PgGroupDeliveryAuthority, type GroupDeliveryAuthority } from "./groupDeliveryAuthority.js";
+import { GroupDeliveryProviderEffects } from "./groupDeliveryProviderEffects.js";
 
 const log = createLogger("land-group-delivery-deployer");
 
@@ -68,6 +65,16 @@ const log = createLogger("land-group-delivery-deployer");
 export interface GroupIntentStore {
   writeIntent(orgId: string, landGroupId: string, token: string, step: "preview" | "promote"): Promise<boolean>;
   readIntent(orgId: string, landGroupId: string, step: "preview" | "promote"): Promise<boolean>;
+  /**
+   * Clear only an intent this claimant just wrote when fresh authority fails BEFORE
+   * provider invocation. A lost fence leaves the marker intact and therefore ambiguous.
+   */
+  clearPreEffectAuthorityFailure(
+    orgId: string,
+    landGroupId: string,
+    token: string,
+    step: "preview" | "promote",
+  ): Promise<boolean>;
 }
 
 export interface ProductionGroupDeliveryDeployerDeps {
@@ -88,6 +95,8 @@ export interface ProductionGroupDeliveryDeployerDeps {
    * runtime guard in `markIntentOrAbort` remains as defense-in-depth against a type-cast bypass.
    */
   readonly intentStore: GroupIntentStore;
+  /** Injected only by focused tests; production resolves a fresh exact-operation org grant. */
+  readonly authority?: GroupDeliveryAuthority;
 }
 
 /** The `deploy.<provider>` provider kind maps onto the `deployRef.provider`. */
@@ -96,6 +105,8 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   private readonly behaviorRevisions: PgBehaviorRevisionResolver;
   private readonly proofBackedWebDemo: ProofBackedWebDemo;
   private readonly urlProbe: UrlReachabilityProbe;
+  private readonly authority: GroupDeliveryAuthority;
+  private readonly effects: GroupDeliveryProviderEffects;
 
   constructor(private readonly deps: ProductionGroupDeliveryDeployerDeps) {
     this.releaseInstances = deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool);
@@ -103,27 +114,23 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     this.proofBackedWebDemo =
       deps.proofBackedWebDemo ?? buildProofBackedWebDemo(deps.pool, deps.eventStore, deps.secrets);
     this.urlProbe = deps.urlProbe ?? fetchUrlReachabilityProbe();
+    this.authority = deps.authority ?? new PgGroupDeliveryAuthority(deps.pool);
+    this.effects = new GroupDeliveryProviderEffects({
+      adapterFor: (plan) => this.adapter(plan),
+      urlProbe: this.urlProbe,
+      ...(deps.verifyPoll !== undefined && { verifyPoll: deps.verifyPoll }),
+      grantFor: (plan, target, operation, operationTarget) => this.grant(plan, target, operation, operationTarget),
+    });
   }
 
   async buildArtifact(input: { plan: GroupDeliveryPlan; target: ResolvedGroupDeployTarget }): Promise<GroupArtifact> {
     const { plan, target } = input;
-    const ref = this.ref(target);
-    const source = this.source(plan, target);
     const deployGrant = await this.grant(plan, target, "deploy", {
       resourceId: target.appId,
       sourceRepo: target.repoSlug,
       sourceRef: plan.mainSha,
     });
-    const built = await this.adapter(plan).buildArtifact(
-      {
-        deploy: deployGrant,
-        resolveArtifactIdentity: (deploymentId) =>
-          this.grant(plan, target, "resolve_artifact_identity", { resourceId: target.appId, deploymentId }),
-      },
-      ref,
-      source,
-    );
-    return { artifactDigest: built.artifactDigest, deploymentId: built.deploymentId };
+    return this.effects.buildArtifact(plan, target, deployGrant);
   }
 
   async applyPreview(input: {
@@ -134,7 +141,14 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPreviewOutcome> {
     const { plan, target, artifact } = input;
-    const ref = this.ref(target);
+    const deployTarget = {
+      resourceId: target.appId,
+      sourceRepo: target.repoSlug,
+      sourceRef: plan.mainSha,
+    };
+    // Authority is the first operation. An absent/invalid grant rejects before either
+    // the persistence completion check or any provider call.
+    await this.grant(plan, target, "deploy", deployTarget);
     // COMPLETION CHECK: a persisted release for THIS group's artifact already exists ⇒ REUSE it
     // (idempotent — a takeover after the prior owner persisted the preview).
     const existing = await findGroupRelease(this.deps.pool, plan, target, artifact.artifactDigest);
@@ -163,21 +177,14 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       });
       return { kind: "ambiguous" };
     }
-    // FIRE: write the preview intent FENCED (also the immediate fence-recheck, Finding C) COMMITTED
-    // BEFORE the external deploy. A lost fence ⇒ abort before firing.
-    await this.markIntentOrAbort(plan, input.token, "preview");
     const behaviorRevisionIds = await resolveGroupBehaviorRevisionIds(this.deps.pool, this.behaviorRevisions, plan);
-    const grant = await this.grant(plan, target, "deploy", {
-      resourceId: target.appId,
-      sourceRepo: target.repoSlug,
-      sourceRef: plan.mainSha,
-    });
-    const preview = await this.adapter(plan).applyPreview(grant, ref, {
-      source: this.source(plan, target),
-      artifactDigest: parseDigest(artifact.artifactDigest),
-      integrationNodeId: plan.tailRunId,
-      behaviorRevisionIds,
-    });
+    // Intent must precede the effect, but its fenced DB write is awaitable. Resolve the exact
+    // grant AFTER it, at the provider boundary. If that read proves authority unavailable before
+    // any provider call, clear ONLY this claimant's fenced intent; all other uncertainty stays
+    // ambiguous and is never re-fired.
+    await this.markIntentOrAbort(plan, input.token, "preview");
+    const grant = await this.grantAfterOwnedIntent(plan, target, "deploy", deployTarget, input.token, "preview");
+    const preview = await this.effects.applyPreview(plan, target, artifact, behaviorRevisionIds, grant);
     // NO verify here — the caller runs verifyPreview separately so a verify failure can tear
     // the preview down (Finding 4) instead of leaking it. The preview release is persisted.
     const release = await readBackGroupRelease(this.releaseInstances, plan, target, preview.deploymentId);
@@ -216,6 +223,28 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     }
   }
 
+  /** Resolve fresh authority after intent, undoing only a proven pre-effect failure. */
+  private async grantAfterOwnedIntent(
+    plan: GroupDeliveryPlan,
+    target: ResolvedGroupDeployTarget,
+    operation: IntegrationPrivilegedOperation,
+    operationTarget: IntegrationOperationTarget,
+    token: string | undefined,
+    step: "preview" | "promote",
+  ): Promise<OrgGrant> {
+    try {
+      return await this.grant(plan, target, operation, operationTarget);
+    } catch (error) {
+      if (
+        token === undefined ||
+        !(await this.deps.intentStore.clearPreEffectAuthorityFailure(plan.orgId, plan.landGroupId, token, step))
+      ) {
+        throw new LandGroupDeliveryClaimLostError(plan.landGroupId);
+      }
+      throw new LandGroupDeliveryRetryableAuthorityError(step, error);
+    }
+  }
+
   async verifyPreview(input: {
     plan: GroupDeliveryPlan;
     target: ResolvedGroupDeployTarget;
@@ -224,7 +253,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
   }): Promise<void> {
     // Preview-safe readiness: poll status to READY + smoke-check the URL (NO markLive). Throws
     // LOUD when the preview never becomes reachable (the core tears it down → preview_failed).
-    await this.verifyReadiness(input.plan, input.target, input.preview.previewDeploymentId, input.heartbeat);
+    await this.effects.verifyReadiness(input.plan, input.target, input.preview.previewDeploymentId, input.heartbeat);
   }
 
   async demo(input: {
@@ -272,7 +301,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       resourceId: target.appId,
       deploymentId: input.previewDeploymentId,
     });
-    await this.adapter(plan).teardownPreview(grant, this.ref(target), input.previewDeploymentId);
+    await this.effects.teardownPreview(plan, target, input.previewDeploymentId, grant);
   }
 
   async promote(input: {
@@ -284,7 +313,13 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     heartbeat?: () => Promise<void>;
   }): Promise<GroupPromoteOutcome> {
     const { plan, target, artifact, preview } = input;
-    const ref = this.ref(target);
+    const promoteTarget = {
+      resourceId: target.appId,
+      deploymentId: preview.previewDeploymentId,
+    };
+    // Authority is the first operation. An absent/invalid promote grant rejects before
+    // any durable release read, intent marker read/write, or provider effect.
+    await this.grant(plan, target, "promote", promoteTarget);
     const current = await currentLiveGroupRelease(this.deps.pool, plan, target);
     // COMPLETION CHECK: THIS group's artifact is ALREADY the live production release ⇒ the promote
     // has COMMITTED. NO-OP — but ENSURE `deploy.verified` is emitted (Finding B: a prior owner may
@@ -330,22 +365,22 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
       });
       return { kind: "ambiguous" };
     }
-    // FIRE: write the promote intent FENCED (the atomic immediate fence-recheck, Finding C)
-    // COMMITTED IMMEDIATELY BEFORE the external promote. A lost fence ⇒ abort before firing. This
-    // is the tightest boundary — write intent, then the external call, then the durable completion.
+    // As preview: write the fenced proof first, then acquire fresh exact authority directly at
+    // the provider boundary. Only a proven pre-effect authority failure may clear this owned
+    // marker; a crash, lost fence, or provider error remains ambiguous and never re-fires.
     await this.markIntentOrAbort(plan, input.token, "promote");
+    const grant = await this.grantAfterOwnedIntent(plan, target, "promote", promoteTarget, input.token, "promote");
     const prior = current;
-    const grant = await this.grant(plan, target, "promote", {
-      resourceId: target.appId,
-      deploymentId: preview.previewDeploymentId,
-    });
-    const transition = await this.adapter(plan).promote(grant, ref, {
-      deploymentId: preview.previewDeploymentId,
-      artifactDigest: parseDigest(artifact.artifactDigest),
-      previousReleaseInstanceId: prior?.releaseInstanceId ?? null,
-    });
+    const transition = await this.effects.promote(
+      plan,
+      target,
+      artifact,
+      preview,
+      prior?.releaseInstanceId ?? null,
+      grant,
+    );
     // Production verify (the markLive path is correct here — the release IS production now).
-    const verified = await this.verifyReadiness(plan, target, transition.deploymentId, input.heartbeat);
+    const verified = await this.effects.verifyReadiness(plan, target, transition.deploymentId, input.heartbeat);
     // Finding 2: durably emit the GROUP's `deploy.verified` on the tail run (idempotently) so mq-15
     // seals + ds-6 joins from the group's evidence. Bound to the LIVE production deployment.
     await emitGroupDeployVerified({ pool: this.deps.pool, eventStore: this.deps.eventStore }, plan, target, {
@@ -404,10 +439,7 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     });
     // The REAL traffic rollback to the persisted prior-good lineage — throws LOUD if it does
     // not genuinely succeed (the caller degrades to needs_attention, never a pretended rollback).
-    await this.adapter(plan).rollback(grant, this.ref(target), {
-      targetArtifactDigest: parseDigest(priorGood.artifactDigest),
-      targetReleaseInstanceId: priorGood.releaseInstanceId,
-    });
+    await this.effects.rollback(plan, target, priorGood, grant);
   }
 
   // ---- private wiring -----------------------------------------------------------------
@@ -424,76 +456,12 @@ export class ProductionGroupDeliveryDeployer implements GroupDeliveryDeployer {
     });
   }
 
-  private ref(target: ResolvedGroupDeployTarget): DeployRef {
-    return { provider: target.provider, appId: target.appId };
-  }
-
-  private source(plan: GroupDeliveryPlan, target: ResolvedGroupDeployTarget): DeploySource {
-    return { repo: target.repoSlug, ref: plan.mainSha };
-  }
-
   private async grant(
     plan: GroupDeliveryPlan,
     target: ResolvedGroupDeployTarget,
-    operation: "deploy" | "resolve_artifact_identity" | "promote" | "rollback" | "teardown_deployment",
-    operationTarget: { resourceId?: string; deploymentId?: string; sourceRepo?: string; sourceRef?: string },
+    operation: IntegrationPrivilegedOperation,
+    operationTarget: IntegrationOperationTarget,
   ): Promise<OrgGrant> {
-    const grant = await loadDeployOperationGrant(
-      this.deps.pool,
-      plan.projectId,
-      { provider: target.provider, orgId: plan.orgId },
-      operation,
-      operationTarget,
-    );
-    if (grant === undefined) {
-      throw missingDeployGrantError(plan.projectId, { provider: target.provider, orgId: plan.orgId }, operation);
-    }
-    return grant;
-  }
-
-  /**
-   * Poll the provider deployment status to READY (unbounded while advancing) + smoke-check the
-   * URL. Returns the verification (final state + resolved URL + smoke status) so the caller can
-   * bind the group's `deploy.verified` to the live deployment. Throws LOUD on a failure/stuck
-   * terminal or an unreachable URL.
-   */
-  private async verifyReadiness(
-    plan: GroupDeliveryPlan,
-    target: ResolvedGroupDeployTarget,
-    deploymentId: string,
-    heartbeat?: () => Promise<void>,
-  ): Promise<{ state: string; url: string; smokeStatus: number }> {
-    const ref = this.ref(target);
-    const adapter = this.adapter(plan);
-    const { poll } = await pollUntilTerminal<{ state: string; ready: boolean; failed: boolean; url: string }>({
-      readState: async () => {
-        // Per-poll liveness sign-of-life: an unbounded-but-progressing verify keeps the delivery
-        // claim fresh so a live owner is NEVER taken over (Finding 5 — no double-deploy). A lost
-        // claim throws here, aborting the drive before any further external effect.
-        if (heartbeat !== undefined) await heartbeat();
-        const grant = await this.grant(plan, target, "deploy", { resourceId: target.appId, deploymentId });
-        const status = await adapter.status(grant, ref, deploymentId);
-        return { state: status.state, ready: status.ready, failed: status.failed, url: status.url };
-      },
-      onFailureTerminal: (state) =>
-        new Error(
-          `land-group delivery: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' reached FAILURE state '${state}'`,
-        ),
-      onStuck: (state, polls) =>
-        new Error(`land-group delivery: deployment '${deploymentId}' STUCK in '${state}' after ${String(polls)} polls`),
-      intervalMs: this.deps.verifyPoll?.intervalMs ?? 5000,
-    });
-    if (poll.url === "") {
-      throw new Error(
-        `land-group delivery: deployment '${deploymentId}' READY but the provider returned no URL to smoke-check`,
-      );
-    }
-    const smoke = await this.urlProbe.probe(poll.url);
-    if (!isHealthySmokeStatus(smoke)) {
-      throw new Error(
-        `land-group delivery: deployment '${deploymentId}' URL '${poll.url}' not reachable (HTTP ${String(smoke)})`,
-      );
-    }
-    return { state: poll.state, url: poll.url, smokeStatus: smoke };
+    return this.authority.require(plan, target, operation, operationTarget);
   }
 }

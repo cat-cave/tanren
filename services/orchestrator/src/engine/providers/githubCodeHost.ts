@@ -445,6 +445,9 @@ export class GitHubCodeHost implements CodeHost {
     // attempt of this same effect intent landed — a successful no-op, not a re-land (the
     // git host + Postgres cannot share a txn, so step 2 is safely retryable).
     if (current === input.authorizedSha) {
+      // A prior transport-loss attempt may have moved main without reaching its cache
+      // invalidation. Fence any pre-land flight before reporting this effect as complete.
+      this.mainHeadCache.invalidate(mainHeadCacheKey(input.repo.owner, input.repo.name, input.intoMain));
       return { mainSha: input.authorizedSha };
     }
     if (current !== input.expectedMainSha) {

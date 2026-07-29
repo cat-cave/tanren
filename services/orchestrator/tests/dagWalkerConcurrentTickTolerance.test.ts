@@ -175,8 +175,10 @@ describe("DagWalker benign-skip tolerance — a typed benign per-spec error is a
     expect(result.enqueuedRunIds).toEqual([]);
     // The enqueued event NEVER fired; since the only ready spec was skipped, the
     // tick emits the drained outcome — the shape a no-op tick takes, NOT an error.
-    expect(emitted).not.toContain("dag.spec.enqueued");
-    expect(emitted).toContain("dag.drained");
+    // Negative control: a stale/concurrent-claim error must remain a benign
+    // no-op. Its exact externally-visible transition is a single terminal drain,
+    // never an enqueued event or an extra reordered effect.
+    expect(emitted).toEqual(["dag.drained"]);
   });
 
   // The crux of the fix: a benign skip of ONE spec must NOT abort the tick — the
