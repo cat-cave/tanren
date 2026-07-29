@@ -40,6 +40,11 @@ interface InflightEntry {
 export class MainHeadCache {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, InflightEntry>();
+  // Keep the generation fence alive while superseded flights are still settling.
+  // The current-flight map intentionally points only at the newest generation,
+  // so it cannot by itself tell us that an older promise is still capable of
+  // publishing a result.
+  private readonly flightCounts = new Map<string, number>();
   private readonly generations = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
@@ -84,12 +89,16 @@ export class MainHeadCache {
         if (this.inflight.get(key)?.promise === promise) {
           this.inflight.delete(key);
         }
+        const remainingFlights = (this.flightCounts.get(key) ?? 1) - 1;
+        if (remainingFlights > 0) this.flightCounts.set(key, remainingFlights);
+        else this.flightCounts.delete(key);
         // Once the flight settles, a generation with no entry or flight has
         // no stale observer left that could reuse it, so reclaim its metadata.
-        if (!this.entries.has(key) && !this.inflight.has(key)) {
+        if (!this.entries.has(key) && !this.inflight.has(key) && !this.flightCounts.has(key)) {
           this.generations.delete(key);
         }
       });
+    this.flightCounts.set(key, (this.flightCounts.get(key) ?? 0) + 1);
     this.inflight.set(key, { generation, promise });
     return promise;
   }
@@ -97,7 +106,7 @@ export class MainHeadCache {
   /** Bust the cached head for `key` (call when a merge to that branch completes). */
   invalidate(key: string): void {
     this.entries.delete(key);
-    if (this.inflight.has(key)) {
+    if (this.inflight.has(key) || (this.flightCounts.get(key) ?? 0) > 0) {
       this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
     } else {
       this.generations.delete(key);

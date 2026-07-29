@@ -125,6 +125,31 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
     await expect(Promise.all([fresh, joined])).resolves.toEqual(["fresh", "fresh"]);
   });
 
+  it("keeps the invalidation fence while a superseded flight is still settling", async () => {
+    const cache = new MainHeadCache();
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const stale = cache.read("k", async () => {
+      await staleGate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    const rejected = cache.read("k", async () => {
+      throw new Error("fresh read failed");
+    });
+    await expect(rejected).rejects.toThrow("fresh read failed");
+
+    // The replacement's finalizer must not reclaim generation 1 while the
+    // superseded generation-0 promise can still settle and publish.
+    const fresh = cache.read("k", async () => "fresh");
+    await expect(fresh).resolves.toBe("fresh");
+    releaseStale();
+    await expect(stale).resolves.toBe("stale");
+    expect(await cache.read("k", async () => "wrong")).toBe("fresh");
+  });
+
   it("fences an invalidation re-entered by the reader before it resolves", async () => {
     const cache = new MainHeadCache();
     let reads = 0;
