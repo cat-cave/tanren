@@ -443,48 +443,5 @@ export const UsageTokenAccountingFailedPayload = z
   })
   .strict();
 
-// cost.provider_capture_failed (silent-fallback hardening, finding 5) — the
-// MANAGED OpenRouter per-call real-cost query (`/api/v1/generation`) failed
-// (auth / transport / API error). The platform IS the biller, so this erases
-// AUTHORITATIVE real platform spend — surfaced LOUDLY (not silently nulled).
-// Names the generation id + a secret-free diagnostic tail; no secret value.
-export const CostProviderCaptureFailedPayload = z
-  .object({
-    generationId: z.string(),
-    detail: z.string(),
-    reason: z.string(),
-  })
-  .strict();
-
-// cost.notional_unpriced (silent-fallback hardening, finding 6) — a call's MODEL
-// is not in the maintained LiteLLM price source, so its NOTIONAL (list-value)
-// figure is NULL. Notional is the comparable, forecastable figure for every
-// billing mode; a model-id drift silently dropping it is surfaced LOUDLY so an
-// operator notices the price-source gap. Names the provider + model (secret-free).
-export const CostNotionalUnpricedPayload = z
-  .object({
-    provider: z.string(),
-    model: z.string(),
-    cli: z.string(),
-    taskId: z.string(),
-    reason: z.string(),
-  })
-  .strict();
-
-// cost.reconcile_failed (silent-fallback hardening, finding 7) — a run-end cost
-// reconcile resolved a POSITIVE real dollar total (ccusage / credit drawdown) but
-// could apply it to NO cost_records row (no rows for the run, or a zero total-token
-// denominator). The observed real spend would otherwise silently vanish — surfaced
-// LOUDLY so the lost attribution is visible. Names the basis + the un-applied total.
-export const CostReconcileFailedPayload = z
-  .object({
-    basis: z.enum(["ccusage", "credits"]),
-    totalCostUsd: z.number(),
-    reason: z.enum(["no_rows", "zero_token_denominator"]),
-    reasonText: z.string(),
-  })
-  .strict();
-
-// Codex critic #18 usage.accounting_failed — peeled off to schemas/usage.ts for
-// the 500-line cap, re-exported here so registry.ts imports through one path.
+export * from "./costFailures.js";
 export { UsageAccountingFailedPayload } from "./usage.js";

@@ -38,44 +38,27 @@ name: ocr-review-untrusted
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # FORK-PR REVIEW (authorized-`/review` command) — see the block below.
+  issue_comment:
+    types: [created]
 
-# ============================================================================
-# FORK-PR REVIEW (maintainer-triggered) — do not auto-run OCR on fork code + key.
-#
-# The auto path above is for SAME-REPO PRs: GitHub only injects
-# `secrets.OPENROUTER_API_KEY` when the PR head is a branch of THIS repo, so a
-# fork PR's `pull_request` run has no key and OCR yields empty findings — safe
-# by design. Reviewing a fork requires running OCR (with the key) against
-# untrusted fork code, which a maintainer must consciously authorize AFTER
-# eyeballing the fork diff. That is a deliberate, gated action — never automatic.
-#
-# To wire it, add an `issue_comment`-triggered job that:
-#   on:
-#     issue_comment:
-#       types: [created]
-#   jobs:
-#     fork-review:
-#       # 1. Only PR comments, only the `/review` command.
-#       # 2. Only a trusted commenter — author_association MUST be one of
-#       #    OWNER / MEMBER / COLLABORATOR (a fork author is CONTRIBUTOR/NONE and
-#       #    is rejected). This is the authorization gate.
-#       if: >-
-#         github.event.issue.pull_request != null &&
-#         startsWith(github.event.comment.body, '/review') &&
-#         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-#                  github.event.comment.author_association)
-#       # 3. Resolve the PR head SHA via the API (never trust the comment text),
-#       #    sanitize it (^[0-9a-f]{7,40}$), then run the SAME sanitized,
-#       #    rules-from-base, read-only, no-write-token pipeline as the `review`
-#       #    job below — the key is present but the write token is NOT, so the
-#       #    blast radius stays "capped LLM spend". The trusted lane posts as usual.
-# Kept as a documented stub intentionally: the same-repo auto path covers the
-# common case; the fork path is a rare, maintainer-initiated action.
-# ============================================================================
+# FORK-PR REVIEW (`/review` command) — see DESIGN §SECURITY.7. A fork
+# `pull_request` run has no LLM key → OCR can't run → review_complete=false →
+# `review/verdict` FAILS CLOSED. A `/review` comment runs OCR WITH the key (LLM
+# key only, no write token), gated by the job `if:` to a trusted human or the bot.
 
-# issue #58 — one in-flight review per PR; a new push cancels the stale run.
+# issue #58 — for `pull_request`, one in-flight review per PR (a new push cancels
+# the stale run). For `issue_comment` (/review), a UNIQUE per-run group: the
+# concurrency group is evaluated BEFORE the job-level authorization `if:`, so a
+# shared PR group would let ANY unauthorized comment (fork author included) join
+# the group and cancel an in-flight authorized /review via cancel-in-progress —
+# a review DoS. Per-run isolation means a comment event can never cancel another
+# run (each authorized /review is a deliberate, standalone action).
 concurrency:
-  group: ocr-review-${{ github.event.pull_request.number }}
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('ocr-review-pr-{0}', github.event.pull_request.number)
+        || format('ocr-review-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 # Least privilege. `contents: read` (checkouts) + `pull-requests: read`
@@ -88,13 +71,26 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest # ephemeral runner (DESIGN §SECURITY.5)
+    # AUTHORIZATION GATE (fail-safe: the job never starts — never checks out fork
+    # code — unless authorized). `pull_request` runs unconditionally (same-repo
+    # auto path). An `issue_comment` runs ONLY for a `/review` command on a PR
+    # from a trusted human (OWNER/MEMBER/COLLABORATOR) OR an allowlisted agent bot
+    # (trevor-workstation[bot] / tanren-reviewer[bot], the auto-review). A fork author
+    # (CONTRIBUTOR/NONE) or any other bot is rejected here. The command must be EXACTLY
+    # `/review` or `/review <args>` — `/review-anything` is rejected (a command
+    # boundary, not a prefix) so an arbitrary slash-command can't start a keyed run.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       (github.event.comment.body == '/review' || startsWith(github.event.comment.body, '/review ')) &&
+       (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
+        contains(fromJSON('["trevor-workstation[bot]","tanren-reviewer[bot]"]'), github.event.comment.user.login)))
     env:
-      # Sanitized, GitHub-provided commit SHAs. These come from the trusted
-      # event context (not PR-controllable branch names) but are re-validated
-      # by a sanitize step before ANY use, per DESIGN §SECURITY.3.
-      RAW_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      RAW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # PR number from whichever event fired (pull_request or the /review comment).
+      # All downstream steps read this; the head/base SHAs are resolved + sanitized
+      # by the `ctx` + `sha` steps (DESIGN §SECURITY.3), never taken from raw input.
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       # OCR install target. `npm i -g --prefix` fails on a standard runner global
       # path, so we invoke via `npx --package <pkg> ocr` (binary name != package).
       OCR_PACKAGE: "@alibaba-group/open-code-review"
@@ -104,19 +100,66 @@ jobs:
       MAX_DIFF_LINES: "8000"
       REVIEW_DEADLINE_SEC: "1800"
     steps:
+      # --- Resolve PR context (works for BOTH triggers) -----------------------
+      # pull_request: SHAs from the trusted event context. issue_comment (/review):
+      # from the PR API — NEVER the comment text. Fork head is fetched via the
+      # advertised refs/pull/<n>/head (n digits-validated). Sanitized next step.
+      - name: Resolve PR context
+        id: ctx
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }} # read-only: read the PR head/base SHA
+          REPO: ${{ github.repository }}
+          EV_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EV_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$' || { echo "::error::bad pr number: $PR_NUMBER"; exit 1; }
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_REF="$EV_BASE_REF"
+            RAW_HEAD="$EV_HEAD_SHA"
+            CHECKOUT_REF="$EV_HEAD_SHA"
+          else
+            # /review on a (possibly fork) PR: authoritative refs from the API.
+            BASE_REF="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')"
+            RAW_HEAD="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+            # The fork head commit is advertised on the base repo as this ref.
+            CHECKOUT_REF="refs/pull/$PR_NUMBER/head"
+          fi
+          # base ref is the trusted, repo-controlled base BRANCH; validate before use.
+          printf '%s' "$BASE_REF" | grep -Eq '^[A-Za-z0-9._/-]+$' || { echo "::error::bad base ref: $BASE_REF"; exit 1; }
+          # Trusted base = the LIVE tip of the base branch — NOT the PR's recorded
+          # `.base.sha`, which LAGS for a behind PR and would extract a STALE
+          # reviewer (pre-fix scripts: no clamp / no validate-ocr-result → OCR
+          # aborts). The archived rules+scripts must match THIS workflow version.
+          BASE_TIP="$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')"
+          printf '%s' "$BASE_TIP" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::bad base tip for $BASE_REF: $BASE_TIP"; exit 1; }
+          # Diff base = MERGE-BASE of tip and head, so a behind branch is reviewed
+          # for ONLY its own changes (two-dot base_tip..head would show main's newer
+          # commits the PR lacks as reversions → false rule_change). Fail-safe to
+          # the tip (fail-closed, never -open).
+          RAW_DIFF_BASE="$BASE_TIP"
+          MERGE_BASE="$(gh api "repos/$REPO/compare/${BASE_TIP}...${RAW_HEAD}" --jq '.merge_base_commit.sha' 2>/dev/null || true)"
+          if printf '%s' "$MERGE_BASE" | grep -Eq '^[0-9a-f]{40}$'; then
+            RAW_DIFF_BASE="$MERGE_BASE"
+            echo "trusted base = live tip ${BASE_TIP} (${BASE_REF}); diff base = merge-base ${MERGE_BASE}"
+          else
+            echo "::warning::could not resolve merge-base for ${BASE_TIP}...${RAW_HEAD}; diffing from base tip"
+          fi
+          echo "raw_base=$BASE_TIP" >> "$GITHUB_OUTPUT"
+          echo "raw_diff_base=$RAW_DIFF_BASE" >> "$GITHUB_OUTPUT"
+          echo "raw_head=$RAW_HEAD" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+
       # --- Unified checkout: PR head, with base fetched below ------------------
-      # ONE checkout (issue #287 — OCR runs from a real git root). The tree is
-      # UNTRUSTED (PR-head code), but nothing security-sensitive is READ from it:
-      # the rule + scripts are extracted from the base SHA (below). fetch-depth:0
-      # so both base and head commits are reachable for the diffs.
-      # persist-credentials:false keeps the tree write-incapable. First-party
-      # actions/* are pinned to a major version tag per repo convention; ANY
-      # non-`actions/`-owner (third-party) action MUST be pinned to a full commit
-      # SHA (there are none in this file).
+      # ONE checkout (issue #287 — OCR runs from a real git root). UNTRUSTED
+      # PR-head tree, but nothing security-sensitive is READ from it (rules +
+      # scripts are extracted from the base SHA below). fetch-depth:0 so base +
+      # head are reachable; persist-credentials:false keeps it write-incapable.
       - name: Checkout PR head (read-only, untrusted)
         uses: actions/checkout@v6 # actions/checkout (first-party)
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.ctx.outputs.checkout_ref }}
           path: repo
           fetch-depth: 0
           persist-credentials: false
@@ -132,6 +175,12 @@ jobs:
       # git or OCR. Export the clean values for later steps.
       - name: Sanitize base/head SHAs
         id: sha
+        env:
+          # Raw SHAs resolved by `ctx` (event context for pull_request, PR API for
+          # /review). Re-validated here before ANY use, per DESIGN §SECURITY.3.
+          RAW_BASE_SHA: ${{ steps.ctx.outputs.raw_base }}
+          RAW_DIFF_BASE_SHA: ${{ steps.ctx.outputs.raw_diff_base }}
+          RAW_HEAD_SHA: ${{ steps.ctx.outputs.raw_head }}
         run: |
           set -euo pipefail
           sanitize() {
@@ -145,29 +194,31 @@ jobs:
             printf '%s' "$val"
           }
           BASE_SHA="$(sanitize base "$RAW_BASE_SHA")"
+          DIFF_BASE_SHA="$(sanitize diff_base "$RAW_DIFF_BASE_SHA")"
           HEAD_SHA="$(sanitize head "$RAW_HEAD_SHA")"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "diff_base_sha=$DIFF_BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
-      # --- Make the base sha reachable in the unified checkout ----------------
-      # Both commits must be present for the OCR diff AND the preflight/guard/
-      # ground `git diff base..head`. Sanitized sha only; no PR-controlled refs.
-      - name: Fetch base commit
+      # base_sha (tip) for the trusted `git archive`; diff_base_sha (merge-base) +
+      # head for the diffs. Sanitized shas only; fetch each if not already present.
+      - name: Fetch base commits
         working-directory: repo
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${{ steps.sha.outputs.base_sha }}" || \
-            git fetch --no-tags origin "${{ steps.sha.outputs.base_sha }}"
-          git cat-file -e "${{ steps.sha.outputs.base_sha }}^{commit}"
+          for sha in "${{ steps.sha.outputs.base_sha }}" "${{ steps.sha.outputs.diff_base_sha }}"; do
+            git cat-file -e "${sha}^{commit}" 2>/dev/null || \
+              git fetch --no-tags --depth=1 origin "$sha" || \
+              git fetch --no-tags origin "$sha"
+            git cat-file -e "${sha}^{commit}"
+          done
           git cat-file -e "${{ steps.sha.outputs.head_sha }}^{commit}"
 
       # --- Extract the TRUSTED base review tree (rules + scripts) -------------
-      # `git archive <base_sha> ops/review` materializes the reviewer config AND
-      # the pipeline scripts AS THEY EXIST AT THE BASE — never PR head. So a PR
-      # editing ops/review/** (rule.json, the scripts, this guard) cannot change
-      # what actually executes (DESIGN §SECURITY.1/.2/.4). The extracted tree
-      # lives at an absolute $RUNNER_TEMP path; every script is invoked from
-      # there, and --rule points at the extracted rule file.
+      # `git archive <base_sha> ops/review` materializes the reviewer config +
+      # scripts AS AT THE BASE TIP — never PR head — so a PR editing ops/review/**
+      # cannot change what runs (DESIGN §SECURITY.1/.2/.4). Extracted to an
+      # absolute $RUNNER_TEMP path; every script is invoked from there.
       - name: Extract trusted base review tree
         id: base
         working-directory: repo
@@ -208,7 +259,7 @@ jobs:
         id: guard
         working-directory: repo
         env:
-          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          BASE_SHA: ${{ steps.sha.outputs.diff_base_sha }} # merge-base: only the PR's own changes
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
         run: |
           set -euo pipefail
@@ -219,7 +270,7 @@ jobs:
       - name: Preflight (cost/size gate)
         working-directory: repo
         env:
-          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          BASE_SHA: ${{ steps.sha.outputs.diff_base_sha }} # merge-base: only the PR's own changes
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
         run: |
           set -euo pipefail
@@ -274,18 +325,18 @@ jobs:
         id: ocr
         working-directory: repo
         env:
-          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          BASE_SHA: ${{ steps.sha.outputs.diff_base_sha }} # merge-base: OCR reviews only the PR's own changes
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
           RULE_ABS: ${{ steps.base.outputs.rule_abs }}
           MODEL_JSON: ${{ runner.temp }}/model.json
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
-          # OCR authenticates to the LLM endpoint with OCR_LLM_AUTH_TOKEN. On a
-          # same-repo PR GitHub injects `secrets.OPENROUTER_API_KEY`; on a FORK
-          # PR the secret is empty by design (fork jobs get no secrets) — OCR
-          # then produces empty findings and a maintainer re-triggers the review
-          # (see the fork-review note in ocr-review-trusted.yml). The URL /
-          # protocol / model are non-secret routing config.
-          OCR_LLM_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+          # OCR reads the bearer token from OCR_LLM_TOKEN (the v1.7.15 binary checks
+          # OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there is NO OCR_LLM_AUTH_TOKEN;
+          # a wrong name => "no valid LLM endpoint configured" => OCR never runs).
+          # Same-repo PRs get secrets.OPENROUTER_API_KEY; a FORK pull_request gets
+          # an empty secret → review_complete=false → gate FAILS CLOSED (fork PRs
+          # are reviewed via the authorized /review path). URL/protocol non-secret.
+          OCR_LLM_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
         run: |
@@ -296,7 +347,10 @@ jobs:
           # Non-secret; surface the resolved model to OCR as well as the --model flag.
           export OCR_LLM_MODEL="$MODEL"
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
-          # Absolute paths for --rule and --background-file (issues #287/#324).
+          # -- FAIL-CLOSED completeness (do NOT regress) — see validate-ocr-result.mjs.
+          # CERTIFY only if OCR exits 0 AND emits a well-formed result (object with
+          # an array `comments`); merely-valid JSON would leave the gate fail-open.
+          set +e
           npx --yes --package "$OCR_PACKAGE" ocr review \
             --model "$MODEL" \
             --rule "$RULE_ABS" \
@@ -304,8 +358,22 @@ jobs:
             --to "$HEAD_SHA" \
             --background-file "${{ steps.context.outputs.context_md }}" \
             --format json \
-            > "$OCR_RAW" || echo "::warning::OCR exited non-zero; keeping partial JSON"
-          test -s "$OCR_RAW" || echo "{}" > "$OCR_RAW"
+            > "$OCR_RAW"
+          OCR_EXIT=$?
+          set -e
+          REVIEW_COMPLETE=false
+          if [ "$OCR_EXIT" -eq 0 ] && [ -s "$OCR_RAW" ] \
+             && node "${{ steps.base.outputs.scripts }}/validate-ocr-result.mjs" "$OCR_RAW"; then
+            REVIEW_COMPLETE=true
+          else
+            echo "::warning::OCR did not complete a valid review (exit=$OCR_EXIT); review/verdict will FAIL CLOSED"
+            # Keep any partial bytes for debugging, but normalize to valid JSON so
+            # the downstream JSON pipeline still runs (findings will be empty and
+            # review_complete=false forces the gate to fail).
+            node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' "$OCR_RAW" >/dev/null 2>&1 || echo "{}" > "$OCR_RAW"
+          fi
+          echo "review_complete=$REVIEW_COMPLETE" >> "$GITHUB_OUTPUT"
+          echo "ocr_exit=$OCR_EXIT" >> "$GITHUB_OUTPUT"
 
       # --- JSON pipeline: ground -> dedup -> reconcile ------------------------
       # ground-findings needs the unified repo (git diff base..head); dedup +
@@ -313,7 +381,7 @@ jobs:
       - name: Ground findings
         working-directory: repo
         env:
-          BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+          BASE_SHA: ${{ steps.sha.outputs.diff_base_sha }} # merge-base: ground against the PR's own changes
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
         run: |
           set -euo pipefail
@@ -381,6 +449,10 @@ jobs:
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
           RULE_CHANGE: ${{ steps.guard.outputs.rule_change }}
           RULE_CHANGE_PATHS: ${{ steps.guard.outputs.rule_change_paths }}
+          # Completeness signal from the OCR step. Absent/"false" ⇒ the review did
+          # not certify ⇒ verdict.mjs fails the gate closed (no green on a crash).
+          REVIEW_COMPLETE: ${{ steps.ocr.outputs.review_complete }}
+          OCR_EXIT: ${{ steps.ocr.outputs.ocr_exit }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -390,6 +462,10 @@ jobs:
           const reconciled = readJson(`${T}/reconciled.json`, { findings: [], marker: "" });
           const preflight = readJson(`${T}/preflight.json`, {});
           const model = readJson(`${T}/model.json`, {});
+          // FAIL CLOSED: certify ONLY on an explicit review_complete=true. A
+          // missing/false value (crash, missing key, partial stream) is NOT a
+          // clean review — the gate must fail, not pass on zero findings.
+          const reviewComplete = process.env.REVIEW_COMPLETE === "true";
           const out = {
             schema: "ocr-review-output/v1",
             pr_number: Number(process.env.PR_NUMBER),
@@ -397,6 +473,8 @@ jobs:
             head_sha: process.env.HEAD_SHA,       // trusted job binds to THIS sha
             rule_change: process.env.RULE_CHANGE === "true",
             rule_change_paths: (process.env.RULE_CHANGE_PATHS || "").split(",").filter(Boolean),
+            review_complete: reviewComplete,
+            ocr_exit: Number(process.env.OCR_EXIT ?? "-1"),
             oversized: !!preflight.oversized,
             preflight,
             model,
@@ -405,7 +483,7 @@ jobs:
             marker: reconciled.marker || "",
           };
           fs.writeFileSync(`${T}/review-output.json`, JSON.stringify(out, null, 2));
-          console.log(`review-output.json: pr=${out.pr_number} head=${out.head_sha} rule_change=${out.rule_change} findings=${out.findings.length}`);
+          console.log(`review-output.json: pr=${out.pr_number} head=${out.head_sha} rule_change=${out.rule_change} review_complete=${out.review_complete} findings=${out.findings.length}`);
           NODE
 
       # --- Upload the artifact (JSON + assembled context) ---------------------

@@ -38,6 +38,28 @@ ops/review/tanren-ocr-rules.json checked out from the BASE ref>`. Delete any PR-
    the trusted job posts a P0 "reviewer-config change — maintainer review required" and
    sets verdict=FAIL. A PR cannot weaken its own reviewer.
 5. Ephemeral runner; do not set git `safe.directory '*'`.
+6. **Fail closed on an incomplete review (do NOT regress).** Zero findings is
+   "clean" ONLY when OCR actually ran and certified. A crash, a **missing LLM key
+   (fork `pull_request` runs get no secret)**, or a partial stream also yields
+   zero findings — treating that as a pass green-lights unreviewed code. The
+   untrusted lane records `review_complete` (true iff OCR exits 0 and emits valid
+   JSON); `verdict.mjs` fails `review/verdict` closed and `post-review.mjs`
+   requests changes ("review did not complete") whenever it is not certified. A
+   fork PR is therefore never auto-approved — it must be reviewed via the
+   authorized `/review` path (item 7).
+7. **Fork review via an authorized `/review` command.** A fork `pull_request` run
+   gets no LLM key, so it fails closed (item 6). To actually review a fork,
+   `ocr-review-untrusted.yml` also triggers on `issue_comment`: a `/review`
+   comment runs OCR **with the key** against the fork code — the SAME blast radius
+   as the same-repo untrusted lane (LLM key only, NO write token → worst case is
+   capped LLM spend). The job-level `if:` authorizes it (so an unauthorized
+   comment never checks out fork code) for a trusted human
+   (OWNER/MEMBER/COLLABORATOR) **or** the `trevor-workstation[bot]` agent identity
+   (agents auditing agents). SHAs are resolved from the PR API (never the comment
+   text), sanitized, and the fork head is checked out read-only via the advertised
+   `refs/pull/<n>/head`. The trusted `workflow_run` lane posts as usual; its
+   head-SHA equality check is skipped for issue_comment (which runs on the default
+   branch, so `workflow_run.head_sha` is the base head, not the PR head).
 
 ## COST GATE (issue #409 — OCR `review` has NO internal budget)
 

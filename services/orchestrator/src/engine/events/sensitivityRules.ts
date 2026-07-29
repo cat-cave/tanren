@@ -9,7 +9,7 @@ import {
   auditPostureStrandsFindingsSensitivityRules,
   auditorFindingsRoutedSensitivityRules,
 } from "./sensitivityRules.audit.js";
-import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
+import { dagSensitivityRules, specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
 // W0 + W1-A (integration.author.*) + future Wn frozen-payload sensitivity fan-in (single source; also re-exports sibling wave rules to stay under the cap).
@@ -314,131 +314,7 @@ export const sensitivityRules: SensitivityRule[] = [
   // Tanren-method benchmark accept tier (§2.1), extracted for line-cap headroom.
   ...benchmarkSensitivityRules,
 
-  // DagWalker (autonomy-engine.md §1a) scheduling events — spec/run ids + non-sensitive counts, public.
-  ...rulesFor("dag.spec.enqueued", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["satisfiedDependsOn[]", "public"],
-    ["inFlightBefore", "public"],
-    ["concurrencyCeiling", "public"],
-  ]),
-  ...rulesFor("dag.drained", [
-    ["doneCount", "public"],
-    ["inFlightCount", "public"],
-    ["blockedCount", "public"],
-  ]),
-  ...rulesFor("dag.budget.paused", [
-    ["ceilingUsd", "public"],
-    ["spentUsd", "public"],
-    ["period", "public"],
-    ["readyHeldBack", "public"],
-    ["reason", "public"],
-  ]),
-  // The budget FRACTION milestone (50% / 80%): band + ceiling/spend figures + period, all public.
-  ...rulesFor("dag.budget.milestone", [
-    ["band", "public"],
-    ["ceilingUsd", "public"],
-    ["spentUsd", "public"],
-    ["period", "public"],
-  ]),
-  ...rulesFor("dag.concurrency.saturated", [
-    ["readyHeldBack", "public"],
-    ["inFlightCount", "public"],
-    ["concurrencyCeiling", "public"],
-  ]),
-  // (no_silent_fallbacks) the corrupt-config surface — knob label + applied default + reason, public.
-  ...rulesFor("dag.config.corrupt", [
-    ["knob", "public"],
-    ["appliedDefault.threshold", "public"],
-    ["appliedDefault.depthCap", "public"],
-    ["reason", "public"],
-  ]),
-  // (§2c) speculative-execution events — spec/run/ancestor ids + threshold label + counts, public.
-  ...rulesFor("dag.spec.speculative", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["unmergedAncestors[]", "public"],
-    ["threshold", "public"],
-  ]),
-  ...rulesFor("dag.spec.speculation_held", [
-    ["specId", "public"],
-    ["unmergedAncestors[]", "public"],
-    ["depth", "public"],
-    ["depthCap", "public"],
-  ]),
-  // (§3) benign-wait for a not-yet-ready ancestor — spec/run/ancestor ids + phase label, public.
-  ...rulesFor("dag.spec.ancestor_not_ready", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["ancestorSpecId", "public"],
-    ["ancestorPhase", "public"],
-  ]),
-  // (§2c) change-percolation events — spec/run/ancestor ids, ancestor head SHAs (a commit hash
-  // is not a secret), severity label, resolver flag, diagnosis reason. No diff/cred/output.
-  ...rulesFor("dag.spec.percolating", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["ancestorSpecId", "public"],
-    ["fromAncestorSha", "public"],
-    ["toAncestorSha", "public"],
-    ["severity", "public"],
-  ]),
-  ...rulesFor("dag.spec.percolated", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["ancestorSpecId", "public"],
-    ["integratedAncestorSha", "public"],
-    ["viaResolver", "public"],
-  ]),
-  ...rulesFor("dag.spec.percolation_deferred", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["ancestorSpecId", "public"],
-    ["pendingAncestorSha", "public"],
-    ["severity", "public"],
-  ]),
-  ...rulesFor("dag.spec.percolation_replan", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["ancestorSpecId", "public"],
-    ["ancestorSha", "public"],
-    ["reason", "public"],
-  ]),
-  // §3/§7 NEVER-DISCARD REBASE (integration.rebase) — spec/run/branch ids, the shifted
-  // base + branch-head SHAs (public: commit hashes are not secrets), the same-run-id
-  // never-discard flag, the rebase-conflicted flag, and the rebase_vs_rebuild decision
-  // label. No diff content, credentials, or command output.
-  ...rulesFor("integration.rebase", [
-    ["specId", "public"],
-    ["runId", "public"],
-    ["sameRunId", "public"],
-    ["branch", "public"],
-    ["newBaseSha", "public"],
-    ["headSha", "public"],
-    ["rebaseConflicted", "public"],
-    ["decision", "public"],
-  ]),
-  // Post-merge auto-issue creation (tempering.md dim A) — PR/merge identity + the
-  // failing post-merge checks + the auto-filed issue's number/url/label, all public
-  // (the regression + its tracking issue are visible run lineage, no secrets).
-  ...rulesFor("merge.post_merge_failed", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["specId", "public"],
-    ["baseBranch", "public"],
-    ["mergeSha", "public"],
-    ["failingChecks[].kind", "public"],
-    ["failingChecks[].name", "public"],
-    ["failingChecks[].state", "public"],
-    ["failingChecks[].url", "public"],
-  ]),
-  ...rulesFor("issue.opened", [
-    ["reason", "public"],
-    ["issueNumber", "public"],
-    ["issueUrl", "public"],
-    ["prUrl", "public"],
-    ["label", "public"],
-  ]),
+  ...dagSensitivityRules,
   // Split out under the 500-line cap: app_env.* (appEnv); infra/integration —
   // runner/allocator/workspace/credential, cost+usage, github/ci/phase1/reviews/
   // notifications/hello/redaction (infra); strand reconciler (strand); ci-intel

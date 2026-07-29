@@ -29,7 +29,7 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { migrate, resetSystemPool, runWithOrgScope, runWithSystemScope, setSystemPool } from "@tanren/db";
 import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { ForgeProposalStore } from "../src/engine/forge/proposals.js";
 import { ForgeThreadStore } from "../src/engine/forge/threads.js";
@@ -41,6 +41,8 @@ const describeDb = enabled ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 const RUNTIME_ROLE = "tanren_app";
 const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
+const SYSTEM_DATABASE_URL = "TANREN_SYSTEM_DATABASE_URL";
+const originalSystemDatabaseUrl = process.env[SYSTEM_DATABASE_URL];
 
 function dbName(): string {
   return `tanren_rls_r2c4_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -86,12 +88,24 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
   let runtimePool: Pool;
 
   beforeAll(async () => {
+    // Negative control: this points at the caller's normal database, not this
+    // fresh throwaway database. The explicit owner-pool injection below MUST
+    // win, or every owner baseline read would query this poisoned target.
+    process.env[SYSTEM_DATABASE_URL] = ADMIN_URL;
+    resetSystemPool();
+
     const adminPool = new Pool({ connectionString: ADMIN_URL });
     await adminPool.query(`CREATE DATABASE ${database}`);
     await adminPool.end();
 
     ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
     await migrate(ownerPool);
+
+    // This cohort's owner baseline is deliberately local to `database`. Pin the
+    // system pool to it so an ambient deployment URL cannot redirect a baseline
+    // to another database. Production behavior remains environment-driven when
+    // no caller explicitly injects a system pool.
+    setSystemPool(ownerPool);
 
     runtimePool = new Pool({ connectionString: runtimeUrl(ADMIN_URL, database) });
 
@@ -104,6 +118,12 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
   afterAll(async () => {
     await runtimePool?.end();
     await ownerPool?.end();
+    resetSystemPool();
+    if (originalSystemDatabaseUrl === undefined) {
+      delete process.env[SYSTEM_DATABASE_URL];
+    } else {
+      process.env[SYSTEM_DATABASE_URL] = originalSystemDatabaseUrl;
+    }
     const adminPool = new Pool({ connectionString: ADMIN_URL });
     await adminPool.query(
       "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
@@ -156,6 +176,22 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     );
     expect(scopedList.map((t) => t.id)).toEqual(ownedList.map((t) => t.id));
     expect(scopedList.map((t) => t.id)).toContain(created.id);
+  });
+
+  it("NEGATIVE: a poisoned external system URL cannot divert an owner baseline from this throwaway database", async () => {
+    expect(process.env[SYSTEM_DATABASE_URL]).toBe(ADMIN_URL);
+    const created = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      ForgeThreadStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A, scope: "run", title: "pinned-owner-baseline" },
+        ACTOR,
+      ),
+    );
+
+    const ownerBaseline = await runWithSystemScope(ownerPool, (client) =>
+      ForgeThreadStore.get(client, created.id, ACTOR),
+    );
+    expect(ownerBaseline?.id).toBe(created.id);
   });
 
   // (b) turn append + list write/read through the scope. Under R3b the unscoped
