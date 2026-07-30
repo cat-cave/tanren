@@ -95,8 +95,7 @@ jobs:
       # PINNED for reproducibility — OCR config semantics vary by version (v1.8.1
       # ignores OCR_CONFIG_PATH + env extra_body); bump deliberately + re-verify.
       OCR_PACKAGE: "@alibaba-group/open-code-review@1.8.1"
-      # Cost/behavior knobs consumed by preflight.mjs (issue #409). Defaults live
-      # in the script; surfaced here so an operator can override per-repo.
+      # Cost/behavior knobs consumed by preflight.mjs (#409); overridable per-repo.
       MAX_FILES: "60"
       MAX_DIFF_LINES: "8000"
       REVIEW_DEADLINE_SEC: "1800"
@@ -224,7 +223,6 @@ jobs:
         run: |
           set -euo pipefail
           BASE_SHA="${{ steps.sha.outputs.base_sha }}"
-          # Defense in depth: re-assert the sha shape before it reaches git.
           printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad base_sha: $BASE_SHA"; exit 1; }
           BASE_TREE="$RUNNER_TEMP/base-review"
           rm -rf "$BASE_TREE"; mkdir -p "$BASE_TREE"
@@ -346,8 +344,10 @@ jobs:
           echo "using model: $MODEL"
           export OCR_LLM_MODEL="$MODEL" # non-secret; surfaced to OCR alongside --model
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
-          # Write ~/.opencodereview/config.json (the path `ocr review` reads) with the key injected; no-ops on fork/bootstrap.
-          node "$SCRIPTS/write-ocr-config.mjs" "$CONFIG_ABS" "$HOME/.opencodereview/config.json"
+          # Write ~/.opencodereview/config.json (path `ocr review` reads) with the key injected.
+          # NON-FATAL (|| below): a missing script (bootstrap/rename) or template degrades to env-auth/no-reasoning.
+          node "$SCRIPTS/write-ocr-config.mjs" "$CONFIG_ABS" "$HOME/.opencodereview/config.json" \
+            || echo "::warning::OCR reasoning config not written — env auth, no reasoning"
           # FAIL-CLOSED completeness (do NOT regress): CERTIFY only if OCR exits 0
           # AND emits a well-formed result — see validate-ocr-result.mjs below.
           set +e
