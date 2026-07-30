@@ -130,14 +130,12 @@ jobs:
           printf '%s' "$BASE_REF" | grep -Eq '^[A-Za-z0-9._/-]+$' || { echo "::error::bad base ref: $BASE_REF"; exit 1; }
           # Trusted base = the LIVE tip of the base branch — NOT the PR's recorded
           # `.base.sha`, which LAGS for a behind PR and would extract a STALE
-          # reviewer (pre-fix scripts: no clamp / no validate-ocr-result → OCR
-          # aborts). The archived rules+scripts must match THIS workflow version.
+          # reviewer (archived rules+scripts must match THIS workflow version).
           BASE_TIP="$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')"
           printf '%s' "$BASE_TIP" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::bad base tip for $BASE_REF: $BASE_TIP"; exit 1; }
           # Diff base = MERGE-BASE of tip and head, so a behind branch is reviewed
-          # for ONLY its own changes (two-dot base_tip..head would show main's newer
-          # commits the PR lacks as reversions → false rule_change). Fail-safe to
-          # the tip (fail-closed, never -open).
+          # for ONLY its own changes (two-dot base..head would false-flag main's
+          # newer commits as reversions). Fail-safe to the tip (fail-closed).
           RAW_DIFF_BASE="$BASE_TIP"
           MERGE_BASE="$(gh api "repos/$REPO/compare/${BASE_TIP}...${RAW_HEAD}" --jq '.merge_base_commit.sha' 2>/dev/null || true)"
           if printf '%s' "$MERGE_BASE" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -229,17 +227,19 @@ jobs:
           printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad base_sha: $BASE_SHA"; exit 1; }
           BASE_TREE="$RUNNER_TEMP/base-review"
           rm -rf "$BASE_TREE"; mkdir -p "$BASE_TREE"
-          # `--` after the sha is belt-and-suspenders; the sha is already pure hex.
           git archive --format=tar "$BASE_SHA" -- ops/review | tar -x -C "$BASE_TREE"
           SCRIPTS="$BASE_TREE/ops/review/scripts"
           RULE_ABS="$BASE_TREE/ops/review/tanren-ocr-rules.json"
           ROUTING_ABS="$BASE_TREE/ops/review/model-routing.json"
+          CONFIG_ABS="$BASE_TREE/ops/review/ocr-llm-config.json"
           test -d "$SCRIPTS" || { echo "::error::missing base scripts dir: $SCRIPTS"; exit 1; }
           test -f "$RULE_ABS" || { echo "::error::missing base rule file: $RULE_ABS"; exit 1; }
           test -f "$ROUTING_ABS" || { echo "::error::missing base routing file: $ROUTING_ABS"; exit 1; }
+          test -f "$CONFIG_ABS" || { echo "::error::missing base OCR config: $CONFIG_ABS"; exit 1; }
           echo "scripts=$SCRIPTS" >> "$GITHUB_OUTPUT"
           echo "rule_abs=$RULE_ABS" >> "$GITHUB_OUTPUT"
           echo "routing_abs=$ROUTING_ABS" >> "$GITHUB_OUTPUT"
+          echo "config_abs=$CONFIG_ABS" >> "$GITHUB_OUTPUT"
 
       # --- Neutralize the PR-head reviewer-config dir (DESIGN §SECURITY.2) -----
       # Any `.opencodereview/` shipped by the PR is deleted so OCR cannot load a
@@ -329,13 +329,14 @@ jobs:
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
           RULE_ABS: ${{ steps.base.outputs.rule_abs }}
           MODEL_JSON: ${{ runner.temp }}/model.json
+          # Trusted config (base tree, no key): OCR merges llm.extra_body (reasoning=max) with env auth.
+          OCR_CONFIG_PATH: ${{ steps.base.outputs.config_abs }}
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
-          # OCR reads the bearer token from OCR_LLM_TOKEN (the v1.7.15 binary checks
+          # OCR reads the bearer token from OCR_LLM_TOKEN (binary checks
           # OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there is NO OCR_LLM_AUTH_TOKEN;
           # a wrong name => "no valid LLM endpoint configured" => OCR never runs).
           # Same-repo PRs get secrets.OPENROUTER_API_KEY; a FORK pull_request gets
-          # an empty secret → review_complete=false → gate FAILS CLOSED (fork PRs
-          # are reviewed via the authorized /review path). URL/protocol non-secret.
+          # an empty secret → review_complete=false → gate FAILS CLOSED. URL non-secret.
           OCR_LLM_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
@@ -347,9 +348,8 @@ jobs:
           # Non-secret; surface the resolved model to OCR as well as the --model flag.
           export OCR_LLM_MODEL="$MODEL"
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
-          # -- FAIL-CLOSED completeness (do NOT regress) — see validate-ocr-result.mjs.
-          # CERTIFY only if OCR exits 0 AND emits a well-formed result (object with
-          # an array `comments`); merely-valid JSON would leave the gate fail-open.
+          # FAIL-CLOSED completeness (do NOT regress): CERTIFY only if OCR exits 0
+          # AND emits a well-formed result — see validate-ocr-result.mjs below.
           set +e
           npx --yes --package "$OCR_PACKAGE" ocr review \
             --model "$MODEL" \

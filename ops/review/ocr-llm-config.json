@@ -1,0 +1,9 @@
+{
+  "//": "Trusted OCR runtime config (NO api_key — auth stays via OCR_LLM_* env). Pointed at by OCR_CONFIG_PATH in ocr-review-untrusted.yml; OCR merges it with the env auth. llm.extra_body is passed through to the OpenRouter request body: reasoning=max drives luna's deepest reasoning (best review quality; luna is ~10% of its original price after the 2026-07 cuts). provider.allow_fallbacks keeps a run alive if the primary OpenRouter provider for the model is down; require_parameters=false lets a model that does not support `reasoning` ignore it rather than error.",
+  "llm": {
+    "extra_body": {
+      "reasoning": { "effort": "max" },
+      "provider": { "allow_fallbacks": true, "require_parameters": false }
+    }
+  }
+}
