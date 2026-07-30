@@ -1,0 +1,15 @@
+{
+  "//": "Trusted OCR runtime config TEMPLATE (NO api_key — write-ocr-config.mjs injects it from the OCR_LLM_TOKEN secret at review time). `ocr review` reads ~/.opencodereview/config.json (the DEFAULT path) — it does NOT honor OCR_CONFIG_PATH, and it ignores env-var auth once a complete config is present (verified against OCR v1.8.1). So the reasoning/provider options MUST live in a complete custom_providers config here. extra_body is passed to the OpenRouter request: reasoning=max drives luna's deepest reasoning (best review quality; luna is ~10% of its original price after the 2026-07 cuts). provider.allow_fallbacks keeps a run alive if the primary provider is down; require_parameters=false lets a model without `reasoning` ignore it rather than error.",
+  "provider": "openrouter",
+  "custom_providers": {
+    "openrouter": {
+      "url": "https://openrouter.ai/api/v1",
+      "protocol": "openai",
+      "model": "openai/gpt-5.6-luna",
+      "extra_body": {
+        "reasoning": { "effort": "max" },
+        "provider": { "allow_fallbacks": true, "require_parameters": false }
+      }
+    }
+  }
+}

@@ -91,9 +91,10 @@ jobs:
       # All downstream steps read this; the head/base SHAs are resolved + sanitized
       # by the `ctx` + `sha` steps (DESIGN §SECURITY.3), never taken from raw input.
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-      # OCR install target. `npm i -g --prefix` fails on a standard runner global
-      # path, so we invoke via `npx --package <pkg> ocr` (binary name != package).
-      OCR_PACKAGE: "@alibaba-group/open-code-review"
+      # OCR install target (invoked via `npx --package <pkg> ocr`; bin name != pkg).
+      # PINNED for reproducibility — OCR config semantics vary by version (v1.8.1
+      # ignores OCR_CONFIG_PATH + env extra_body); bump deliberately + re-verify.
+      OCR_PACKAGE: "@alibaba-group/open-code-review@1.8.1"
       # Cost/behavior knobs consumed by preflight.mjs (issue #409). Defaults live
       # in the script; surfaced here so an operator can override per-repo.
       MAX_FILES: "60"
@@ -130,14 +131,12 @@ jobs:
           printf '%s' "$BASE_REF" | grep -Eq '^[A-Za-z0-9._/-]+$' || { echo "::error::bad base ref: $BASE_REF"; exit 1; }
           # Trusted base = the LIVE tip of the base branch — NOT the PR's recorded
           # `.base.sha`, which LAGS for a behind PR and would extract a STALE
-          # reviewer (pre-fix scripts: no clamp / no validate-ocr-result → OCR
-          # aborts). The archived rules+scripts must match THIS workflow version.
+          # reviewer (archived rules+scripts must match THIS workflow version).
           BASE_TIP="$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')"
           printf '%s' "$BASE_TIP" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::bad base tip for $BASE_REF: $BASE_TIP"; exit 1; }
           # Diff base = MERGE-BASE of tip and head, so a behind branch is reviewed
-          # for ONLY its own changes (two-dot base_tip..head would show main's newer
-          # commits the PR lacks as reversions → false rule_change). Fail-safe to
-          # the tip (fail-closed, never -open).
+          # for ONLY its own changes (two-dot base..head would false-flag main's
+          # newer commits as reversions). Fail-safe to the tip (fail-closed).
           RAW_DIFF_BASE="$BASE_TIP"
           MERGE_BASE="$(gh api "repos/$REPO/compare/${BASE_TIP}...${RAW_HEAD}" --jq '.merge_base_commit.sha' 2>/dev/null || true)"
           if printf '%s' "$MERGE_BASE" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -229,17 +228,19 @@ jobs:
           printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "::error::bad base_sha: $BASE_SHA"; exit 1; }
           BASE_TREE="$RUNNER_TEMP/base-review"
           rm -rf "$BASE_TREE"; mkdir -p "$BASE_TREE"
-          # `--` after the sha is belt-and-suspenders; the sha is already pure hex.
           git archive --format=tar "$BASE_SHA" -- ops/review | tar -x -C "$BASE_TREE"
           SCRIPTS="$BASE_TREE/ops/review/scripts"
           RULE_ABS="$BASE_TREE/ops/review/tanren-ocr-rules.json"
           ROUTING_ABS="$BASE_TREE/ops/review/model-routing.json"
+          CONFIG_ABS="$BASE_TREE/ops/review/ocr-llm-config.json"
           test -d "$SCRIPTS" || { echo "::error::missing base scripts dir: $SCRIPTS"; exit 1; }
           test -f "$RULE_ABS" || { echo "::error::missing base rule file: $RULE_ABS"; exit 1; }
           test -f "$ROUTING_ABS" || { echo "::error::missing base routing file: $ROUTING_ABS"; exit 1; }
+          # CONFIG_ABS is OPTIONAL (reasoning enhancement); write-ocr-config.mjs no-ops if absent.
           echo "scripts=$SCRIPTS" >> "$GITHUB_OUTPUT"
           echo "rule_abs=$RULE_ABS" >> "$GITHUB_OUTPUT"
           echo "routing_abs=$ROUTING_ABS" >> "$GITHUB_OUTPUT"
+          echo "config_abs=$CONFIG_ABS" >> "$GITHUB_OUTPUT"
 
       # --- Neutralize the PR-head reviewer-config dir (DESIGN §SECURITY.2) -----
       # Any `.opencodereview/` shipped by the PR is deleted so OCR cannot load a
@@ -329,13 +330,12 @@ jobs:
           HEAD_SHA: ${{ steps.sha.outputs.head_sha }}
           RULE_ABS: ${{ steps.base.outputs.rule_abs }}
           MODEL_JSON: ${{ runner.temp }}/model.json
+          CONFIG_ABS: ${{ steps.base.outputs.config_abs }} # trusted reasoning config template
+          SCRIPTS: ${{ steps.base.outputs.scripts }}
           # --- OCR LLM auth (the ONLY secret this lane carries) ----------------
-          # OCR reads the bearer token from OCR_LLM_TOKEN (the v1.7.15 binary checks
-          # OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL — there is NO OCR_LLM_AUTH_TOKEN;
-          # a wrong name => "no valid LLM endpoint configured" => OCR never runs).
-          # Same-repo PRs get secrets.OPENROUTER_API_KEY; a FORK pull_request gets
-          # an empty secret → review_complete=false → gate FAILS CLOSED (fork PRs
-          # are reviewed via the authorized /review path). URL/protocol non-secret.
+          # Bearer token is OCR_LLM_TOKEN (NOT OCR_LLM_AUTH_TOKEN — a wrong name =>
+          # "no valid LLM endpoint" => OCR never runs). It also feeds write-ocr-config
+          # above. A FORK pull_request gets an empty secret → fail-closed. URL non-secret.
           OCR_LLM_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
           OCR_LLM_URL: https://openrouter.ai/api/v1
           OCR_LLM_PROTOCOL: openai
@@ -344,12 +344,12 @@ jobs:
           # Model id resolved by select-model.mjs; default to the routing default.
           MODEL="$(node -e 'const m=require(process.env.MODEL_JSON);process.stdout.write((m.models&&m.models[0])||"openai/gpt-5.6-luna")')"
           echo "using model: $MODEL"
-          # Non-secret; surface the resolved model to OCR as well as the --model flag.
-          export OCR_LLM_MODEL="$MODEL"
+          export OCR_LLM_MODEL="$MODEL" # non-secret; surfaced to OCR alongside --model
           OCR_RAW="$RUNNER_TEMP/ocr-raw.json"
-          # -- FAIL-CLOSED completeness (do NOT regress) — see validate-ocr-result.mjs.
-          # CERTIFY only if OCR exits 0 AND emits a well-formed result (object with
-          # an array `comments`); merely-valid JSON would leave the gate fail-open.
+          # Write ~/.opencodereview/config.json (the path `ocr review` reads) with the key injected; no-ops on fork/bootstrap.
+          node "$SCRIPTS/write-ocr-config.mjs" "$CONFIG_ABS" "$HOME/.opencodereview/config.json"
+          # FAIL-CLOSED completeness (do NOT regress): CERTIFY only if OCR exits 0
+          # AND emits a well-formed result — see validate-ocr-result.mjs below.
           set +e
           npx --yes --package "$OCR_PACKAGE" ocr review \
             --model "$MODEL" \
