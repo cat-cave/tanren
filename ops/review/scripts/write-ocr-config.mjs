@@ -47,7 +47,12 @@ function main() {
   for (const name of names) providers[name] = { ...providers[name], api_key: key };
   cfg.custom_providers = providers;
   fs.mkdirSync(path.dirname(dest), { recursive: true });
+  // Remove any pre-existing file first: writeFileSync's `mode` only applies on
+  // CREATION, so an existing config with broader perms would keep them and leave
+  // the injected token world-readable. rm + create + explicit chmod = 0600 always.
+  fs.rmSync(dest, { force: true });
   fs.writeFileSync(dest, JSON.stringify(cfg), { mode: 0o600 });
+  fs.chmodSync(dest, 0o600);
   console.log(`write-ocr-config: wrote ${dest} (reasoning config, key injected into: ${names.join(",")})`);
 }
 
