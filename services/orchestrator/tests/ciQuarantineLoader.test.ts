@@ -129,7 +129,7 @@ describe("runGateTier flaky-quarantine actuation (CLOSES the flaky→quarantine�
     expect(result.passed).toBe(true);
     // The quarantined step did NOT short-circuit the rest — build still ran + passed.
     expect(ssh.commands.map((c) => c.command)).toEqual(
-      ["pnpm test:unit", "pnpm build"].map((c) => withMiseActivation(c)),
+      ["pnpm test:unit", "pnpm build"].map((c) => withMiseActivation(c, "/ws")),
     );
     expect(result.steps.find((s) => s.name === "unit")?.passed).toBe(false);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.quarantine_excluded", "gate.passed"]);

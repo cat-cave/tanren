@@ -258,7 +258,7 @@ async function executeStep(
     // project declared none), THEN prepend the app-env prelude. Both are prepended to
     // the EXECUTED command only; the emitted `step.run` stays the original (no secret,
     // no prelude in events). PROJECT path — codex/answerers never run through here.
-    command: withMiseActivation(withAppEnv(step.run, input.appEnv)),
+    command: withMiseActivation(withAppEnv(step.run, input.appEnv), input.workspacePath),
     cwd: input.workspacePath,
     // VCS/build op (the project's gate step): output-driven + the workspace as the
     // silent-stretch liveness probe. NEVER killed for elapsed time — a long test suite
