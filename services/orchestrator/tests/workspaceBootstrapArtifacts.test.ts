@@ -92,7 +92,10 @@ describe("bootstrap-artifact isolation", () => {
     // --allow-empty so the no-manifest case still yields a concrete base sha.
     expect(cmd).toContain("--allow-empty");
     // -q so the commit summary stays off stdout; rev-parse is the sha source.
-    expect(cmd).toContain("git commit -q");
+    expect(cmd).toContain("commit -q --allow-empty");
+    // The project's hooks get no vote on Tanren's own bookkeeping commit: the runner
+    // ships no project toolchain, so a toolchain-dependent hook would kill prep here.
+    expect(cmd).toContain("-c core.hooksPath=/dev/null");
   });
 
   it("(a) captures the writer diff against the post-bootstrap base", async () => {
