@@ -442,6 +442,12 @@ ports:
   : "${TANREN_PUBLIC_BASE_URL:=http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT}}"; \
   echo "orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT internal-mtls=$TANREN_INTERNAL_MTLS_HOST_PORT allocator=$TANREN_ALLOCATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT public_base_url=$TANREN_PUBLIC_BASE_URL"
 
+# DESTRUCTIVE. `-v` wipes the named volumes, which now includes `vaultdata` — every
+# stored credential goes with it, and re-seeding needs operator-held key material.
+# Vault is persistent as of the file-storage backend, so an ordinary restart
+# (`docker compose restart vault`, a Docker VM reboot, `just up-dev` over a live
+# stack) KEEPS credentials; this recipe is the one that does not. Use `docker compose
+# -f compose.dev.yml down` (no `-v`) to stop the stack without losing secrets.
 down-dev:
   docker compose -f compose.dev.yml down -v
 

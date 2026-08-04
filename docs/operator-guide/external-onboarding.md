@@ -101,7 +101,13 @@ just up-dev                    # Postgres, Vault, orchestrator, worker, allocato
 ```
 
 `just up-dev` generates the runner identity key, mounts it as a compose secret, and
-echoes the effective host ports. Confirm health before driving anything:
+echoes the effective host ports.
+
+Vault stores its data on the `vaultdata` named volume, so credentials survive a
+container restart, a Docker VM reboot and a re-`up-dev`. The one command that
+destroys them is `just down-dev` / `just stack-reset` (both `down -v`) — after
+either, re-seed with `just seed-platform-creds`. Confirm health before driving
+anything:
 
 ```sh
 curl -s localhost:3100/healthz | jq .
