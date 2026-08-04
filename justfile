@@ -646,7 +646,21 @@ smoke-ssh-integration:
 # NOT OPT-IN, and deliberately so: this test's header used to claim "the container run is
 # the proof" while nothing ran it, which is exactly the rot this recipe exists to stop.
 smoke-toolchain-container:
-  runner_port="${TANREN_RUNNER_SSH_HOST_PORT:-$((2222 + ${TANREN_PORT_OFFSET:-0}))}"; fingerprint="$(ssh-keyscan -p "$runner_port" -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_TOOLCHAIN_CONTAINER=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT="$runner_port" TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/toolchainContainer.integration.test.ts
+  runner_port="${TANREN_RUNNER_SSH_HOST_PORT:-$((2222 + ${TANREN_PORT_OFFSET:-0}))}"; fingerprint="$(ssh-keyscan -p "$runner_port" -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_TOOLCHAIN_CONTAINER=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT="$runner_port" TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/toolchainContainer.integration.test.ts services/orchestrator/tests/workspaceSetupContainer.integration.test.ts
+
+# WRITER-COMMIT TOOLCHAIN container proof. The unit suite pins the command STRINGS; this
+# is the only place their EFFECT on a real runner is proven — and the effect is the whole
+# defect. Every string was already correct, `mise install` had already succeeded, and the
+# writer's commit still died on `pnpm not found`, because the provisioned toolchain was
+# never on PATH for the commit's subprocess. A string test cannot see PATH.
+#
+# It drives the REAL SshCommandSubstrate against the SAME `runner` container
+# `smoke-ssh-integration` uses (already built + healthy by then), so it costs one SSH
+# session and NO image build.
+#
+# NOT OPT-IN: a container proof nothing runs is a claim, not a proof.
+smoke-writer-commit-hooks:
+  runner_port="${TANREN_RUNNER_SSH_HOST_PORT:-$((2222 + ${TANREN_PORT_OFFSET:-0}))}"; fingerprint="$(ssh-keyscan -p "$runner_port" -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_WRITER_COMMIT_CONTAINER=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT="$runner_port" TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/writerCommitToolchain.integration.test.ts
 
 live-codex-writer:
   test -n "${TANREN_CODEX_AUTH_JSON_FILE:-}"
@@ -1188,6 +1202,7 @@ smoke: \
   smoke-connectivity \
   smoke-ssh-integration \
   smoke-toolchain-container \
+  smoke-writer-commit-hooks \
   smoke-plane-split-worker \
   smoke-plane-split-worker-remote-writes \
   smoke-plane-split-p3 \
