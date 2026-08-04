@@ -12,6 +12,13 @@
 #     services/orchestrator/docker/render-worker
 # Override the tag the runner uses with TANREN_DS4_RENDER_IMAGE.
 FROM mcr.microsoft.com/playwright:v1.50.0-noble
+# A DETERMINISTIC base locale. The base image sets none, so the container inherits a
+# C-family default whose meaning is architecture-dependent: an arm64 chromium maps the C
+# family to `en_US_POSIX` and reports `navigator.language === "en-US@posix"`, which is not
+# valid BCP-47 and throws in `Intl.PluralRules`. The screenshot path declares the
+# scenario's locale explicitly per page; this makes the image's own default host-
+# independent for everything else that runs here (e.g. the click driver).
+ENV LANG=en_US.UTF-8
 WORKDIR /app
 # Pin the npm package to the image's browser version so chromium + the driver match.
 RUN npm init -y >/dev/null 2>&1 && npm install playwright@1.50.0 >/dev/null 2>&1

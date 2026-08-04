@@ -91,6 +91,19 @@ export interface PixelRenderRunner {
   screenshot(input: {
     readonly documentHtml: string;
     readonly viewport: PixelViewport;
+    /**
+     * The scenario's BCP-47 locale, DECLARED to the browser (Playwright's
+     * `newPage({ locale })`) rather than inherited from the host.
+     *
+     * REQUIRED, not optional, on purpose: `locale` is a dimension of the scenario
+     * matrix and outcomes are keyed on it, but the scenario document only ever
+     * stamped it into `<html lang>` — a markup attribute that does NOT set
+     * `navigator.language`. Every scenario therefore rendered in whatever locale the
+     * host supplied, so the matrix dimension was inert with respect to the thing it
+     * claims to vary. Making this required means a new call site cannot silently
+     * reintroduce host inheritance; the compiler asks for the locale.
+     */
+    readonly locale: string;
   }): Promise<PixelScreenshotResult | PixelScreenshotFailure>;
 }
 

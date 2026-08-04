@@ -11,10 +11,19 @@ import { readFileSync } from "node:fs";
 const width = Number.parseInt(process.env.PW_WIDTH ?? "1280", 10) || 1280;
 const height = Number.parseInt(process.env.PW_HEIGHT ?? "800", 10) || 800;
 const html = readFileSync("/work/page.html", "utf8");
+// The scenario's locale, DECLARED by the host runner. FAIL-CLOSED: a missing PW_LOCALE is
+// a wiring fault, not a reason to silently fall back to the container's default locale —
+// that default is host-architecture-dependent (an arm64 chromium under a C-family locale
+// reports `en-US@posix`, which is not valid BCP-47 and throws in `Intl`).
+const locale = process.env.PW_LOCALE;
+if (!locale) {
+  console.error("DS4_SHOT_NO_LOCALE: PW_LOCALE is required (the host runner declares the scenario locale)");
+  process.exit(2);
+}
 
 const browser = await chromium.launch();
 try {
-  const page = await browser.newPage({ viewport: { width, height } });
+  const page = await browser.newPage({ viewport: { width, height }, locale });
   await page.setContent(html, { waitUntil: "networkidle" });
   await page.screenshot({ path: "/work/out.png" });
 } finally {

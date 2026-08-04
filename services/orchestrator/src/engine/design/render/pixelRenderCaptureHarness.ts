@@ -61,7 +61,10 @@ export class PixelRenderCaptureHarness {
 
     const documentHtml = scenarioDocument(rendered.html, scenario);
     const viewport = resolveViewport(scenario.viewport);
-    const shot = await this.runner.screenshot({ documentHtml, viewport });
+    // Declare the scenario's locale to the browser. `scenarioDocument` above stamps the
+    // same value into `<html lang>`, but that is markup only — `navigator.language`, which
+    // an i18n runtime actually reads, comes from the browser context.
+    const shot = await this.runner.screenshot({ documentHtml, viewport, locale: scenario.locale });
     if (!shot.ok) {
       return this.failed(scenario.scenarioKey, designContractVersion, "browser", shot.reason);
     }
