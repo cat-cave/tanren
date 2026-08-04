@@ -136,10 +136,14 @@ export const SpecCancelledPayload = z
   .strict();
 
 // run.cancelled: the spec's active run was cancelled as part of the spec cancel — it
-// goes terminal `cancelled` and its claimed runner is RELEASED (the runner-row release
-// seam; the workspace reaper then reclaims the sandbox now the run is terminal).
-// `runnerReleased` records whether a runner was actually found + released (false when
-// the run had no claimed runner — e.g. a still-`queued` run), so a leak is never silent.
+// goes terminal `cancelled`, its live `job_queue` rows are REAPED terminal, and its
+// claimed runner is RELEASED (the runner-row release seam; the workspace reaper then
+// reclaims the sandbox now the run is terminal). `runnerReleased` records whether a
+// runner was actually found + released (false when the run had no claimed runner —
+// e.g. a still-`queued` run), so a leak is never silent. `jobsCancelled` names the
+// queue rows the cancel reaped: a claimable row left behind is a cancel a worker
+// restart can UNDO (the claim path never joins run status), so the reap is recorded
+// as evidence rather than assumed.
 export const RunCancelledPayload = z
   .object({
     runId: z.string(),
@@ -147,6 +151,7 @@ export const RunCancelledPayload = z
     cancelledBy: z.string(),
     runnerId: z.string().optional(),
     runnerReleased: z.boolean(),
+    jobsCancelled: z.array(z.string()).optional(),
   })
   .strict();
 

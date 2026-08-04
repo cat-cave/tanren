@@ -43,6 +43,8 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["cancelledBy", "public"],
     ["runnerId", "public"],
     ["runnerReleased", "public"],
+    // The reaped `job_queue` row ids — queue coordinates (run lineage), no secret.
+    ["jobsCancelled[]", "public"],
   ]),
   // dag.spec.redriven (apex v35): a random/transient run failure RE-DRIVES the spec
   // (→ open) instead of stranding it — the never-strand sibling. All fields public-safe:

@@ -9,7 +9,8 @@
 //      FREES the DAG slot: the walker classifies `cancelled` as `terminal_blocked`
 //      (like `merged`/`needs_attention`), so it never re-enqueues a cancelled spec.
 //   2. Cancels the spec's ACTIVE run (the non-terminal `queued`/`running`/`halted`
-//      run, if any) to the terminal `cancelled` run status, and RELEASES that run's
+//      run, if any) to the terminal `cancelled` run status, REAPS that run's live
+//      `job_queue` rows to the terminal `cancelled` job status, and RELEASES that run's
 //      claimed runner through the runner-release seam (the `runners` row flips
 //      `released` — the allocator's sweeper + the run-workspace reaper then reclaim
 //      the sandbox now the run is terminal, so NO sandbox leaks).
@@ -40,6 +41,13 @@ export interface CancelledRun {
   fromStatus: string;
   runnerId?: string;
   runnerReleased: boolean;
+  /**
+   * The run's live `job_queue` rows reaped to the terminal `cancelled` job status
+   * (ids, in queue order). Empty when the run had no live queue row. Recorded
+   * HONESTLY so a surviving claimable row is never silently assumed away — a
+   * cancel that leaves one behind is a cancel that a worker restart can undo.
+   */
+  jobsCancelled: string[];
 }
 
 export interface CancelSpecResult {
@@ -159,11 +167,11 @@ export async function cancelSpec(
 
 /**
  * Cancel the spec's single ACTIVE run (the non-terminal `queued`/`running`/`halted`
- * run) and release its claimed runner. The guarded UPDATE flips at most one row; a
- * spec with no active run (all runs terminal, or never run) is a clean skip. Releasing
- * the runner flips its `runners` row `released` (the allocator-release seam's DB side)
- * so the sweeper + run-workspace reaper reclaim the sandbox now the run is terminal —
- * NO leaked sandbox.
+ * run), REAP its live `job_queue` rows, and release its claimed runner. The guarded
+ * UPDATE flips at most one row; a spec with no active run (all runs terminal, or never
+ * run) is a clean skip. Releasing the runner flips its `runners` row `released` (the
+ * allocator-release seam's DB side) so the sweeper + run-workspace reaper reclaim the
+ * sandbox now the run is terminal — NO leaked sandbox.
  */
 async function cancelActiveRun(
   client: pg.PoolClient,
@@ -187,6 +195,34 @@ async function cancelActiveRun(
   }
   const fromStatus = row.status;
   await client.query("UPDATE runs SET status = 'cancelled' WHERE run_id = $1", [row.run_id]);
+
+  // REAP the run's live `job_queue` rows to the terminal `cancelled` job status.
+  //
+  // WITHOUT this the cancel is NOT DURABLE. `runs.status` is not on the claim path:
+  // `JobQueue.claim` selects purely on `task_kind` + `status = 'queued'`, and the
+  // lease reaper (`reapExpiredLeases`) requeues ANY `running` row whose lease lapsed —
+  // neither joins the owning run. So a cancelled run's queue row survives the cancel,
+  // the worker that dies/restarts while holding it lets its lease lapse, the reaper
+  // returns it to `queued`, and the next claim RESURRECTS the cancelled run. The
+  // DagWalker's terminal-status guard never sees it: the walker gates ENQUEUE, and
+  // this row was already enqueued.
+  //
+  // Flipping the row terminal closes both doors at once: `cancelled` is not `queued`
+  // (never claimed) and not `running` (never reaped), and it is a legal transition
+  // from every live status (see engine/state/job.ts). `leased_until = NULL` drops the
+  // lease so the row also leaves the reaper's partial index.
+  const reaped = await client.query<{ id: string }>(
+    `UPDATE job_queue
+        SET status = 'cancelled', ended_at = now(), leased_until = NULL
+      WHERE run_id = $1 AND status IN ('queued', 'claimed', 'running')
+    RETURNING id::text AS id`,
+    [row.run_id],
+  );
+  // `job_queue.id` is a bigserial rendered as text: sort NUMERICALLY but via BigInt, since
+  // an id past Number.MAX_SAFE_INTEGER would compare wrong under `Number()`.
+  const jobsCancelled = reaped.rows
+    .map((jobRow) => jobRow.id)
+    .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0));
 
   // Release the run's claimed runner (the allocator-release seam's DB side: flip the
   // `runners` row `released`). The sweeper/reaper reclaim the sandbox now the run is
@@ -216,10 +252,11 @@ async function cancelActiveRun(
       cancelledBy: ctx.cancelledBy,
       ...(runnerId === undefined ? {} : { runnerId }),
       runnerReleased,
+      jobsCancelled,
     },
   });
 
-  return { runId: row.run_id, fromStatus, runnerId, runnerReleased };
+  return { runId: row.run_id, fromStatus, runnerId, runnerReleased, jobsCancelled };
 }
 
 /**
