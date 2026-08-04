@@ -104,7 +104,7 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
     // no-op when none was declared), THEN prepend the app-env prelude — both on the
     // EXECUTED string only, so the error/event command stays prelude-free. The codex
     // harness path never runs through here, so it keeps the runner's isolated node.
-    command: withMiseActivation(withAppEnv(command, input.appEnv)),
+    command: withMiseActivation(withAppEnv(command, input.appEnv), input.workspacePath),
     cwd: input.workspacePath,
     // VCS/build op: output-driven + the workspace as the silent-stretch liveness
     // probe (a build/install writes files as it works). NEVER killed for elapsed time.
@@ -251,7 +251,8 @@ export async function ensureWorkspaceDepsInstalled(
   });
   const guarded =
     `if [ -f ${JUSTFILE_PATH} ] || [ -f .tanren/ci.yml ]; then ` +
-    `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; { ${toolchainProvisionCommand(detection)}; } && { ${command}; }; ` +
+    `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ` +
+    `{ ${toolchainProvisionCommand(detection, input.workspacePath)}; } && { ${command}; }; ` +
     `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard
   // ONLY, never to `command` (the value carried into the error below), so a
@@ -262,7 +263,7 @@ export async function ensureWorkspaceDepsInstalled(
     // installs under the project's declared toolchain — a no-op when none declared),
     // THEN prepend the app-env prelude. Both on the EXECUTED string only; the error
     // command stays the ORIGINAL (prelude-free). Codex never runs through this path.
-    command: withMiseActivation(withAppEnv(guarded, input.appEnv)),
+    command: withMiseActivation(withAppEnv(guarded, input.appEnv), input.workspacePath),
     cwd: input.workspacePath,
     // VCS/build op: output-driven + the workspace as the silent-stretch liveness
     // probe (the install writes files as it works). NEVER killed for elapsed time.

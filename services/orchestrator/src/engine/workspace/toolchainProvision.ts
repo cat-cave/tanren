@@ -6,10 +6,11 @@
 //
 // The shell this module builds does three things, in order, and the third is the point:
 //   1. `mise use --global <tool>@<spec> …` — install the detected tools AND record them
-//      in the runner user's own mise config. `--global` deliberately writes OUTSIDE the
-//      workspace: Tanren never materializes a config file into a repository it did not
-//      author, so the writer's diff, the bootstrap commit and the pushed branch stay
-//      exactly as clean as before.
+//      in THIS RUN's own mise config (ssh/miseActivate.ts `miseRunScope`), held under the
+//      runner-wide mise lock because the installs tree behind it is shared by every
+//      concurrent run. `--global` deliberately writes OUTSIDE the workspace: Tanren never
+//      materializes a config file into a repository it did not author, so the writer's
+//      diff, the bootstrap commit and the pushed branch stay exactly as clean as before.
 //   2. activate, so the tools are on PATH for the verification below.
 //   3. VERIFY every declared binary actually resolves — and exit NONZERO naming the
 //      tool, its version and the FILE that declared it when one does not. This is the
@@ -28,8 +29,9 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import {
   MISE_CONFIG_REL_PATH,
   miseProvisionCommand,
-  miseSharedDirPrelude,
-  TOOLCHAIN_PROVISIONED_MARKER,
+  miseRunScope,
+  miseScopeExport,
+  underMiseLock,
 } from "../ssh/miseActivate.js";
 import { combinedOutput, commandSucceeded, failureReason, tailOf } from "./outputTail.js";
 import {
@@ -115,12 +117,13 @@ export function toolchainSpec(requirement: ToolchainRequirement): string {
  * When there is nothing to provision it emits a stated no-op line rather than a
  * fabricated success, so the run timeline records what Tanren concluded about the repo.
  */
-export function toolchainProvisionCommand(detection: ToolchainDetection): string {
+export function toolchainProvisionCommand(detection: ToolchainDetection, workspacePath: string): string {
   if (detection.deferToMiseConfig) {
     // The repo's OWN mise config outranks anything Tanren could read from its
     // conventions: trust + install it verbatim, through the SAME command as before.
-    return miseProvisionCommand();
+    return miseProvisionCommand(workspacePath);
   }
+  const scope = miseRunScope(workspacePath);
   const parts: string[] = [];
   for (const { path, reason } of detection.unresolved) {
     // A declaration Tanren READ but cannot honor is announced, never dropped. It is
@@ -136,18 +139,27 @@ export function toolchainProvisionCommand(detection: ToolchainDetection): string
     else parts.push(echo(NOTHING_PROVISIONABLE_NOTICE));
     return parts.join("; ");
   }
-  // THE SHARED-DIR PRELUDE IS NOT OPTIONAL HERE. This is a THIRD mise seam, alongside the
-  // two `miseSharedDirPrelude` already covers (the activation prelude and the repo-owns-a-
-  // mise.toml provision). All three must agree on `MISE_DATA_DIR` or provisioning writes
-  // the toolchain into a directory the later activation does not read — the install
-  // succeeds, THIS command's verification passes because it runs in the same shell, and
-  // the project's bootstrap still dies on `pnpm: not found`. Sourcing the image's script
-  // is guarded on it being readable, so a runner that publishes no shared dir keeps mise's
-  // own defaults at every seam, exactly as before.
-  parts.push(`${miseSharedDirPrelude()}export MISE_YES=1`);
+  // `miseScopeExport` settles BOTH things this third mise seam has to agree with the
+  // other two about: the shared data dir the image published (or the install lands where
+  // the activation will not look — and this command's own verification would still pass,
+  // because it runs in the same shell as the install), and THIS run's config file rather
+  // than a runner-wide one two concurrent runs would overwrite for each other.
+  parts.push(miseScopeExport(scope));
   parts.push(echo(`tanren: provisioning declared toolchain - ${describeRequirements(detection.requirements)}`));
-  // `--global`: recorded in the runner user's mise config, NOT in the repository.
-  parts.push(`mise use --global ${detection.requirements.map((r) => quoteSshShellArg(toolchainSpec(r))).join(" ")}`);
+  // `--global`: recorded in THIS RUN's mise config (miseRunScope — never the runner-wide
+  // one two concurrent runs would fight over), and never in the repository. Held under
+  // the shared lock because `mise use` also INSTALLS, and the installs tree is shared:
+  // unsynchronised, two runs race on `installs/<tool>/latest` (`ln -sf … File exists`).
+  // `mise trust` clears mise's config-trust gate for the Tanren-authored config, exactly
+  // as the golden image does for its own off-default global config (runner/Dockerfile).
+  const specs = detection.requirements.map((r) => quoteSshShellArg(toolchainSpec(r))).join(" ");
+  parts.push(
+    underMiseLock(
+      scope,
+      `[ -f "${scope.configFile}" ] || : > "${scope.configFile}"; ` +
+        `mise trust "${scope.configFile}"; mise use --global ${specs}`,
+    ),
+  );
   parts.push('eval "$(mise env -s bash)"');
   for (const requirement of detection.requirements) {
     parts.push(
@@ -155,7 +167,7 @@ export function toolchainProvisionCommand(detection: ToolchainDetection): string
         `{ ${echoErr(missingBinaryMessage(requirement))}; exit 1; }`,
     );
   }
-  parts.push(`: > "${TOOLCHAIN_PROVISIONED_MARKER}"`);
+  parts.push(`: > "${scope.markerFile}"`);
   parts.push(echo(TOOLCHAIN_VERIFIED_NOTICE));
   return parts.join("; ");
 }
@@ -256,7 +268,7 @@ export async function provisionMiseToolchain(input: ProvisionMiseToolchainInput)
   const detection = await resolveWorkspaceToolchain(input);
   const result = await input.ssh.run(input.target, {
     // `set -e` so any failing step in the provision chain surfaces a nonzero exit.
-    command: `set -e; ${toolchainProvisionCommand(detection)}`,
+    command: `set -e; ${toolchainProvisionCommand(detection, input.workspacePath)}`,
     cwd: input.workspacePath,
     watchdog: watchdogFor(input),
   });
