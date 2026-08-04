@@ -55,12 +55,15 @@ function realPng(width: number, height: number): Uint8Array {
 /** A runner that returns a REAL PNG (records the document it was asked to screenshot). */
 class FixturePngRunner implements PixelRenderRunner {
   public lastDocumentHtml: string | null = null;
+  public lastLocale: string | null = null;
   public constructor(private readonly png: Uint8Array) {}
   async screenshot(input: {
     documentHtml: string;
     viewport: { width: number; height: number };
+    locale: string;
   }): Promise<PixelScreenshotResult | PixelScreenshotFailure> {
     this.lastDocumentHtml = input.documentHtml;
+    this.lastLocale = input.locale;
     return { ok: true, png: this.png, viewport: input.viewport };
   }
 }
@@ -148,6 +151,16 @@ describe("PixelRenderCaptureHarness", () => {
     expect(runner.lastDocumentHtml).toContain("<button");
     expect(runner.lastDocumentHtml).toContain("Click me");
     expect(runner.lastDocumentHtml).toContain(`data-theme="${scenario.theme}"`);
+
+    // REGRESSION — the scenario's locale is DECLARED to the browser, not just stamped
+    // into markup. `locale` is a dimension of the scenario matrix and outcomes are keyed
+    // on it (acceptanceSpec/acceptanceOutcome), but the document only ever carried it as
+    // `<html lang>`, which does NOT set `navigator.language`. So every scenario in the
+    // matrix rendered in whatever locale the HOST supplied, and the dimension was inert
+    // with respect to the thing it claims to vary.
+    expect(runner.lastLocale).toBe(scenario.locale);
+    // The markup attribute is still set — but it is not, and never was, the browser locale.
+    expect(runner.lastDocumentHtml).toContain(`lang="${scenario.locale}"`);
 
     // The stored bytes are the EXACT real PNG, content-addressed.
     const stored = await cas.get(ORG_ID, outcome.captureRef.casRef.digest);
