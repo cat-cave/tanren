@@ -2,15 +2,22 @@
 // reader (`redriveHistoryReader.ts`) and the applier (`plannerRunRedrive.ts`) can both
 // import them without circling. Pure type declarations; no runtime.
 
-import type { RunFailureCode } from "../worker/runFailureClassifier.js";
+import type { RunFailureCause, RunFailureCode } from "../worker/runFailureClassifier.js";
 import type { WanderingHaltVerdict } from "./wanderingHaltDetector.js";
 
 /** Facts a fixed-point read needs: the spec + its org + the failure code + the work signature now seen. */
 export interface RedriveHistoryFacts {
   orgId: string;
   specId: string;
-  /** The classified failure code of the CURRENT failure (one fixed-point axis). */
+  /** The classified failure code of the CURRENT failure. Retained as the FALLBACK
+   * fixed-point axis, used for history rows written before `cause` existed. */
   code: RunFailureCode;
+  /** The FINE-GRAINED cause of the CURRENT failure — the PRIMARY fixed-point axis. The
+   * code alone proved far too coarse (93% of live run failures classified `internal`), so
+   * three categorically different causes aliased into ONE repeating state and parked the
+   * spec. Optional only so a caller that cannot compute it degrades to the old code-keyed
+   * behavior rather than failing. */
+  cause?: RunFailureCause;
   /** The run STAGE the CURRENT failure is attributed to. Used by the wandering-halt
    * detector (apex v67 #122) as one progress axis — a later-stage failure than every
    * prior re-drive is deliverable progress. The fixed-point detector ignores this. */

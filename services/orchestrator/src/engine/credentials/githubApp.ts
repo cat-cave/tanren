@@ -48,11 +48,38 @@ export async function storeGithubAppCredential(
   return { credentialKind: githubAppKind, ref, appId: credential.appId, redacted: true };
 }
 
+/**
+ * Thrown when a GitHub App credential ref IS configured but the secret store has no
+ * secret at that ref. Mirrors `MissingGithubCredentialRefError` in
+ * `githubTokenResolver.ts` exactly (same `retriable` / `ref` / `name` shape) — the two
+ * are the App and token halves of the same operator-configuration condition.
+ *
+ * WHY IT IS A CLASS. This throw used to be a BARE `Error`, so `error.name` was the
+ * generic `"Error"` and `classifyRunFailure` — which keys off the class name and nothing
+ * else — could not see it. On the live instance that hid 20 run failures inside the
+ * opaque `internal` bucket, where they aliased with every other unclassified throw and
+ * drove the spec toward a false fixed point. A named class is the minimum a failure needs
+ * in order to be attributable at all.
+ *
+ * The MESSAGE is byte-identical to the previous bare throw, so any caller (or test)
+ * matching on the message text keeps matching, and `instanceof Error` still holds.
+ */
+export class MissingGithubAppCredentialRefError extends Error {
+  readonly retriable = false as const;
+  readonly ref: string;
+
+  constructor(ref: string) {
+    super(`missing GitHub App credential ref: ${ref}`);
+    this.name = "MissingGithubAppCredentialRefError";
+    this.ref = ref;
+  }
+}
+
 export async function loadGithubAppCredential(secrets: SecretStore, ref: string): Promise<GithubAppCredential> {
   const validated = validateGithubAppCredentialRef(ref);
   const secret = await secrets.get(validated);
   if (secret === undefined) {
-    throw new Error(`missing GitHub App credential ref: ${validated}`);
+    throw new MissingGithubAppCredentialRefError(validated);
   }
   let parsed: unknown;
   try {

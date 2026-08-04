@@ -137,20 +137,31 @@ describe("decideRunDisposition — GENUINE-HALT: only the four structural classe
     });
     expect(disposition.bucket === "genuine_halt" ? disposition.message : "").not.toContain("raw provider detail");
   });
-  it("a credential misconfiguration GENUINE-HALTS immediately (never re-driven, even at count 1)", () => {
-    const d = decideRunDisposition({ kind: "error", error: new MissingCredentialError("github_token") }, PROGRESS);
+  // SUPERSEDED BEHAVIOR (deliberate). A MISSING credential no longer genuine-halts: it is a
+  // named PRECONDITION (`credential`) that becomes true the moment the secret is seeded, with
+  // no change to the spec — so it re-drives indefinitely and resumes on its own. See
+  // `preconditionRedrive.test.ts` for the full recovery proof. What is pinned HERE is that
+  // the genuine-terminal path did NOT become dead code: `UnscopedOrgError` — a tanren-side
+  // scoping defect with NO external condition that could clear it — still halts immediately.
+  it("an unscoped-org credential fault GENUINE-HALTS as a misconfiguration (the genuine-terminal set stays live)", () => {
+    const d = decideRunDisposition({ kind: "error", error: new UnscopedOrgError() }, PROGRESS);
     expect(d).toMatchObject({
       bucket: "genuine_halt",
       reason: "misconfiguration",
       message: expect.stringContaining("credential"),
+      failure: { cause: "credential_org_scope_lost", attribution: "tanren" },
     });
     expect(d.bucket === "genuine_halt" ? d.message : "").toContain("a human must fix");
   });
 
-  it("an unscoped-org credential fault GENUINE-HALTS as a misconfiguration", () => {
-    expect(decideRunDisposition({ kind: "error", error: new UnscopedOrgError() }, PROGRESS).bucket).toBe(
-      "genuine_halt",
-    );
+  it("a MISSING credential does NOT genuine-halt — it precondition-blocks and keeps re-driving", () => {
+    const d = decideRunDisposition({ kind: "error", error: new MissingCredentialError("github_token") }, PROGRESS);
+    expect(d).toMatchObject({
+      bucket: "re_drive",
+      preconditionBlock: "credential",
+      consecutiveSameFailure: 0,
+      failure: { cause: "credential_missing", attribution: "environment" },
+    });
   });
 
   it("the SAME transient failure at a FIXED POINT GENUINE-HALTS as a persistent_failure (no hot-loop, no count)", () => {

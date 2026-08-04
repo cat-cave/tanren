@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RUN_FAILURE_ATTRIBUTIONS, RUN_FAILURE_CAUSES } from "../../worker/runFailureCause.js";
 
 // GENUINE-HALT escalation reasons (apex v35 — the unified run-finalize authority,
 // `runFinalizeAuthority.ts`). `needs_attention` is RESERVED for the three GENUINE-HALT
@@ -54,10 +55,23 @@ export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
       terminalRuns: z.array(StrandTerminalRun),
       // How many times the spec had already been re-enqueued (exceeded the cap).
       attempts: z.number().int().nonnegative(),
+      // The FINE-GRAINED cause of the failure that parked this spec, and WHOSE bug it
+      // is. A halt is a BUG REPORT, not a terminal state — it means either a bug in
+      // tanren or a bug in the target repository, and both get fixed. Parking with
+      // only a broad `failureCode` (93% of which read `internal` on a live instance)
+      // told an operator nothing about which repo to open. These two fields are the
+      // legibility fix: the timeline now says WHAT specifically broke and WHOSE fault
+      // it is. Closed vocabularies from the classifier (`worker/runFailureCause.ts`),
+      // never derived from an error message. OPTIONAL for back-compat with rows
+      // written before this change.
+      cause: z.enum(RUN_FAILURE_CAUSES).optional(),
+      attribution: z.enum(RUN_FAILURE_ATTRIBUTIONS).optional(),
       // The human-readable DECISION ask (the escalation discipline): framed as
       // "the autonomous self-heal could not make progress — a human must decide",
       // NOT "an error occurred". Mirrors the merge_conflict source's `message` so
-      // both parked-state reasons surface as decisions, not error reports.
+      // both parked-state reasons surface as decisions, not error reports. It now
+      // also NAMES the attribution inline, so the ask reads "this is tanren's bug" /
+      // "this is the target repository's bug" without a join.
       message: z.string(),
     })
     .strict(),

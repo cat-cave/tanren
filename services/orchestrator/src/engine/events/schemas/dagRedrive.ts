@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RUN_FAILURE_ATTRIBUTIONS, RUN_FAILURE_CAUSES, RUN_PRECONDITIONS } from "../../worker/runFailureCause.js";
 
 // dag.spec.redriven (apex v35 robustness-over-recovery): a spec's run failed with a RANDOM /
 // TRANSIENT / INTERNAL fault (not budget, not misconfiguration, not a human-decision), so it is
@@ -41,6 +42,24 @@ export const DagSpecRedrivenPayload = z
     ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.
     stage: z.enum(["bootstrap", "credentials", "workspace", "agent", "merge", "deploy", "run"]),
+    // The FINE-GRAINED cause id — the SECOND, NARROWER classification axis (see
+    // `worker/runFailureCause.ts`). THIS is what the convergence readers key the
+    // fixed-point signature on now, because `failureCode` alone proved far too coarse: on a
+    // live instance 93% of run failures classified as the catch-all `internal`, so an SSH
+    // outage, a missing credential and a control-plane 500 — three unrelated causes — read
+    // as one repeating state and parked the spec. The enum is built FROM the classifier's
+    // own vocabulary array, so a payload can never carry a cause the classifier cannot
+    // produce. OPTIONAL: rows written before this change carry none, and the readers fall
+    // back to `failureCode` for them.
+    cause: z.enum(RUN_FAILURE_CAUSES).optional(),
+    // WHOSE bug this is — tanren's, the target repo's, the environment's, or not yet
+    // knowable. Closed vocabulary, never derived from an error message. OPTIONAL for the
+    // same back-compat reason as `cause`.
+    attribution: z.enum(RUN_FAILURE_ATTRIBUTIONS).optional(),
+    // The NAMED external condition this re-drive is blocked on, when there is one. Present
+    // exactly when `source === "precondition_block"`; the re-drive keeps probing until the
+    // condition clears. Closed vocabulary.
+    precondition: z.enum(RUN_PRECONDITIONS).optional(),
     // CONSECUTIVE prior re-drives at the SAME structural FIXED POINT (this one included) — the
     // intelligent stuck-detector (apex v35; the shared `convergenceDetector`). It counts the
     // trailing run of re-drives whose failure code AND produced-work signature both match. A
@@ -73,9 +92,18 @@ export const DagSpecRedrivenPayload = z
     //     skip these rows or a sequence (workflow_redrive[internal], prober_resume[usage_limit],
     //     workflow_redrive[internal]) reads as "a new state appeared," masking a genuine cycle.
     //     The reader filters by `payload.source === "prober_resume"`.
+    //   - "precondition_block" — the run is blocked on a NAMED external precondition (an
+    //     absent credential, an unreachable runner, a control plane refusing writes). It is
+    //     the GENERALIZATION of `prober_resume`'s "re-drive is the probe" pattern: the next
+    //     run's own attempt IS the test of whether the condition cleared, so the spec keeps
+    //     re-driving on a cadence FOREVER instead of parking. Like `prober_resume` these
+    //     rows are NOT structural evidence of non-convergence — the spec is WAITING, not
+    //     stuck — so both readers filter them out of the convergence history. Without that
+    //     filter, waiting for a credential would itself manufacture the fixed point that
+    //     parks the spec, which is precisely the live defect this fixes.
     // OPTIONAL so existing committed rows (which carry no `source`) parse cleanly; absent ⇒
     // treat as the default `workflow_redrive`.
-    source: z.enum(["workflow_redrive", "prober_resume"]).optional(),
+    source: z.enum(["workflow_redrive", "prober_resume", "precondition_block"]).optional(),
   })
   .strict();
 export type DagSpecRedrivenPayload = z.infer<typeof DagSpecRedrivenPayload>;
