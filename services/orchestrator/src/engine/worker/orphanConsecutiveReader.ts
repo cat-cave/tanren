@@ -8,6 +8,7 @@ import type pg from "pg";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
+import { EVENTS_AFTER_ATTENTION_RESOLVED_SQL } from "../workflow/attentionResolutionBoundary.js";
 
 const log = createLogger("run-finalize-orphan-reader");
 
@@ -45,9 +46,17 @@ export async function readOrphanConsecutive(
   try {
     const result = await client.query<{
       payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
-    }>(`SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`, [
-      specId,
-    ]);
+    }>(
+      // BOUNDED by the most recent operator requeue — only re-drives after the spec's latest
+      // `dag.spec.attention_resolved` count (see `workflow/attentionResolutionBoundary.ts`;
+      // the planner-path sibling applies the identical bound). No resolution event ⇒ the full
+      // history, exactly as before.
+      `SELECT payload FROM events
+         WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
+           AND ${EVENTS_AFTER_ATTENTION_RESOLVED_SQL}
+         ORDER BY ts ASC, id ASC`,
+      [specId],
+    );
     // Audit finding D1 (mirrors `redriveHistoryReader.ts`'s prober-resume filter — finding
     // #13): `dag.spec.redriven` rows whose `payload.source === "prober_resume"` are the
     // window-pause prober's atomic spec flip from `in_flight` → `open`; they carry a
