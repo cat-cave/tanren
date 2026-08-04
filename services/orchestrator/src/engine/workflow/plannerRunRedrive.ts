@@ -16,6 +16,7 @@
 // each with a SPECIFIC, actionable diagnostic (never a bare "internal error").
 
 import type { EventName, EventPayload } from "../events/index.js";
+import { causeFields, preconditionFields } from "./redriveEventFields.js";
 import type { AppendEventInput } from "../eventStore.js";
 import {
   type ConvergenceFacts,
@@ -241,6 +242,7 @@ async function applyRedrive(
         failureCode: disposition.failure.code,
         stage: disposition.failure.stage,
         message: disposition.failure.summary,
+        ...causeFields(disposition.failure),
       },
     },
     rawErrorMessage: rawErrorMessage ?? disposition.failure.summary,
@@ -258,8 +260,12 @@ async function applyRedrive(
         runId: ctx.context.runId,
         failureCode: disposition.failure.code,
         stage: disposition.failure.stage,
+        // `cause` is the signature the readers key on now; `failureCode` stays put as
+        // public contract + the pre-change fallback.
+        ...causeFields(disposition.failure),
         consecutiveSameFailure: disposition.consecutiveSameFailure,
         backoffSeconds: disposition.backoffSeconds,
+        ...preconditionFields(disposition.preconditionBlock),
       },
     },
   );
@@ -319,6 +325,7 @@ async function applyGenuineHalt(
       failureCode: disposition.failure?.code ?? "genuine_halt",
       stage: disposition.failure?.stage ?? "finalize",
       message: disposition.message,
+      ...causeFields(disposition.failure),
     },
   });
   // apex v67 #122 — branch on the disposition's source: the new `wandering_halt` source
@@ -343,6 +350,9 @@ async function applyGenuineHalt(
           reason: disposition.reason,
           terminalRuns: [{ runId: ctx.context.runId, status: "failed" }],
           attempts: disposition.consecutiveSameFailure,
+          // A halt is a BUG REPORT: name WHAT broke and WHOSE bug it is, so an operator
+          // knows which repository to open without reconstructing it.
+          ...causeFields(disposition.failure),
           message: disposition.message,
         };
   await seams.updateSpecAtomic(
@@ -444,8 +454,10 @@ async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOu
   // #82 — window pressure is UNBOUNDED, never escalates) outcome never reaches the
   // fixed-point rule, so the facts are immaterial (return progress).
   const probe = decideRunDisposition(outcome, { priorSameFixedPoint: 0 });
-  const code = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure?.code : undefined;
-  const stage = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure?.stage : undefined;
+  // `cause` is the axis the reader keys the fixed-point signature on; `code` remains the
+  // pre-change fallback and `stage` feeds the wandering-halt progress axis.
+  const classified = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure : undefined;
+  const { code, stage, cause } = classified ?? { code: undefined, stage: undefined, cause: undefined };
   const reader = ctx.input.redriveHistoryReader;
   // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
   // the tenant-scope invariant); the read is skipped only when the reader isn't
@@ -455,7 +467,13 @@ async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOu
   if (reader === undefined || code === undefined || stage === undefined) {
     return { priorSameFixedPoint: 0 };
   }
-  const result = await reader({ orgId, specId: ctx.context.specId, code, stage });
+  const result = await reader({
+    orgId,
+    specId: ctx.context.specId,
+    code,
+    stage,
+    ...(cause !== undefined && { cause }),
+  });
   if (result.kind === "read_failed") {
     // Audit C2 #3: DEFER escalation on a broken read. The reader has already logged
     // the raw error at its layer; log again HERE with the disposition context

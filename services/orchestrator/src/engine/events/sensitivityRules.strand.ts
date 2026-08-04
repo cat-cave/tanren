@@ -20,6 +20,12 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["terminalRuns[].runId", "public"],
     ["terminalRuns[].status", "public"],
     ["attempts", "public"],
+    // strand source: the fine-grained cause + WHOSE bug the halt is. Closed
+    // vocabularies from the classifier (worker/runFailureCause), selected by the error
+    // CLASS name and never message-derived — the legibility fix that lets an operator
+    // see which repository to open without a join.
+    ["cause", "public"],
+    ["attribution", "public"],
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["message", "public"],
@@ -59,8 +65,14 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["consecutiveSameFailure", "public"],
     ["workSignature", "public"],
     ["backoffSeconds", "public"],
-    // Audit finding #13: discriminator that excludes prober resumes from the
-    // structural-redrive convergence history. Closed vocabulary, no secrets.
+    // The fine-grained cause + attribution + the named blocking precondition. All three
+    // are closed vocabularies from the classifier, never derived from an error message.
+    ["cause", "public"],
+    ["attribution", "public"],
+    ["precondition", "public"],
+    // Audit finding #13: discriminator that excludes prober resumes — and now
+    // precondition blocks — from the structural-redrive convergence history. Closed
+    // vocabulary, no secrets.
     ["source", "public"],
   ]),
   // dag.spec.attention_resolved: an operator resolved a needs_attention escalation

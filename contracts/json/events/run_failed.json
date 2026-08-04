@@ -2,6 +2,52 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "attribution": {
+      "enum": [
+        "tanren",
+        "target_repo",
+        "environment",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "cause": {
+      "enum": [
+        "runner_ssh_outage",
+        "runner_double_claim",
+        "credential_missing",
+        "github_credential_missing",
+        "github_app_credential_missing",
+        "credential_org_scope_lost",
+        "provider_mode_unresolved",
+        "control_plane_write_failed",
+        "job_org_context_lost",
+        "run_context_unresolvable",
+        "ancestor_stack_malformed",
+        "workspace_bootstrap_failed",
+        "workspace_deps_install_failed",
+        "workspace_command_failed",
+        "speculative_assembly_failed",
+        "provider_usage_window_exhausted",
+        "answerer_stalled",
+        "answerer_schema_invalid",
+        "empty_writer_output",
+        "design_contract_corrupt",
+        "design_oracle_actor_misconfigured",
+        "design_oracle_result_malformed",
+        "spec_persistently_invalid",
+        "planner_convergence_stalled",
+        "merge_gate_unsatisfied",
+        "pre_merge_behavior_unsatisfied",
+        "review_stalled",
+        "run_halted_without_change",
+        "simulated_review_publication_failed",
+        "simulated_review_publish_contended",
+        "simulated_review_head_stale",
+        "unclassified"
+      ],
+      "type": "string"
+    },
     "failureCode": {
       "type": "string"
     },

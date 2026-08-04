@@ -7,6 +7,7 @@
 import type pg from "pg";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
+import { isNonStructuralRedriveSource, redriveFailureSignature } from "../workflow/redriveConvergenceSignature.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("run-finalize-orphan-reader");
@@ -44,7 +45,7 @@ export async function readOrphanConsecutive(
 ): Promise<OrphanConsecutiveReadResult> {
   try {
     const result = await client.query<{
-      payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
+      payload: { failureCode?: string; cause?: string; stage?: string; workSignature?: string; source?: string };
     }>(`SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`, [
       specId,
     ]);
@@ -55,14 +56,22 @@ export async function readOrphanConsecutive(
     // code for an `open` flip. Folding them into THIS convergence history defeats cycle
     // detection the same way the planner reader was vulnerable to. Filter them out at
     // assembly time so a paused-resumed spec whose runner crashes is still escalated when
-    // the structural crashes repeat.
+    // the structural crashes repeat. `precondition_block` rows are excluded by the SAME
+    // shared rule (see `workflow/redriveConvergenceSignature.ts`) — a run waiting on an
+    // absent credential or an unreachable runner is not evidence of non-convergence, and
+    // counting the wait would let it manufacture the very fixed point that parks the spec.
+    //
+    // The signature itself now prefers the FINE-GRAINED `cause` over the broad
+    // `failureCode` (falling back to the code for rows written before `cause` existed), so
+    // the orphan path stops aliasing categorically different crashes together exactly as
+    // the planner path does. The stage qualifier is retained on top of it.
     const history: AttemptSignature[] = result.rows
-      .filter((row) => row.payload.source !== "prober_resume")
+      .filter((row) => !isNonStructuralRedriveSource(row.payload.source))
       .map((row) => ({
-        failureSignature: orphanFailureSignature(row.payload.failureCode ?? "", row.payload.stage),
+        failureSignature: orphanFailureSignature(redriveFailureSignature(row.payload), row.payload.stage),
         ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
       }));
-    history.push({ failureSignature: orphanFailureSignature(failure.code, failure.stage) });
+    history.push({ failureSignature: orphanFailureSignature(failure.cause ?? failure.code, failure.stage) });
     const decision = await decideConvergence(history, (h) =>
       fixedPointRuleJudgment(
         h,

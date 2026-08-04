@@ -88,11 +88,19 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
       code: "internal",
       stage: "run",
       summary: "the run failed with an internal error",
+      // The cause axis fails closed exactly as the code axis does — an unrecognized
+      // throw is `unclassified`/`unknown`, never a guess and never message-derived.
+      cause: "unclassified",
+      attribution: "unknown",
     });
     expect(classifyRunFailure(RAW_LEAK)).toEqual({
       code: "internal",
       stage: "run",
       summary: "the run failed with an internal error",
+      // The cause axis fails closed exactly as the code axis does — an unrecognized
+      // throw is `unclassified`/`unknown`, never a guess and never message-derived.
+      cause: "unclassified",
+      attribution: "unknown",
     });
     // A known credential error maps to its safe code/stage/summary — never its message.
     expect(classifyRunFailure(new WorkspaceBootstrapError(RAW_LEAK)).summary).toBe("workspace bootstrap failed");
@@ -112,6 +120,8 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
       code: "speculative_assembly",
       stage: "workspace",
       summary: "the dependent run's speculative base assembly failed",
+      cause: "speculative_assembly_failed",
+      attribution: "tanren",
     });
     // Every phase classifies to the SAME public shape (the phase is internal-only).
     expect(classifyRunFailure(new SpeculativeAssemblyError("phantom_workspace", "no workspace handle")).code).toBe(
@@ -181,6 +191,9 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
       code: "workspace",
       stage: "workspace",
       summary: "a workspace command failed during the run",
+      cause: "workspace_command_failed",
+      // The catch-all cannot attribute itself — see the worked example in runFailureCause.ts.
+      attribution: "unknown",
     });
   });
 
@@ -193,6 +206,8 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
       code: "empty_writer_output",
       stage: "agent",
       summary: "the writer produced no commit ahead of the base this attempt",
+      cause: "empty_writer_output",
+      attribution: "unknown",
     });
   });
 });

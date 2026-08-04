@@ -44,10 +44,10 @@ export class WorkerPool {
   // orphaned. Defaults to 0 (no successor → a genuine orphan strands).
   successorRunCount = 0;
   // The orphan path's consecutive-same-failure read (`SELECT payload FROM events ...
-  // dag.spec.redriven`): the prior re-driven failure codes newest→oldest. The orphan
-  // re-drives under the cap (spec → `open`) and genuine-halts at it. Defaults to empty
-  // (first failure of its kind ⇒ re-drive).
-  priorRedrivenFailureCodes: string[] = [];
+  // dag.spec.redriven`): each prior re-drive's convergence SIGNATURE (the fine-grained
+  // `cause`, which the readers prefer over the broad `failureCode`). The orphan re-drives
+  // while progressing and genuine-halts at a fixed point. Defaults to empty (first of its kind).
+  priorRedrivenSignatures: string[] = [];
   prUrl: string | null = null;
   // Test-support for the org-scoping mutants (runExecutor org-scope establishment
   // + finalize): when set, the run⋈spec⋈project read echoes this org on the
@@ -275,8 +275,8 @@ export class WorkerPool {
       return {
         // Each prior re-drive records the ENRICHED signature (code + the `run` stage it failed
         // in), matching the live orphan path so the detector keys on `code@stage`.
-        rows: this.priorRedrivenFailureCodes.map((c) => ({ payload: { failureCode: c, stage: "run" } })),
-        rowCount: this.priorRedrivenFailureCodes.length,
+        rows: this.priorRedrivenSignatures.map((c) => ({ payload: { failureCode: c, cause: c, stage: "run" } })),
+        rowCount: this.priorRedrivenSignatures.length,
       };
     }
     // The in-process orphan disposition: a GUARDED `in_flight`/`review` → `open` (a

@@ -20,6 +20,7 @@ import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import { createLogger } from "../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
+import { isNonStructuralRedriveSource, redriveFailureSignature } from "./redriveConvergenceSignature.js";
 import { assessWanderingHalt } from "./wanderingHaltDetector.js";
 import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
 
@@ -39,7 +40,13 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
     try {
       return await runWithOrgScope(pool, facts.orgId, async (client) => {
         const redriveRows = await client.query<{
-          payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
+          payload: {
+            failureCode?: string;
+            cause?: string;
+            stage?: string;
+            workSignature?: string;
+            source?: string;
+          };
           ts: string;
         }>(
           `SELECT payload, ts FROM events
@@ -66,17 +73,26 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
         // internal` sequence that defeats cycle detection. Filter them out at assembly time so
         // a genuinely stuck spec is escalated regardless of intervening pause/resume churn. The
         // SAME filter applies to the wandering-halt history assembly below for the same reason.
-        const structuralRows = redriveRows.rows.filter((row) => row.payload.source !== "prober_resume");
-        // Assemble the oldest→newest attempt history (each prior re-drive's failure code +
-        // work signature) and append the CURRENT attempt, then route the escalation decision
-        // through the shared convergence judge. 1 ⇒ a proven fixed point (the authority
-        // escalates); 0 ⇒ progress (a changing failure / work, or a not-yet-cyclic repeat).
+        //
+        // `precondition_block` rows are excluded for the SAME reason and by the same rule:
+        // they are a run WAITING on a named external condition (an unseeded credential, an
+        // unreachable runner), re-driven on a cadence because the next attempt IS the probe.
+        // A wait is not evidence of non-convergence — and if it were counted, waiting for a
+        // credential would itself manufacture the fixed point that parks the spec, which is
+        // exactly the live defect. Both exempt sources are listed in ONE set so the two
+        // history readers cannot drift apart.
+        const structuralRows = redriveRows.rows.filter((row) => !isNonStructuralRedriveSource(row.payload.source));
+        // Assemble the oldest→newest attempt history (each prior re-drive's failure
+        // signature + work signature) and append the CURRENT attempt, then route the
+        // escalation decision through the shared convergence judge. 1 ⇒ a proven fixed point
+        // (the authority escalates); 0 ⇒ progress (a changing failure / work, or a
+        // not-yet-cyclic repeat).
         const history: AttemptSignature[] = structuralRows.map((row) => ({
-          failureSignature: row.payload.failureCode ?? "",
+          failureSignature: redriveFailureSignature(row.payload),
           ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
         }));
         history.push({
-          failureSignature: facts.code,
+          failureSignature: facts.cause ?? facts.code,
           ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
         });
         // Route the escalation decision through the SHARED `decideConvergence` judge — NOT a raw

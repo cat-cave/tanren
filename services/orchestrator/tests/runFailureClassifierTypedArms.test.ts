@@ -45,6 +45,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "malformed_ancestor_stack",
       stage: "bootstrap",
       summary: "the run's ancestor stack failed schema parse",
+      cause: "ancestor_stack_malformed",
+      attribution: "tanren",
     });
   });
 
@@ -57,6 +59,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "design_contract_corrupt",
       stage: "bootstrap",
       summary: "the persisted design contract failed schema parse",
+      cause: "design_contract_corrupt",
+      attribution: "tanren",
     });
   });
 
@@ -69,6 +73,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "design_oracle_actor_config",
       stage: "agent",
       summary: "the design oracle actor is misconfigured",
+      cause: "design_oracle_actor_misconfigured",
+      attribution: "tanren",
     });
   });
 
@@ -81,6 +87,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "malformed_design_oracle_result",
       stage: "agent",
       summary: "the design oracle result was malformed",
+      cause: "design_oracle_result_malformed",
+      attribution: "unknown",
     });
   });
 
@@ -102,6 +110,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "spec_persistently_invalid",
       stage: "agent",
       summary: "a spec could not be made valid and requires human attention",
+      cause: "spec_persistently_invalid",
+      attribution: "unknown",
     });
   });
 
@@ -113,16 +123,22 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "internal",
       stage: "run",
       summary: "the run failed with an internal error",
+      cause: "unclassified",
+      attribution: "unknown",
     });
     expect(classifyRunFailure("a bare non-Error throw")).toEqual({
       code: "internal",
       stage: "run",
       summary: "the run failed with an internal error",
+      cause: "unclassified",
+      attribution: "unknown",
     });
     expect(classifyRunFailure(null)).toEqual({
       code: "internal",
       stage: "run",
       summary: "the run failed with an internal error",
+      cause: "unclassified",
+      attribution: "unknown",
     });
   });
 
@@ -134,6 +150,8 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "merge",
       stage: "merge",
       summary: "strict simulated-review publication failed",
+      cause: "simulated_review_publication_failed",
+      attribution: "tanren",
     });
     expect(explicitRunFailureRetryability(permanent)).toBe("non_retriable");
     expect(explicitRunFailureRetryability(busy)).toBe("retriable");
