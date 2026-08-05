@@ -10,12 +10,22 @@ export const CostProviderCaptureFailedPayload = z
   })
   .strict();
 
+// The CLOSED subset of NotionalReason values that represent an ACTIONABLE GAP (as
+// opposed to an honest empty or an already-narrated misconfig). Only these fire
+// `cost.notional_unpriced`. Mirrors `LOUD_NOTIONAL_REASONS` in `costs/sources.ts`.
+const UnpricedNotionalReason = z.enum(["model_id_absent", "model_not_listed", "price_source_unavailable"]);
+
 export const CostNotionalUnpricedPayload = z
   .object({
     provider: z.string(),
     model: z.string(),
     cli: z.string(),
     taskId: z.string(),
+    // WHICH gap this is — the machine-readable discriminator. `model_id_absent` is
+    // a tanren defect, `model_not_listed` is a fact about the model, and
+    // `price_source_unavailable` is an infrastructure fault that a later reprice can
+    // still fix. Collapsing them into prose made all three unqueryable.
+    reasonCode: UnpricedNotionalReason,
     reason: z.string(),
   })
   .strict();

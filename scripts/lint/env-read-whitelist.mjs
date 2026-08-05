@@ -165,6 +165,13 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // singleton is first built (same posture as TANREN_LOG_LEVEL above), NOT boot
   // config the Zod schema owns.
   "services/orchestrator/src/engine/costs/pricing/modelPriceSource.ts",
+  // TANREN_OPENROUTER_PRICE_LIVE (=0 kill switch → the OpenRouter list-price leg
+  // stops fetching). Same posture and same lazy-singleton read as the LiteLLM knob
+  // above; it shares that module's TANREN_MODEL_PRICE_TTL_SECONDS for its interval.
+  // Note this leg has NO vendored seed by design, so disabling it means the
+  // notional axis reports `price_source_unavailable` rather than serving a stale
+  // marketplace price — the honest posture for a source whose point is liveness.
+  "services/orchestrator/src/engine/costs/pricing/openRouterPriceSource.ts",
   // ── db ─────────────────────────────────────────────────────────────────────
   // The system (BYPASSRLS) DB URL the org-scope seam reads.
   "db/src/orgScope.ts",

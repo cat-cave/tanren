@@ -386,9 +386,14 @@ First, so the ledger is balanced, what this change **does** recover:
 - The **notional axis**, which was structurally NULL in every deployment because
   role was smuggled through `model` (§5). Real codex rows now carry a real model
   id, so `notional_cost_usd` is computed from real LiteLLM rates and
-  `cost.notional_unpriced` stops firing on 100% of rows. That is not real spend —
-  it is a computed list value — but it is the only usable number an operator gets
-  on an unmeterable route, and it was broken.
+  `cost.notional_unpriced` stops firing on 100% of rows.
+
+  > **CORRECTED (§10).** Measured WRONG on a live run of the build that shipped it:
+  > the id never reached the recorder (the decorators drop `model`), LiteLLM does not
+  > list the OpenRouter id anyway, and the guard silenced the empty-model case. That is not real spend —
+  > it is a computed list value — but it is the only usable number an operator gets
+  > on an unmeterable route, and it was broken.
+
 - The **correctness** (not the reachability) of the per-call capture path for BYOK
   OpenRouter, and the removal of a caller-declared guess in favour of OpenRouter's
   own `upstream_inference_cost` (§4.4).
@@ -489,3 +494,20 @@ on the same unmeterable route still runs.
 3. **`role` column** with its own migration slot, backfilled from
    `cost_source_raw->>'role'`.
 4. **The shim**, only if upstream declines.
+
+---
+
+## 10. Follow-on: the NOTIONAL axis (XHE-931)
+
+§6's claim that this change _recovered_ the notional axis was **wrong**, measured on
+a live run of the build that shipped it: `cost.resolved` still carried `"model": ""`
+and a null notional on 100% of rows, because the observability decorators rebuild the
+adapter and never copied `model`. Two further defects (no OpenRouter price source; a
+loud-event guard that silenced exactly this case) meant a real model id would not
+have priced anything either.
+
+Diagnosed and fixed in
+[`openrouter-cost-attribution-notional.md`](./openrouter-cost-attribution-notional.md),
+which also re-verifies §1's codex finding **structurally** — against the shipped
+binary's serde tables rather than one captured run — and reaches the same
+conclusion.

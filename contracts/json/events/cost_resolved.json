@@ -34,6 +34,18 @@
         }
       ]
     },
+    "notionalReason": {
+      "enum": [
+        "priced",
+        "ccusage",
+        "model_id_absent",
+        "model_not_listed",
+        "price_source_unavailable",
+        "unattributed_credential",
+        "no_tokens"
+      ],
+      "type": "string"
+    },
     "provider": {
       "type": "string"
     },
@@ -49,7 +61,8 @@
     "costUsd",
     "notionalCostUsd",
     "billingMode",
-    "costBasis"
+    "costBasis",
+    "notionalReason"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.cost.resolved"

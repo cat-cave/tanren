@@ -18,6 +18,12 @@ export function timedAnswererAdapter<TOutput>(
     kind: inner.kind,
     cli: inner.cli,
     authRef: inner.authRef,
+    // Forward the wrapped adapter's DECLARED model id — same reasoning as the
+    // writer decorator: this object IS the adapter production holds, so a field it
+    // drops is a field the cost recorder never sees. Spread-conditional so an
+    // adapter with no model keeps the property absent rather than explicitly
+    // `undefined`.
+    ...(inner.model !== undefined && { model: inner.model }),
     // Forward the wrapped adapter's per-call token telemetry so the cost path can
     // read it through this timing decorator (the decorator is the instance the loop
     // holds). Absent when the inner adapter exposes none (e.g. a fake fixture).
