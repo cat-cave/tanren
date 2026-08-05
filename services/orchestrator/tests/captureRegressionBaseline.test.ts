@@ -168,10 +168,12 @@ describe("captureRegressionBaseline", () => {
     expect(stepCommand?.cwd).toBe("/ws");
   });
 
-  it("looks the step up at per_iteration only", async () => {
-    // A regression step declared on a pre_audit tier is not this run's baseline source;
-    // the baseline exists to serve the per-iteration judgment.
-    const preAuditOnly = CiConfigV1.parse({
+  it("looks the step up at per_iteration only — defence in depth", async () => {
+    // The schema now REFUSES a regression contract outside `per_iteration`, so this config
+    // cannot come from a real `.tanren/ci.yml` (hence the cast past validation). The lookup
+    // stays narrow regardless: the baseline serves the per-iteration judgment, and capturing
+    // one from a step the gate will never judge that way would spend a suite run for nothing.
+    const preAuditOnly = {
       version: 1,
       tiers: {
         fast: [{ name: "lint", run: "just lint" }],
@@ -179,7 +181,7 @@ describe("captureRegressionBaseline", () => {
         merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
       },
       when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
-    });
+    } as unknown as CiConfigV1;
     const ssh = new Ssh(twoPassing);
     const result = await captureRegressionBaseline({ ssh, target, workspacePath: "/ws", config: preAuditOnly });
     expect(result.kind).toBe("not_declared");

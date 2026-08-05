@@ -157,8 +157,11 @@ a different root cause in a file outside the changed file's reverse-dependency s
 selector that under-selects on the exact bug is worse than none. This contract does not
 scope the suite — it scopes the **judgment**, which costs nothing and cannot under-select.
 
-**One per lifecycle point.** A run captures exactly one baseline, so exactly one step may
-declare `regression` at a given point; two is refused at config-resolve time.
+**One per run, at `per_iteration`.** A run captures exactly one baseline, from one command,
+so exactly one step may declare `regression` and it must sit in a `per_iteration` tier.
+Anything else is refused at config-resolve time rather than silently resolved. `reportPath`
+must stay inside the workspace — the gate deletes it before the confirmation re-run, so
+absolute paths and `..` segments are refused too.
 
 **The merge authority is unaffected.** A `regression` step is _refused_ on any tier mapped
 to `pre_merge` (see below). `pre_merge` and `pre_audit` keep running unscoped, absolute
@@ -178,9 +181,14 @@ gate. The validator rejects:
   merge authority, and an uncovered `pre_merge` would make `tanren/gate: success` a
   vacuous pass that lands anything. This is rejected **fail-closed** (a
   writer-editable `.tanren/ci.yml` cannot silently drop merge coverage).
-- **two `regression` contracts at the same lifecycle point** — a run captures exactly one
-  baseline, from the first declaration's command. A second step judged against it would read
-  its own tests as never having passed, so a green suite could surface as a mass regression.
+- **more than one `regression` contract in a config, or one outside `per_iteration`** — a
+  run captures exactly ONE baseline, by running the declared command against the base tree
+  at workspace prep. A second contract (or one at another lifecycle point) would be judged
+  against a baseline built by a different command, so its own tests would read as never
+  having passed and a green suite could surface as a mass regression.
+- **a `regression` `reportPath` that is absolute or contains `..`** — the gate DELETES this
+  path before the confirmation re-run, and `.tanren/ci.yml` is writer-editable, so an
+  unconstrained path is an arbitrary `rm -f` on the runner.
 - **a `regression` contract on a tier mapped to `pre_merge`** — the regression contract
   passes a step whose suite is red so long as nothing _regressed_, which is right inside
   the writer loop and unacceptable at the merge authority. `.tanren/ci.yml` is

@@ -345,6 +345,55 @@ describe("the regression contract at the gate", () => {
     // The report kept is the one the verdict was decided on, not the discarded first run.
     expect(result.parsedJunitReports?.get("test")?.total).toBe(2);
   });
+
+  describe("containment of the destructive pre-retry cleanup — defence in depth", () => {
+    // The schema already refuses these paths, so a real `.tanren/ci.yml` cannot reach here.
+    // The gate re-checks anyway: this is the one DESTRUCTIVE operation performed on a
+    // project-declared path, and deleting runner state outside the workspace is not
+    // recoverable. These drive the tier runner with a step built directly, past validation.
+    it.each([
+      ["a parent-directory escape", "../state.json"],
+      ["a nested parent-directory escape", "reports/../../state.json"],
+      ["an absolute path", "/etc/passwd"],
+      ["a backslash separator", "reports\\junit.xml"],
+      ["an empty path", ""],
+    ])("refuses to clear %s, and fails the step instead", async (_label, reportPath) => {
+      const ssh = new TestRunSsh([{ a: "failed" }, { a: "failed" }]);
+      const { events, appendEvent } = recordingEvents();
+      void events;
+      const result = await runGateTier({
+        ssh,
+        target,
+        workspacePath: "/ws",
+        tier: "fast",
+        when: "per_iteration",
+        steps: [{ name: "test", run: "run-tests", regression: { reportPath } }],
+        appendEvent,
+        regressionBaseline: baselineOf({ a: "passed" }),
+      });
+      expect(result.passed).toBe(false);
+      // NOTHING was deleted, and the confirmation suite was never spent.
+      expect(ssh.commands.some((c) => c.command.startsWith("rm -f "))).toBe(false);
+      expect(ssh.stepRuns).toBe(1);
+    });
+
+    it("does clear an ordinary nested path", async () => {
+      const ssh = new TestRunSsh([{ a: "failed" }, { a: "failed" }]);
+      const { appendEvent } = recordingEvents();
+      await runGateTier({
+        ssh,
+        target,
+        workspacePath: "/ws",
+        tier: "fast",
+        when: "per_iteration",
+        steps: [{ name: "test", run: "run-tests", regression: { reportPath: "reports/x/junit.xml" } }],
+        appendEvent,
+        regressionBaseline: baselineOf({ a: "passed" }),
+      });
+      expect(ssh.commands.some((c) => c.command === "rm -f '/ws/reports/x/junit.xml'")).toBe(true);
+      expect(ssh.stepRuns).toBe(2);
+    });
+  });
 });
 
 describe("baselineFromReport wiring", () => {

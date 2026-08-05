@@ -85,7 +85,21 @@ export type CiStepEvidence = z.infer<typeof CiStepEvidence>;
 // per-iteration judgment still cannot merge.
 export const CiStepRegression = z
   .object({
-    reportPath: z.string().min(1),
+    // CONTAINED WORKSPACE PATH. Unlike every other declared path in this schema, this one
+    // drives a DESTRUCTIVE operation: the gate deletes the report before the confirmation
+    // re-run so a stale report can never be mistaken for fresh results. `.tanren/ci.yml` is
+    // repo-sourced and WRITER-EDITABLE, so an unconstrained path here is an arbitrary
+    // `rm -f` on the runner — `../state.json` would resolve outside the workspace entirely.
+    // Absolute paths, parent-directory segments and backslashes are refused at parse time,
+    // where the blast radius is a loud config error instead of deleted runner state.
+    reportPath: z
+      .string()
+      .min(1)
+      .refine((value) => !value.startsWith("/"), { message: "reportPath must be workspace-relative, not absolute" })
+      .refine((value) => !value.split("/").includes(".."), {
+        message: "reportPath must not contain a `..` segment — it must stay inside the workspace",
+      })
+      .refine((value) => !value.includes("\\"), { message: "reportPath must use `/` separators" }),
   })
   .strict();
 export type CiStepRegression = z.infer<typeof CiStepRegression>;
@@ -303,33 +317,49 @@ export const CiConfigV1 = z
         });
       }
     }
-    // ONE REGRESSION CONTRACT PER LIFECYCLE POINT. Baseline capture resolves the FIRST
-    // declaration (`regressionStepFor`) and runs THAT command once on the base tree, but the
-    // tier runner judges EVERY step that declares `regression`. A second declaration would
-    // therefore be judged against a baseline produced by a different command — its own tests
-    // would look like they had never passed, so a green suite could read as a mass
-    // regression. There is no sensible reconciliation, so the config is refused rather than
-    // silently resolved to the first.
-    for (const point of ["per_iteration", "pre_audit", "pre_merge"] as const) {
-      const declaring: string[] = [];
-      for (const [tierName, points] of Object.entries(cfg.when)) {
-        if (!points.includes(point)) continue;
-        for (const step of cfg.tiers[tierName] ?? []) {
-          if (step.regression !== undefined) declaring.push(`${tierName}.${step.name}`);
-        }
-      }
-      if (declaring.length > 1) {
+    // THE REGRESSION CONTRACT IS A `per_iteration` CONTRACT, and exactly ONE of them.
+    //
+    // A run captures ONE baseline, by running ONE declared command against the untouched
+    // base tree, and that single baseline is forwarded to every gate call. Two consequences
+    // the config must not be able to express:
+    //   - a declaration at `pre_audit`/`pre_merge` is judged against a baseline built by the
+    //     `per_iteration` command (so its own tests read as never having passed), or against
+    //     no baseline at all (a declaration that silently does nothing);
+    //   - a SECOND declaration at the same point is judged against the FIRST one's baseline,
+    //     with the same effect — a green suite surfacing as a mass regression.
+    // Both are refused here rather than resolved to something arbitrary. (`pre_merge` is
+    // additionally refused below, with its own message: there the contract is not merely
+    // unimplemented, it is wrong in principle.)
+    const regressionSteps: string[] = [];
+    for (const [tierName, points] of Object.entries(cfg.when)) {
+      for (const step of cfg.tiers[tierName] ?? []) {
+        if (step.regression === undefined) continue;
+        regressionSteps.push(`${tierName}.${step.name}`);
+        const misplaced = points.filter((p) => p !== "per_iteration");
+        if (points.includes("per_iteration") || misplaced.length === 0) continue;
+        // `pre_merge` gets its own, sharper message from the merge-authority rule below.
+        if (misplaced.includes("pre_merge")) continue;
         ctx.addIssue({
           code: "custom",
-          path: ["tiers"],
+          path: ["tiers", tierName],
           message:
-            `${declaring.length} steps declare a \`regression\` contract at "${point}" ` +
-            `(${declaring.join(", ")}). Exactly one is allowed: the run captures ONE baseline, from the ` +
-            "first declaration's command, and judging a second step's report against it would read that " +
-            "step's tests as never having passed. Merge them into one step, or move one to another " +
-            "lifecycle point.",
+            `step "${step.name}" declares a \`regression\` contract but tier "${tierName}" maps to ` +
+            `${misplaced.map((p) => `"${p}"`).join(", ")} rather than "per_iteration". The run captures its ` +
+            "baseline from the per_iteration declaration only, so this contract would be judged against " +
+            "another command's baseline or against none at all. Move the step to a per_iteration tier.",
         });
       }
+    }
+    if (regressionSteps.length > 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tiers"],
+        message:
+          `${regressionSteps.length} steps declare a \`regression\` contract (${regressionSteps.join(", ")}). ` +
+          "Exactly one is allowed: the run captures ONE baseline, from that step's command, and judging a " +
+          "second step's report against it would read that step's tests as never having passed. Merge them " +
+          "into one step.",
+      });
     }
     // THE MERGE AUTHORITY IS NOT NEGOTIABLE: a `regression` step may never sit in a tier
     // mapped to `pre_merge`. The regression contract deliberately PASSES a step whose

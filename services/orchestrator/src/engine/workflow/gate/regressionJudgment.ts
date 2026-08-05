@@ -58,9 +58,21 @@ export async function runStepCommand(input: RegressionStepDeps, step: CiStep): P
  * succeeded. Used to clear the previous JUnit report before the confirmation re-run so a
  * stale report can never be mistaken for fresh results. A substrate failure returns false
  * (the caller fails the step) rather than proceeding with a report it cannot trust.
+ *
+ * CONTAINMENT, restated here on purpose. This is the only DESTRUCTIVE operation the gate
+ * performs on a path the PROJECT declares, and `.tanren/ci.yml` is writer-editable. The
+ * schema already refuses absolute paths and `..` segments, but a second gate on the
+ * operation itself is cheap and the failure mode it prevents (deleting runner state outside
+ * the workspace) is not recoverable. Refusing is safe: the caller treats it as "could not
+ * clear" and fails the step.
  */
+function isContainedRelPath(relPath: string): boolean {
+  return relPath !== "" && !relPath.startsWith("/") && !relPath.includes("\\") && !relPath.split("/").includes("..");
+}
+
 async function removeWorkspaceFile(input: RegressionStepDeps, relPath: string): Promise<boolean> {
-  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${relPath.replace(/^\/+/u, "")}`;
+  if (!isContainedRelPath(relPath)) return false;
+  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${relPath}`;
   const result = await input.ssh.run(input.target, {
     command: `rm -f ${quoteSshShellArg(path)}`,
     watchdog: outputOnlyWatchdog(),
