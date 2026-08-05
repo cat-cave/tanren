@@ -61,7 +61,7 @@ describe("the `regression` step field", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("REFUSES two regression declarations at one lifecycle point", () => {
+  it("REFUSES two regression declarations in the same run", () => {
     // Only ONE baseline is captured per run, from the first declaration's command. A second
     // step judged against it would read its own tests as never having passed, so a green
     // suite could surface as a mass regression. There is no sensible reconciliation.
@@ -79,7 +79,7 @@ describe("the `regression` step field", () => {
     });
     expect(parsed.success).toBe(false);
     const message = parsed.success ? "" : parsed.error.issues.map((i) => i.message).join(" ");
-    expect(message).toContain("per_iteration");
+    expect(message).toContain("Exactly one is allowed");
     expect(message).toContain("fast.backend");
     expect(message).toContain("fast.frontend");
   });
@@ -105,8 +105,8 @@ describe("the `regression` step field", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("ALLOWS the same count of declarations spread across DIFFERENT lifecycle points", () => {
-    // One per point is fine — each point resolves its own single declaration.
+  it("REFUSES declarations spread across different lifecycle points", () => {
+    // There is one baseline per RUN, not one per point, so spreading them is not a fix.
     const parsed = CiConfigV1.safeParse({
       version: 1,
       tiers: {
@@ -116,12 +116,13 @@ describe("the `regression` step field", () => {
       },
       when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
     });
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
   });
 
-  it("allows a regression step on a tier mapped to pre_audit", () => {
-    // Only `pre_merge` is the merge authority. A project that wants the transition
-    // judgment before its audit as well is making a defensible choice.
+  it("REFUSES a regression step on a tier mapped only to pre_audit", () => {
+    // The single baseline is captured from the `per_iteration` declaration. A pre_audit
+    // declaration would be judged against another command's baseline, or none at all —
+    // a contract that silently does nothing. Refuse rather than resolve it to something.
     const parsed = CiConfigV1.safeParse({
       version: 1,
       tiers: {
@@ -131,6 +132,27 @@ describe("the `regression` step field", () => {
       },
       when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
     });
+    expect(parsed.success).toBe(false);
+    const message = parsed.success ? "" : parsed.error.issues.map((i) => i.message).join(" ");
+    expect(message).toContain("per_iteration");
+  });
+
+  it("REFUSES a reportPath that escapes the workspace", () => {
+    // This path drives a destructive `rm -f` on the runner and `.tanren/ci.yml` is
+    // writer-editable, so containment is enforced where the blast radius is a config error.
+    for (const bad of ["../state.json", "/etc/passwd", "reports/../../state.json", "a\\b.xml"]) {
+      const parsed = CiConfigV1.safeParse(config({ fastStep: { regression: { reportPath: bad } } }));
+      expect(parsed.success, `expected ${bad} to be refused`).toBe(false);
+    }
+  });
+
+  it("accepts an ordinary nested workspace-relative reportPath", () => {
+    const parsed = CiConfigV1.safeParse(config({ fastStep: { regression: { reportPath: "reports/x/junit.xml" } } }));
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a path containing a dotfile segment that is not `..`", () => {
+    const parsed = CiConfigV1.safeParse(config({ fastStep: { regression: { reportPath: ".reports/junit.xml" } } }));
     expect(parsed.success).toBe(true);
   });
 });
