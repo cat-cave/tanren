@@ -10,6 +10,7 @@ import {
   applyConvergencePolicy,
   type ConvergenceState,
   effectiveBlockingProgress,
+  blockingRootCauseOscillates,
   type VelocityDeferPolicy,
 } from "../src/engine/workflow/loopPolicy.js";
 import type { AttemptSignature } from "../src/engine/workflow/convergenceDetector.js";
@@ -315,5 +316,127 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
       ];
       expect(effectiveBlockingProgress("retired", history)).toBe("retired");
     });
+  });
+});
+
+// REGRESSION — the observed run: three plan rounds, each `stalled`, each naming the SAME
+// `blockingRootCauseId` ("gate-slow-codegen-drift"), each escalated `keep_going`, each decided
+// `continue`. 3h42m and ~$1.73 on one run, 52 identical writer attempts, a second run stalled
+// the same way, two of three benchmark tiers lost.
+//
+// The detector was never missing. On `main`, `assessStructuralProgress` ALREADY returns
+// `fixed_point` for that exact A→A→A trajectory, and `effectiveBlockingProgress` ALREADY uses
+// it to override the answerer's narration to `regressed`. The proof was computed and then
+// DISCARDED: it was allowed to change what the loop called the round, but not whether the loop
+// stopped. Convergence had no floor.
+describe("the structural fixed point is a FLOOR under the answerer's keep_going", () => {
+  const round = (
+    state: ConvergenceState,
+    id: string,
+    pScore: number,
+    escalation: ConvergenceEscalation = "keep_going",
+  ): { state: ConvergenceState; decision: string } =>
+    applyConvergencePolicy({
+      assessment: "stalled",
+      blockingProgress: "unchanged",
+      escalation,
+      state,
+      velocityPolicy: DEFAULT_VELOCITY_POLICY,
+      loopBlocking: { id, pScore },
+    });
+
+  it("HALTS once the SAME named cause is a proven fixed point, despite keep_going", () => {
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    const cause = "gate-slow-codegen-drift";
+
+    const r1 = round(state, cause, 4);
+    expect(r1).toMatchObject({ decision: "continue", state: { consecutiveStalls: 1 } });
+    state = r1.state;
+    // Round 2: an immediate repeat alone is NOT a fixed point (it may be transient) — the
+    // detector deliberately requires a recurrence across an intervening round.
+    const r2 = round(state, cause, 4);
+    expect(r2).toMatchObject({ decision: "continue", state: { consecutiveStalls: 2 } });
+    state = r2.state;
+    // Round 3 is where the observed run kept going. The trajectory now PROVES the fixed point.
+    expect(blockingRootCauseOscillates([...state.blockingHistory, { failureSignature: cause, magnitude: 4 }])).toBe(
+      true,
+    );
+    expect(round(state, cause, 4)).toMatchObject({ decision: "halt", state: { consecutiveStalls: 3 } });
+  });
+
+  it("NEGATIVE CONTROL: a SHRINKING kept P-score is never a fixed point, however many rounds", () => {
+    // The property that makes this safe to ship ON by default, and the reason a COUNT would have
+    // been the wrong fix. The answerer's prompt says "slow / hard / many-attempts are NEVER
+    // reasons to escalate", and the v24 trajectory case (1000 → 1 errors) is real progress on one
+    // stubborn cause. A round-counting floor would kill exactly the hard-but-converging runs
+    // Tanren exists to finish; the structural detector cannot, because `isCycle` requires no net
+    // magnitude decrease.
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    for (const pScore of [40, 30, 20, 10, 4, 2]) {
+      expect(round(state, "gate-slow-codegen-drift", pScore).decision).toBe("continue");
+      state = round(state, "gate-slow-codegen-drift", pScore).state;
+    }
+    // Six consecutive stalls on ONE cause and still iterating, because the score fell every round.
+    expect(state.consecutiveStalls).toBe(6);
+  });
+
+  it("NEGATIVE CONTROL: a loop still EXPLORING new causes never floors", () => {
+    // A brand-new state since the last recurrence means the loop found something — `isCycle`
+    // treats that as exploration, not a cycle.
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    for (const cause of ["cause-a", "cause-b", "cause-c", "cause-d", "cause-e"]) {
+      expect(round(state, cause, 4).decision).toBe("continue");
+      state = round(state, cause, 4).state;
+    }
+    expect(state.consecutiveStalls).toBe(5);
+  });
+
+  it("NEGATIVE CONTROL: an UNNAMED blocker never floors — a halt must name its cause", () => {
+    // "Halts are bugs" only holds as a doctrine if a halt says WHOSE bug. An empty root-cause id
+    // gives the operator nothing to act on, so it is never grounds to stop even when the empty
+    // signatures make the trajectory look structurally stuck.
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    for (let i = 0; i < 5; i += 1) {
+      expect(round(state, "", 4).decision).toBe("continue");
+      state = round(state, "", 4).state;
+    }
+    expect(state.consecutiveStalls).toBe(5);
+  });
+
+  it("a single forward step breaks the cycle and the loop keeps running", () => {
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    const cause = "gate-slow-codegen-drift";
+    state = round(state, cause, 4).state;
+    state = round(state, cause, 4).state;
+    // Real motion on the blocker: the P-score falls, so the recurrence net-shrank.
+    const advanced = applyConvergencePolicy({
+      assessment: "progress",
+      blockingProgress: "reduced",
+      escalation: "keep_going",
+      state,
+      velocityPolicy: DEFAULT_VELOCITY_POLICY,
+      loopBlocking: { id: cause, pScore: 2 },
+    });
+    expect(advanced.decision).toBe("continue");
+    expect(advanced.state.consecutiveStalls).toBe(0);
+    // And the next stall at the now-lower score is still not a fixed point.
+    expect(round(advanced.state, cause, 2).decision).toBe("continue");
+  });
+
+  it("the floor changes only the VERDICT — an escalate still halts, progress still continues", () => {
+    // Nothing about the answerer-driven paths moves. The floor adds an exit; it removes none.
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    expect(round(state, "one-off", 4, "escalate").decision).toBe("halt");
+    state = { consecutiveStalls: 0, blockingHistory: [] };
+    expect(
+      applyConvergencePolicy({
+        assessment: "progress",
+        blockingProgress: "retired",
+        escalation: "keep_going",
+        state,
+        velocityPolicy: DEFAULT_VELOCITY_POLICY,
+        loopBlocking: { id: "moving", pScore: 1 },
+      }).decision,
+    ).toBe("continue");
   });
 });

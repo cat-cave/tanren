@@ -136,6 +136,14 @@ export interface VelocityDeferPolicy {
   afterStalls: number;
 }
 
+// True iff the loop's latest blocking signature actually NAMES a cause. A halt must be
+// attributable — "whose bug is this?" is unanswerable when the blocker was never identified —
+// so an unnamed blocker ("") never trips the floor, however structurally stuck it looks.
+function namesABlockingCause(history: ReadonlyArray<AttemptSignature>): boolean {
+  const latest = history.at(-1);
+  return latest !== undefined && latest.failureSignature !== "";
+}
+
 // True iff the blocking root cause is STUCK this loop — the same merge-gating finding
 // recurs materially `unchanged`, or `regressed` to worse. This is the v24 stall signal:
 // it is driven by the BLOCKING root cause, NOT by whether peripheral findings moved.
@@ -243,6 +251,9 @@ export function applyConvergencePolicy(input: ConvergencePolicyInput): {
     { failureSignature: loopBlocking.id, magnitude: loopBlocking.pScore },
   ];
   const effectiveProgress = effectiveBlockingProgress(blockingProgress, blockingHistory);
+  // The SAME structural read, kept as its own fact because the policy now uses it TWICE: to
+  // override the answerer's narration (above) AND as the floor under its verdict (below).
+  const structuralFixedPoint = blockingRootCauseOscillates(blockingHistory);
   const blockerAdvanced = effectiveProgress === "retired" || effectiveProgress === "reduced";
   // ESCALATE ALWAYS HALTS (Codex critic #17). The answerer's `escalate` verdict is the
   // SEMANTIC signal — "human input would genuinely CHANGE the outcome" per the prompt (an
@@ -272,6 +283,29 @@ export function applyConvergencePolicy(input: ConvergencePolicyInput): {
   // UNBOUNDED; the count is observability only.
   if (blockingIsStuck(effectiveProgress)) {
     const consecutiveStalls = state.consecutiveStalls + 1;
+    // THE FLOOR. The answerer said `keep_going`, but the DETERMINISTIC detector has already
+    // PROVEN a fixed point over the blocking trajectory — the same named cause recurring across
+    // an intervening round with no net P-score reduction and no new state explored since.
+    //
+    // That proof was already being computed and then THROWN AWAY. It was allowed to override
+    // the answerer's NARRATION (`retired` → `regressed`, two lines up) but not its VERDICT, so a
+    // proven-stuck loop still fell through to `continue` — unbounded. Observed cost: three
+    // rounds on one unchanging cause, 3h42m and ~$1.73, 52 identical writer attempts. A delivery
+    // system that can MEASURE that it is stalled and keeps spending is worse than one that
+    // cannot, because the information was right here and unused.
+    //
+    // This is NOT a give-up counter (`no-arbitrary-timeouts`): there is no threshold, no config
+    // and no round count. It is the existing structural proof the codebase already trusts,
+    // finally allowed to act. A shrinking P-score is never a fixed point, so a slow-but-real
+    // grind is untouched — `isCycle` requires no net magnitude decrease.
+    //
+    // It takes the SAME exit as the answerer's own `escalate`: halt → `convergence_stalled`.
+    // The halt NAMES its cause — `blockingRootCauseId` is already on `convergence.assessed`, and
+    // a floor-triggered halt is distinguishable from an answerer-triggered one by the pair
+    // (`escalation: "keep_going"`, `decision: "halt"`), which only this path emits.
+    if (structuralFixedPoint && namesABlockingCause(blockingHistory)) {
+      return { state: { consecutiveStalls, blockingHistory }, decision: "halt" };
+    }
     return { state: { consecutiveStalls, blockingHistory }, decision: "continue" };
   }
   // The blocking root cause was retired/reduced (forward motion on the blocker), OR

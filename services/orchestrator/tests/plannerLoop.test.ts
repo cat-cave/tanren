@@ -291,9 +291,35 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
   });
 
   it("KEEPS GOING (UNBOUNDED) on a stall the agent judges should continue — far past any old K, never escalates", async () => {
-    // The blocking root cause is unchanged each loop (a stall), but the agent keeps saying
-    // `keep_going` — so the loop iterates through 4 stalled loops (past the old K=3) then
-    // converges clean on the 5th. It NEVER halts on a count.
+    // The agent keeps saying `keep_going` on the SAME blocking root cause, and the loop iterates
+    // past the old K=3 then converges clean on the 5th. It NEVER halts on a count.
+    //
+    // The audits SHRINK (P0 → P1 → P2 → P2 → clean). That is what "slow but converging" MEANS,
+    // and it is the property this test exists to protect: a hard problem being ground down over
+    // many rounds must never be stopped by an attempt count. The structural fixed-point floor
+    // cannot fire here, because a net magnitude decrease is never a cycle. Previously this
+    // fixture repeated the IDENTICAL P0 four times, which is not a slow trajectory — it is a
+    // stopped one, and it is covered by the fixed-point case below.
+    const keepGoing = Array.from({ length: 4 }, () => convergenceStalledKeepGoing);
+    const { input } = defaultLoopInput({
+      convergencePolicy: convergencePolicyWith({ demoRunEnabled: false }),
+      adapters: {
+        ...defaultLoopInput().input.adapters,
+        auditor: makeAuditor([p0Audit, p1Audit, p2Audit, p2Audit, cleanAudit]),
+        triage: makeTriage([triageAllTasks]),
+        convergence: makeConvergence(keepGoing),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+  });
+
+  it("HALTS on a PROVEN structural fixed point even while the agent says keep_going", async () => {
+    // The floor. The identical P0 recurs on the identical blocking root cause with no P-score
+    // movement — the deterministic detector proves a fixed point, which `main` already computed
+    // and then discarded (it could override the answerer's NARRATION but not its VERDICT).
+    // Observed cost of having no floor: 3h42m and ~$1.73 on one run, 52 identical writer
+    // attempts, a second run stalled the same way.
     const keepGoing = Array.from({ length: 4 }, () => convergenceStalledKeepGoing);
     const { input } = defaultLoopInput({
       convergencePolicy: convergencePolicyWith({ demoRunEnabled: false }),
@@ -305,7 +331,8 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
       },
     });
     const outcome = await runSubtaskLoop(input);
-    expect(outcome.kind).toBe("passed");
+    // It stops at the proof rather than running to the 5th round the fixture would have passed.
+    expect(outcome.kind).toBe("convergence_stalled");
   });
 
   it("a velocity_defer convergence PASSES the spec, deferring the MILD (≤ default P3) leftovers as specs", async () => {
