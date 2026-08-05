@@ -12,7 +12,11 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import type { Commit, WriterResult } from "./types.js";
+import { runCommitThroughProjectGate, writerExitReasonFor } from "./writerCommitGate.js";
+// Re-exported so each adapter imports it from the module it ALREADY imports — the
+// 500-line architecture cap leaves no room for another import line in codex/claude.
+export { writerExitReasonFor };
+import type { Commit, CommitRejection, WriterResult } from "./types.js";
 
 export async function captureBaselineSha(
   ssh: CommandSubstrate,
@@ -36,19 +40,26 @@ async function commitWorkspaceChangesAfterCodex(
   ssh: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
-): Promise<void> {
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "commit codex workspace changes",
-    cwd: workspace,
-    command: [
-      "set -eu",
-      "git add -A",
-      "if ! git diff --cached --quiet --exit-code; then",
-      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m 'codex writer'",
-      "fi",
-    ].join("\n"),
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
-  });
+): Promise<CommitRejection | undefined> {
+  // This commit leaves the repo's hook path LIVE — deliberately, because it carries the
+  // writer's content into the PR — so the project's pre-commit gate votes on Tanren's
+  // output. The hook's NO vote comes back as a VALUE (writerCommitGate.ts), not a throw:
+  // it is the project telling us precisely what is wrong with the work, and the subtask
+  // loop re-drives the writer with it. A substrate failure or watchdog stall still throws.
+  return await runCommitThroughProjectGate(async () =>
+    runWorkspaceSshCommand(ssh, target, {
+      label: "commit codex workspace changes",
+      cwd: workspace,
+      command: [
+        "set -eu",
+        "git add -A",
+        "if ! git diff --cached --quiet --exit-code; then",
+        "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m 'codex writer'",
+        "fi",
+      ].join("\n"),
+      watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
+    }),
+  );
 }
 
 export async function captureGitStateAfterCodex(
@@ -56,9 +67,15 @@ export async function captureGitStateAfterCodex(
   target: RunnerHandle,
   workspace: string,
   baselineSha: string,
-): Promise<Pick<WriterResult, "diff" | "commits">> {
-  await commitWorkspaceChangesAfterCodex(ssh, target, workspace);
-  return await captureGitStateAfterBaseline(ssh, target, workspace, baselineSha);
+): Promise<Pick<WriterResult, "diff" | "commits" | "commitRejection">> {
+  const commitRejection = await commitWorkspaceChangesAfterCodex(ssh, target, workspace);
+  // Captured even on a rejection. `git add -A` succeeded and only `git commit` was
+  // refused, so the writer's work is still in the tree and `git diff <baseline>`
+  // (working tree vs baseline) still shows it — the diff is the WORK SIGNATURE the
+  // convergence detector needs to tell "the writer changed something this iteration"
+  // from a fixed point. `git log baseline..HEAD` is simply empty: no commit was made.
+  const state = await captureGitStateAfterBaseline(ssh, target, workspace, baselineSha);
+  return commitRejection === undefined ? state : { ...state, commitRejection };
 }
 
 async function captureGitStateAfterBaseline(

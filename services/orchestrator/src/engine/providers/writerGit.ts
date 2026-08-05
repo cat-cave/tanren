@@ -2,7 +2,11 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import type { Commit, WriterResult } from "./types.js";
+import { runCommitThroughProjectGate, writerExitReasonFor } from "./writerCommitGate.js";
+// Re-exported so each adapter imports it from the module it ALREADY imports — the
+// 500-line architecture cap leaves no room for another import line in codex/claude.
+export { writerExitReasonFor };
+import type { Commit, CommitRejection, WriterResult } from "./types.js";
 
 // shared baseline/diff/commit capture for CLI writer adapters that,
 // like Codex, edit the workspace in place and let us derive the result from git
@@ -37,8 +41,11 @@ export async function captureGitStateAfterWriter(
   workspace: string,
   baselineSha: string,
   commitMessage: string,
-): Promise<Pick<WriterResult, "diff" | "commits">> {
-  await commitWorkspaceChanges(ssh, target, workspace, commitMessage);
+): Promise<Pick<WriterResult, "diff" | "commits" | "commitRejection">> {
+  const commitRejection = await commitWorkspaceChanges(ssh, target, workspace, commitMessage);
+  // Captured even on a rejection — see the twin in codexGit.ts. `git add -A` succeeded
+  // and only `git commit` was refused, so the work is still in the tree and the diff
+  // against the baseline still shows it (the convergence detector's work signature).
   const diff = await runWorkspaceSshCommand(ssh, target, {
     label: "capture writer git diff",
     cwd: workspace,
@@ -51,7 +58,8 @@ export async function captureGitStateAfterWriter(
     command: `git log --format='%H%x09%s' --reverse ${baselineSha}..HEAD`,
     watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
-  return { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
+  const state = { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
+  return commitRejection === undefined ? state : { ...state, commitRejection };
 }
 
 async function commitWorkspaceChanges(
@@ -59,19 +67,24 @@ async function commitWorkspaceChanges(
   target: RunnerHandle,
   workspace: string,
   commitMessage: string,
-): Promise<void> {
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "commit writer workspace changes",
-    cwd: workspace,
-    command: [
-      "set -eu",
-      "git add -A",
-      "if ! git diff --cached --quiet --exit-code; then",
-      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m ${shellSingleQuote(commitMessage)}`,
-      "fi",
-    ].join("\n"),
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
-  });
+): Promise<CommitRejection | undefined> {
+  // Hooks stay LIVE here (this commit carries the writer's content into the PR), and the
+  // hook's NO vote comes back as a VALUE (writerCommitGate.ts), not a throw, so the
+  // subtask loop can re-drive the writer with it. Substrate faults still throw.
+  return await runCommitThroughProjectGate(async () =>
+    runWorkspaceSshCommand(ssh, target, {
+      label: "commit writer workspace changes",
+      cwd: workspace,
+      command: [
+        "set -eu",
+        "git add -A",
+        "if ! git diff --cached --quiet --exit-code; then",
+        `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m ${shellSingleQuote(commitMessage)}`,
+        "fi",
+      ].join("\n"),
+      watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
+    }),
+  );
 }
 
 function shellSingleQuote(value: string): string {

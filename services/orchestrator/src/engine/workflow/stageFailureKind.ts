@@ -56,6 +56,13 @@ export type StageFailureKind =
   // guard by another route (a BUILD-spec re-author dead-end), so the operator sees a
   // SPECIFIC needs_attention class instead of opaque `crashed`.
   | "spec_persistently_invalid"
+  // The PROJECT's own pre-commit hook refused the writer's work. Distinct from
+  // `crashed` (which is what an escaping `WorkspaceCommandError` used to be
+  // labelled): nothing malfunctioned — the target repository's quality gate
+  // rendered a verdict, and the loop re-drives the writer against it. On the
+  // timeline this is the operator's signal that Tanren is converging on the
+  // project's own standards rather than dying against them.
+  | "commit_rejected"
   | "crashed";
 
 /**

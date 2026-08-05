@@ -4,7 +4,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
-import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { captureBaselineSha, captureGitStateAfterWriter, writerExitReasonFor } from "./writerGit.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 
 // aider harness adapter — a Writer-only CLI harness conforming to the v1
@@ -128,7 +128,7 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
       if (aider.failure !== undefined || aider.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, exitReason: writerExitReasonFor(gitState), tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }

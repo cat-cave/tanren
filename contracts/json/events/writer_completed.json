@@ -82,7 +82,8 @@
         "timeout",
         "crashed",
         "token_limit",
-        "window_exhausted"
+        "window_exhausted",
+        "commit_rejected"
       ],
       "type": "string"
     },

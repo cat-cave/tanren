@@ -263,9 +263,17 @@ export async function recordWriterCost(input: WriterCostInput): Promise<void> {
   //     NULL-loud (cost_basis='unknown' / billing_mode='unattributed' — the
   //     existing recorder path for an unattributable real call, unchanged);
   //     `writer.subtask.failed` is the sole loud signal for the terminated case.
+  //
+  //   - `commit_rejected` groups with the FINISHED arms, not the terminated ones.
+  //     The discriminant here is "was the call killed before `turn.completed`
+  //     could carry usage?", and it was not: the CLI ran to completion and only
+  //     the PROJECT's commit hook then refused the result. So missing telemetry
+  //     on this arm is the same genuine parser/adapter drift the loud event
+  //     exists for — the rejection does not explain it away, and suppressing it
+  //     here would hide real drift behind an unrelated hook verdict.
   if (
     isRealMissingTelemetry(input.adapter.cli, input.tokenUsage) &&
-    (input.exitReason === "completed" || input.exitReason === "token_limit")
+    (input.exitReason === "completed" || input.exitReason === "token_limit" || input.exitReason === "commit_rejected")
   ) {
     await input.ctx.emitTokenAccountingFailed?.({
       role: "writer",
