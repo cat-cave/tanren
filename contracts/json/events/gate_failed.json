@@ -65,12 +65,52 @@
     "failedReason": {
       "enum": [
         "exit_code",
-        "evidence_insufficient"
+        "evidence_insufficient",
+        "test_regression"
       ],
       "type": "string"
     },
     "failedStep": {
       "type": "string"
+    },
+    "regression": {
+      "additionalProperties": false,
+      "properties": {
+        "baselineTotal": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observedTotal": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regressed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "regressedCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unconfirmedCount": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "regressed",
+        "regressedCount",
+        "unconfirmedCount",
+        "baselineTotal",
+        "observedTotal"
+      ],
+      "type": "object"
     },
     "steps": {
       "items": {
@@ -144,6 +184,45 @@
           },
           "passed": {
             "type": "boolean"
+          },
+          "regression": {
+            "additionalProperties": false,
+            "properties": {
+              "baselineTotal": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "observedTotal": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "regressed": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "regressedCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unconfirmedCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "regressed",
+              "regressedCount",
+              "unconfirmedCount",
+              "baselineTotal",
+              "observedTotal"
+            ],
+            "type": "object"
           },
           "run": {
             "type": "string"

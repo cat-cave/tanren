@@ -4,7 +4,7 @@
 // writer iteration with when="per_iteration", and once before the audit with
 // when="pre_audit". The config is sourced from the repo's tanren-ci.yml when
 // present and the documented default when absent (resolveCiConfig).
-import type { CiConfigV1, CiWhen } from "../../ci/index.js";
+import type { CiConfigV1, CiWhen, RegressionBaseline } from "../../ci/index.js";
 import { tiersFor } from "../../ci/index.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
@@ -42,6 +42,12 @@ export interface RunGateForWhenInput {
   // without a project-governance context (a unit path) omits it — an honest absence,
   // never a fabricated version.
   policyVersion?: number;
+  // THE REGRESSION BASELINE: the test ids green on this run's untouched base tree,
+  // captured once at workspace prep. Threaded to each tier so a step declaring a
+  // `regression` contract is judged on pass->fail TRANSITIONS instead of absolute
+  // redness. Absent => no baseline for this run; the judgment skips and the step keeps
+  // its ordinary exit-code meaning.
+  regressionBaseline?: RegressionBaseline;
 }
 
 // The combined result across every tier mapped to a lifecycle point. `passed`
@@ -74,6 +80,7 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
       ...(input.advisoryStepNames === undefined ? {} : { advisoryStepNames: input.advisoryStepNames }),
       ...(input.quarantinedStepNames === undefined ? {} : { quarantinedStepNames: input.quarantinedStepNames }),
+      ...(input.regressionBaseline === undefined ? {} : { regressionBaseline: input.regressionBaseline }),
     });
     results.push(result);
     if (!result.passed) {

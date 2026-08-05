@@ -75,6 +75,45 @@
           "passed": {
             "type": "boolean"
           },
+          "regression": {
+            "additionalProperties": false,
+            "properties": {
+              "baselineTotal": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "observedTotal": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "regressed": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "regressedCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unconfirmedCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "regressed",
+              "regressedCount",
+              "unconfirmedCount",
+              "baselineTotal",
+              "observedTotal"
+            ],
+            "type": "object"
+          },
           "run": {
             "type": "string"
           },

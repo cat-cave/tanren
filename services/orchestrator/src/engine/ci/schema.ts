@@ -59,6 +59,37 @@ export const CiStepEvidence = z.discriminatedUnion("kind", [
 ]);
 export type CiStepEvidence = z.infer<typeof CiStepEvidence>;
 
+// ---- Regression contract ----------------------------------------------------
+
+// REGRESSION CONTRACT — the declaration that makes a test step safe to run at
+// `per_iteration`. The full argument lives in engine/ci/regression.ts.
+//
+// A step that declares `regression` is judged NOT on whether its suite is green, but on
+// whether it BROKE something that was green: the gate parses the step's JUnit report at
+// `reportPath` and fails ONLY when a test that PASSED on the run's untouched base tree
+// now fails. A test the writer is in the middle of authoring is not in the baseline and
+// therefore cannot fail this step — which is what makes tests survivable in the writer's
+// own loop, where a failure is fed back as steering in the context that produced it.
+//
+// WHY A SEPARATE FIELD AND NOT AN `evidence` KIND. `evidence` is POSITIVE PROOF harvested
+// on an exit-0 — it answers "did the declared work actually run?". This contract answers
+// a different question ("did this change break something?"), and it applies on the
+// NONZERO-exit path that `evidence` deliberately never touches: a step whose suite is red
+// exits nonzero, and that exit is precisely what must stop being an automatic tier
+// failure. The two COMPOSE — a step may declare both, and each keeps its own meaning.
+//
+// SCOPE DISCIPLINE: this changes how THIS step is judged, at the lifecycle points its
+// tier maps to. It is intended for `per_iteration`. It does NOT weaken `pre_audit` /
+// `pre_merge`, which run their own unscoped, absolute test steps under `minTests` floors
+// — the merge authority is untouched, so a regression that somehow escaped the
+// per-iteration judgment still cannot merge.
+export const CiStepRegression = z
+  .object({
+    reportPath: z.string().min(1),
+  })
+  .strict();
+export type CiStepRegression = z.infer<typeof CiStepRegression>;
+
 // A single named shell command within a tier. `run` is an opaque shell string
 // executed verbatim by the consumer; this module does not parse or validate
 // shell syntax.
@@ -86,6 +117,9 @@ export const CiStep = z
     run: z.string().min(1),
     junitReport: z.string().min(1).optional(),
     evidence: CiStepEvidence.optional(),
+    // The pass→fail TRANSITION contract (see `CiStepRegression`). Optional; a step that
+    // declares none is judged exactly as before (exit code, then evidence).
+    regression: CiStepRegression.optional(),
   })
   .strict();
 export type CiStep = z.infer<typeof CiStep>;
@@ -266,6 +300,30 @@ export const CiConfigV1 = z
             "(every step is judged on exit code alone — the green-by-accident class). " +
             "Declare an `evidence` block (junit / artifact / stdout-count) on at least one step, " +
             "or set `junitReport` on the test step (back-compat: promotes to junit evidence with minTests: 1).",
+        });
+      }
+    }
+    // THE MERGE AUTHORITY IS NOT NEGOTIABLE: a `regression` step may never sit in a tier
+    // mapped to `pre_merge`. The regression contract deliberately PASSES a step whose
+    // suite is red — as long as nothing that was green went red — which is exactly right
+    // inside the writer's loop and exactly wrong at the merge gate, where the bar is an
+    // ABSOLUTE green suite. `.tanren/ci.yml` is repo-sourced and WRITER-EDITABLE, so a
+    // writer that could not get the merge gate green has a one-line edit available that
+    // makes red tests mergeable, and it reads like a reasonable config change. Refuse it
+    // at config-resolve time (loud), rather than discovering it in a post-mortem.
+    for (const [tierName, points] of Object.entries(cfg.when)) {
+      if (!points.includes("pre_merge")) continue;
+      const regressionStep = (cfg.tiers[tierName] ?? []).find((step) => step.regression !== undefined);
+      if (regressionStep !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["tiers", tierName],
+          message:
+            `step "${regressionStep.name}" declares a \`regression\` contract but tier "${tierName}" maps to ` +
+            '"pre_merge". The regression contract passes a step whose suite is RED so long as nothing ' +
+            "REGRESSED — that is correct inside the writer loop and unacceptable at the merge authority, " +
+            "which requires an absolute green suite. Move the regression step to a `per_iteration` tier " +
+            "and keep an unscoped, absolute test step at pre_merge.",
         });
       }
     }
