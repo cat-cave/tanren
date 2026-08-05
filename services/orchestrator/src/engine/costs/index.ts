@@ -11,11 +11,18 @@ export {
   type AttributionInput,
   classifyAuthRef,
   computeCostUsd,
-  computeNotionalUsd,
   credentialSlugOf,
   refKindOf,
   resolveCostSource,
 } from "./sources.js";
+export {
+  billableTokenTotal,
+  computeNotionalUsd,
+  LoudNotionalReason,
+  NotionalReason,
+  type NotionalResult,
+  notionalReasonIsLoud,
+} from "./notional.js";
 
 // cost PR-C: per-credential credit/overage USD-rate resolution + the honest
 // Claude-overage seam. The credit-drawdown reconcile resolves the rate from

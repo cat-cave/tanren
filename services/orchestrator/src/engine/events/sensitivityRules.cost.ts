@@ -16,6 +16,10 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["notionalCostUsd", "public"],
     ["billingMode", "public"],
     ["costBasis", "public"],
+    // notionalReason — a closed enum naming WHY notionalCostUsd is (or is not) a
+    // number. Carries no credential, model secret, or tenant data; it is the
+    // operational telemetry that makes a null explainable. Public.
+    ["notionalReason", "public"],
   ]),
   ...rulesFor("cost.failed", [
     ["taskId", "public"],
@@ -101,6 +105,9 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["model", "public"],
     ["cli", "public"],
     ["taskId", "public"],
+    // reasonCode — the closed machine-readable discriminator (model_id_absent /
+    // model_not_listed / price_source_unavailable). A fixed enum, no secret.
+    ["reasonCode", "public"],
     ["reason", "public"],
   ]),
   // cost.reconcile_failed (silent-fallback hardening) — basis/total/reason are

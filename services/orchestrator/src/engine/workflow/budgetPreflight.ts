@@ -35,6 +35,7 @@
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import { classifyAuthRef, refKindOf } from "../costs/sources.js";
 import { isCeilingEnforceable, resolveRouteMetering, type RouteMetering } from "../costs/meterability.js";
+import { warmCostPriceSource } from "../costs/pricing/costPriceSource.js";
 import type { AppendEvent } from "./subtaskLoop.js";
 
 /**
@@ -247,6 +248,13 @@ export async function runBudgetCeilingPreflight(
   hasUsageProbe: boolean,
   appendEvent: AppendEvent,
 ): Promise<void> {
+  // Start the live price tables refreshing before the run's first priced call, so
+  // fewer opening calls land on a cold table. Fire-and-forget by design: it does NOT
+  // wait, so an unreachable price API can never delay or fail a run (and no
+  // wall-clock deadline is introduced — see `costPriceSource`). Rows that land first
+  // record `price_source_unavailable` rather than a silent null. Lives here because
+  // this is the run's cost-setup seam.
+  warmCostPriceSource();
   const budget = await budgetGate.resolveBudget(projectId);
   // Narrate FIRST and unconditionally — an unbudgeted run's NULL-cost posture is
   // just as invisible to an operator as a budgeted one's, and it does not throw.

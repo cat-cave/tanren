@@ -246,6 +246,21 @@ export const CredentialScopedTokenMintedPayload = z
   })
   .strict();
 
+// The CLOSED set of reasons a notional cost is (or is not) a number. MIRRORS
+// `costs/sources.ts` NotionalReason — kept as a local literal rather than an import
+// for the same reason `costFailures.ts` mirrors `UnmeterableReason`: the event
+// vocabulary must not take a dependency on the cost engine. `costsSources.test.ts`
+// asserts the two enums stay identical, so drift fails a test rather than a run.
+export const NotionalReason = z.enum([
+  "priced",
+  "ccusage",
+  "model_id_absent",
+  "model_not_listed",
+  "price_source_unavailable",
+  "unattributed_credential",
+  "no_tokens",
+]);
+
 export const CostResolvedPayload = z
   .object({
     taskId: z.string(),
@@ -254,11 +269,16 @@ export const CostResolvedPayload = z
     model: z.string(),
     // REAL SPEND (FOCUS BilledCost): null when no reliable real-cost basis exists.
     costUsd: z.string().nullable(),
-    // NOTIONAL VALUE (FOCUS ListCost): the tokens' COMPUTED value from the maintained
-    // LiteLLM model-price source (keyed by model id); null when the model is unpriced.
+    // NOTIONAL VALUE (FOCUS ListCost): the tokens' COMPUTED value at the model's LIVE
+    // list price (OpenRouter's own `/api/v1/models` quote for a marketplace route,
+    // else the LiteLLM table); null when the model could not be priced.
     notionalCostUsd: z.string().nullable(),
     billingMode: z.string(),
     costBasis: z.string(),
+    // WHY notionalCostUsd is (or is not) a number. Always present, so a null on this
+    // event is never unexplained. Mirrors `costs/sources.ts` NotionalReason and
+    // `cost_source_raw->>'notionalReason'` on the row.
+    notionalReason: NotionalReason,
   })
   .strict();
 

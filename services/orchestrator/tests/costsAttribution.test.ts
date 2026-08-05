@@ -3,15 +3,29 @@ import { classifyAuthRef, computeCostUsd, computeNotionalUsd, resolveCostSource 
 import { ModelPriceSource, type ModelPriceMap } from "../src/engine/costs/pricing/modelPriceSource.js";
 import type { TokenUsage } from "../src/engine/providers/types.js";
 
+// The five buckets are DISJOINT and sum to totalTokens (see TokenUsage: "provider
+// -reported total, else sum of the five"). A fixture that sets buckets but leaves
+// the total at 0 describes an impossible call, and the notional path now reads the
+// total (a zero-token call is `no_tokens`, not an unpriced model) — so derive the
+// total from the buckets unless a test states one explicitly.
 function usage(partial: Partial<TokenUsage>): TokenUsage {
-  return {
+  const buckets = {
     inputTokens: 0,
     cachedInputTokens: 0,
     cacheCreationTokens: 0,
     outputTokens: 0,
     reasoningOutputTokens: 0,
-    totalTokens: 0,
     ...partial,
+  };
+  return {
+    ...buckets,
+    totalTokens:
+      partial.totalTokens ??
+      buckets.inputTokens +
+        buckets.cachedInputTokens +
+        buckets.cacheCreationTokens +
+        buckets.outputTokens +
+        buckets.reasoningOutputTokens,
   };
 }
 
@@ -329,7 +343,12 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
       rawUsage: {},
     });
     expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBe("7.500000");
+    // The figure AND why it is a figure: priced off the model rate, not carried
+    // over from a ccusage fact (this call has none).
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: "7.500000",
+      reason: "priced",
+    });
   });
 
   it("computes notional from the model price for a per_token call (real spend NULL with no fact)", () => {
@@ -340,7 +359,10 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
       rawUsage: {},
     });
     expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBe("7.500000");
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: "7.500000",
+      reason: "priced",
+    });
   });
 
   it("bills cached-input at the cache-read rate and reasoning at the output rate (model price)", () => {
@@ -353,7 +375,9 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
     // priced-openai: in 2.5, out 10, cache-read 1.25.
     // 1M cached @1.25 + 1M reasoning @10 = 1.25 + 10 = 11.25
     const tokens = usage({ cachedInputTokens: 1_000_000, reasoningOutputTokens: 1_000_000 });
-    expect(Number(computeNotionalUsd(source, tokens, fixturePriceSource))).toBeCloseTo(11.25, 5);
+    const notional = computeNotionalUsd(source, tokens, fixturePriceSource);
+    expect(Number(notional.usd)).toBeCloseTo(11.25, 5);
+    expect(notional.reason).toBe("priced");
   });
 
   it("prefers a positive ccusage figure as notional over the model rate (subscription)", () => {
@@ -365,7 +389,12 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
       rawUsage: {},
     });
     expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBe("1.500000");
+    // The ccusage figure verbatim, and the reason says the model rate was never
+    // consulted — a mutant that fell through to the price table would say "priced".
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: "1.500000",
+      reason: "ccusage",
+    });
   });
 
   it("returns null notional for an UNRECOGNIZED ref (unpriced on both axes — no model price, ccusage untrusted)", () => {
@@ -377,7 +406,12 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
       rawUsage: {},
     });
     expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBeNull();
+    // NULL, and the reason names the misconfig — NOT `model_not_listed` (the model
+    // IS listed here; the credential is what we refuse to trust).
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: null,
+      reason: "unattributed_credential",
+    });
   });
 
   it("returns null notional when the call's MODEL is not in the price source (LOUD-unknown)", () => {
@@ -387,11 +421,22 @@ describe("notional (ListCost) computation — computeNotionalUsd from the LiteLL
       model: "model-not-in-source",
       rawUsage: {},
     });
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBeNull();
+    // The price source WAS consultable (a populated fixture map → health 'ready'),
+    // so the null is a fact about the model, not an outage.
+    expect(fixturePriceSource.health()).toBe("ready");
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: null,
+      reason: "model_not_listed",
+    });
   });
 
   it("returns null notional when the call carries no model id", () => {
     const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", rawUsage: {} });
-    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toBeNull();
+    // A real token-bearing call with no model id is a DEFECT in the caller, and the
+    // reason code says so rather than blaming the price source.
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS, fixturePriceSource)).toEqual({
+      usd: null,
+      reason: "model_id_absent",
+    });
   });
 });

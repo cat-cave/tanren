@@ -12,15 +12,29 @@ import { classifyAuthRef, computeCostUsd, computeNotionalUsd, resolveCostSource 
 import { ModelPriceSource, type ModelPriceMap } from "../src/engine/costs/pricing/modelPriceSource.js";
 import type { TokenUsage } from "../src/engine/providers/types.js";
 
+// The five buckets are DISJOINT and sum to totalTokens (see TokenUsage: "provider
+// -reported total, else sum of the five"). A fixture that sets buckets but leaves
+// the total at 0 describes an impossible call, and the notional path now reads the
+// total (a zero-token call is `no_tokens`, not an unpriced model) — so derive the
+// total from the buckets unless a test states one explicitly.
 function usage(partial: Partial<TokenUsage>): TokenUsage {
-  return {
+  const buckets = {
     inputTokens: 0,
     cachedInputTokens: 0,
     cacheCreationTokens: 0,
     outputTokens: 0,
     reasoningOutputTokens: 0,
-    totalTokens: 0,
     ...partial,
+  };
+  return {
+    ...buckets,
+    totalTokens:
+      partial.totalTokens ??
+      buckets.inputTokens +
+        buckets.cachedInputTokens +
+        buckets.cacheCreationTokens +
+        buckets.outputTokens +
+        buckets.reasoningOutputTokens,
   };
 }
 
@@ -192,7 +206,7 @@ describe("computeNotionalUsd — per-bucket model-price arithmetic", () => {
     // cache-creation at input (no cache-creation axis → input rate stands in).
     // Bucket dollars: input 1M@2.5=2.5, cached 2M@1.25=2.5, cache-creation
     // 3M@2.5=7.5, output 4M@10=40, reasoning 5M@10=50. Sum = 102.5.
-    const usd = computeNotionalUsd(
+    const notional = computeNotionalUsd(
       src,
       usage({
         inputTokens: 1_000_000,
@@ -203,11 +217,14 @@ describe("computeNotionalUsd — per-bucket model-price arithmetic", () => {
       }),
       priceSource,
     );
-    expect(usd).toBe("102.500000");
+    expect(notional).toEqual({ usd: "102.500000", reason: "priced" });
   });
 
   it("emits a 6-decimal fixed-precision string", () => {
-    expect(computeNotionalUsd(src, usage({ outputTokens: 100_000 }), priceSource)).toBe("1.000000");
+    expect(computeNotionalUsd(src, usage({ outputTokens: 100_000 }), priceSource)).toEqual({
+      usd: "1.000000",
+      reason: "priced",
+    });
   });
 
   it("returns null when the model is not in the price source (LOUD-unknown, no guess)", () => {
@@ -217,7 +234,30 @@ describe("computeNotionalUsd — per-bucket model-price arithmetic", () => {
       model: "not-in-source",
       rawUsage: {},
     });
-    expect(computeNotionalUsd(unknown, usage({ outputTokens: 1 }), priceSource)).toBeNull();
+    // The source WAS consultable, so the null blames the MODEL, not the source. A
+    // mutant that flipped the health check would say `price_source_unavailable`.
+    expect(priceSource.health()).toBe("ready");
+    expect(computeNotionalUsd(unknown, usage({ outputTokens: 1 }), priceSource)).toEqual({
+      usd: null,
+      reason: "model_not_listed",
+    });
+  });
+
+  it("blames the SOURCE, not the model, when no price source could be consulted", () => {
+    // An EMPTY table is a source that cannot answer anything (health 'unavailable').
+    // Same null, categorically different reason: recoverable by a later reprice.
+    const emptySource = new ModelPriceSource({});
+    expect(emptySource.health()).toBe("unavailable");
+    expect(computeNotionalUsd(src, usage({ outputTokens: 100_000 }), emptySource)).toEqual({
+      usd: null,
+      reason: "price_source_unavailable",
+    });
+  });
+
+  it("reports a zero-token call as legitimately empty, never as an unpriced model", () => {
+    // Nothing to price is NOT a pricing gap: a priceable model with no tokens must
+    // not pollute the loud unpriced signal.
+    expect(computeNotionalUsd(src, usage({}), priceSource)).toEqual({ usd: null, reason: "no_tokens" });
   });
 
   it("prefers a positive ccusage figure over the model price (and emits it verbatim)", () => {
@@ -228,6 +268,9 @@ describe("computeNotionalUsd — per-bucket model-price arithmetic", () => {
       ccusageCostUsd: 2.345678,
       rawUsage: {},
     });
-    expect(computeNotionalUsd(withCcusage, usage({ outputTokens: 100_000 }), priceSource)).toBe("2.345678");
+    expect(computeNotionalUsd(withCcusage, usage({ outputTokens: 100_000 }), priceSource)).toEqual({
+      usd: "2.345678",
+      reason: "ccusage",
+    });
   });
 });

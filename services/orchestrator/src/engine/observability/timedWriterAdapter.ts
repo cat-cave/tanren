@@ -14,6 +14,17 @@ export function timedWriterAdapter(inner: WriterAdapter, sink: TimingSink = cons
     kind: inner.kind,
     cli: inner.cli,
     authRef: inner.authRef,
+    // Forward the wrapped adapter's DECLARED model id. This decorator is the
+    // instance `adapterSelector` returns and the workflow holds, so a field it
+    // does not copy does not exist as far as production is concerned. Omitting
+    // `model` here made every cost row record `model: ""` (the cost sites read
+    // `adapter.model ?? ""`), which in turn made `notional_cost_usd` NULL on 100%
+    // of rows — see docs/_design/openrouter-cost-attribution.md §11.
+    // Spread-conditional (not `model: inner.model`) so an adapter that genuinely
+    // declares NO model keeps the property ABSENT rather than gaining an explicit
+    // `undefined`, preserving the "no model id → notional NULL, stay quiet" path
+    // for fake fixtures.
+    ...(inner.model !== undefined && { model: inner.model }),
     runWriter: (opts) =>
       timed<WriterResult>(
         {
