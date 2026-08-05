@@ -108,7 +108,9 @@ export async function judgeRegression(
   // against measures a ~25% per-run flake rate from a repo-wide per-test wall-clock
   // budget, so a single red report is not evidence of breakage. Re-run and intersect: a
   // test that regresses TWICE is real; one that passes on the retry was contention.
-  const confirmRun = await runStepCommand(input, step);
+  // The confirmation run's EXIT CODE is deliberately ignored, exactly as the first run's
+  // is: a red suite exits nonzero either way, and the verdict comes from the report.
+  await runStepCommand(input, step);
   const confirmRead = await readWorkspaceFile(deps, reportPath);
   if (!confirmRead.present) return { kind: "unreadable" };
   let confirmReport: JunitReport;
@@ -120,7 +122,6 @@ export async function judgeRegression(
   // The confirmation run's report is the one we keep for the per-test ingest: it is the
   // most recent observation of the tree, and it is the one the verdict was decided on.
   parsedJunitReports.set(step.name, confirmReport);
-  void confirmRun;
   const secondPass = detectRegressions(baseline, confirmReport);
   const confirmed = confirmRegressions(firstPass, secondPass);
   return {
