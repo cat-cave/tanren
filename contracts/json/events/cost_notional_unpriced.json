@@ -14,6 +14,14 @@
     "reason": {
       "type": "string"
     },
+    "reasonCode": {
+      "enum": [
+        "model_id_absent",
+        "model_not_listed",
+        "price_source_unavailable"
+      ],
+      "type": "string"
+    },
     "taskId": {
       "type": "string"
     }
@@ -23,6 +31,7 @@
     "model",
     "cli",
     "taskId",
+    "reasonCode",
     "reason"
   ],
   "type": "object",
