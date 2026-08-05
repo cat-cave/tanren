@@ -50,7 +50,6 @@
 // the budget gate can FAIL CLOSED on it rather than assume $0.
 import { z } from "zod";
 import type { TokenUsage } from "../providers/types.js";
-import { defaultModelPriceSource, type ModelPrice, type ModelPriceSource } from "./pricing/modelPriceSource.js";
 
 export const BillingMode = z.enum(["per_token", "subscription", "self_hosted", "unattributed"]);
 export type BillingMode = z.infer<typeof BillingMode>;
@@ -349,68 +348,6 @@ export function computeCostUsd(source: CostSource, _tokens: TokenUsage): string 
   // Every other basis (unknown / unattributed / subscription / self_hosted) has NO
   // real-spend fact → cost_usd is NULL. No list-rate table, no fake estimate.
   return null;
-}
-
-// computeNotionalUsd returns the NOTIONAL estimate (FOCUS ListCost) of a call's
-// tokens for the cost_records.notional_cost_usd column, or null when the call's
-// MODEL is not in the maintained price source. Unlike computeCostUsd (REAL spend,
-// a metered FACT), this is a COMPUTED estimate sourced from the real LiteLLM
-// model-price data (ModelPriceSource), keyed by model id — so notional value is the
-// comparable, forecastable figure for EVERY billing mode (incl. subscription/
-// self_hosted, where real spend is $0/NULL). A positive ccusage figure (kept on
-// `notionalCcusageCostUsd` even when dropped from real spend) is the more-accurate
-// notional value, so it is PREFERRED; otherwise the model price prices the same
-// per-bucket arithmetic. NULL-and-loud: null when the model is unpriced (missing
-// model / unattributed) — an HONEST state, NEVER a fake estimate. Notional is
-// NEVER written to cost_usd.
-export function computeNotionalUsd(
-  source: CostSource,
-  tokens: TokenUsage,
-  priceSource: ModelPriceSource = defaultModelPriceSource(),
-): string | null {
-  // A positive ccusage figure is the most-accurate notional value when present.
-  if (source.notionalCcusageCostUsd !== null) {
-    return formatUsd(source.notionalCcusageCostUsd);
-  }
-  // An unattributed misconfig is unpriced on BOTH axes — we never even look up a
-  // notional rate (we cannot trust its provider/model).
-  if (source.billingMode === "unattributed" || source.model === "") {
-    return null;
-  }
-  // The maintained LiteLLM price for this model (provider-checked). NULL-and-loud
-  // when the model is not in the source — no fallback guess.
-  const price = priceSource.lookup(source.model, providerForLookup(source.provider));
-  if (price === null) {
-    return null;
-  }
-  return formatUsd(priceTokensAtModelPrice(price, tokens));
-}
-
-// The provider hint passed to ModelPriceSource.lookup: a real provider name when
-// we have one, else undefined (so the lookup keys on the model id alone rather
-// than asserting against an `unknown`/placeholder provider that would never match
-// upstream's `litellm_provider`).
-function providerForLookup(provider: string): string | undefined {
-  return provider === "" || provider === "unknown" ? undefined : provider;
-}
-
-// Per-bucket NOTIONAL arithmetic over a maintained ModelPrice. reasoning tokens
-// bill at the output rate; cached-input at the cache-READ rate when the model
-// lists one, else at the input rate; cache-creation at the cache-CREATION rate
-// when listed, else at the input rate. An axis the model does not list (null) is
-// treated as the input rate where it stands in for input-like tokens, else 0.
-function priceTokensAtModelPrice(price: ModelPrice, tokens: TokenUsage): number {
-  const inputPerMillion = price.input?.costPerMillion ?? 0;
-  const outputPerMillion = price.output?.costPerMillion ?? inputPerMillion;
-  const cacheReadPerMillion = price.cacheRead?.costPerMillion ?? inputPerMillion;
-  const cacheCreationPerMillion = price.cacheCreation?.costPerMillion ?? inputPerMillion;
-  return (
-    (tokens.inputTokens * inputPerMillion) / 1_000_000 +
-    (tokens.cachedInputTokens * cacheReadPerMillion) / 1_000_000 +
-    (tokens.cacheCreationTokens * cacheCreationPerMillion) / 1_000_000 +
-    (tokens.outputTokens * outputPerMillion) / 1_000_000 +
-    (tokens.reasoningOutputTokens * outputPerMillion) / 1_000_000
-  );
 }
 
 function formatUsd(value: number): string {

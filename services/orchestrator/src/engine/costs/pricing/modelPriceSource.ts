@@ -60,6 +60,22 @@ export const LITELLM_PRICE_URL =
 // no human refresh. Overridable via `TANREN_MODEL_PRICE_TTL_SECONDS`.
 const DEFAULT_TTL_SECONDS = 3600;
 
+// One long-context price tier — the rates that apply once a call's PROMPT tokens
+// reach `minPromptTokens`. Lives here (not in the OpenRouter source) so `ModelPrice`
+// can carry it without this module importing a specific source, and so any future
+// source that publishes tiered rates normalizes into the same shape.
+export interface PriceTier {
+  minPromptTokens: number;
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  cacheReadCostPerToken?: number;
+  cacheCreationCostPerToken?: number;
+}
+
+// The per-entry key a normalized upstream row carries its tiers under. Underscore-
+// prefixed so it can never collide with an upstream LiteLLM field name.
+export const PRICE_TIERS_KEY = "_tanren_price_tiers";
+
 // A single rate axis: the upstream per-token cost plus the per-million convenience
 // figure (per-million = per-token × 1e6). Both are present iff upstream supplied a
 // finite, non-negative number for the axis; otherwise the whole axis is null.
@@ -93,6 +109,13 @@ export interface ModelPrice {
   batchInput: RateAxis | null;
   // output_cost_per_token_batches — the discounted Batch-API output rate, when listed.
   batchOutput: RateAxis | null;
+  // LONG-CONTEXT TIERS, ascending by `minPromptTokens`. A marketplace price is not
+  // always a single rate: OpenRouter charges more above a prompt-size threshold
+  // (e.g. `openai/gpt-5.6-luna` doubles its prompt rate above 272 000 prompt
+  // tokens). The notional arithmetic selects the highest tier whose floor the call's
+  // prompt tokens reach; an empty array means the flat rates above apply always.
+  // LiteLLM's schema has no equivalent, so this is always empty for that source.
+  tiers: readonly PriceTier[];
 }
 
 // The shape we read off each upstream entry. Everything is optional + loosely
@@ -175,7 +198,25 @@ function parseEntry(model: string, raw: unknown): ModelPrice | null {
     cacheCreation: toRateAxis(entry.cache_creation_input_token_cost),
     batchInput: toRateAxis(entry.input_cost_per_token_batches),
     batchOutput: toRateAxis(entry.output_cost_per_token_batches),
+    tiers: parseTiers((raw as Record<string, unknown>)[PRICE_TIERS_KEY]),
   };
+}
+
+// Read the normalized long-context tiers off an upstream entry. Absent (LiteLLM) or
+// malformed → an empty list, i.e. "the flat rates apply always". Never throws: a
+// bad tier must degrade to flat pricing, not un-price the model.
+function parseTiers(raw: unknown): readonly PriceTier[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const tiers = raw.filter(
+    (tier): tier is PriceTier =>
+      typeof tier === "object" &&
+      tier !== null &&
+      typeof (tier as PriceTier).minPromptTokens === "number" &&
+      Number.isFinite((tier as PriceTier).minPromptTokens),
+  );
+  return [...tiers].sort((left, right) => left.minPromptTokens - right.minPromptTokens);
 }
 
 // ModelPriceSource: a typed lookup over a maintained price map. Build it with the
@@ -222,6 +263,30 @@ export class ModelPriceSource {
     return price;
   }
 
+  // Can this source answer a lookup at all right now?
+  //
+  // This is what separates "OpenRouter does not list this model" from "we have not
+  // been able to ASK OpenRouter". Both produce a null price; only one is a fact
+  // about the model. The notional reason code needs to tell them apart, otherwise a
+  // network outage is indistinguishable from an unlisted model — and the null is
+  // silent again, which is the whole defect being fixed.
+  //
+  // The base (frozen) source is `ready` whenever it has any priced row: it never
+  // fetches, so it is never "warming".
+  health(): ModelPriceSourceHealth {
+    return this.tableIsPopulated() ? "ready" : "unavailable";
+  }
+
+  // A frozen source never fetches, so warming it is a no-op. Declared here so every
+  // `ModelPriceSource` satisfies the `ModelPriceLookup` warm contract uniformly.
+  warm(): void {}
+
+  // Does the backing table hold at least one row? Cheap existence check (not the
+  // full `models()` parse) — `health` only needs to know the table is not empty.
+  protected tableIsPopulated(): boolean {
+    return Object.keys(this.#map).some((key) => !isNonModelKey(key));
+  }
+
   // The set of resolvable model ids (priced models only; non-model keys excluded).
   // Useful for diagnostics / tests; not a hot path.
   models(): string[] {
@@ -241,6 +306,13 @@ export function defaultModelPriceSource(): ModelPriceSource {
   cachedDefault ??= new ModelPriceSource();
   return cachedDefault;
 }
+
+// Whether a price source can currently answer lookups.
+//   ready       — it has a populated table (live, or a real offline seed).
+//   unavailable — it has NO table: never fetched successfully and has no seed. A
+//                 null lookup from an `unavailable` source says nothing about the
+//                 model, only about the source.
+export type ModelPriceSourceHealth = "ready" | "unavailable";
 
 // A function that fetches + parses the maintained price map from upstream. Injected
 // so tests drive a deterministic (network-free) fake; prod uses `fetchLiteLlmPriceMap`.
@@ -338,6 +410,14 @@ export class LiveModelPriceSource extends ModelPriceSource {
     }
   }
 
+  // Trigger a background refresh when the table is stale, WITHOUT waiting for it.
+  // The lazy path already does this on the first lookup; calling it at run setup
+  // just starts the fetch earlier, so fewer opening calls land on a cold table.
+  // Returns immediately and never throws — `#refresh` owns its own errors.
+  override warm(): void {
+    this.#scheduleRefreshIfStale();
+  }
+
   // Await any needed refresh, for a deterministic test assertion or an optional
   // eager warm at bootstrap. Never throws (the refresh handles its own errors).
   async ensureFresh(): Promise<void> {
@@ -379,7 +459,8 @@ export function liveFetchEnabled(): boolean {
 
 // The refresh TTL in ms from `TANREN_MODEL_PRICE_TTL_SECONDS` (default 1h). A
 // missing/blank/non-positive value falls back to the default rather than freezing.
-function ttlMsFromEnv(): number {
+// Exported so every live price source (LiteLLM, OpenRouter) shares one TTL policy.
+export function ttlMsFromEnv(): number {
   const raw = process.env["TANREN_MODEL_PRICE_TTL_SECONDS"];
   if (raw === undefined || raw.trim() === "") {
     return DEFAULT_TTL_SECONDS * 1000;
