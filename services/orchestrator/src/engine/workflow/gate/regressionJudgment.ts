@@ -21,7 +21,8 @@ import {
 } from "./gateStepTypes.js";
 import { withAppEnv } from "../../ssh/appEnvPrelude.js";
 import { withMiseActivation } from "../../ssh/miseActivate.js";
-import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
+import { buildActivityWatchdog, outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
+import { quoteSshShellArg } from "../../ssh/command.js";
 
 export interface RegressionStepDeps {
   ssh: CommandSubstrate;
@@ -50,6 +51,21 @@ export async function runStepCommand(input: RegressionStepDeps, step: CiStep): P
       workspace: input.workspacePath,
     }),
   });
+}
+
+/**
+ * Delete a workspace-relative file over SSH, returning whether the removal is known to have
+ * succeeded. Used to clear the previous JUnit report before the confirmation re-run so a
+ * stale report can never be mistaken for fresh results. A substrate failure returns false
+ * (the caller fails the step) rather than proceeding with a report it cannot trust.
+ */
+async function removeWorkspaceFile(input: RegressionStepDeps, relPath: string): Promise<boolean> {
+  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${relPath.replace(/^\/+/u, "")}`;
+  const result = await input.ssh.run(input.target, {
+    command: `rm -f ${quoteSshShellArg(path)}`,
+    watchdog: outputOnlyWatchdog(),
+  });
+  return result.failure === undefined && result.stalled !== true && result.exitCode === 0;
 }
 
 /** The regression judgment's outcome. `skip` leaves the step to the ordinary exit-code +
@@ -108,8 +124,14 @@ export async function judgeRegression(
   // against measures a ~25% per-run flake rate from a repo-wide per-test wall-clock
   // budget, so a single red report is not evidence of breakage. Re-run and intersect: a
   // test that regresses TWICE is real; one that passes on the retry was contention.
-  // The confirmation run's EXIT CODE is deliberately ignored, exactly as the first run's
-  // is: a red suite exits nonzero either way, and the verdict comes from the report.
+  // DELETE THE FIRST RUN'S REPORT FIRST. Without this, a confirmation run that dies before
+  // writing (a crash, an OOM, a stall) leaves the ORIGINAL report in place — we would re-read
+  // the first run's failures, "confirm" them against themselves, and report a flake as a real
+  // regression. That is precisely the false positive the confirmation run exists to prevent,
+  // so the read must be unable to succeed unless the retry actually produced fresh results.
+  if (!(await removeWorkspaceFile(input, reportPath))) return { kind: "unreadable" };
+  // The confirmation run's EXIT CODE is deliberately ignored, exactly as the first run's is:
+  // a red suite exits nonzero either way, and the verdict comes from the report.
   await runStepCommand(input, step);
   const confirmRead = await readWorkspaceFile(deps, reportPath);
   if (!confirmRead.present) return { kind: "unreadable" };

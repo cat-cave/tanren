@@ -38,7 +38,7 @@ export interface RegressionVerdict {
  *  regression contract's confirmation re-run, so both run byte-identically. */
 // One executed step's outcome, mirroring the gate.* event shape. `evidence` is the
 // optional positive-proof verdict the gate harvested when the step declared an
-// evidence contract (apex v57 task #64). Carried on BOTH pass and fail so the
+// evidence contract. Carried on BOTH pass and fail so the
 // timeline records observed-vs-required counts even on a pass (visibility), and so a
 // fail names the diagnosis precisely (the writer's iteration-1 directive).
 export interface GateStepOutcome {

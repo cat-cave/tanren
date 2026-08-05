@@ -19,12 +19,12 @@ const config = {
     "services/orchestrator/src/engine/workflow/gate/captureRegressionBaseline.ts",
   ],
   reporters: ["clear-text"],
-  // Measured 87.63% overall: regression.ts 100.00% (46/46), regressionJudgment.ts 90.36%,
+  // Measured 87.32% overall: regression.ts 100.00% (46/46), regressionJudgment.ts 89.09%,
   // captureRegressionBaseline.ts 73.68%. `break` sits just below the measured score so this
   // passes today and a regression below the floor fails.
   //
-  // The 21 survivors + 2 no-coverage are equivalents in four groups:
-  //   (a) `log.error("…")` message strings and their structured-detail objects (15, all in
+  // The 25 survivors + 2 no-coverage are equivalents in four groups:
+  //   (a) `log.error("…")` message strings and their structured-detail objects (all in
   //       captureRegressionBaseline) — the function's observable contract is its returned
   //       discriminated result; the log line has no event/DB/return consumer. Same class the
   //       workflow-stages cluster documents for emitStageTiming.

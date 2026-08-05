@@ -126,7 +126,7 @@ export function buildDefaultGate(
   // that has no prep phase (the conflict-resolver re-gate) and on any run whose capture
   // failed — the judgment then skips, leaving today's behaviour exactly in place.
   regressionBaseline?: RegressionBaseline,
-): (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome> {
+): RunGateCallback {
   const context = input.context;
   // The lazily-resolved gate config, memoized as a DISCRIMINATED result so an
   // INVALID `.tanren/ci.yml` (built-repo data) is a RUN-SCOPED gate failure — never

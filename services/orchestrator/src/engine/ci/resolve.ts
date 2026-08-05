@@ -186,9 +186,11 @@ export function junitReportFor(config: CiConfigV1, when: CiWhen): { tier: string
 // which is what lets a repository with a 40-minute suite simply decline, while one whose
 // suite runs in seconds can afford the signal on every writer iteration.
 //
-// FIRST-WINS mirrors `junitReportFor`: at most one regression judgment per lifecycle
-// point, in tier-then-step order, so two declarations can never race two baselines over
-// the same run.
+// FIRST-WINS mirrors `junitReportFor` — but here it is DEFENCE IN DEPTH, not the
+// guarantee: the schema REFUSES two declarations at one lifecycle point outright, because
+// only one baseline is captured per run and a second step judged against it would read its
+// own tests as never having passed. This resolver stays deterministic anyway, so the
+// baseline can never depend on object iteration order.
 // `reportPath` is lifted out of the step so callers never re-derive it behind an optional
 // chain: `step.regression` is what SELECTS the step, so a caller re-testing it would be
 // writing an unreachable branch (and an untestable one — mutation testing flags exactly

@@ -17,7 +17,9 @@ import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { GateFailedPayload, GateStepResult } from "../src/engine/events/schemas/gate.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 
-const target: RunnerHandle = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
+// RunnerHandle's contract surface is `backend` alone; the mock substrate reads no reach
+// fields, so the minimal valid handle is the honest fixture here.
+const target: RunnerHandle = { backend: "ssh" };
 const REPORT_PATH = "reports/junit.xml";
 
 function junitXml(cases: Record<string, JunitOutcome>): string {
@@ -51,8 +53,13 @@ function baselineOf(cases: Record<string, JunitOutcome>) {
 class TestRunSsh implements CommandSubstrate {
   readonly commands: RunnerCommand[] = [];
   stepRuns = 0;
-  /** Raw bodies served instead of a rendered report, one per step run (for malformed XML). */
+  /** The report as it exists ON DISK. A step run that produces nothing leaves the PREVIOUS
+   *  run's report sitting there — the condition that made a flake look "confirmed". */
+  private reportOnDisk: string | undefined;
+  /** Raw bodies served instead of a rendered report, one per step run (malformed XML). */
   rawBodies: (string | undefined)[] = [];
+  /** Override the result of the pre-retry `rm -f` (the report-clearing safety step). */
+  rmResult: Partial<CommandResult> | undefined;
   constructor(
     private readonly reports: (Record<string, JunitOutcome> | undefined)[],
     private readonly exitCode = 1,
@@ -63,15 +70,20 @@ class TestRunSsh implements CommandSubstrate {
   async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     const base = { stderr: "", timedOut: false };
+    if (command.command.startsWith("rm -f ")) {
+      if (this.rmResult !== undefined) return { ...base, exitCode: 0, stdout: "", ...this.rmResult };
+      this.reportOnDisk = undefined;
+      return { ...base, exitCode: 0, stdout: "" };
+    }
     if (command.command.includes("cat ")) {
-      const raw = this.rawBodies[Math.max(this.stepRuns - 1, 0)];
-      if (raw !== undefined) return { ...base, exitCode: 0, stdout: raw };
-      const cases = this.current();
-      if (cases === undefined) return { ...base, exitCode: 0, stdout: "__TANREN_FILE_ABSENT__" };
-      return { ...base, exitCode: 0, stdout: junitXml(cases) };
+      return { ...base, exitCode: 0, stdout: this.reportOnDisk ?? "__TANREN_FILE_ABSENT__" };
     }
     this.stepRuns += 1;
+    const raw = this.rawBodies[this.stepRuns - 1];
     const cases = this.current();
+    // A run with no scripted report writes NOTHING — whatever was on disk stays.
+    if (raw !== undefined) this.reportOnDisk = raw;
+    else if (cases !== undefined) this.reportOnDisk = junitXml(cases);
     const red = cases !== undefined && Object.values(cases).some((o) => o === "failed" || o === "error");
     return { ...base, exitCode: red ? this.exitCode : 0, stdout: "suite output" };
   }
@@ -189,15 +201,20 @@ describe("the regression contract at the gate", () => {
     expect(result.failedReason).toBe("exit_code");
   });
 
-  it("FAILS when the CONFIRMATION run's report goes missing", async () => {
-    // The first run showed a regression, so the verdict now depends on the second run's
-    // report. Losing it must not silently clear the regression.
+  it("does NOT confirm a regression from a STALE report when the retry writes nothing", async () => {
+    // The retry died before writing (crash / OOM / stall), leaving the FIRST run's report on
+    // disk. Re-reading it would "confirm" the failures against themselves and report a flake
+    // as a real regression — the exact false positive the confirmation exists to prevent. The
+    // gate clears the report before retrying, so the read finds nothing and the step fails
+    // on the exit-code class instead of inventing a confirmed regression.
     const ssh = new TestRunSsh([{ a: "failed" }, undefined]);
     const { result } = await runTier(ssh, baselineOf({ a: "passed" }));
     expect(result.passed).toBe(false);
     if (result.passed) throw new Error("unreachable");
     expect(result.failedReason).toBe("exit_code");
     expect(result.regression).toBeUndefined();
+    // The previous report was explicitly removed before the retry ran.
+    expect(ssh.commands.some((c) => c.command.startsWith("rm -f "))).toBe(true);
   });
 
   it("FAILS when the CONFIRMATION run's report is malformed", async () => {
@@ -223,6 +240,31 @@ describe("the regression contract at the gate", () => {
       regressedCount: 1,
       unconfirmedCount: 1,
     });
+  });
+
+  it("targets the workspace-qualified report path when clearing before the retry", async () => {
+    const ssh = new TestRunSsh([{ a: "failed" }, { a: "failed" }]);
+    await runTier(ssh, baselineOf({ a: "passed" }));
+    const rm = ssh.commands.find((c) => c.command.startsWith("rm -f "));
+    expect(rm?.command).toBe("rm -f '/ws/reports/junit.xml'");
+  });
+
+  it.each([
+    ["a nonzero exit", { exitCode: 1 }],
+    ["a substrate failure", { failure: { reason: "transport" } as CommandResult["failure"] }],
+    ["a stall", { stalled: true }],
+  ])("FAILS without retrying when clearing the previous report hits %s", async (_label, rmResult) => {
+    // If the old report cannot be cleared, a retry's results are indistinguishable from the
+    // first run's. Rather than confirm a regression we cannot trust, fail the step — and do
+    // not spend a second full suite run to get there.
+    const ssh = new TestRunSsh([{ a: "failed" }, { a: "failed" }]);
+    ssh.rmResult = rmResult;
+    const { result } = await runTier(ssh, baselineOf({ a: "passed" }));
+    expect(result.passed).toBe(false);
+    if (result.passed) throw new Error("unreachable");
+    expect(result.failedReason).toBe("exit_code");
+    expect(result.regression).toBeUndefined();
+    expect(ssh.stepRuns).toBe(1);
   });
 
   it("SKIPS the judgment with no baseline, falling back to ordinary exit-code judgment", async () => {

@@ -157,6 +157,9 @@ a different root cause in a file outside the changed file's reverse-dependency s
 selector that under-selects on the exact bug is worse than none. This contract does not
 scope the suite — it scopes the **judgment**, which costs nothing and cannot under-select.
 
+**One per lifecycle point.** A run captures exactly one baseline, so exactly one step may
+declare `regression` at a given point; two is refused at config-resolve time.
+
 **The merge authority is unaffected.** A `regression` step is _refused_ on any tier mapped
 to `pre_merge` (see below). `pre_merge` and `pre_audit` keep running unscoped, absolute
 test steps under their `minTests` floors.
@@ -175,6 +178,9 @@ gate. The validator rejects:
   merge authority, and an uncovered `pre_merge` would make `tanren/gate: success` a
   vacuous pass that lands anything. This is rejected **fail-closed** (a
   writer-editable `.tanren/ci.yml` cannot silently drop merge coverage).
+- **two `regression` contracts at the same lifecycle point** — a run captures exactly one
+  baseline, from the first declaration's command. A second step judged against it would read
+  its own tests as never having passed, so a green suite could surface as a mass regression.
 - **a `regression` contract on a tier mapped to `pre_merge`** — the regression contract
   passes a step whose suite is red so long as nothing _regressed_, which is right inside
   the writer loop and unacceptable at the merge authority. `.tanren/ci.yml` is
