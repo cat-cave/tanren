@@ -61,6 +61,64 @@ describe("the `regression` step field", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("REFUSES two regression declarations at one lifecycle point", () => {
+    // Only ONE baseline is captured per run, from the first declaration's command. A second
+    // step judged against it would read its own tests as never having passed, so a green
+    // suite could surface as a mass regression. There is no sensible reconciliation.
+    const parsed = CiConfigV1.safeParse({
+      version: 1,
+      tiers: {
+        fast: [
+          { name: "backend", run: "just test-py", regression: { reportPath: "py.xml" } },
+          { name: "frontend", run: "just test-ts", regression: { reportPath: "ts.xml" } },
+        ],
+        slow: [{ name: "t", run: "just test", junitReport: "r.xml" }],
+        merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
+      },
+      when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
+    });
+    expect(parsed.success).toBe(false);
+    const message = parsed.success ? "" : parsed.error.issues.map((i) => i.message).join(" ");
+    expect(message).toContain("per_iteration");
+    expect(message).toContain("fast.backend");
+    expect(message).toContain("fast.frontend");
+  });
+
+  it("REFUSES two declarations that meet at a point via DIFFERENT tiers", () => {
+    // The rule keys off the `when` policy, so splitting the two across tiers that both map
+    // to the same lifecycle point is not an escape hatch.
+    const parsed = CiConfigV1.safeParse({
+      version: 1,
+      tiers: {
+        fast: [{ name: "one", run: "a", regression: { reportPath: "a.xml" } }],
+        extra: [{ name: "two", run: "b", regression: { reportPath: "b.xml" } }],
+        slow: [{ name: "t", run: "just test", junitReport: "r.xml" }],
+        merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
+      },
+      when: {
+        fast: ["per_iteration"],
+        extra: ["per_iteration"],
+        slow: ["pre_audit"],
+        merge: ["pre_merge"],
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("ALLOWS the same count of declarations spread across DIFFERENT lifecycle points", () => {
+    // One per point is fine — each point resolves its own single declaration.
+    const parsed = CiConfigV1.safeParse({
+      version: 1,
+      tiers: {
+        fast: [{ name: "one", run: "a", regression: { reportPath: "a.xml" } }],
+        slow: [{ name: "t", run: "just test", junitReport: "r.xml", regression: { reportPath: "b.xml" } }],
+        merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
+      },
+      when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it("allows a regression step on a tier mapped to pre_audit", () => {
     // Only `pre_merge` is the merge authority. A project that wants the transition
     // judgment before its audit as well is making a defensible choice.
@@ -100,8 +158,13 @@ describe("regressionStepFor", () => {
     expect(regressionStepFor(resolveCiConfig(), "per_iteration")).toBeUndefined();
   });
 
-  it("takes the FIRST declaration in tier-then-step order, so two cannot race", () => {
-    const parsed = CiConfigV1.parse({
+  it("resolves deterministically if two declarations ever reach it — defence in depth", () => {
+    // The schema now REFUSES two declarations at one lifecycle point, so this config cannot
+    // come from a real `.tanren/ci.yml` (hence the cast past validation). The lookup keeps
+    // its first-wins order anyway: a resolver that picked non-deterministically would make
+    // the baseline depend on object iteration order, and a validation layer is a bad place
+    // to put the ONLY guarantee.
+    const unvalidated = {
       version: 1,
       tiers: {
         fast: [
@@ -112,7 +175,9 @@ describe("regressionStepFor", () => {
         merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
       },
       when: { fast: ["per_iteration"], slow: ["pre_audit"], merge: ["pre_merge"] },
-    });
-    expect(regressionStepFor(parsed, "per_iteration")?.step.name).toBe("one");
+    } as unknown as CiConfigV1;
+    const found = regressionStepFor(unvalidated, "per_iteration");
+    expect(found?.step.name).toBe("one");
+    expect(found?.reportPath).toBe("first.xml");
   });
 });

@@ -303,6 +303,34 @@ export const CiConfigV1 = z
         });
       }
     }
+    // ONE REGRESSION CONTRACT PER LIFECYCLE POINT. Baseline capture resolves the FIRST
+    // declaration (`regressionStepFor`) and runs THAT command once on the base tree, but the
+    // tier runner judges EVERY step that declares `regression`. A second declaration would
+    // therefore be judged against a baseline produced by a different command — its own tests
+    // would look like they had never passed, so a green suite could read as a mass
+    // regression. There is no sensible reconciliation, so the config is refused rather than
+    // silently resolved to the first.
+    for (const point of ["per_iteration", "pre_audit", "pre_merge"] as const) {
+      const declaring: string[] = [];
+      for (const [tierName, points] of Object.entries(cfg.when)) {
+        if (!points.includes(point)) continue;
+        for (const step of cfg.tiers[tierName] ?? []) {
+          if (step.regression !== undefined) declaring.push(`${tierName}.${step.name}`);
+        }
+      }
+      if (declaring.length > 1) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["tiers"],
+          message:
+            `${declaring.length} steps declare a \`regression\` contract at "${point}" ` +
+            `(${declaring.join(", ")}). Exactly one is allowed: the run captures ONE baseline, from the ` +
+            "first declaration's command, and judging a second step's report against it would read that " +
+            "step's tests as never having passed. Merge them into one step, or move one to another " +
+            "lifecycle point.",
+        });
+      }
+    }
     // THE MERGE AUTHORITY IS NOT NEGOTIABLE: a `regression` step may never sit in a tier
     // mapped to `pre_merge`. The regression contract deliberately PASSES a step whose
     // suite is red — as long as nothing that was green went red — which is exactly right

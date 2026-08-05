@@ -8,7 +8,7 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { captureRegressionBaseline } from "../src/engine/workflow/gate/captureRegressionBaseline.js";
 
-const target: RunnerHandle = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
+const target: RunnerHandle = { backend: "ssh" };
 
 function configWith(step?: Record<string, unknown>) {
   return CiConfigV1.parse({
