@@ -214,3 +214,7 @@ The orchestrator exposes a small surface from
 - `stepsFor(config, when)` — the flattened steps for a lifecycle point, in tier
   then step order.
 - `bootstrapCommand(config)` — the bootstrap command, or `undefined`.
+- `regressionStepFor(config, when)` — the first step declaring a `regression`
+  contract at a lifecycle point (with its tier and report path), or `undefined`
+  when the project declares none. `undefined` is the zero-cost opt-out: no
+  baseline is captured and gate behaviour is unchanged.
