@@ -33,12 +33,12 @@ import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import type { ContractFile } from "../forge/scaffold/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
-import { buildReGateCi, type MergeGateRunContext, runPublishGateStage } from "./plannerRunCi.js";
+import { buildReGateCi, runPublishGateStage } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
   baseShiftRebaseSeam,
-  buildDefaultGate,
   buildEntityRiskProducer,
+  buildRunGate,
   designOracleSeam,
   issueLoopProvenanceSeam,
   loopConfigSeam,
@@ -318,10 +318,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const { adapters, usageProbe, specValidator, budgetGate: iterationBudgetGate } = adapterResult;
     // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref (apex v30).
     const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
-    // The deterministic gate on the just-bootstrapped workspace (tanren-ci.yml or default).
-    const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
-    // Native merge-gate context: the authority runs `runGate` at `pre_merge` + publishes `tanren/gate`.
-    const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
+    // The deterministic gate on the just-bootstrapped workspace, plus the run's REGRESSION
+    // BASELINE — measured HERE because this is the last moment the tree still IS the base.
+    const { runGate, mergeGateCtx } = await buildRunGate(input, allocation.target, workspacePath, eventStore);
 
     // write→gate→PR→CI→review tail: re-enters on changes_requested UNBOUNDED while feedback
     // KEEPS CHANGING; escalates at a FIXED POINT (shared `convergenceDetector`, NOT a count).

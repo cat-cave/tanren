@@ -6,7 +6,7 @@
 // per-test JUnit grain in-process. `buildDefaultGate` is re-exported from
 // plannerRunAdapters so plannerRun.ts keeps its single import surface.
 
-import { type CiWhen, junitReportFor } from "../ci/index.js";
+import { type CiWhen, type RegressionBaseline, junitReportFor } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
@@ -108,11 +108,24 @@ async function resolveVerdictAnchorSha(
   return workspaceHead;
 }
 
+/** The run's gate closure shape (mirrors MergeGateRunContext.runGate). */
+export type RunGateCallback = (gate: {
+  when: CiWhen;
+  taskId?: string;
+  headShaOverride?: string;
+}) => Promise<GateOutcome>;
+
 export function buildDefaultGate(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
   eventStore: EventStore,
+  // THE RUN'S REGRESSION BASELINE, measured at workspace prep before the writer ran (see
+  // captureRegressionBaseline). Threaded verbatim to every gate call, so a step declaring
+  // a `regression` contract is judged on pass->fail transitions. Absent on every caller
+  // that has no prep phase (the conflict-resolver re-gate) and on any run whose capture
+  // failed — the judgment then skips, leaving today's behaviour exactly in place.
+  regressionBaseline?: RegressionBaseline,
 ): (gate: { when: CiWhen; taskId?: string; headShaOverride?: string }) => Promise<GateOutcome> {
   const context = input.context;
   // The lazily-resolved gate config, memoized as a DISCRIMINATED result so an
@@ -287,6 +300,7 @@ export function buildDefaultGate(
       // AUDIT-EVIDENCE BASELINE: the governance policy version, threaded so the
       // gate.verdict roll-up records which policy revision the gate was judged under.
       ...(input.context.policyVersion === undefined ? {} : { policyVersion: input.context.policyVersion }),
+      ...(regressionBaseline === undefined ? {} : { regressionBaseline }),
       ...(headSha === "" ? {} : { headSha }),
       // Plane B: the project's dev+test app env (+ the `TANREN_QUARANTINE` filter), so
       // the building agent's gate commands run with it. Never logged/emitted.

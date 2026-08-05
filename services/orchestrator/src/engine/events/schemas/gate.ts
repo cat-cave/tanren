@@ -37,6 +37,26 @@ export const GateStepEvidence = z
   .strict();
 export type GateStepEvidence = z.infer<typeof GateStepEvidence>;
 
+// REGRESSION VERDICT: the pass→fail TRANSITION judgment for a step that declared a
+// `regression` contract (engine/ci/regression.ts). Carried on the step result on BOTH
+// branches — on a pass it is the durable proof the comparison actually RAN (a silently
+// skipped judgment and a clean one are otherwise indistinguishable on the timeline), and
+// on a fail it names the tests the writer's steering lists. `regressed` is a BOUNDED
+// sample (a whole-root breakage regresses thousands; the names stop informing long before
+// then) — `regressedCount` is the true verdict. `unconfirmedCount` records transitions the
+// confirmation re-run cleared as flakes: never blocking, but a suite quietly burning time
+// on contention becomes visible here before anyone goes looking for it.
+export const GateStepRegression = z
+  .object({
+    regressed: z.array(z.string()),
+    regressedCount: z.number().int().nonnegative(),
+    unconfirmedCount: z.number().int().nonnegative(),
+    baselineTotal: z.number().int().nonnegative(),
+    observedTotal: z.number().int().nonnegative(),
+  })
+  .strict();
+export type GateStepRegression = z.infer<typeof GateStepRegression>;
+
 // One executed step within a tier: the named shell command plus its captured
 // outcome. `outputTail` is a bounded tail of combined stdout/stderr (the gate
 // runner truncates to keep events small) so the failing command's diagnostic
@@ -52,6 +72,9 @@ export const GateStepResult = z
     timedOut: z.boolean(),
     outputTail: z.string(),
     evidence: GateStepEvidence.optional(),
+    // Present only for a step that declared a `regression` contract. Absent ⇒ the step
+    // was judged the ordinary way (exit code, then evidence).
+    regression: GateStepRegression.optional(),
   })
   .strict();
 export type GateStepResult = z.infer<typeof GateStepResult>;
@@ -98,8 +121,12 @@ export const GateFailedPayload = z
     failedStep: z.string(),
     exitCode: z.number().int().nullable(),
     steps: z.array(GateStepResult),
-    failedReason: z.enum(["exit_code", "evidence_insufficient"]).optional(),
+    // `"test_regression"` is the pass→fail TRANSITION class: the step's suite may be red,
+    // but what FAILED the gate is specifically that a test green on the run's base tree
+    // is now red, confirmed across two runs.
+    failedReason: z.enum(["exit_code", "evidence_insufficient", "test_regression"]).optional(),
     evidence: GateStepEvidence.optional(),
+    regression: GateStepRegression.optional(),
   })
   .strict();
 

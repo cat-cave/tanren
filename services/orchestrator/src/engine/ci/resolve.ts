@@ -176,6 +176,38 @@ export function junitReportFor(config: CiConfigV1, when: CiWhen): { tier: string
   return undefined;
 }
 
+// The FIRST step declaring a `regression` contract among the tiers mapped to a lifecycle
+// point, with its owning tier — the declaration that tells a run whether a baseline is
+// worth capturing at all, and which command produces it.
+//
+// ABSENCE IS SEMANTIC, AND IS THE WHOLE OPT-IN: a project that declares no `regression`
+// step gets no baseline capture, no extra suite run at workspace prep, and byte-identical
+// gate behaviour. The cost of this contract is paid only by a project that asked for it —
+// which is what lets a repository with a 40-minute suite simply decline, while one whose
+// suite runs in seconds can afford the signal on every writer iteration.
+//
+// FIRST-WINS mirrors `junitReportFor`: at most one regression judgment per lifecycle
+// point, in tier-then-step order, so two declarations can never race two baselines over
+// the same run.
+// `reportPath` is lifted out of the step so callers never re-derive it behind an optional
+// chain: `step.regression` is what SELECTS the step, so a caller re-testing it would be
+// writing an unreachable branch (and an untestable one — mutation testing flags exactly
+// that dead fallback).
+export function regressionStepFor(
+  config: CiConfigV1,
+  when: CiWhen,
+): { tier: string; step: CiStep; reportPath: string } | undefined {
+  for (const tierName of tiersFor(config, when)) {
+    for (const step of config.tiers[tierName] ?? []) {
+      const regression = step.regression;
+      if (regression !== undefined) {
+        return { tier: tierName, step, reportPath: regression.reportPath };
+      }
+    }
+  }
+  return undefined;
+}
+
 function orderedTierNames(config: CiConfigV1): string[] {
   const extras = Object.keys(config.tiers)
     .filter((name) => name !== "fast" && name !== "slow")

@@ -32,6 +32,15 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["steps[].evidence.reason", "public"],
     ["steps[].evidence.observed", "public"],
     ["steps[].evidence.required", "public"],
+    // Regression verdict: test IDENTIFIERS and counts. A test id is a public identifier
+    // (it already rides the per-test CI-intelligence grain), and the counts are scale
+    // figures. Nothing here carries runner output or environment.
+    ["steps[].regression.regressed", "public"],
+    ["steps[].regression.regressed[]", "public"],
+    ["steps[].regression.regressedCount", "public"],
+    ["steps[].regression.unconfirmedCount", "public"],
+    ["steps[].regression.baselineTotal", "public"],
+    ["steps[].regression.observedTotal", "public"],
   ]),
   ...rulesFor("gate.failed", [
     ["tier", "public"],
@@ -50,6 +59,15 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["steps[].evidence.reason", "public"],
     ["steps[].evidence.observed", "public"],
     ["steps[].evidence.required", "public"],
+    // Regression verdict: test IDENTIFIERS and counts. A test id is a public identifier
+    // (it already rides the per-test CI-intelligence grain), and the counts are scale
+    // figures. Nothing here carries runner output or environment.
+    ["steps[].regression.regressed", "public"],
+    ["steps[].regression.regressed[]", "public"],
+    ["steps[].regression.regressedCount", "public"],
+    ["steps[].regression.unconfirmedCount", "public"],
+    ["steps[].regression.baselineTotal", "public"],
+    ["steps[].regression.observedTotal", "public"],
     // Top-level evidence on the gate.failed payload: the harvested verdict for the
     // failing step (the diagnosis the writer's rework directive consumes).
     ["evidence.kind", "public"],
@@ -57,6 +75,12 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["evidence.reason", "public"],
     ["evidence.observed", "public"],
     ["evidence.required", "public"],
+    ["regression.regressed", "public"],
+    ["regression.regressed[]", "public"],
+    ["regression.regressedCount", "public"],
+    ["regression.unconfirmedCount", "public"],
+    ["regression.baselineTotal", "public"],
+    ["regression.observedTotal", "public"],
   ]),
   // Lenient-posture advisory step failure (lint/typecheck): names + exit code are
   // public identifiers; the captured output tail is secret (may surface env/paths).

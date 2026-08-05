@@ -8,6 +8,7 @@ export {
   CiDeploy,
   CiStep,
   CiStepEvidence,
+  CiStepRegression,
   CiTiers,
   CiUpgrade,
   CiWhen,
@@ -24,11 +25,25 @@ export {
   bootstrapCommand,
   deployCommand,
   junitReportFor,
+  regressionStepFor,
   resolveCiConfig,
   stepsFor,
   tiersFor,
   upgradeCommand,
 } from "./resolve.js";
+
+// THE REGRESSION CONTRACT: the pass→fail transition judgment that makes tests safe to
+// run inside the writer's own loop. Pure comparison over parsed JUnit reports — no
+// execution, no I/O, no test-runner knowledge.
+export {
+  MAX_NAMED_REGRESSIONS,
+  type RegressionBaseline,
+  baselineFromReport,
+  confirmRegressions,
+  describeRegressions,
+  detectRegressions,
+  sampleRegressions,
+} from "./regression.js";
 
 export { parseYaml } from "./yaml.js";
 export type { YamlValue } from "./yaml.js";
