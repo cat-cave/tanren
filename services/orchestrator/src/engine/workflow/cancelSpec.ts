@@ -8,20 +8,22 @@
 //      already-`cancelled` one, is a clean IDEMPOTENT no-op, never an error), which
 //      FREES the DAG slot: the walker classifies `cancelled` as `terminal_blocked`
 //      (like `merged`/`needs_attention`), so it never re-enqueues a cancelled spec.
-//   2. Cancels the spec's ACTIVE run (the non-terminal `queued`/`running`/`halted`
-//      run, if any) to the terminal `cancelled` run status, REAPS that run's live
-//      `job_queue` rows to the terminal `cancelled` job status, and RELEASES that run's
-//      claimed runner through the runner-release seam (the `runners` row flips
-//      `released` — the allocator's sweeper + the run-workspace reaper then reclaim
-//      the sandbox now the run is terminal, so NO sandbox leaks).
+//   2. Cancels EVERY non-terminal run of the spec (`queued`/`running`/`paused`/
+//      `halted`) to the terminal `cancelled` run status, REAPS each run's live
+//      `job_queue` rows to the terminal `cancelled` job status, and RELEASES each of
+//      their claimed runners through the runner-release seam (the `runners` row flips
+//      `released` — the allocator's sweeper + the run-workspace reaper then reclaim the
+//      sandbox now the run is terminal, so NO sandbox leaks). NOT "the at-most-one
+//      active run": a re-driven spec accumulates `halted` runs, so the set is routinely
+//      larger than one and picking a single member cancels the wrong run.
 //   3. Does NOT silently cascade-cancel dependents (the human-escalation discipline):
 //      each direct dependent that is still live is parked at `needs_attention` (the
 //      same terminal escalation a merge conflict / dead-letter uses) and emits a loud
 //      `dag.spec.needs_attention` (source `cancelled_ancestor`), so a human DECIDES how
 //      to proceed (re-scope the dependent, re-queue the ancestor, or cancel it too) —
 //      a dependent is never silently dropped.
-//   4. Emits the actor-stamped `spec.cancelled` (+ `run.cancelled` when a run was
-//      cancelled) audit events, and wakes the DagWalker so the freed slot is picked up.
+//   4. Emits the actor-stamped `spec.cancelled` (+ one `run.cancelled` per cancelled
+//      run) audit events, and wakes the DagWalker so the freed slot is picked up.
 //
 // Org-scoped under RLS (the actor MUST carry the project's org); fail-closed (a
 // missing org / an invisible spec is a hard SpecNotFoundError, never a silent skip).
@@ -57,8 +59,14 @@ export interface CancelSpecResult {
   cancelled: boolean;
   /** The terminal status the spec now holds (`cancelled` on a flip; its prior terminal status on a no-op). */
   status: string;
-  /** The active run cancelled alongside the spec (absent when the spec had none). */
-  run?: CancelledRun;
+  /**
+   * EVERY non-terminal run cancelled alongside the spec, oldest first. Empty when the
+   * spec had none. A LIST, not an optional single run: a re-driven spec accumulates
+   * non-terminal (`halted`) runs, and the operator is cancelling the SPEC — every run
+   * of it must settle, or the survivors are stranded non-terminal forever (the spec is
+   * now terminal, so a second cancel is a documented idempotent no-op).
+   */
+  runs: CancelledRun[];
   /** Direct dependents parked at `needs_attention` because their ancestor was cancelled. */
   dependentsParked: string[];
 }
@@ -96,7 +104,14 @@ export async function cancelSpec(
     // needs_attention) is a clean no-op, NOT an error. Return its current terminal
     // status so a repeated cancel is safely repeatable.
     if ((TERMINAL_SPEC_STATUSES as readonly string[]).includes(found.status)) {
-      return { specId: input.specId, projectId, cancelled: false, status: found.status, dependentsParked: [] };
+      return {
+        specId: input.specId,
+        projectId,
+        cancelled: false,
+        status: found.status,
+        runs: [],
+        dependentsParked: [],
+      };
     }
 
     // ATOMIC guarded flip: re-check the non-terminal status set IN the UPDATE so a
@@ -114,13 +129,13 @@ export async function cancelSpec(
         input.specId,
       ]);
       const status = after.rows[0]?.status ?? found.status;
-      return { specId: input.specId, projectId, cancelled: false, status, dependentsParked: [] };
+      return { specId: input.specId, projectId, cancelled: false, status, runs: [], dependentsParked: [] };
     }
 
     const eventStore = new PgEventStore(client);
 
-    // Cancel the spec's ACTIVE run (if any) + release its claimed runner.
-    const run = await cancelActiveRun(client, eventStore, {
+    // Cancel EVERY non-terminal run of the spec + release each claimed runner.
+    const runs = await cancelNonTerminalRuns(client, eventStore, {
       specId: input.specId,
       projectId,
       orgId,
@@ -159,104 +174,143 @@ export async function cancelSpec(
       projectId,
       cancelled: true,
       status: "cancelled",
-      run,
+      runs,
       dependentsParked,
     };
   });
 }
 
 /**
- * Cancel the spec's single ACTIVE run (the non-terminal `queued`/`running`/`halted`
- * run), REAP its live `job_queue` rows, and release its claimed runner. The guarded
- * UPDATE flips at most one row; a spec with no active run (all runs terminal, or never
- * run) is a clean skip. Releasing the runner flips its `runners` row `released` (the
- * allocator-release seam's DB side) so the sweeper + run-workspace reaper reclaim the
- * sandbox now the run is terminal — NO leaked sandbox.
+ * Cancel EVERY non-terminal run of the spec, REAP each run's live `job_queue` rows, and
+ * release each of their claimed runners.
+ *
+ * NOT "the at-most-one active run" — that premise was false, and it made the documented
+ * way to stop a runaway run report success without stopping it. Three faults in one
+ * predicate:
+ *
+ *   1. `halted` is NON-TERMINAL and ACCUMULATES. `allowedRunTransitions` has
+ *      `halted: ["running", "cancelled"]`, and the run-failure boundary re-drives a
+ *      transient fault by reopening the spec and starting a SUCCESSOR run — leaving the
+ *      predecessor `halted` forever. A spec re-driven a few times therefore has many
+ *      matching rows. Observed live: SEVEN — six `halted` plus the one `running`.
+ *   2. `ORDER BY run_id LIMIT 1` then picked one of them ARBITRARILY. `runs.run_id` is a
+ *      `text` id with a random suffix, so its lexicographic order carries no relation to
+ *      recency or liveness. The live run was selected only by luck. Observed: the cancel
+ *      returned `cancelled: true` naming a DAY-OLD `halted` run while the actually-
+ *      executing run kept burning credits for another six minutes.
+ *   3. `paused` was MISSING from the predicate although it is non-terminal, and
+ *      `state/run.ts` states "the operator-cancel path is the only `paused`-terminal
+ *      exit". The sole documented exit did not select the status it was the exit for.
+ *
+ * And the operator gets no second attempt: the caller flips the SPEC terminal in this
+ * same transaction, so a retried cancel is an idempotent no-op. One wrong pick is
+ * permanent.
+ *
+ * Cancelling the SET is the honest shape rather than picking a better single row: the
+ * operator is cancelling the spec, so every run of it must settle. There is no reason to
+ * choose. The status set is exactly the non-terminal half of the run state machine, and
+ * the ordering is `started_at` — a real recency signal, and a deterministic lock order.
  */
-async function cancelActiveRun(
+async function cancelNonTerminalRuns(
   client: pg.PoolClient,
   eventStore: PgEventStore,
   ctx: { specId: string; projectId: string; orgId: string; cancelledBy: string },
-): Promise<CancelledRun | undefined> {
-  // Read the (at most one) active run's id + status BEFORE the flip, locking the row so
-  // a concurrent worker transition can't race the cancel (FOR UPDATE serializes the two
-  // — the loser observes the now-`cancelled` row). A spec with no active run is a clean
-  // skip.
+): Promise<CancelledRun[]> {
+  // Lock ALL of them before flipping, so a concurrent worker transition can't race the
+  // cancel (FOR UPDATE serializes the two — the loser observes the now-`cancelled` row).
+  // A spec with no non-terminal run is a clean skip. `ORDER BY started_at, run_id` gives
+  // a deterministic lock order (no deadlock against a concurrent cancel) and a stable,
+  // oldest-first result.
   const active = await client.query<{ run_id: string; status: string }>(
     `SELECT run_id, status FROM runs
-       WHERE spec_id = $1 AND status IN ('queued', 'running', 'halted')
-       ORDER BY run_id LIMIT 1
+       WHERE spec_id = $1 AND status IN ('queued', 'running', 'paused', 'halted')
+       ORDER BY started_at ASC, run_id ASC
        FOR UPDATE`,
     [ctx.specId],
   );
-  const row = active.rows[0];
-  if (row === undefined) {
-    return undefined;
-  }
-  const fromStatus = row.status;
-  await client.query("UPDATE runs SET status = 'cancelled' WHERE run_id = $1", [row.run_id]);
 
-  // REAP the run's live `job_queue` rows to the terminal `cancelled` job status.
-  //
-  // WITHOUT this the cancel is NOT DURABLE. `runs.status` is not on the claim path:
-  // `JobQueue.claim` selects purely on `task_kind` + `status = 'queued'`, and the
-  // lease reaper (`reapExpiredLeases`) requeues ANY `running` row whose lease lapsed —
-  // neither joins the owning run. So a cancelled run's queue row survives the cancel,
-  // the worker that dies/restarts while holding it lets its lease lapse, the reaper
-  // returns it to `queued`, and the next claim RESURRECTS the cancelled run. The
-  // DagWalker's terminal-status guard never sees it: the walker gates ENQUEUE, and
-  // this row was already enqueued.
-  //
-  // Flipping the row terminal closes both doors at once: `cancelled` is not `queued`
-  // (never claimed) and not `running` (never reaped), and it is a legal transition
-  // from every live status (see engine/state/job.ts). `leased_until = NULL` drops the
-  // lease so the row also leaves the reaper's partial index.
-  const reaped = await client.query<{ id: string }>(
-    `UPDATE job_queue
-        SET status = 'cancelled', ended_at = now(), leased_until = NULL
-      WHERE run_id = $1 AND status IN ('queued', 'claimed', 'running')
-    RETURNING id::text AS id`,
-    [row.run_id],
-  );
-  // `job_queue.id` is a bigserial rendered as text: sort NUMERICALLY but via BigInt, since
-  // an id past Number.MAX_SAFE_INTEGER would compare wrong under `Number()`.
-  const jobsCancelled = reaped.rows
-    .map((jobRow) => jobRow.id)
-    .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0));
+  const cancelled: CancelledRun[] = [];
+  for (const row of active.rows) {
+    const fromStatus = row.status;
+    await client.query("UPDATE runs SET status = 'cancelled' WHERE run_id = $1", [row.run_id]);
 
-  // Release the run's claimed runner (the allocator-release seam's DB side: flip the
-  // `runners` row `released`). The sweeper/reaper reclaim the sandbox now the run is
-  // terminal. A run with no claimed runner (e.g. a still-`queued` run that never
-  // allocated) releases nothing — recorded honestly (runnerReleased: false), never a
-  // silent assumed-released.
-  const runnerRow = await client.query<{ runner_id: string }>(
-    "SELECT runner_id FROM runners WHERE run_id = $1 AND status = 'claimed' LIMIT 1",
-    [row.run_id],
-  );
-  const runnerId = runnerRow.rows[0]?.runner_id;
-  let runnerReleased = false;
-  if (runnerId !== undefined) {
-    await client.query("UPDATE runners SET status = 'released', released_at = now() WHERE runner_id = $1", [runnerId]);
-    runnerReleased = true;
-  }
+    // REAP the run's live `job_queue` rows to the terminal `cancelled` job status.
+    //
+    // WITHOUT this the cancel is NOT DURABLE. `runs.status` is not on the claim path:
+    // `JobQueue.claim` selects purely on `task_kind` + `status = 'queued'`, and the
+    // lease reaper (`reapExpiredLeases`) requeues ANY `running` row whose lease lapsed —
+    // neither joins the owning run. So a cancelled run's queue row survives the cancel,
+    // the worker that dies/restarts while holding it lets its lease lapse, the reaper
+    // returns it to `queued`, and the next claim RESURRECTS the cancelled run. The
+    // DagWalker's terminal-status guard never sees it: the walker gates ENQUEUE, and
+    // this row was already enqueued.
+    //
+    // Flipping the row terminal closes both doors at once: `cancelled` is not `queued`
+    // (never claimed) and not `running` (never reaped), and it is a legal transition
+    // from every live status (see engine/state/job.ts). `leased_until = NULL` drops the
+    // lease so the row also leaves the reaper's partial index.
+    const reaped = await client.query<{ id: string }>(
+      `UPDATE job_queue
+          SET status = 'cancelled', ended_at = now(), leased_until = NULL
+        WHERE run_id = $1 AND status IN ('queued', 'claimed', 'running')
+      RETURNING id::text AS id`,
+      [row.run_id],
+    );
+    // `job_queue.id` is a bigserial rendered as text: sort NUMERICALLY but via BigInt,
+    // since an id past Number.MAX_SAFE_INTEGER would compare wrong under `Number()`.
+    const jobsCancelled = reaped.rows
+      .map((jobRow) => jobRow.id)
+      .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0));
 
-  await eventStore.append({
-    runId: row.run_id,
-    specId: ctx.specId,
-    projectId: ctx.projectId,
-    orgId: ctx.orgId,
-    eventType: "run.cancelled",
-    payload: {
+    // Release the run's claimed runner (the allocator-release seam's DB side: flip the
+    // `runners` row `released`). The sweeper/reaper reclaim the sandbox now the run is
+    // terminal. A run with no claimed runner (e.g. a still-`queued` run that never
+    // allocated, or a long-`halted` one whose runner went back to the pool) releases
+    // nothing — recorded honestly (runnerReleased: false), never a silent assumed-released.
+    const runnerRow = await client.query<{ runner_id: string }>(
+      "SELECT runner_id FROM runners WHERE run_id = $1 AND status = 'claimed' LIMIT 1",
+      [row.run_id],
+    );
+    const runnerId = runnerRow.rows[0]?.runner_id;
+    let runnerReleased = false;
+    if (runnerId !== undefined) {
+      await client.query("UPDATE runners SET status = 'released', released_at = now() WHERE runner_id = $1", [
+        runnerId,
+      ]);
+      runnerReleased = true;
+    }
+
+    // One `run.cancelled` per run. The event is already per-run, so the payload shape is
+    // unchanged — a consumer sees N events instead of silently missing N-1 cancellations.
+    //
+    // `appendIfAbsent`, not `append`: `run.cancelled` is covered by the partial unique
+    // index `events_run_terminal_unique (run_id, event_type)`, so a duplicate INSERT
+    // raises and would roll back the WHOLE cancel — spec flip, every run flip, every
+    // runner release. Cancelling N runs multiplies that exposure by N, so the at-most-once
+    // insert matters more here than it did on the single-run path. Both NOTIFYs still fire
+    // on the landing path, so the SSE/dispatcher behaviour is unchanged; a `false` return
+    // means this run's terminal event was already recorded, which does not change the fact
+    // that this transaction flipped the run.
+    await eventStore.appendIfAbsent({
       runId: row.run_id,
-      fromStatus,
-      cancelledBy: ctx.cancelledBy,
-      ...(runnerId === undefined ? {} : { runnerId }),
-      runnerReleased,
-      jobsCancelled,
-    },
-  });
+      specId: ctx.specId,
+      projectId: ctx.projectId,
+      orgId: ctx.orgId,
+      eventType: "run.cancelled",
+      payload: {
+        runId: row.run_id,
+        fromStatus,
+        cancelledBy: ctx.cancelledBy,
+        ...(runnerId === undefined ? {} : { runnerId }),
+        runnerReleased,
+        jobsCancelled,
+      },
+    });
 
-  return { runId: row.run_id, fromStatus, runnerId, runnerReleased, jobsCancelled };
+    cancelled.push({ runId: row.run_id, fromStatus, runnerId, runnerReleased, jobsCancelled });
+  }
+
+  return cancelled;
 }
 
 /**
