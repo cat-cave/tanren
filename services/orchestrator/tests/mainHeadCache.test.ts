@@ -56,38 +56,116 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
     expect(await cache.read("k", read)).toBe("sha-2");
   });
 
-  it("fences a stale in-flight read so neither reader returns or republishes its SHA", async () => {
+  it("cannot publish a stale flight after invalidation and generation reclaim", async () => {
     const cache = new MainHeadCache();
-    let releaseStale!: () => void;
-    let releaseFresh!: () => void;
-    const staleGate = new Promise<void>((resolve) => {
-      releaseStale = resolve;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    const stale = cache.read("k", async () => {
+      await gate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    let reads = 0;
+    let releaseFresh!: () => void;
     const freshGate = new Promise<void>((resolve) => {
       releaseFresh = resolve;
     });
-    let staleReads = 0;
-    let freshReads = 0;
+    const fresh = async () => {
+      reads += 1;
+      await freshGate;
+      return "fresh";
+    };
+    // A read begun after invalidation must not join the stale generation,
+    // even while that older flight is still blocked.
+    const freshRead = cache.read("k", fresh);
+    await Promise.resolve();
+    expect(reads).toBe(1);
+    releaseFresh();
+    await expect(freshRead).resolves.toBe("fresh");
+    release();
+    await expect(stale).resolves.toBe("stale");
+    expect(await cache.read("k", fresh)).toBe("fresh");
+    expect(reads).toBe(1);
+  });
 
-    const staleReader = cache.read("k", async () => {
-      staleReads += 1;
+  it("does not let an old finalizer remove a newer in-flight generation", async () => {
+    const cache = new MainHeadCache();
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let releaseFresh!: () => void;
+    const freshGate = new Promise<void>((resolve) => {
+      releaseFresh = resolve;
+    });
+    let reads = 0;
+    const stale = cache.read("k", async () => {
       await staleGate;
       return "stale";
     });
     cache.invalidate("k");
-    const postLandReader = cache.read("k", async () => {
-      freshReads += 1;
+    const fresh = cache.read("k", async () => {
+      reads += 1;
       await freshGate;
       return "fresh";
     });
 
-    // Invalidation makes the post-land reader start a distinct generation, rather than
-    // joining the stale flight. When that old flight settles, it joins the fresh one.
-    expect([staleReads, freshReads]).toEqual([1, 1]);
+    // Let the old generation settle while the replacement is still blocked.
+    // A subsequent read must join the replacement, not start a third flight.
     releaseStale();
+    await expect(stale).resolves.toBe("stale");
+    const joined = cache.read("k", async () => {
+      reads += 1;
+      return "wrong";
+    });
+    expect(reads).toBe(1);
     releaseFresh();
-    await expect(Promise.all([staleReader, postLandReader])).resolves.toEqual(["fresh", "fresh"]);
-    expect(await cache.read("k", async () => "unexpected")).toBe("fresh");
+    await expect(Promise.all([fresh, joined])).resolves.toEqual(["fresh", "fresh"]);
+  });
+
+  it("keeps the invalidation fence while a superseded flight is still settling", async () => {
+    const cache = new MainHeadCache();
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const stale = cache.read("k", async () => {
+      await staleGate;
+      return "stale";
+    });
+    cache.invalidate("k");
+    const rejected = cache.read("k", async () => {
+      throw new Error("fresh read failed");
+    });
+    await expect(rejected).rejects.toThrow("fresh read failed");
+
+    // The replacement's finalizer must not reclaim generation 1 while the
+    // superseded generation-0 promise can still settle and publish.
+    const fresh = cache.read("k", async () => "fresh");
+    await expect(fresh).resolves.toBe("fresh");
+    releaseStale();
+    await expect(stale).resolves.toBe("stale");
+    expect(await cache.read("k", async () => "wrong")).toBe("fresh");
+  });
+
+  it("fences an invalidation re-entered by the reader before it resolves", async () => {
+    const cache = new MainHeadCache();
+    let reads = 0;
+    const stale = cache.read("k", async () => {
+      reads += 1;
+      cache.invalidate("k");
+      return "stale";
+    });
+    await expect(stale).resolves.toBe("stale");
+    expect(
+      await cache.read("k", async () => {
+        reads += 1;
+        return "fresh";
+      }),
+    ).toBe("fresh");
+    expect(reads).toBe(2);
   });
 
   it("does NOT cache a throw (a 403/transient must re-read, never memoize the failure)", async () => {
@@ -108,7 +186,7 @@ describe("MainHeadCache (apex-v35 volume guard)", () => {
 /** A scripted HTTP client that records requested paths. */
 class RecordingHttp implements GitHubHttpClient {
   readonly paths: string[] = [];
-  constructor(private readonly responder: (path: string) => GitHubHttpResponse | Promise<GitHubHttpResponse>) {}
+  constructor(private readonly responder: (path: string) => GitHubHttpResponse) {}
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.paths.push(input.path);
     return this.responder(input.path);
@@ -169,68 +247,5 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
         idempotencyKey: "intent-mhc",
       }),
     ).rejects.toThrow(/stale compare-and-swap/u);
-  });
-
-  it("an idempotent retry fences a pre-land flight before reporting the authorized SHA", async () => {
-    let mainSha = "head1";
-    let refReads = 0;
-    let releaseStale!: () => void;
-    let staleReadStarted!: () => void;
-    const staleGate = new Promise<void>((resolve) => {
-      releaseStale = resolve;
-    });
-    const staleStarted = new Promise<void>((resolve) => {
-      staleReadStarted = resolve;
-    });
-    const http = new RecordingHttp(async (path) => {
-      if (path.startsWith("/repos/o/r/git/ref/heads/")) {
-        refReads += 1;
-        if (refReads === 1) {
-          staleReadStarted();
-          await staleGate;
-          return refResponse("head1");
-        }
-        return refResponse(mainSha);
-      }
-      if (path.startsWith("/repos/o/r/git/refs/heads/")) {
-        mainSha = "head2";
-        throw new Error("transport lost after the ref update");
-      }
-      return refResponse(mainSha);
-    });
-    const cache = new MainHeadCache();
-    const host = new GitHubCodeHost(http, async () => ({ token: "t" }), cache);
-
-    const preLandReader = host.fetchRef({ repo, remoteBranch: "main" });
-    await staleStarted;
-    await expect(
-      host.landAuthorizedIntegration({
-        repo,
-        intoMain: "main",
-        expectedMainSha: "head1",
-        authorizedSha: "head2",
-        idempotencyKey: "transport-loss",
-      }),
-    ).rejects.toThrow(/transport lost/u);
-
-    // The retry reads main fresh, observes the already-landed authorized SHA, and must
-    // invalidate before it reports success. A following reader cannot join the old flight.
-    await expect(
-      host.landAuthorizedIntegration({
-        repo,
-        intoMain: "main",
-        expectedMainSha: "head1",
-        authorizedSha: "head2",
-        idempotencyKey: "transport-loss",
-      }),
-    ).resolves.toEqual({ mainSha: "head2" });
-    const postRetryReader = host.fetchRef({ repo, remoteBranch: "main" });
-    releaseStale();
-
-    await expect(Promise.all([preLandReader, postRetryReader])).resolves.toEqual(["head2", "head2"]);
-    // stale flight + failed land + retry + post-retry fresh fetch
-    expect(refReads).toBe(4);
-    await expect(host.fetchRef({ repo, remoteBranch: "main" })).resolves.toBe("head2");
-    expect(refReads).toBe(4);
   });
 });

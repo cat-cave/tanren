@@ -25,9 +25,9 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-interface CacheFlight {
-  generation: number;
-  promise: Promise<string | undefined>;
+interface InflightEntry {
+  readonly generation: number;
+  readonly promise: Promise<string | undefined>;
 }
 
 /**
@@ -39,7 +39,12 @@ interface CacheFlight {
  */
 export class MainHeadCache {
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly inflight = new Map<string, CacheFlight>();
+  private readonly inflight = new Map<string, InflightEntry>();
+  // Keep the generation fence alive while superseded flights are still settling.
+  // The current-flight map intentionally points only at the newest generation,
+  // so it cannot by itself tell us that an older promise is still capable of
+  // publishing a result.
+  private readonly flightCounts = new Map<string, number>();
   private readonly generations = new Map<string, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
@@ -55,31 +60,45 @@ export class MainHeadCache {
    * cached and propagates (a 403/transient must not be memoized).
    */
   async read(key: string, read: () => Promise<string | undefined>): Promise<string | undefined> {
-    const generation = this.generationOf(key);
     const cached = this.entries.get(key);
     if (cached !== undefined && cached.expiresAt > this.now()) {
       return cached.sha;
     }
+    const generation = this.generations.get(key) ?? 0;
+    this.generations.set(key, generation);
     const existing = this.inflight.get(key);
     if (existing !== undefined && existing.generation === generation) {
       return existing.promise;
     }
-    const promise = read()
+    // Register the flight before invoking the reader. Besides making the
+    // single-flight boundary explicit, this covers a reentrant invalidation
+    // triggered synchronously by a reader: invalidate() must see and fence it.
+    const promise = Promise.resolve()
+      .then(read)
       .then((sha) => {
-        // A land invalidated this key while this request was in flight. Discard its
-        // result entirely and join (or start) the current generation instead.
-        if (this.generationOf(key) !== generation) {
-          return this.read(key, read);
+        // An invalidation that happened while the read was in flight starts a
+        // newer generation; the stale result must never repopulate its cache.
+        if (this.generations.get(key) === generation) {
+          this.entries.set(key, { sha, expiresAt: this.now() + this.ttlMs });
         }
-        this.entries.set(key, { sha, expiresAt: this.now() + this.ttlMs });
         return sha;
       })
       .finally(() => {
-        // Do not delete a newer generation's flight when this stale one settles.
-        if (this.inflight.get(key)?.generation === generation) {
+        // An older flight may settle after a newer generation has started;
+        // never let its finalizer delete the newer flight's record.
+        if (this.inflight.get(key)?.promise === promise) {
           this.inflight.delete(key);
         }
+        const remainingFlights = (this.flightCounts.get(key) ?? 1) - 1;
+        if (remainingFlights > 0) this.flightCounts.set(key, remainingFlights);
+        else this.flightCounts.delete(key);
+        // Once the flight settles, a generation with no entry or flight has
+        // no stale observer left that could reuse it, so reclaim its metadata.
+        if (!this.entries.has(key) && !this.inflight.has(key) && !this.flightCounts.has(key)) {
+          this.generations.delete(key);
+        }
       });
+    this.flightCounts.set(key, (this.flightCounts.get(key) ?? 0) + 1);
     this.inflight.set(key, { generation, promise });
     return promise;
   }
@@ -87,7 +106,11 @@ export class MainHeadCache {
   /** Bust the cached head for `key` (call when a merge to that branch completes). */
   invalidate(key: string): void {
     this.entries.delete(key);
-    this.generations.set(key, this.generationOf(key) + 1);
+    if (this.inflight.has(key) || (this.flightCounts.get(key) ?? 0) > 0) {
+      this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    } else {
+      this.generations.delete(key);
+    }
   }
 
   /** Bust every cached head (a coarse reset; used by tests). */
@@ -95,11 +118,6 @@ export class MainHeadCache {
     for (const key of new Set([...this.entries.keys(), ...this.inflight.keys(), ...this.generations.keys()])) {
       this.invalidate(key);
     }
-    this.entries.clear();
-  }
-
-  private generationOf(key: string): number {
-    return this.generations.get(key) ?? 0;
   }
 }
 
