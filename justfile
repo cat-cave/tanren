@@ -36,6 +36,12 @@ lint:
 types-lint:
   corepack pnpm run check:types-lint
 
+# Typecheck the TEST trees, which every package `tsconfig.json` excludes (`src/**` only).
+# A ratchet, not a clean gate: existing debt is recorded per file in
+# `scripts/test-types-baseline.json` and may only ever shrink. See the script header.
+test-types:
+  corepack pnpm run check:test-types
+
 architecture:
   corepack pnpm run check:architecture
 
@@ -125,7 +131,7 @@ spelling:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test compose-config
+fast-check: format-check lint types-lint test-types architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -174,7 +180,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
+ci: format-check lint types-lint test-types architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner

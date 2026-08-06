@@ -1,0 +1,7 @@
+{
+  // Typecheck the package's TEST tree. `tsconfig.json` scopes to `src/**`, so until this
+  // existed a test file could not fail to compile — see `scripts/check-test-types.mjs`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
+}
