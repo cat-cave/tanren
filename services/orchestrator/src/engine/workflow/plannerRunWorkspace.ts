@@ -13,6 +13,7 @@ import type { ActorIdentity } from "../contracts/codeHostTypes.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { MISE_CONFIG_REL_PATH } from "../ssh/miseActivate.js";
 import {
   bootstrapWorkspace,
   commitBootstrapState,
@@ -194,7 +195,7 @@ export async function prepareRunWorkspace(
   // derive's `materializeTemplate` step) ALREADY landed these files on the repo's
   // default branch as part of the project's initial content, so this materialization
   // is a no-op and NO commit is made (sha "").
-  const contractSha = await materializeContractFilesCommit(input, target, workspacePath);
+  const contractSha = await materializeContractFilesCommit(input, target, workspacePath, provisionMise);
 
   // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the Tanren-owned
   // commits — the contract-files commit when one was made (apex v28 fix), ELSE the
@@ -238,6 +239,7 @@ async function materializeContractFilesCommit(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
+  provisionMise: (stepInput: ProvisionMiseToolchainInput) => Promise<unknown>,
 ): Promise<string> {
   const files = input.context.contractFiles;
   if (files === undefined || files.length === 0) return "";
@@ -249,6 +251,17 @@ async function materializeContractFilesCommit(
   });
   // Nothing newly written (every file already present) ⇒ no commit, no base shift.
   if (result.written.length === 0) return "";
+  // A CONTRACT FILE CAN BE THE `mise.toml` ITSELF (forge/scaffold/contractFiles.ts writes
+  // one whenever the project's lifecycle declares a toolchain). The provision above ran
+  // BEFORE this materialization, so on a brownfield repo that shipped no mise.toml it saw
+  // nothing to install and skipped — and the commit below keeps the repo's hooks LIVE, so
+  // a pre-commit hook that needs the newly declared toolchain fails during workspace prep,
+  // which is exactly the failure the hook-toolchain activation exists to prevent. The
+  // activation is not enough on its own: it puts a toolchain on PATH, it does not INSTALL
+  // one. Re-provision when the toolchain declaration is something we just wrote.
+  if (result.written.includes(MISE_CONFIG_REL_PATH)) {
+    await provisionMise({ ssh: input.ssh, target, workspacePath });
+  }
   const committed = await runWorkspaceSshCommand(input.ssh, target, {
     label: "commit deterministic contract files",
     cwd: workspacePath,
@@ -258,7 +271,15 @@ async function materializeContractFilesCommit(
     // bootstrap commit — keeps the repo's hooks LIVE and ships its content in the PR.
     command: buildContractFilesCommitCommand(result.written),
   });
-  return committed.stdout.trim();
+  // VALIDATED, like every other sha-returning workspace step (`commitBootstrapState`,
+  // `resolveWorkspaceHeadSha`, the writer/codex commit captures). This value becomes the
+  // answerer's review base; a stray line on stdout must be a LOUD failure here, not a
+  // malformed revision three steps downstream. "" only on a fake SSH that yields no output.
+  const contractSha = committed.stdout.trim();
+  if (contractSha !== "" && !/^[0-9a-f]{40}$/u.test(contractSha)) {
+    throw new Error(`contract-files commit returned invalid sha: ${contractSha}`);
+  }
+  return contractSha;
 }
 
 // Clones the target branch and returns the clone HEAD. `git rev-parse HEAD` runs
