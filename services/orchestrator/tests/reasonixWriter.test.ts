@@ -156,7 +156,7 @@ describe("reasonix writer adapter", () => {
       exitCode: 0,
       stdout:
         '{"usage":{"prompt_tokens":2,"completion_tokens":1}}\n' +
-        " \t \n" +
+        "not-json\n" +
         '{"usage":{"prompt_tokens":7,"completion_tokens":4}}\n',
       stderr: "",
     });

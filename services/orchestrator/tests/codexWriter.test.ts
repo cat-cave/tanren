@@ -276,7 +276,7 @@ describe("Codex writer adapter", () => {
 
   it("fails the writer typed with exact final usage across malformed events", async () => {
     const stdout =
-      '{"usage":{"promptTokens":2,"completionTokens":1}}\n \t \n' +
+      '{"usage":{"promptTokens":2,"completionTokens":1}}\nnot-json\n' +
       '{"usage":{"promptTokens":7,"completionTokens":4}}\n';
     const telemetry = parseCodexJsonlTelemetry(stdout);
     expect(telemetry).toEqual({

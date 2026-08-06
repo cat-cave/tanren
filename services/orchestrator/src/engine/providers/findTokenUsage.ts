@@ -52,28 +52,33 @@ export function decodeJsonlObjectEvents(stdout: string): JsonlObjectEvents {
   const events: Record<string, unknown>[] = [];
   const failures: JsonlObjectParseFailure[] = [];
   let rawEventCount = 0;
-  const rawLines = stdout.split(/\n/u);
-  for (const [index, rawLine] of rawLines.entries()) {
+  let lineNumber = 1;
+  let lineStart = 0;
+  while (lineStart < stdout.length) {
+    const newlineIndex = stdout.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex === -1 ? stdout.length : newlineIndex;
+    const rawLine = stdout.slice(lineStart, lineEnd);
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    const isEmptyStream = stdout === "";
-    const isTrailingLineTerminator = index === rawLines.length - 1 && rawLine === "" && stdout.endsWith("\n");
-    if (isEmptyStream || isTrailingLineTerminator) continue;
+    const currentLineNumber = lineNumber;
+    lineNumber += 1;
+    lineStart = newlineIndex === -1 ? stdout.length : newlineIndex + 1;
+    if (line.trim() === "") continue;
     rawEventCount += 1;
     if (rawEventCount > MAX_JSONL_OBJECT_EVENTS) {
       // Stop at the FIRST overflow: record the single `event_limit_exceeded`
       // marker and break, so a hostile/huge stream cannot drive unbounded
       // per-line JSON.parse/byte-length work past the event cap. `rawEventCount`
       // stays at the cap + 1 (the marker line).
-      failures.push({ lineNumber: index + 1, reason: "event_limit_exceeded" });
+      failures.push({ lineNumber: currentLineNumber, reason: "event_limit_exceeded" });
       break;
     }
     if (Buffer.byteLength(line, "utf8") > MAX_JSONL_OBJECT_LINE_BYTES) {
-      failures.push({ lineNumber: index + 1, reason: "line_too_large" });
+      failures.push({ lineNumber: currentLineNumber, reason: "line_too_large" });
       continue;
     }
     const decoded = decodeJsonObject(line);
     if (decoded.event === undefined) {
-      failures.push({ lineNumber: index + 1, reason: decoded.reason });
+      failures.push({ lineNumber: currentLineNumber, reason: decoded.reason });
     } else {
       events.push(decoded.event);
     }

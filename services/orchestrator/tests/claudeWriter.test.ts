@@ -233,7 +233,7 @@ describe("Claude writer adapter", () => {
 
   it("fails the writer typed with exact final usage across a malformed line", async () => {
     const stdout =
-      '{"usage":{"input_tokens":2,"output_tokens":1}}\n \t \n{"usage":{"input_tokens":7,"output_tokens":4}}\n';
+      '{"usage":{"input_tokens":2,"output_tokens":1}}\nnot-json\n{"usage":{"input_tokens":7,"output_tokens":4}}\n';
     const malformed = parseClaudeStreamTelemetry(stdout);
     expect(malformed.jsonlDecodeFailure).toEqual({
       kind: "jsonl_object_decode_failed",

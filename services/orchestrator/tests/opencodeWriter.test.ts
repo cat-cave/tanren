@@ -223,7 +223,7 @@ describe("opencode writer adapter", () => {
       exitCode: 0,
       stdout:
         '{"usage":{"input_tokens":2,"output_tokens":1}}\n' +
-        " \t \n" +
+        "not-json\n" +
         '{"usage":{"input_tokens":7,"output_tokens":4}}\n',
       stderr: "",
     });
