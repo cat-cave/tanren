@@ -193,16 +193,18 @@ class RecordingHttp implements GitHubHttpClient {
   }
 }
 
-function refResponse(sha: string): GitHubHttpResponse {
-  return { status: 200, body: { object: { sha } } };
+function refResponse(sha: string, branch = "main"): GitHubHttpResponse {
+  return { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
 }
 
-describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
+describe("GitHubCodeHost fetchRef caching behavior", () => {
   const repo = { owner: "o", name: "r" };
 
   it("collapses repeated default-branch reads, then busts on a land", async () => {
     const http = new RecordingHttp((path) =>
-      path.includes("/git/refs/heads/") ? { status: 200, body: { object: { sha: "new" } } } : refResponse("head1"),
+      path.includes("/git/refs/heads/")
+        ? { status: 200, body: { ref: "refs/heads/main", object: { sha: "new" } } }
+        : refResponse("head1"),
     );
     const cache = new MainHeadCache();
     const host = new GitHubCodeHost(http, async () => ({ token: "t" }), cache);
@@ -231,7 +233,9 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
     // see `head2` (fresh) and reject the land against the stale expected `head1` — proving
     // the cache never feeds the merge decision a stale base.
     const http = new RecordingHttp((path) =>
-      path.includes("/git/refs/heads/") ? { status: 200, body: { object: { sha: "x" } } } : refResponse("head2"),
+      path.includes("/git/refs/heads/")
+        ? { status: 200, body: { ref: "refs/heads/main", object: { sha: "x" } } }
+        : refResponse("head2"),
     );
     const cache = new MainHeadCache();
     // Seed a STALE cached head.

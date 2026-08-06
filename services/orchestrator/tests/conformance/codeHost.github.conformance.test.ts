@@ -162,7 +162,7 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       if (sha === undefined) {
         return { status: 404, body: { message: "no such ref" } };
       }
-      return { status: 200, body: { object: { sha } } };
+      return { status: 200, body: { ref: `refs/heads/${branch}`, object: { sha } } };
     }
 
     // pushRef create: POST /git/refs  { ref: "refs/heads/:b", sha }
@@ -243,7 +243,11 @@ function reachesIn(repo: RepoState, fromSha: string, targetSha: string): boolean
 }
 
 /** Build a GitHub-shaped `/compare` body (the `status` + base-exclusive `commits`). */
-function compareBody(repo: RepoState, baseSha: string, headSha: string): { status: string; commits: unknown[] } {
+function compareBody(
+  repo: RepoState,
+  baseSha: string,
+  headSha: string,
+): { status: string; total_commits: number; commits: unknown[] } {
   const status =
     baseSha === headSha
       ? "identical"
@@ -264,7 +268,7 @@ function compareBody(repo: RepoState, baseSha: string, headSha: string): { statu
     if (author !== undefined) commits.push({ sha, author: { login: author }, committer: { login: author } });
     stack.push(...(repo.parents.get(sha) ?? []));
   }
-  return { status, commits };
+  return { status, total_commits: commits.length, commits };
 }
 
 const REPO = { owner: "owner", name: "repo" } as const;
