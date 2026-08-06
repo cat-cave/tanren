@@ -20,7 +20,9 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { BOOTSTRAP_GATE_TIER, type GateOutcome } from "../src/engine/workflow/gate/index.js";
 import {
+  commitBootstrapState,
   provisionMiseToolchain,
+  runWorkspaceSshCommand,
   WorkspaceBootstrapError,
   WorkspaceMiseProvisionError,
 } from "../src/engine/workspace/index.js";
@@ -273,6 +275,111 @@ describe("the workspace-PREP `just bootstrap` deps-install self-heals via the ga
     } as unknown as RunPlannerLoopInput;
 
     await expect(prepareRunWorkspace(input, target, workspacePath)).rejects.toBeInstanceOf(WorkspaceMiseProvisionError);
+  });
+});
+
+// The target repo's commit hooks, simulated. A repo whose hook shells out to its package
+// manager (the near-universal husky/lefthook shape) FAILS every `git commit` while the
+// toolchain is absent — and the runner ships no project toolchain by design. The substrate
+// refuses any `git commit` that does not disable the repo's hook path, standing in for
+// ANY hook class (pre-commit, commit-msg, prepare-commit-msg), and mirrors `set -eu`
+// aborting the commit chain.
+const HUSKY_TOOLCHAIN_FAILURE =
+  ".husky/pre-commit: line 3: pnpm: command not found\nhusky - pre-commit script failed (code 127)";
+class PreCommitHookNeedsToolchainSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    this.commands.push(command);
+    const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    if (command.command.includes(".tanren/ci.yml")) return ok;
+    if (command.command.includes("commit -q --allow-empty")) {
+      if (!command.command.includes("core.hooksPath=/dev/null")) {
+        // The hook ran and died on the missing toolchain; `set -eu &&` aborts the chain
+        // before `git rev-parse HEAD`, so the whole command exits nonzero with no sha.
+        return { exitCode: 127, stdout: "", stderr: HUSKY_TOOLCHAIN_FAILURE, timedOut: false };
+      }
+      return { ...ok, stdout: `${"c".repeat(40)}\n` };
+    }
+    if (command.command.includes("git rev-parse HEAD")) return { ...ok, stdout: `${"a".repeat(40)}\n` };
+    return ok;
+  }
+}
+
+// REGRESSION — the deferred-bootstrap self-heal must be REACHABLE on a repo whose
+// pre-commit hook needs the toolchain.
+//
+// The self-heal test above proves prep DEFERS a failed deps install, but it stubs the
+// `commitBootstrap` seam — so the REAL `commitBootstrapState`, the step that actually
+// runs the repo's hook, never executes on the deferred path. In production it does: prep
+// catches the deps-install failure to defer it, then unconditionally commits the
+// bootstrap tree. With the repo hook path live, the hook demands the package manager the deferred
+// bootstrap did not install, `git commit` exits nonzero, `runWorkspaceSshCommand` throws
+// `WorkspaceCommandError`, and NOTHING catches it — the run dies in prep and the deliberate
+// self-heal is dead code on every such repo.
+describe("the deferred-bootstrap self-heal survives a target repo whose pre-commit hook needs the toolchain", () => {
+  it("commitBootstrapState runs NONE of the target repo's commit hooks", async () => {
+    const ssh = new PreCommitHookNeedsToolchainSsh();
+
+    const sha = await commitBootstrapState({ ssh, target, workspacePath });
+
+    expect(sha).toBe("c".repeat(40));
+    const commit = ssh.commands.find((c) => c.command.includes("commit -q --allow-empty"));
+    // The whole hook path is disabled for this one invocation, not just the two hooks
+    // `--no-verify` covers: a toolchain-dependent `prepare-commit-msg` would still fire
+    // under `--no-verify` and kill prep exactly the same way.
+    expect(commit?.command).toContain("-c core.hooksPath=/dev/null");
+    expect(commit?.command).not.toContain("--no-verify");
+  });
+
+  it("prepareRunWorkspace completes the DEFERRED path through the REAL bootstrap commit (no stubbed seam)", async () => {
+    const ssh = new PreCommitHookNeedsToolchainSsh();
+    const input = {
+      ssh,
+      context: context(),
+      timeoutMs: 100,
+      githubToken: "ghs_test",
+      provisionMise: async () => {},
+      // The prep deps install fails — the deferred self-heal path. The workspace now has
+      // NO package manager, so the repo's pre-commit hook cannot run.
+      runBootstrap: async () => {
+        throw prepBootstrapError();
+      },
+      // NOTE: no `commitBootstrap` seam — the real commit path runs.
+    } as unknown as RunPlannerLoopInput;
+
+    const prepared = await prepareRunWorkspace(input, target, workspacePath);
+
+    // The defer survived to the writer loop instead of being killed in prep...
+    expect(prepared.prepBootstrapDeferred?.exitCode).toBe(1);
+    expect(prepared.prepBootstrapDeferred?.outputTail).toContain("ERR_PNPM_IGNORED_BUILDS");
+    // ...and the run still has a concrete diff base.
+    expect(prepared.baseSha).toBe("c".repeat(40));
+  });
+
+  it("NEGATIVE CONTROL: the same prep DIES when the bootstrap commit runs the repo's hooks", async () => {
+    // Drive the identical scenario through a commit seam that reproduces the pre-fix
+    // behaviour (a hook-verified commit). The failure must still be LOUD — this fix
+    // removes the hook from the bootstrap commit, it does NOT make prep swallow a failed
+    // commit. Any other commit failure still kills the run, as it should.
+    const ssh = new PreCommitHookNeedsToolchainSsh();
+    const input = {
+      ssh,
+      context: context(),
+      timeoutMs: 100,
+      githubToken: "ghs_test",
+      provisionMise: async () => {},
+      runBootstrap: async () => {
+        throw prepBootstrapError();
+      },
+      commitBootstrap: async (stepInput: { ssh: CommandSubstrate; target: RunnerHandle; workspacePath: string }) =>
+        runWorkspaceSshCommand(stepInput.ssh, stepInput.target, {
+          label: "commit bootstrap state",
+          cwd: stepInput.workspacePath,
+          command: "set -eu && git add -A && git commit -q --allow-empty -m 'tanren: bootstrap'",
+        }).then((r) => r.stdout.trim()),
+    } as unknown as RunPlannerLoopInput;
+
+    await expect(prepareRunWorkspace(input, target, workspacePath)).rejects.toThrow("commit bootstrap state failed");
   });
 });
 

@@ -305,7 +305,7 @@ describe("prepareRunWorkspace clone authentication", () => {
       ssh.commands.findIndex((entry) => predicate(entry.command.command));
     const cloneIdx = idx((c) => c.includes("git clone"));
     const identityIdx = idx((c) => c.includes("git config user.name"));
-    const commitIdx = idx((c) => c.includes("git commit"));
+    const commitIdx = idx((c) => c.includes("commit -q --allow-empty"));
     // The dedicated identity step exists, runs AFTER the clone, and BEFORE the
     // bootstrap commit — so the commit has a configured author (never the
     // auto-detected `<unix-user>@<host>.(none)` that GitHub maps to `<unknown>`).

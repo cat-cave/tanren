@@ -410,6 +410,11 @@ export interface CommitBootstrapStateInput {
 // `--allow-empty` so the no-manifest / artifact-free case still yields a real
 // commit, keeping the run base a concrete sha and the later PR-branch cleanup
 // (drop-the-bootstrap-commit rebase) symmetric in every case.
+//
+// `-c core.hooksPath=/dev/null` ONLY here — the project's hooks get no vote on Tanren's
+// bookkeeping commit: it is `git add -A` install artifacts, DROPPED before the push, and the
+// runner ships NO project toolchain, so a hook needing one throws UNCAUGHT and kills prep.
+// Not `--no-verify` — that leaves `prepare-commit-msg` live. PR-bound commits are unchanged.
 export async function commitBootstrapState(input: CommitBootstrapStateInput): Promise<string> {
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "commit bootstrap state",
@@ -426,7 +431,7 @@ export async function commitBootstrapState(input: CommitBootstrapStateInput): Pr
       // -q so the commit summary stays off stdout; git rev-parse is then the
       // only stdout-producing step and its output is the bootstrap commit sha.
       "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
-        `git commit -q --allow-empty -m ${quoteSshShellArg(BOOTSTRAP_COMMIT_MESSAGE)}`,
+        `git -c core.hooksPath=/dev/null commit -q --allow-empty -m ${quoteSshShellArg(BOOTSTRAP_COMMIT_MESSAGE)}`,
       "git rev-parse HEAD",
     ].join(" && "),
   });
