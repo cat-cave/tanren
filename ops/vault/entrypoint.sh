@@ -48,9 +48,25 @@ log "starting server with file storage at $DATA_DIR (persistent across restarts)
 vault server -config="$CONFIG_FILE" &
 server_pid=$!
 
-# Forward termination so the file backend is not torn mid-write — a risk that only
-# exists now that there IS durable state.
-trap 'kill -TERM "$server_pid" 2>/dev/null || true' TERM INT
+# Forward termination and then WAIT — a risk that only exists now that there IS
+# durable state, and forwarding alone does not cover it.
+#
+# Under `set -e` the bare forward was worse than nothing. A trapped signal
+# interrupts the final `wait`, which returns 143, and `set -e` exits the script on
+# it — so PID 1 was gone while Vault was still flushing its file backend, and Docker
+# then killed the container out from under the write. The whole point of this file
+# is that the store survives; tearing it mid-write is the one way to lose it that
+# `server -dev` could not.
+#
+# The handler ignores REPEATED signals (an impatient `docker compose stop` sends
+# more) so the drain cannot itself be interrupted, and the wait below re-waits until
+# the server has actually reaped.
+shutdown() {
+  trap "" TERM INT
+  log "termination requested - waiting for Vault to flush its file storage"
+  kill -TERM "$server_pid" 2>/dev/null || true
+}
+trap shutdown TERM INT
 
 # `vault status` exits 0 unsealed, 2 sealed, other while the listener is coming up.
 attempt=0
@@ -128,4 +144,19 @@ fi
 unset VAULT_TOKEN
 log "ready - storage is persistent, credentials survive a container restart"
 
-wait "$server_pid"
+# `wait` returns >128 when a trapped signal interrupted it rather than when the child
+# actually exited, and the child may still be draining. Keep waiting until it is
+# really gone, then exit with ITS status so a crash is still reported as a crash.
+rc=0
+while :; do
+  # Reset per attempt: `|| rc=$?` only assigns on failure, so a successful re-wait
+  # after an interrupted one would otherwise leave the stale 143 as our exit status.
+  rc=0
+  wait "$server_pid" || rc=$?
+  if [ "$rc" -gt 128 ] && kill -0 "$server_pid" 2>/dev/null; then
+    continue
+  fi
+  break
+done
+log "vault exited with status $rc"
+exit "$rc"

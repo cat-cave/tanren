@@ -465,11 +465,16 @@ down-dev:
 # down." If only stopped containers remain (rare; usually the prior `down` already
 # cleaned them), the next `up-dev` will recreate over them.
 stack-reset:
-  if [ -n "$(docker compose -f compose.dev.yml ps -q 2>/dev/null)" ]; then \
-    docker compose -f compose.dev.yml down -v --remove-orphans; \
-  else \
-    echo "stack-reset: no containers for this compose project — nothing to remove."; \
-  fi
+  # UNCONDITIONAL. This used to probe `ps -q` first and skip the teardown when it
+  # came back empty — but `ps -q` lists RUNNING containers only, so a stack that had
+  # merely been stopped (`docker compose stop`, a daemon reboot) took the
+  # "nothing to remove" branch and `down -v` never ran. `docker compose down`
+  # WITHOUT `-v` leaves no containers at all and would skip it too. Either way the
+  # named volumes survived a reset that documents itself as destroying them — which
+  # matters now that `vaultdata` is one of them. `down -v` is idempotent and a no-op
+  # on a project that does not exist, so the probe bought nothing and cost the
+  # invariant.
+  docker compose -f compose.dev.yml down -v --remove-orphans
 
 # Hosting/boot seeder for PLATFORM-scoped secret-store refs (deploy-layer config,
 # NOT a tenant/userland credential route). Seeds the managed-LLM router key at

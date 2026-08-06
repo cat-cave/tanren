@@ -38,7 +38,18 @@ services:
     ports:
       # Host port is remappable (default 18200) via TANREN_VAULT_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 8200.
-      - "${TANREN_VAULT_HOST_PORT:-18200}:8200"
+      #
+      # LOOPBACK BY DEFAULT, unlike every other service here, and deliberately so.
+      # Vault listens on 0.0.0.0 inside the container behind a FIXED, published root
+      # token (`dev-root-token`) — which was survivable while `server -dev` kept
+      # everything in memory and threw it away on restart. It is not survivable now:
+      # this change is precisely what makes the GitHub App key, the LLM router key,
+      # the proof-signing key and every per-org BYOK credential PERSIST, so a
+      # 0.0.0.0 publish hands all of them to anything that can reach the host.
+      # Containers are unaffected (they use `vault:8200` on the compose network) and
+      # the host-side seeder already targets 127.0.0.1. An operator who genuinely
+      # runs the dev stack on a remote box can widen it explicitly.
+      - "${TANREN_VAULT_BIND_ADDR:-127.0.0.1}:${TANREN_VAULT_HOST_PORT:-18200}:8200"
     volumes:
       - vaultdata:/vault/file
     healthcheck:
