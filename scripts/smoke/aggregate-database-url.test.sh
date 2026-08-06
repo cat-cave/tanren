@@ -9,6 +9,9 @@ test "$actual" = "postgres://tanren:tanren@localhost:7397/tanren"
 actual="$(TANREN_PORT_OFFSET=08 TANREN_POSTGRES_HOST_PORT= DATABASE_URL= "$script")"
 test "$actual" = "postgres://tanren:tanren@localhost:5440/tanren"
 
+actual="$(TANREN_PORT_OFFSET=08 TANREN_POSTGRES_HOST_PORT= DATABASE_URL= "$script" --normalized-offset)"
+test "$actual" = "8"
+
 actual="$(TANREN_PORT_OFFSET=100 TANREN_POSTGRES_HOST_PORT=00009 DATABASE_URL= "$script")"
 test "$actual" = "postgres://tanren:tanren@localhost:9/tanren"
 
@@ -26,7 +29,7 @@ if TANREN_PORT_OFFSET=18446744073709551615 DATABASE_URL= "$script" >/dev/null 2>
   exit 1
 fi
 
-if TANREN_POSTGRES_HOST_PORT=70000 DATABASE_URL= "$script" >/dev/null 2>&1; then
+if TANREN_PORT_OFFSET=0 TANREN_POSTGRES_HOST_PORT=70000 DATABASE_URL= "$script" >/dev/null 2>&1; then
   echo "negative control failed: out-of-range port was accepted" >&2
   exit 1
 fi

@@ -1265,9 +1265,9 @@ smoke-aggregate: \
   smoke-rls-proof-dashboard
 
 smoke: smoke-aggregate-config-test
-  # Validate once and export through the nested just invocation so all leaves
-  # inherit the same mapped owner URL.
-  DATABASE_URL="$(scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL; exec just smoke-aggregate
+  # Resolve the owner URL and normalize/export the offset before the nested
+  # invocation so every leaf inherits the same URL and decimal arithmetic value.
+  normalized_offset="$(scripts/smoke/aggregate-database-url.sh --normalized-offset)"; DATABASE_URL="$(scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL TANREN_PORT_OFFSET="$normalized_offset"; exec just smoke-aggregate
 
 smoke-aggregate-config-test:
   scripts/smoke/aggregate-database-url.test.sh

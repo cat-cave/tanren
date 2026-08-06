@@ -30,48 +30,67 @@ function files(text: string) {
 
 // Everything below is DERIVED from the justfile, never restated. A spec that
 // carries its own copy of the recipe list drifts away from the file it guards —
-// which is precisely how the defect survived. Nothing here names a smoke recipe.
-const smokeLeaves: string[] = parseJustfileRecipes(realJustfile)
-  .get("smoke")
-  .dependencies.filter((name: string) => name.startsWith("smoke-"));
+// which is precisely how the defect survived. `smoke` is a wrapper now; its
+// body invokes the real dependency list in `smoke-aggregate`.
+const smokeRoot = "smoke";
+const smokeAggregate = "smoke-aggregate";
+const realRecipes = parseJustfileRecipes(realJustfile);
+const smokeLeaves: string[] =
+  realRecipes.get(smokeAggregate)?.dependencies.filter((name: string) => name.startsWith("smoke-")) ?? [];
 
 // Leaves the justfile ALSO invokes from another recipe's body (`just <recipe>`).
 // Dropping their dependency edge does NOT make them unreachable, because they
 // still run — so a non-detection is correct for exactly these, and only these.
 // Derived from the file too, so the carve-out cannot quietly grow.
 const bodyInvoked = new Set(
-  [...realJustfile.matchAll(/^\s+.*\bjust\s+([A-Za-z0-9_][A-Za-z0-9_-]*)/gmu)].map((match) => match[1]),
+  [...realRecipes.values()].flatMap((recipe) =>
+    [...recipe.body.matchAll(/\bjust\s+(?:-{1,2}[^\s]+\s+)*([A-Za-z0-9_][A-Za-z0-9_-]*)/gu)].map((match) => match[1]),
+  ),
 );
 const dropDetectable = smokeLeaves.filter((leaf) => !bodyInvoked.has(leaf));
 
-// Drop one leaf from the real one-per-line `smoke:` list, the way a bad rebase would.
+// Drop one leaf from the real one-per-line `smoke-aggregate:` list, the way a bad rebase would.
 function withoutSmokeLeaf(text: string, leaf: string): string {
   const lines = text.split("\n");
-  const index = lines.findIndex((line) => line.trim() === `${leaf} \\` || line.trim() === leaf);
+  const start = lines.findIndex((line) => line.startsWith(`${smokeAggregate}:`));
+  if (start === -1) {
+    throw new Error(`missing ${smokeAggregate} recipe`);
+  }
+  let end = start;
+  while (lines[end]?.trimEnd().endsWith("\\")) {
+    end += 1;
+  }
+  const index = lines.findIndex(
+    (line, lineIndex) =>
+      lineIndex > start && lineIndex <= end && (line.trim() === `${leaf} \\` || line.trim() === leaf),
+  );
   expect([leaf, index > -1]).toEqual([leaf, true]);
   lines.splice(index, 1);
   return lines.join("\n");
 }
 
-// Re-collapse the real `smoke:` list onto ONE line with a comment pasted mid-list —
+// Re-collapse the real `smoke-aggregate:` list onto ONE line with a comment pasted mid-list —
 // the exact shape of the historical defect, rebuilt from today's content.
 function collapsedWithInlineComment(text: string): { mutated: string; head: string[]; tail: string[] } {
   const lines = text.split("\n");
-  const start = lines.findIndex((line) => line.startsWith("smoke:"));
+  const start = lines.findIndex((line) => line.startsWith(`${smokeAggregate}:`));
+  if (start === -1) {
+    throw new Error(`missing ${smokeAggregate} recipe`);
+  }
   let end = start;
-  while (lines[end].trimEnd().endsWith("\\")) {
+  while (lines[end]?.trimEnd().endsWith("\\")) {
     end += 1;
   }
   const tokens = lines
     .slice(start, end + 1)
     .map((line) => line.trim().replace(/\\$/u, "").trim())
     .join(" ")
-    .replace(/^smoke:\s*/u, "")
+    .replace(new RegExp(`^${smokeAggregate}:\\s*`, "u"), "")
     .split(/\s+/u);
   const split = Math.floor(tokens.length / 2);
   const head = tokens.slice(0, split);
   const tail = tokens.slice(split);
-  const collapsed = `smoke: ${head.join(" ")} # rv-24: a doc comment pasted mid-list ${tail.join(" ")}`;
+  const collapsed = `${smokeAggregate}: ${head.join(" ")} # rv-24: a doc comment pasted mid-list ${tail.join(" ")}`;
   return { mutated: [...lines.slice(0, start), collapsed, ...lines.slice(end + 1)].join("\n"), head, tail };
 }
 
@@ -85,6 +104,7 @@ describe("smoke-recipes-reachable", () => {
 
   it("is GREEN on the real justfile — every smoke-* recipe runs when `just smoke` runs", () => {
     expect(checkSmokeRecipesReachable(files(realJustfile))).toEqual([]);
+    expect(realRecipes.get(smokeRoot)?.body).toContain(`just ${smokeAggregate}`);
   });
 
   it("goes RED when ANY single leaf is dropped from the real smoke dependency list", () => {

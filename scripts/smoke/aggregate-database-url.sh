@@ -4,7 +4,12 @@ set -euo pipefail
 # Resolve the owner connection used by the aggregate smoke wrapper. Keep this
 # in one executable seam so every dependent recipe inherits the same mapped
 # port instead of independently falling back to localhost:5432.
-if [[ -n "${DATABASE_URL:-}" ]]; then
+if [[ "${1:-}" != "" && "${1:-}" != "--normalized-offset" ]] || [[ "$#" -gt 1 ]]; then
+  echo "aggregate smoke: unknown option" >&2
+  exit 2
+fi
+
+if [[ "${1:-}" != "--normalized-offset" && -n "${DATABASE_URL:-}" ]]; then
   printf '%s\n' "$DATABASE_URL"
   exit 0
 fi
@@ -30,6 +35,11 @@ fi
 if ! offset_value="$(normalize_bounded_uint "$offset" 60103)"; then
   echo "aggregate smoke: TANREN_PORT_OFFSET must be in 0..60103" >&2
   exit 2
+fi
+
+if [[ "${1:-}" == "--normalized-offset" ]]; then
+  printf '%s\n' "$offset_value"
+  exit 0
 fi
 
 if [[ -n "$port_override" ]]; then
