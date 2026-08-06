@@ -208,10 +208,14 @@ describe("provider adapter timing wrappers", () => {
       kind: "writer",
       cli: "codex",
       authRef: "credential/codex",
+      model: "openai/gpt-5.6-luna",
       runWriter: vi.fn<() => Promise<WriterResult>>(async () => writerResult),
     };
     const wrapped = timedWriterAdapter(inner, sink);
     expect(wrapped.cli).toBe("codex");
+    // The decorator MUST forward the wrapped adapter's real model id; the cost path
+    // reads it through this instance, so dropping it would record an empty model.
+    expect(wrapped.model).toBe("openai/gpt-5.6-luna");
     const out = await wrapped.runWriter({ prompt: "p", workspace: "/ws", timeoutMs: 1 });
     expect(out).toBe(writerResult);
     expect(records[0]).toMatchObject({
@@ -227,9 +231,13 @@ describe("provider adapter timing wrappers", () => {
       kind: "answerer",
       cli: "claude",
       authRef: "credential/claude",
+      model: "claude-opus-4-8",
       runAnswerer: async () => ({ ok: true }),
     };
-    const out = await timedAnswererAdapter(inner, "checker", sink).runAnswerer({
+    const wrapped = timedAnswererAdapter(inner, "checker", sink);
+    // The decorator MUST forward the wrapped adapter's real model id (see writer test).
+    expect(wrapped.model).toBe("claude-opus-4-8");
+    const out = await wrapped.runAnswerer({
       prompt: "p",
       timeoutMs: 1,
       outputSchema: { name: "x", jsonSchema: {}, parse: (v) => v as { ok: boolean } },
@@ -239,5 +247,25 @@ describe("provider adapter timing wrappers", () => {
       operation: "provider.answer",
       attributes: { cli: "claude", role: "checker" },
     });
+  });
+
+  it("omits model on both timing wrappers when the wrapped adapter declares none", () => {
+    const { sink } = captureSink();
+    const innerWriter: WriterAdapter = {
+      kind: "writer",
+      cli: "fake",
+      authRef: "credential/fake",
+      runWriter: async () => ({ diff: "", commits: [], exitReason: "completed", tokenUsage: emptyTokenUsage }),
+    };
+    const innerAnswerer: AnswererAdapter<{ ok: boolean }> = {
+      kind: "answerer",
+      cli: "fake",
+      authRef: "credential/fake",
+      runAnswerer: async () => ({ ok: true }),
+    };
+    // A model-less fixture stays model-less through the decorator — the recorder's
+    // honest notional-NULL path, never mistaken for a priced empty-string model.
+    expect("model" in timedWriterAdapter(innerWriter, sink)).toBe(false);
+    expect("model" in timedAnswererAdapter(innerAnswerer, "checker", sink)).toBe(false);
   });
 });
