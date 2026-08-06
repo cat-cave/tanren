@@ -231,6 +231,43 @@ describe("D3 — every null notional carries a reason, and the actionable ones a
       "model_not_listed",
     );
   });
+
+  it("A COLD OpenRouter leg is an OUTAGE, even though the LiteLLM leg is ready", () => {
+    // THE PRODUCTION SHAPE, and the one the test above cannot see. `costPriceSource`
+    // seeds the LiteLLM leg from the vendored 1.3 MB snapshot, so that leg is `ready`
+    // from the first millisecond of the process and can NEVER be `unavailable`. The
+    // outage case above passes only because it makes BOTH legs empty — a configuration
+    // production never has.
+    //
+    // Under the old union `health()`, therefore, an OpenRouter-route call made before
+    // the first `/api/v1/models` fetch landed — every call in a cold process, which
+    // `costPriceSource` deliberately does not wait for — was recorded as
+    // `model_not_listed`. An outage wearing a verdict's clothing, and not repriceable
+    // by intent. Health is now asked of the leg AUTHORITATIVE for the route.
+    const coldMarketplace = new CompositeModelPriceSource(new ModelPriceSource({}), LITELLM_WITHOUT_LUNA);
+    expect(coldMarketplace.health()).toBe("ready");
+    expect(computeNotionalUsd(OPENROUTER_SOURCE, REAL_CODEX_TURN, coldMarketplace).reason).toBe(
+      "price_source_unavailable",
+    );
+  });
+
+  it("but a DIRECT-VENDOR route with a cold marketplace is still a verdict, not an outage", () => {
+    // Precision guard, and the reason the fix is a route hint rather than "always ask
+    // the OpenRouter leg": a direct-vendor route is answerable by the LiteLLM leg
+    // alone, so a cold marketplace says nothing about it. Turning every unlisted
+    // direct-vendor model into `price_source_unavailable` would be the same collapse
+    // in the opposite direction.
+    const directVendor = resolveCostSource({
+      cli: "claude",
+      authRef: "credential/anthropic/acme/key",
+      model: "an-id-litellm-does-not-list",
+      realProviderCostUsd: null,
+      ccusageCostUsd: null,
+      rawUsage: {},
+    });
+    const coldMarketplace = new CompositeModelPriceSource(new ModelPriceSource({}), LITELLM_WITHOUT_LUNA);
+    expect(computeNotionalUsd(directVendor, REAL_CODEX_TURN, coldMarketplace).reason).toBe("model_not_listed");
+  });
 });
 
 // Narrow an optional recorded event / insert to a plain record, failing the test
@@ -319,5 +356,30 @@ describe("D1+D3 — the recorder records the reason and alarms on the gap", () =
     const { events } = await record("openai/gpt-5.6-luna", REAL_CODEX_TURN, dead);
     const unpriced = events.events.find((e) => e.eventType === "cost.notional_unpriced");
     expect(payloadOf(unpriced)["reasonCode"]).toBe("price_source_unavailable");
+  });
+
+  it("PERSISTS the unpriced reason on the committed ROW, not only on the event", async () => {
+    // `cost.notional_unpriced` and `cost.resolved` are both appended through
+    // `appendCostEventNonFatal` — deliberately best-effort, deliberately swallowed.
+    // If the reason lived only there, a dropped append would leave a NULL notional
+    // with nothing on the durable record to say why, and the run-end reprice — which
+    // selects rows by `cost_source_raw->>'notionalReason'`, not by reading the
+    // timeline — could never find the rows it exists to fix. `price_source_unavailable`
+    // is the reason code whose entire value is that the row STAYS REPRICEABLE, so it
+    // is the one that must never be event-only.
+    //
+    // Pinned for both unpriced reasons, and for the cold-marketplace shape that is
+    // what production actually produces.
+    const dead = new CompositeModelPriceSource(new ModelPriceSource({}), new ModelPriceSource({}));
+    const coldMarketplace = new CompositeModelPriceSource(new ModelPriceSource({}), LITELLM_WITHOUT_LUNA);
+    for (const [source, expected] of [
+      [dead, "price_source_unavailable"],
+      [coldMarketplace, "price_source_unavailable"],
+      [LITELLM_WITHOUT_LUNA, "model_not_listed"],
+    ] as const) {
+      const { pool } = await record("openai/gpt-5.6-luna", REAL_CODEX_TURN, source);
+      expect(pool.inserts.at(0)?.[NOTIONAL]).toBeNull();
+      expect(rawCostSource(pool.inserts.at(0))["notionalReason"]).toBe(expected);
+    }
   });
 });

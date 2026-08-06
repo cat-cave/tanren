@@ -157,6 +157,96 @@ describe("LiveModelPriceSource — live fetch + TTL cache with vendored-seed fal
     expect(source.lookup("gpt-5.6-luna")).toBeNull();
   });
 
+  it("a HUNG fetch does not latch out every later refresh for the process lifetime", async () => {
+    // The single-flight latch is correct for a fetch that FINISHES. For one that
+    // never settles it was a permanent kill: `#inFlight` stayed non-null, every
+    // later stale read returned early, and the table froze for the rest of the
+    // process. On the OpenRouter leg — which ships no seed by design — that means
+    // every OpenRouter model records `price_source_unavailable` forever, and the
+    // run-end reprice cannot recover it either. Silent, permanent, and invisible
+    // because it never fails anything: `lookup` stays synchronous, so runs keep
+    // going and only the accounting axis dies.
+    //
+    // The fix is NOT a wall-clock abort (`no-arbitrary-timeouts` forbids one, and
+    // killing the socket is not what is needed). The LATCH expires on the ordinary
+    // refresh cadence: once a full TTL has passed with no result, the next stale
+    // read supersedes the stuck attempt. The stuck fetch is simply abandoned.
+    const clock = { t: 0 };
+    let hangs = 0;
+    const fetcher = vi.fn<ModelPriceFetcher>(async () => {
+      hangs += 1;
+      // The first attempt never settles. The second returns normally.
+      if (hangs === 1) return new Promise<ModelPriceMap>(() => {});
+      return liveMap;
+    });
+    const source = new LiveModelPriceSource({ seed: seedMap, fetcher, ttlMs: 1000, now: () => clock.t });
+
+    source.lookup("seed-model");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    // Within the interval the latch still holds — one stuck attempt must not become
+    // a hot retry loop on every lookup.
+    clock.t = 999;
+    source.lookup("seed-model");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    // A full interval later, the stuck attempt is superseded.
+    clock.t = 1000;
+    await source.ensureFresh();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(source.lookup("gpt-5.6-luna")?.input?.costPerToken).toBe(3e-6);
+  });
+
+  it("a superseded fetch that finally returns cannot overwrite the newer table", async () => {
+    // Ordering, not just liveness: the abandoned attempt is holding a table that is
+    // by construction OLDER than the one that replaced it.
+    const clock = { t: 0 };
+    let release: ((map: ModelPriceMap) => void) | undefined;
+    let call = 0;
+    const fetcher = vi.fn<ModelPriceFetcher>(async () => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<ModelPriceMap>((resolve) => {
+          release = resolve;
+        });
+      }
+      return liveMapV2;
+    });
+    const source = new LiveModelPriceSource({ seed: seedMap, fetcher, ttlMs: 1000, now: () => clock.t });
+
+    source.lookup("seed-model");
+    clock.t = 1000;
+    await source.ensureFresh();
+    expect(source.lookup("gpt-5.6-luna")?.input?.costPerToken).toBe(4e-6);
+
+    // The stale attempt finally answers, with the older revision.
+    release?.(liveMap);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(source.lookup("gpt-5.6-luna")?.input?.costPerToken).toBe(4e-6);
+  });
+
+  it("reports `unavailable` for a table whose every row is unresolvable", async () => {
+    // `health()` answers "can this source resolve a lookup", and a key-existence
+    // check answered a different question. A table of rows that all fail
+    // `parseEntry` — an upstream schema change, a truncated document — resolves
+    // NOTHING, yet reported `ready`, so every null was blamed on the model.
+    const unparseable = new LiveModelPriceSource({
+      seed: { broken: {}, "also-broken": { litellm_provider: "openai" } },
+      fetcher: vi.fn<ModelPriceFetcher>(async () => liveMap),
+      ttlMs: Number.POSITIVE_INFINITY,
+      now: () => 0,
+    });
+    expect(unparseable.health()).toBe("unavailable");
+    // Non-vacuous: one resolvable row is enough.
+    expect(
+      new LiveModelPriceSource({
+        seed: seedMap,
+        fetcher: vi.fn<ModelPriceFetcher>(async () => liveMap),
+        ttlMs: Number.POSITIVE_INFINITY,
+        now: () => 0,
+      }).health(),
+    ).toBe("ready");
+  });
+
   it("NEVER touches the network in the unit-test path (injected fetcher only; global fetch untouched)", async () => {
     const globalFetch = vi.spyOn(globalThis, "fetch");
     const fetcher = vi.fn<ModelPriceFetcher>(async () => liveMap);

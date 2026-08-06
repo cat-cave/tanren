@@ -31,9 +31,9 @@ const NOTIONAL_UNPRICED_DETAIL: Record<LoudNotionalReason, string> = {
   model_id_absent:
     "a real, token-bearing call reached the cost recorder with NO model id, so no price source could be consulted and notional_cost_usd is NULL. This is a TANREN DEFECT, not a property of the model: the adapter that served this call does not declare `model`, or a decorator between the adapter and the cost path dropped it.",
   model_not_listed:
-    "the price sources were reachable and do NOT list this model id, so notional_cost_usd is NULL. Either the id is genuinely unsold (check it against https://openrouter.ai/api/v1/models) or it is not a model id at all — a routing placeholder recorded verbatim.",
+    "the price source AUTHORITATIVE FOR THIS ROUTE was reachable and does not list this model id, so notional_cost_usd is NULL. Verify the recorded model id against that route's source — OpenRouter's /api/v1/models for an OpenRouter route, the LiteLLM model-price table for a direct-vendor one, whose key spaces differ. Either the id is genuinely unlisted there, or it is not a model id at all — a routing placeholder recorded verbatim.",
   price_source_unavailable:
-    "no live price source could be consulted (the OpenRouter /api/v1/models fetch has not succeeded), so notional_cost_usd is NULL. This is an INFRASTRUCTURE fault and says nothing about the model — the row stays repriceable once the fetch recovers.",
+    "the price source authoritative for this route could not be consulted (its live fetch has not yet succeeded — OpenRouter's /api/v1/models on an OpenRouter route), so notional_cost_usd is NULL. This is an INFRASTRUCTURE fault and says nothing about the model — the row stays repriceable once the fetch recovers.",
 };
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;

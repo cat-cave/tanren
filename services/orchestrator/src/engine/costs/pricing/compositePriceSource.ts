@@ -25,13 +25,19 @@
 // assertion.
 
 import type { ModelPrice, ModelPriceSourceHealth } from "./modelPriceSource.js";
+import { OPENROUTER_PROVIDER } from "./openRouterPriceSource.js";
 
 // The narrow read contract the notional path needs. `ModelPriceSource` (frozen),
 // `LiveModelPriceSource` and this composite all satisfy it, so the cost path can be
 // typed on the CAPABILITY rather than on one concrete class.
 export interface ModelPriceLookup {
   lookup(model: string, provider?: string): ModelPrice | null;
-  health(): ModelPriceSourceHealth;
+  // ROUTE-AWARE, and it has to be. Over a multi-leg source "can a price source
+  // answer at all" is not one question: only the leg that is AUTHORITATIVE for the
+  // route can say whether a null means "not listed" or "not asked". Callers pass
+  // the SAME provider hint they passed to `lookup`. A single-table source ignores
+  // it.
+  health(provider?: string): ModelPriceSourceHealth;
   // Trigger a background refresh if the table is stale. Never waits, never throws.
   // A frozen/offline source implements it as a no-op.
   warm?(): void;
@@ -56,11 +62,26 @@ export class CompositeModelPriceSource implements ModelPriceLookup {
     return this.#fallback.lookup(model, provider);
   }
 
-  // The composite can answer if EITHER source can. `unavailable` therefore means
-  // something much stronger than "this model is unpriced": it means no price
-  // source is reachable at all, which is an infrastructure fact the reason code
-  // must not blame on the model.
-  health(): ModelPriceSourceHealth {
+  // Health for THIS ROUTE, not for the union.
+  //
+  // The OR was a real bug, and it defeated the entire point of splitting
+  // `price_source_unavailable` from `model_not_listed`. The LiteLLM leg is seeded
+  // from the vendored 1.3 MB snapshot, so it is `ready` from the first millisecond
+  // of the process and can NEVER be `unavailable`. Under an OR, therefore, the
+  // composite reported `ready` unconditionally — so an OpenRouter-route call made
+  // before the first `/api/v1/models` fetch landed (every call in a cold process,
+  // which `costPriceSource` explicitly does not wait for) was recorded as
+  // `model_not_listed`: an outage wearing a verdict's clothing, and not repriceable
+  // by intent.
+  //
+  // An OpenRouter route is answerable only by the marketplace leg — the LiteLLM
+  // table does not carry the marketplace key space at all, which is reason 1 this
+  // source exists. So its health IS the OpenRouter leg's health. Every other route
+  // is answerable by either leg, and keeps the union.
+  health(provider?: string): ModelPriceSourceHealth {
+    if (provider === OPENROUTER_PROVIDER) {
+      return this.#openRouter.health();
+    }
     return this.#openRouter.health() === "ready" || this.#fallback.health() === "ready" ? "ready" : "unavailable";
   }
 
@@ -69,13 +90,5 @@ export class CompositeModelPriceSource implements ModelPriceLookup {
   warm(): void {
     this.#openRouter.warm?.();
     this.#fallback.warm?.();
-  }
-
-  // Health of the OpenRouter leg alone. An OpenRouter-route call whose model is
-  // unpriced needs to distinguish "OpenRouter does not list it" from "we could not
-  // reach OpenRouter", and only this leg can answer that — the LiteLLM leg being
-  // `ready` says nothing about the marketplace.
-  openRouterHealth(): ModelPriceSourceHealth {
-    return this.#openRouter.health();
   }
 }
