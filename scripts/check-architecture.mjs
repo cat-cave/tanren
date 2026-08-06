@@ -30,8 +30,14 @@ const roadmapDocs = [
   "docs/operator-guide/apex-run-playbook.md",
   "docs/roadmap/timeout-eradication.md",
 ];
-// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
-const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
+// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot,
+// the cspell.json word-list, and the test-types debt baseline (one line per file carrying
+// known type errors — it is GENERATED, and it only ever shrinks).
+const vendoredData = [
+  "services/orchestrator/src/engine/costs/pricing/model_prices.json",
+  "cspell.json",
+  "scripts/test-types-baseline.json",
+];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const requiredDocs = [
