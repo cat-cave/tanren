@@ -13,7 +13,7 @@ import {
   SpecNotRunnableError,
 } from "./projectSpecErrors.js";
 import { loadProjectOrgId, loadSpecWithProject } from "./projectSpecRowSchema.js";
-import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
+import { observeRunAsIntegrationNode } from "../dag/integrationNodeObserve.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
 export { createProject, createProjectOnClient } from "./projectCreate.js";
 export type { CreateProjectInput, CreateProjectOptions, ProjectContract } from "./projectCreate.js";

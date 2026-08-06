@@ -16,11 +16,9 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getSystemPool, migrate, runWithJobOrgId, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { memberKey, proofReuseKey, type ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
-import {
-  observeRunAsIntegrationNode,
-  PgIntegrationNodeModel,
-  speculativeRunToNode,
-} from "../src/engine/dag/integrationNodesPg.js";
+import { observeRunAsIntegrationNode } from "../src/engine/dag/integrationNodeObserve.js";
+import { speculativeRunToNode } from "../src/engine/dag/integrationNodeCompat.js";
+import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 
 const SYSTEM_ROLE = "tanren_system";
 const SYSTEM_PASSWORD = process.env["TANREN_SYSTEM_DB_PASSWORD"] ?? "tanren_system";
@@ -283,7 +281,7 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       baseSha,
       ref: "tanren/authority-preservation",
       purpose: "merge_batch" as const,
-      members: [{ specId: "spec_stamp", runId: RUN_DEP, branch: "stamp", headSha: memberSha }],
+      members: [{ specId: SPEC_ANCESTOR, runId: RUN_DEP, branch: "stamp", headSha: memberSha }],
       headSha,
       treeHash,
       status: "ready" as const,
@@ -310,7 +308,7 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       baseSha: "8".repeat(40),
       ref: "tanren/project-collision",
       purpose: "merge_batch" as const,
-      members: [{ specId: "spec_collision", runId: RUN_DEP, branch: "collision", headSha: "9".repeat(40) }],
+      members: [{ specId: SPEC_ANCESTOR, runId: RUN_DEP, branch: "collision", headSha: "9".repeat(40) }],
       headSha: "a".repeat(40),
       treeHash: "b".repeat(40),
       status: "ready" as const,
@@ -334,7 +332,13 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       baseSha,
       ref: "tanren/batch",
       purpose: "merge_batch",
-      members: memberShas.map((s, i) => ({ specId: `m${i}`, runId: RUN_DEP, branch: `b${i}`, headSha: s })),
+      // Distinct run identities per member (unique (org,node,run) + exact multiset).
+      members: memberShas.map((s, i) => ({
+        specId: i === 0 ? SPEC_ANCESTOR : SPEC_DEP,
+        runId: i === 0 ? `${RUN_DEP}_m0` : RUN_DEP,
+        branch: `b${i}`,
+        headSha: s,
+      })),
     });
     const keyInput = (shas: string[]): ProofReuseKeyInput => ({
       memberKey: memberKey(baseSha, shas),

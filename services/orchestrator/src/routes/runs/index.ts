@@ -41,7 +41,7 @@ import {
 } from "./list.js";
 import { registerOrgCostsRoute } from "./orgCostsRoute.js";
 import { registerProjectProgressRoute } from "./progressRoute.js";
-import { registerStackRetargetRoute } from "./stackRetargetRoute.js";
+import { registerRunsLineageRoutes } from "./lineageRoutes.js";
 import { handleSseStream } from "./sse.js";
 import { parseRawViewOptIn } from "./redaction.js";
 
@@ -212,9 +212,8 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // builder so `createRunRoutes` stays a focused factory.
   registerProjectProgressRoute(app, options);
 
-  // gv-4: transitive stack-retarget safety projection (complete ancestor member
-  // vector). Exclusive body lives in stackRetargetRoute.ts — thin wire only.
-  registerStackRetargetRoute(app, options);
+  // gv-4 stack-retarget + gv-17 base-shift history (lineageRoutes.ts).
+  registerRunsLineageRoutes(app, { pool: options.pool });
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs/:runId/forge

@@ -1,4 +1,3 @@
-// The ONE never-discard base-shift handler (§3/§7): both percolation and merge-behind
 // rebase the existing run/branch in place, re-gate, then preserve exact typed recovery.
 // Conflicts remain recorded in jj; infra and unprovable recovery fail closed.
 
@@ -8,12 +7,14 @@ import type {
   DurableConflictRecoverySettlement,
 } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
+import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
 import {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
   type BaseShiftGateReworkRouter,
+  type BaseShiftInvalidationCause,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type RebaseDecision,
@@ -22,6 +23,8 @@ import {
 } from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
 import { rebaseDecisionFromRecovery, settleBaseShiftRecovery } from "./baseShiftRecovery.js";
+import { emitBaseShiftRebase, type BaseShiftEmitInput } from "./baseShiftEmit.js";
+import { reGateOrHold } from "./baseShiftRegate.js";
 
 const log = createLogger("base-shift");
 
@@ -30,6 +33,7 @@ export {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
   type BaseShiftGateReworkRouter,
+  type BaseShiftInvalidationCause,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type RebaseDecision,
@@ -173,6 +177,12 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       ancestorStack: input.ancestorStack,
       ancestorSpecId: input.decision.ancestorSpecId,
       toSha: input.decision.toSha,
+      // A percolation IS driven by a real ancestor spec, so the durable lineage may carry it.
+      lineageAncestorSpecId: input.decision.ancestorSpecId,
+      // The detector already knows WHY: `ancestor_merged` is literally an ancestor landing;
+      // every other percolation severity is the ancestor's head/verdict moving under us.
+      invalidationCause:
+        input.decision.immediateSeverity === "ancestor_merged" ? "ancestor_landed" : "member_head_moved",
       ...(input.decision.immediateSeverity === "changes_requested" && {
         reviewVerdict: "changes_requested" as const,
       }),
@@ -203,17 +213,26 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
      * empty stack); the kick-off path passes the unmerged set.
      */
     ancestorStack?: AncestorStack;
+    /**
+     * The MARKER key (the shift's `from`). The merge-`behind` path deliberately passes the
+     * base BRANCH here — see `buildBaseShiftRebaseHook`. It must therefore NEVER reach the
+     * durable lineage record's `ancestor_spec_id`; `lineageAncestorSpecId` carries that.
+     */
     ancestorSpecId: string;
     toSha: string;
+    /** The REAL ancestor spec, when this shift has one. Absent ⇒ the record carries none. */
+    lineageAncestorSpecId?: string;
+    /** REQUIRED: why the prior integration is invalid — the driver knows; the builder cannot. */
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
   }): Promise<BaseShiftRebaseOutcome> {
     const { projectId, dependent } = input;
-    // (a) Load the affected integration_nodes (S0). Observe-only today — it does NOT
-    //     branch control flow; it makes the shift's node context inspectable + is the
-    //     substrate Wave 3 keys proof reuse on. A read failure is non-fatal (logged).
-    await this.deps.nodes.nodesForDependent({ projectId, dependent }).catch((error: unknown) => {
+    // (a) Load the affected integration_nodes BEFORE the restack — the before-vector for
+    //     gv-17 base_shift_operations history. A read failure is non-fatal (logged) and
+    //     yields an empty before-vector rather than dropping the shift.
+    const priorNodes = await this.deps.nodes.nodesForDependent({ projectId, dependent }).catch((error: unknown) => {
       log.warn("integration-node read failed (non-fatal)", { specId: dependent.specId }, error);
-      return [];
+      return [] as IntegrationNode[];
     });
 
     // (b) Rebase the dependent's EXISTING branch onto the shifted base — the run/branch
@@ -230,7 +249,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (rebase.outcome === "clean") {
-      return this.settleClean({ ...input, branch: opened.branch, newBaseSha: opened.newBaseSha, rebase });
+      return this.settleClean({
+        ...input,
+        branch: opened.branch,
+        newBaseSha: opened.newBaseSha,
+        rebase,
+        priorNodes,
+      });
     }
     // A conflicted rebase: jj recorded the conflict IN the commit (the work survived).
     // `RebaseResult` is a single interface (not a discriminated union), so re-narrow it
@@ -242,6 +267,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       branch: opened.branch,
       newBaseSha: opened.newBaseSha,
       rebase: conflicted,
+      priorNodes,
     });
   }
 
@@ -276,10 +302,20 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
+    lineageAncestorSpecId?: string;
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult;
+    priorNodes: ReadonlyArray<IntegrationNode>;
   }): Promise<BaseShiftRebaseOutcome> {
-    const result = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
+    const result = await reGateOrHold(this.deps, input.projectId, input.dependent, input.rebase.headSha, {
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      ...(input.lineageAncestorSpecId !== undefined && { lineageAncestorSpecId: input.lineageAncestorSpecId }),
+      invalidationCause: input.invalidationCause,
+      priorNodes: input.priorNodes,
+    });
     if (result.verdict === "passed") {
       await this.keepRun(input);
       await this.emit(input, false, "rebased_clean");
@@ -307,8 +343,11 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
+    lineageAncestorSpecId?: string;
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult & { outcome: "conflicted" };
+    priorNodes: ReadonlyArray<IntegrationNode>;
   }): Promise<BaseShiftRebaseOutcome> {
     let resolution: ConflictResolution;
     try {
@@ -330,7 +369,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // The live resolver may already have routed either planner replan or writer
       // rework. Consume that exact typed result; never collapse it to a boolean and
       // never double-route. A seam without a delegated route uses persistence's
       // canonical planner route, which returns the same typed disposition.
@@ -346,9 +384,15 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO re-plan); a
     // failed GATE-tier re-gate ⇒ WRITER REWORK (the resolved tree is byte-clean, the code just
     // fails a gate); pending ⇒ HOLD (fail-closed).
-    const result = await this.reGateOrHold(input.projectId, input.dependent, resolution.headSha);
+    const result = await reGateOrHold(this.deps, input.projectId, input.dependent, resolution.headSha, {
+      branch: input.branch,
+      newBaseSha: input.newBaseSha,
+      ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
+      ...(input.lineageAncestorSpecId !== undefined && { lineageAncestorSpecId: input.lineageAncestorSpecId }),
+      invalidationCause: input.invalidationCause,
+      priorNodes: input.priorNodes,
+    });
     if (result.verdict === "passed") {
-      // The resolved tree FIT (re-gate passed) — keep the run. The emitted head is the RESOLVED head.
       const resolved: RebaseResult = { outcome: "clean", headSha: resolution.headSha };
       await this.keepRun(input);
       await this.emit({ ...input, rebase: resolved }, true, "rebased_resolved");
@@ -359,31 +403,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     const routed = await this.routeGateFailToRework(input, result.gateError);
     await this.emit(input, true, routed.decision);
     return { ...routed, headSha: input.rebase.headSha };
-  }
-
-  /**
-   * Re-gate the rebased/resolved branch; a `pending` verdict is a fail-closed HOLD. Returns
-   * `{ verdict, gateError? }` — the gate error (present on `failed`) is the writer-rework
-   * steering. Accepts both a bare verdict string and a `ReGateResult` from the re-gate seam.
-   */
-  private async reGateOrHold(
-    projectId: string,
-    dependent: SpeculativeDependent,
-    rebasedHeadSha: string,
-  ): Promise<{ verdict: "passed" | "failed"; gateError?: string }> {
-    let result: ReGateVerdict | ReGateResult;
-    try {
-      result = await this.deps.reGate.reGate({ projectId, dependent, rebasedHeadSha });
-    } catch (error) {
-      throw new BaseShiftHeldError("regate", error instanceof Error ? error.message : String(error));
-    }
-    const verdict = typeof result === "string" ? result : result.verdict;
-    const gateError = typeof result === "string" ? undefined : result.gateError;
-    if (verdict === "pending") {
-      // Inconclusive: NEVER merge on an unverified rebase. Hold (the work survives).
-      throw new BaseShiftHeldError("regate", "the re-gate did not converge (held, not merged)");
-    }
-    return { verdict, ...(gateError !== undefined && { gateError }) };
   }
 
   /**
@@ -467,26 +486,14 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
    * It carries NO token/wall-clock figure — the `rebase_vs_rebuild` read-side joins
    * that cost at read time (engine/insights/integration).
    */
-  private async emit(
-    input: {
-      projectId: string;
-      dependent: SpeculativeDependent;
-      branch: string;
-      newBaseSha: string;
-      rebase: RebaseResult;
-    },
-    rebaseConflicted: boolean,
-    decision: RebaseDecision,
-  ): Promise<void> {
-    await this.deps.events.emitRebase({
-      projectId: input.projectId,
-      specId: input.dependent.specId,
-      runId: input.dependent.runId,
-      branch: input.branch,
-      newBaseSha: input.newBaseSha,
-      headSha: input.rebase.headSha,
-      rebaseConflicted,
-      decision,
-    });
+  private async emit(input: BaseShiftEmitInput, rebaseConflicted: boolean, decision: RebaseDecision): Promise<void> {
+    // Best-effort history/instrumentation ONLY: keepRun/recovery authority already committed, so a
+    // history-write failure must NOT propagate — percolation would misclassify a settled restack as
+    // FAILED (only a thrown BaseShiftHeldError is `held`). Log and continue.
+    try {
+      await emitBaseShiftRebase(this.deps.events, input, rebaseConflicted, decision);
+    } catch (error) {
+      log.warn("base-shift history emit failed (non-fatal)", { runId: input.dependent.runId, decision }, error);
+    }
   }
 }

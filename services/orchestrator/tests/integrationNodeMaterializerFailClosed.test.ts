@@ -29,6 +29,14 @@ function input() {
 
 class EventPool {
   public readonly eventTypes: string[] = [];
+  private memberRows: Array<{
+    ordinal: number;
+    spec_id: string;
+    run_id: string;
+    branch: string;
+    head_sha: string;
+    included: boolean;
+  }> = [];
 
   public async connect(): Promise<this> {
     return this;
@@ -38,6 +46,28 @@ class EventPool {
 
   public async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.includes("INSERT INTO integration_nodes")) return { rows: [{ node_id: "node_eager" }], rowCount: 1 };
+    // gv-17 dual-write: track member rows so loadAuthoritativeMembers can re-read them.
+    if (sql.includes("DELETE FROM integration_node_members")) {
+      this.memberRows = [];
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.includes("INSERT INTO integration_node_members")) {
+      this.memberRows.push({
+        ordinal: params[3] as number,
+        spec_id: params[4] as string,
+        run_id: params[5] as string,
+        branch: params[6] as string,
+        head_sha: params[7] as string,
+        included: true,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("FROM integration_node_members")) {
+      return {
+        rows: [...this.memberRows].sort((a, b) => a.ordinal - b.ordinal),
+        rowCount: this.memberRows.length,
+      };
+    }
     const eventType = params[5];
     if (eventType === "integration.node.materialized" || eventType === "integration.node.materialization_failed")
       this.eventTypes.push(eventType);

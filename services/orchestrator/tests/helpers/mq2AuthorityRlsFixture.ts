@@ -59,6 +59,19 @@ export async function seedMq2Tenant(input: {
     { specId: `${label}1`, runId: `run-${label}1`, branch: `feature/${label}1`, headSha: `sha-${label}1` },
     { specId: `${label}2`, runId: `run-${label}2`, branch: `feature/${label}2`, headSha: `sha-${label}2` },
   ];
+  // gv-17: dual-written members require same-org spec/run FKs.
+  for (const member of members) {
+    await owner.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, $1, $1, 'in_flight')`,
+      [member.specId, projectId, orgId],
+    );
+    await owner.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'cli', $5, 'running')`,
+      [member.runId, member.specId, projectId, orgId, member.branch],
+    );
+  }
   const baseSha = `base-${label}`;
   const headSha = `batch-${label}`;
   const treeHash = `tree-${label}`;

@@ -24,6 +24,22 @@ import type { AncestorStack } from "./ancestorStack.js";
 export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
 
 /**
+ * WHY a restack invalidated the prior integration — the durable `base_shift_operations`
+ * vocabulary (`base_shift_operations_cause_check`). It is declared HERE (the pure ports)
+ * rather than in the pg store so the pure lineage builder and the pg writer share ONE
+ * vocabulary and cannot drift apart. The cause is a REAL fact the driver knows (an
+ * ancestor landed vs. the base branch advanced vs. a member head moved); it is never
+ * defaulted, because a wrong cause is indistinguishable from a right one downstream.
+ */
+export type BaseShiftInvalidationCause =
+  | "ancestor_landed"
+  | "base_moved"
+  | "member_head_moved"
+  | "stack_restack"
+  | "policy_changed"
+  | "proof_stale";
+
+/**
  * A fail-closed HOLD: the rebase/resolver/gate could not settle. The work SURVIVES (the run
  * row + branch are untouched) and is retried on the next notification — NEVER a silent merge,
  * NEVER a silent discard.
@@ -139,5 +155,33 @@ export interface BaseShiftEventEmitter {
     headSha: string;
     rebaseConflicted: boolean;
     decision: RebaseDecision;
+    /**
+     * gv-17 optional lineage snapshot. When present, the pg emitter durably
+     * records a `base_shift_operations` row with before/after member vectors.
+     * Absent on pure in-memory fakes that only assert the event was emitted.
+     */
+    lineage?: {
+      /** When omitted, the pg emitter resolves org from projectId (fail-closed if missing). */
+      orgId?: string;
+      nodeId?: string;
+      ancestorSpecId?: string;
+      fromBaseSha: string;
+      fromMemberKey: string;
+      toMemberKey: string;
+      fromMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      toMembers: ReadonlyArray<{
+        specId: string;
+        runId: string;
+        branch: string;
+        headSha: string;
+      }>;
+      /** REQUIRED: the driver's real cause. There is no safe default (see the type's doc). */
+      invalidationCause: BaseShiftInvalidationCause;
+    };
   }): Promise<void>;
 }

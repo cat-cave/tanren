@@ -214,6 +214,7 @@ describe("BaseShiftCoordinator — threads the re-resolved stack + nonSpeculativ
       nonSpeculative: false,
       ancestorStack: RESOLVED_STACK,
       ancestorSpecId: "spec_a",
+      invalidationCause: "member_head_moved",
       toSha: "sha-new",
     });
     // The resolver received the SAME re-resolved stack the opener did — so the live resolve
@@ -238,6 +239,7 @@ describe("BaseShiftCoordinator — threads the re-resolved stack + nonSpeculativ
       dependent: dependent(),
       nonSpeculative: true,
       ancestorSpecId: "spec_a",
+      invalidationCause: "member_head_moved",
       toSha: "sha-new",
     });
     expect(resolver.seen).toEqual([{ nonSpeculative: true }]);
@@ -297,6 +299,7 @@ describe("BaseShiftCoordinator — threads the re-resolved ancestor stack to the
       nonSpeculative: false,
       ancestorStack: RESOLVED_STACK,
       ancestorSpecId: "spec_a",
+      invalidationCause: "member_head_moved",
       toSha: "sha-new",
     });
     // The opener was handed the re-resolved stack — so the live opener assembles `main +
