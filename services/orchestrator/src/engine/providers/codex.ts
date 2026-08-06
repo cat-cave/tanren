@@ -19,8 +19,6 @@ import {
   postProcessAnswererPreservingJsonlFailure,
   postProcessPreservingJsonlFailure,
 } from "./codexGit.js";
-// recordedCodexModel: the id the adapter DECLARES (WriterAdapter.model) →
-// `cost_records.model`, from the SAME dispatch the exec/config path uses.
 import { buildCodexAnswererExecCommand, buildCodexExecCommand, recordedCodexModel } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
@@ -36,8 +34,7 @@ const log = createLogger("codex");
 // Re-exported so existing `from "./codex.js"` importers (the uniqueness test) stay stable.
 export { safeSchemaFileName };
 
-// Re-exported from codexExecCommand.ts (split out for the 500-line cap) so existing
-// importers (and the command-builder tests) stay stable.
+// Re-exported from codexExecCommand.ts (split out for the 500-line cap) so importers (the command-builder tests) stay stable.
 export { buildCodexAnswererExecCommand, buildCodexExecCommand };
 
 export interface CodexWriterDependencies {
