@@ -19,8 +19,7 @@ import {
   postProcessAnswererPreservingJsonlFailure,
   postProcessPreservingJsonlFailure,
 } from "./codexGit.js";
-// recordedCodexModel: the id the adapter DECLARES (WriterAdapter.model) →
-// `cost_records.model`, from the SAME dispatch the exec/config path uses.
+// recordedCodexModel: the id the adapter DECLARES (WriterAdapter.model → `cost_records.model`), from the exec/config dispatch.
 import { buildCodexAnswererExecCommand, buildCodexExecCommand, recordedCodexModel } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
@@ -36,8 +35,7 @@ const log = createLogger("codex");
 // Re-exported so existing `from "./codex.js"` importers (the uniqueness test) stay stable.
 export { safeSchemaFileName };
 
-// Re-exported from codexExecCommand.ts (split out for the 500-line cap) so existing
-// importers (and the command-builder tests) stay stable.
+// Re-exported from codexExecCommand.ts (split out for the 500-line cap) so existing importers stay stable.
 export { buildCodexAnswererExecCommand, buildCodexExecCommand };
 
 export interface CodexWriterDependencies {
@@ -50,9 +48,8 @@ export interface CodexWriterDependencies {
   model?: string;
   codexHomeBaseDir?: string;
   // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run), the
-  // materializer writes codex's config.toml OpenRouter provider block (base_url =
-  // this endpoint) + an OPENROUTER_API_KEY env file the exec sources, so codex routes
-  // THROUGH OpenRouter. Absent ⇒ BYOK: no override (unchanged).
+  // materializer writes codex's config.toml OpenRouter provider block (base_url = this
+  // endpoint) + an OPENROUTER_API_KEY env file the exec sources. Absent ⇒ BYOK: no override.
   endpointBaseUrl?: string;
 }
 
@@ -116,14 +113,12 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         endpointBaseUrl: dependencies.endpointBaseUrl,
         model: dependencies.model,
       });
-      // The diff/log baseline. In a production run this is the run's BASE sha
-      // (the clone point), threaded via opts.baseSha and captured ONCE after the
-      // clone — so each subtask is judged against the CUMULATIVE workspace state
-      // vs the run base, not the per-subtask HEAD delta. That keeps a replanned,
-      // already-satisfied subtask's diff non-empty (the file a prior subtask
-      // committed still shows) so the checker passes instead of false-rejecting
-      // an empty per-iteration delta. When no baseSha is threaded (no production
-      // caller; only a non-threaded/unit caller) we fall back to HEAD-at-start.
+      // The diff/log baseline. In production this is the run's BASE sha (the clone
+      // point), threaded via opts.baseSha and captured ONCE after the clone — each
+      // subtask is judged against the CUMULATIVE workspace state vs the run base, not
+      // the per-subtask HEAD delta, so a replanned/already-satisfied subtask's diff
+      // stays non-empty (a prior subtask's committed file still shows) and the checker
+      // passes. With no baseSha threaded (unit callers only) we fall back to HEAD.
       const baselineSha =
         opts.baseSha ?? (await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace));
       const codex = await dependencies.ssh.run(dependencies.target, {

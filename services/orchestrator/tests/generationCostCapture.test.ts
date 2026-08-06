@@ -26,7 +26,9 @@ function fakeClient(body: unknown, status = 200): { client: OpenRouterHttpClient
 
 describe("buildManagedGenerationCostCapturer", () => {
   it("resolves the platform key once and returns OpenRouter's REAL total_cost for a generation id", async () => {
-    const { client, requests } = fakeClient({ data: { total_cost: 0.0421 } });
+    // A managed platform generation: OpenRouter is the biller, so it reports
+    // is_byok:false and total_cost IS the authoritative real deduction.
+    const { client, requests } = fakeClient({ data: { total_cost: 0.0421, is_byok: false } });
     const capture = await buildManagedGenerationCostCapturer({
       secrets: fakeSecrets("sk-or-fake"),
       managedCredentialRef: "credential/openrouter/platform/default",
