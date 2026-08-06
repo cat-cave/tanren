@@ -17,6 +17,7 @@ import {
   UnenforceableBudgetCeilingError,
   UnreachableBudgetCeilingError,
 } from "../src/engine/workflow/budgetPreflight.js";
+import { CostCeilingUnenforceablePayload } from "../src/engine/events/schemas/costFailures.js";
 import type { AppendEvent } from "../src/engine/workflow/subtaskLoop.js";
 
 // A real recording sink shaped like the loop's typed AppendEvent.
@@ -214,5 +215,61 @@ describe("assertBudgetCeilingEnforceable", () => {
       ),
     ).resolves.toBeUndefined();
     expect(sink.events).toHaveLength(0);
+  });
+});
+
+// The event schema pairs `reason` with `billingMode` structurally, so a
+// contradictory ceiling diagnostic cannot be persisted at all.
+//
+// `unrecognized_credential_ref` means the run's rows land `billing_mode
+// 'unattributed'`; the two metering limitations mean they land `'per_token'`. Those
+// are not independent facts about a refusal — the second follows from the first —
+// and an operator reading `unrecognized_credential_ref` next to `per_token` would
+// be handed a remedy for the wrong problem. A discriminated union makes the
+// impossible combinations unrepresentable rather than merely never produced.
+describe("cost.ceiling_unenforceable pairs its reason with its billing mode", () => {
+  const base = { refKind: "credential/x", cli: "codex", ceilingUsd: 50, detail: "d", remedy: "r" };
+
+  it("accepts each reason with ITS billing mode", () => {
+    for (const [reason, billingMode] of [
+      ["harness_discards_generation_id", "per_token"],
+      ["byok_upstream_invoice", "per_token"],
+      ["unrecognized_credential_ref", "unattributed"],
+    ] as const) {
+      expect(CostCeilingUnenforceablePayload.safeParse({ ...base, reason, billingMode }).success).toBe(true);
+    }
+  });
+
+  it("REJECTS the crossed pairs", () => {
+    for (const [reason, billingMode] of [
+      ["unrecognized_credential_ref", "per_token"],
+      ["harness_discards_generation_id", "unattributed"],
+      ["byok_upstream_invoice", "unattributed"],
+      ["unrecognized_credential_ref", "subscription"],
+    ] as const) {
+      expect(CostCeilingUnenforceablePayload.safeParse({ ...base, reason, billingMode }).success).toBe(false);
+    }
+  });
+
+  it("the PRODUCER's own payloads satisfy it — schema and preflight cannot drift apart", async () => {
+    // The pairing is only worth having if the one place that emits this event
+    // actually honours it, so the assertion runs over what `assertBudgetCeilingEnforceable`
+    // really emits rather than over hand-written fixtures.
+    for (const authRef of [
+      "credential/openrouter/acme/default",
+      "credential/anthropic/acme/k",
+      "credential/mystery/prod-key",
+    ]) {
+      const sink = recorder();
+      await assertBudgetCeilingEnforceable(
+        { ceilingUsd: 50, cli: "codex", authRef, hasUsageProbe: false },
+        sink.append,
+      ).then(
+        () => null,
+        () => null,
+      );
+      expect(sink.events).toHaveLength(1);
+      expect(CostCeilingUnenforceablePayload.safeParse(sink.events[0]?.payload).success).toBe(true);
+    }
   });
 });
