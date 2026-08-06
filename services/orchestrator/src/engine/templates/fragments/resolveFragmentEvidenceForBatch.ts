@@ -27,12 +27,10 @@ const TEST_SELECTOR_SCHEMA = z
   })
   .strict();
 
-const BEHAVIOR_MANIFEST_SCHEMA = z
-  .object({
-    schemaVersion: z.literal("fragment_behavior_manifest.v1"),
-    behaviors: z.array(z.string().trim().min(1).max(240)).min(1).max(200),
-  })
-  .strict();
+const BEHAVIOR_MANIFEST_SCHEMA = z.strictObject({
+  schemaVersion: z.literal("fragment_behavior_manifest.v1"),
+  behaviors: z.array(z.string().trim().min(1).max(240)).min(1).max(200),
+});
 
 /**
  * The one strict behavior-manifest decoder.  Consumers outside the batch resolver
