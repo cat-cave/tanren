@@ -1,6 +1,8 @@
 {
-  // The ROOT test tree: `scripts/**/*.test.ts` and `tests/e2e/**`. Neither sits under any
-  // package `tsconfig.json`, so neither was typechecked before this file existed.
+  // The ROOT tooling + test trees: ALL of `scripts/**/*.ts` and `tests/**/*.ts`. None of these
+  // sit under any package `tsconfig.json`, so none were typechecked before this file existed.
+  // The scope is deliberately broad (every root script, not just `*.test.ts`) so the ratchet
+  // covers all root TypeScript that no package already owns.
   "extends": "./tsconfig.base.json",
   "compilerOptions": { "noEmit": true, "rootDir": ".", "types": ["node"] },
   "include": ["scripts/**/*.ts", "tests/**/*.ts"]

@@ -180,7 +180,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
+ci: format-check lint types-lint test-types architecture no-pg-as-date schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift integration-schema-bundle-drift rv-read-compat integration-read-compat knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
