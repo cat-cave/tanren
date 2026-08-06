@@ -77,6 +77,7 @@ class BeamUnitPool {
         rowCount: 1,
       };
     }
+    if (sql.includes("SELECT 1 FROM merge_eager_beams")) return { rows: [], rowCount: 0 };
     if (sql.includes("INSERT INTO merge_eager_beams")) {
       const reason = params[6];
       if (typeof reason === "string") this.heldReasons.push(reason);
@@ -153,6 +154,8 @@ function plan() {
       appEnvHash: "e".repeat(64),
       quarantineVersion: "none",
     },
+    integration: { ref: "tanren/eager/run_frontier", headSha: "c".repeat(40), treeHash: "d".repeat(40) },
+    fragmentEvidenceDigest: `sha256:${"e".repeat(64)}`,
   });
 }
 

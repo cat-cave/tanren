@@ -23,6 +23,7 @@ export class EagerBeamMaterializationPersistence implements IntegrationNodeMater
   }
 
   public async recordMaterializationFailure(input: MaterializationFailureRecord): Promise<void> {
+    const planDigest = this.staged()?.planDigest;
     await this.beams.hold({
       orgId: input.orgId,
       projectId: input.projectId,
@@ -30,6 +31,7 @@ export class EagerBeamMaterializationPersistence implements IntegrationNodeMater
       frontierSpecId: this.candidate.specId,
       rank: this.rank,
       reason: input.failureCode,
+      ...(planDigest === undefined ? {} : { planDigest }),
     });
     await this.beams.recordMaterializationFailure(input);
   }

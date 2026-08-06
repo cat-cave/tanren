@@ -34,6 +34,18 @@ const BEHAVIOR_MANIFEST_SCHEMA = z
   })
   .strict();
 
+/**
+ * The one strict behavior-manifest decoder.  Consumers outside the batch resolver
+ * (including eager proof staging) must use this instead of quietly growing a
+ * parallel interpretation of repository-authored behavior data.
+ */
+export function parseFragmentBehaviorManifest(
+  content: string,
+): { readonly schemaVersion: "fragment_behavior_manifest.v1"; readonly behaviors: readonly string[] } | undefined {
+  const parsed = parseJson(BEHAVIOR_MANIFEST_SCHEMA, content);
+  return parsed === undefined || !unique(parsed.behaviors) ? undefined : parsed;
+}
+
 const WORKSPACE_IDENTITY_SCHEMA = z
   .object({
     baseSha: z.string().trim().min(1),
@@ -146,7 +158,7 @@ export async function resolveFragmentEvidenceForBatch(
   const identity = WORKSPACE_IDENTITY_SCHEMA.safeParse(proofRequest.workspaceIdentity);
   if (!identity.success) return { kind: "fallback", reason: "workspace_identity_invalid" };
   if (fragment === undefined) return { kind: "fallback", reason: "fragment_absent" };
-  if (!sameFragment(manifest, fragment)) return { kind: "fallback", reason: "fragment_mismatch" };
+  if (!matchesFragmentEvidenceManifest(manifest, fragment)) return { kind: "fallback", reason: "fragment_mismatch" };
 
   const selectorFile = await readRepositoryFile(workspace, manifest.evidence.testSelector.path);
   if (selectorFile.kind !== "ok") return { kind: "fallback", reason: "selector_unreadable" };
@@ -157,8 +169,8 @@ export async function resolveFragmentEvidenceForBatch(
 
   const behaviorsFile = await readRepositoryFile(workspace, manifest.evidence.behaviorManifest.path);
   if (behaviorsFile.kind !== "ok") return { kind: "fallback", reason: "behavior_manifest_unreadable" };
-  const behaviors = parseJson(BEHAVIOR_MANIFEST_SCHEMA, behaviorsFile.content);
-  if (behaviors === undefined || !unique(behaviors.behaviors)) {
+  const behaviors = parseFragmentBehaviorManifest(behaviorsFile.content);
+  if (behaviors === undefined) {
     return { kind: "fallback", reason: "behavior_manifest_malformed" };
   }
 
@@ -202,7 +214,10 @@ export async function resolveFragmentEvidenceForBatch(
   };
 }
 
-function sameFragment(manifest: FragmentEvidenceManifestV1, fragment: SelectedF2FragmentEvidence): boolean {
+export function matchesFragmentEvidenceManifest(
+  manifest: FragmentEvidenceManifestV1,
+  fragment: SelectedF2FragmentEvidence,
+): boolean {
   const evidence = FragmentEvidenceContractV1Schema.safeParse(fragment.evidence);
   return (
     evidence.success &&

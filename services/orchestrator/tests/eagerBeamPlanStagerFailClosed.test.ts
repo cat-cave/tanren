@@ -34,6 +34,7 @@ describe("EAGER plan staging fail closed", () => {
           staticRef: "credential/github/org/org_eager/token",
         },
         gateInput: { target: null as never, workspacePath: "/scratch/eager" },
+        integration: { ref: "tanren/eager/run_frontier", headSha: "b".repeat(40), treeHash: "c".repeat(40) },
       }),
     ).rejects.toThrow("requires a frontier member");
   });

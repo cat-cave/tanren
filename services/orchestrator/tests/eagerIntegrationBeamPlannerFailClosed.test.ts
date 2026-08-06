@@ -3,7 +3,11 @@ import { defaultProjectConfigV1 } from "../src/engine/config/projectConfig.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import { EagerIntegrationBeamPlanner } from "../src/engine/merge/eagerIntegrationBeamPlanner.js";
+import {
+  EagerIntegrationBeamPlanner,
+  shouldHoldEagerFailure,
+} from "../src/engine/merge/eagerIntegrationBeamPlanner.js";
+import { EagerBeamReadyCasLostError } from "../src/engine/merge/eagerBeamStore.js";
 
 const BASE_SHA = "a".repeat(40);
 const ANCESTOR_SHA = "b".repeat(40);
@@ -92,6 +96,7 @@ class PlannerPool {
         rowCount: 1,
       };
     }
+    if (sql.includes("SELECT 1 FROM merge_eager_beams")) return { rows: [], rowCount: 0 };
     if (sql.includes("INSERT INTO merge_eager_beams")) {
       const reason = params[6];
       if (typeof reason === "string") this.heldReasons.push(reason);
@@ -122,6 +127,11 @@ async function planner(
 }
 
 describe("EAGER planner local assembly failures", () => {
+  it("does not frontier-hold a ready-CAS loser that could invalidate the winner", () => {
+    expect(shouldHoldEagerFailure(new EagerBeamReadyCasLostError())).toBe(false);
+    expect(shouldHoldEagerFailure(new Error("real materialization failure"))).toBe(true);
+  });
+
   it("does not admit a speculative result when the project is absent or unreadable", async () => {
     const absent = new PlannerPool();
     absent.projectVisible = false;

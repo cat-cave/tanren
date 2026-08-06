@@ -1,18 +1,15 @@
 import { defaultOrgConfigV1 } from "../src/engine/config/orgConfig.js";
 import { defaultProjectConfigV1 } from "../src/engine/config/projectConfig.js";
-import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { EagerBeamFactsResolver } from "../src/engine/merge/eagerBeamFacts.js";
 import { EagerBeamMaterializationPersistence } from "../src/engine/merge/eagerBeamMaterializationPersistence.js";
-import { EagerBeamPlanStager, type StagedEagerBeamPlan } from "../src/engine/merge/eagerBeamPlanStager.js";
+import type { StagedEagerBeamPlan } from "../src/engine/merge/eagerBeamPlanStager.js";
 import {
   type EagerBeamCandidate,
   type EagerBeamProject,
   PgEagerBeamStore,
 } from "../src/engine/merge/eagerBeamStore.js";
 import type { MaterializedIntegrationNodeRecord } from "../src/engine/merge/integrationNodeMaterializer.js";
-import { LOCAL_HANDLE } from "./conformance/fakes/localCommandSubstrate.js";
-import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createMergeQueueEagerBeamRoutes } from "../src/routes/mergeQueue/eagerBeams.js";
@@ -23,12 +20,6 @@ const BASE_SHA = "a".repeat(40);
 const ANCESTOR_SHA = "b".repeat(40);
 const FRONTIER_SHA = "c".repeat(40);
 const DIGEST = `sha256:${"d".repeat(64)}`;
-
-class EmptyCiConfigSubstrate implements CommandSubstrate {
-  public async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
-    return { exitCode: 0, stdout: "", stderr: "" };
-  }
-}
 
 class EagerBeamPool {
   public readonly events: string[] = [];
@@ -65,7 +56,12 @@ class EagerBeamPool {
     if (sql.includes("FROM merge_queue q")) {
       return { rows: [candidate()], rowCount: 1 };
     }
-    if (sql.includes("FROM merge_eager_beams b")) return { rows: this.routeRows, rowCount: this.routeRows.length };
+    if (sql.includes("FROM merge_eager_beams b") && sql.includes("LEFT JOIN integration_nodes"))
+      return { rows: this.routeRows, rowCount: this.routeRows.length };
+    if (sql.includes("FROM merge_eager_beams b")) {
+      return { rows: this.readyRowCount === 1 ? [{ "?column?": 1 }] : [], rowCount: this.readyRowCount };
+    }
+    if (sql.includes("SELECT 1 FROM merge_eager_beams")) return { rows: [], rowCount: 0 };
     if (sql.includes("INSERT INTO integration_nodes")) return { rows: [{ node_id: "node_eager" }], rowCount: 1 };
     if (sql.includes("INSERT INTO cas_artifacts")) {
       const digest = params[1];
@@ -86,7 +82,9 @@ class EagerBeamPool {
             rowCount: 1,
           };
     }
-    if (sql.includes("SET state = 'ready'")) return { rows: [], rowCount: this.readyRowCount };
+    if (sql.includes("SET state = 'ready'")) {
+      return { rows: [], rowCount: this.readyRowCount };
+    }
     if (sql.includes("SET state = 'stale'")) {
       return {
         rows: [{ id: "beam_prior", frontier_run_id: "run_frontier", plan_digest: DIGEST }],
@@ -183,6 +181,8 @@ function stagedPlan(): StagedEagerBeamPlan {
         appEnvHash: "e".repeat(64),
         quarantineVersion: "none",
       },
+      integration: { ref: "tanren-local-eager", headSha: FRONTIER_SHA, treeHash: "tree".padEnd(40, "0") },
+      fragmentEvidenceDigest: `sha256:${"3".repeat(64)}`,
     },
     planDigest: DIGEST,
     proofReuseInput: {
@@ -192,6 +192,13 @@ function stagedPlan(): StagedEagerBeamPlan {
       runnerImage: "runner@sha256:test",
       appEnvHash: "e".repeat(64),
       quarantineVersion: "none",
+    },
+    proofArtifacts: {
+      designContractStamp: `v1:sha256:${"1".repeat(64)}`,
+      designContractDigest: `sha256:${"1".repeat(64)}`,
+      behaviorManifestDigest: `sha256:${"2".repeat(64)}`,
+      fragmentEvidenceDigest: `sha256:${"3".repeat(64)}`,
+      fragmentEvidenceManifest: {} as never,
     },
   };
 }
@@ -236,68 +243,8 @@ describe("EAGER production fact gathering", () => {
   });
 });
 
-describe("EAGER proof-plan staging", () => {
-  it("freezes a CAS plan before persistence and records an exact proof-unit evaluation", async () => {
-    const pool = new EagerBeamPool();
-    const stager = new EagerBeamPlanStager({ pool: pool.asPgPool(), ssh: new EmptyCiConfigSubstrate() });
-    const facts = {
-      repoUrl: "https://github.com/owner/repo.git",
-      baseBranch: "main",
-      baseSha: BASE_SHA,
-      members: [
-        { specId: "spec_ancestor", runId: "run_ancestor", branch: "feature/ancestor", headSha: ANCESTOR_SHA },
-        { specId: "spec_frontier", runId: "run_frontier", branch: "feature/frontier", headSha: FRONTIER_SHA },
-      ],
-      memberKey: "f".repeat(64),
-      runnerImage: "runner@sha256:test",
-      policyVersion: "1",
-      quarantineVersion: "none",
-      appEnv: {},
-      installation: undefined,
-      staticRef: "token",
-    };
-    const staged = await stager.stage({
-      beamWidth: 1,
-      rank: 1,
-      orgId: "org_eager",
-      projectId: "project_eager",
-      frontierRunId: "run_frontier",
-      frontierSpecId: "spec_frontier",
-      facts,
-      gateInput: { target: LOCAL_HANDLE, workspacePath: "/workspace" },
-    });
-
-    expect(staged.planDigest).toMatch(/^sha256:/u);
-    expect(staged.plan.members.map((member) => member.headSha)).toEqual([ANCESTOR_SHA, FRONTIER_SHA]);
-    await stager.evaluateMaterialization({
-      orgId: "org_eager",
-      projectId: "project_eager",
-      nodeId: "node_eager",
-      staged,
-    });
-    expect(pool.events).toContain("integration.proof_root.composed");
-  });
-
-  it("rejects a blank live proof coordinate instead of staging a reusable plan", async () => {
-    const pool = new EagerBeamPool();
-    const stager = new EagerBeamPlanStager({ pool: pool.asPgPool(), ssh: new EmptyCiConfigSubstrate() });
-    await expect(
-      stager.stage({
-        beamWidth: 1,
-        rank: 1,
-        orgId: "org_eager",
-        projectId: "project_eager",
-        frontierRunId: "run_frontier",
-        frontierSpecId: "spec_frontier",
-        facts: { ...(await resolvedFacts()), runnerImage: " " },
-        gateInput: { target: LOCAL_HANDLE, workspacePath: "/workspace" },
-      }),
-    ).rejects.toThrow("unresolved");
-  });
-});
-
 describe("EAGER beam durable transitions", () => {
-  it("loads scoped candidates, invalidates stale evidence, records a held row, and CAS-marks ready", async () => {
+  it("loads scoped candidates, records an exact held row, and CAS-marks ready", async () => {
     const pool = new EagerBeamPool();
     const store = new PgEagerBeamStore(pool.asPgPool());
     const loadedProject = await store.loadProject("project_eager");
@@ -312,7 +259,7 @@ describe("EAGER beam durable transitions", () => {
       rank: 1,
       reason: "ancestor_head_changed",
     });
-    expect(pool.events).toEqual(expect.arrayContaining(["merge.beam.stale", "integration.proof.invalidated"]));
+    expect(pool.events).toEqual(["merge.beam.stale"]);
 
     const persisted = await store.persistMaterialized({
       record: {
@@ -333,23 +280,11 @@ describe("EAGER beam durable transitions", () => {
     });
     expect(persisted).toEqual({ nodeId: "node_eager", beamId: "beam_eager", generation: 1 });
 
-    await expect(
-      store.markReady({
-        orgId: "org_eager",
-        projectId: "project_eager",
-        planDigest: DIGEST,
-        nodeId: "node_eager",
-      }),
-    ).resolves.toBeUndefined();
+    await expect(store.markReady(readyInput(DIGEST, stagedPlan().plan), async () => proof())).resolves.toBeUndefined();
     pool.readyRowCount = 0;
-    await expect(
-      store.markReady({
-        orgId: "org_eager",
-        projectId: "project_eager",
-        planDigest: DIGEST,
-        nodeId: "node_eager",
-      }),
-    ).rejects.toThrow("lost its exact building coordinate");
+    await expect(store.markReady(readyInput(DIGEST, stagedPlan().plan), async () => proof())).rejects.toThrow(
+      "lost its exact building coordinate",
+    );
     await store.recordMaterializationFailure({
       orgId: "org_eager",
       projectId: "project_eager",
@@ -363,6 +298,21 @@ describe("EAGER beam durable transitions", () => {
     expect(pool.events).toContain("integration.node.materialization_failed");
   });
 });
+
+function proof() {
+  return {
+    proofRoot: `sha256:${"7".repeat(64)}`,
+    quarantineEpoch: 1,
+    toolchainHash: `sha256:${"6".repeat(64)}`,
+    designContractVersion: `v1:sha256:${"5".repeat(64)}`,
+    behaviorManifestHash: `sha256:${"4".repeat(64)}`,
+    proofUnitIds: ["punit_b"],
+  };
+}
+
+function readyInput(planDigest: string, plan: StagedEagerBeamPlan["plan"]) {
+  return { orgId: "org_eager", projectId: "project_eager", planDigest, nodeId: "node_eager", plan };
+}
 
 describe("EAGER beam read projection", () => {
   it("returns exact evidence only for a complete, typed integration node and marks malformed evidence unavailable", async () => {
@@ -441,20 +391,6 @@ describe("EAGER materialization persistence", () => {
     expect(store.failed).toBe(1);
   });
 });
-
-async function resolvedFacts() {
-  const resolver = await factsResolver(
-    new EagerBeamPool(),
-    new Map([
-      ["main", BASE_SHA],
-      ["feature/ancestor", ANCESTOR_SHA],
-      ["feature/frontier", FRONTIER_SHA],
-    ]),
-  );
-  const result = await resolver.resolve(project(), candidate());
-  if (result.kind !== "resolved") throw new Error("test facts must resolve");
-  return result.facts;
-}
 
 function platformActor(): ActorContext {
   return {

@@ -8,7 +8,12 @@ import { createLogger } from "../observability/logger.js";
 import { EagerBeamFactsResolver } from "./eagerBeamFacts.js";
 import { EagerBeamMaterializationPersistence } from "./eagerBeamMaterializationPersistence.js";
 import { EagerBeamPlanStager, type StagedEagerBeamPlan } from "./eagerBeamPlanStager.js";
-import { type EagerBeamCandidate, type EagerBeamProject, PgEagerBeamStore } from "./eagerBeamStore.js";
+import {
+  EagerBeamReadyCasLostError,
+  type EagerBeamCandidate,
+  type EagerBeamProject,
+  PgEagerBeamStore,
+} from "./eagerBeamStore.js";
 import { IntegrationNodeMaterializer } from "./integrationNodeMaterializer.js";
 import type { EagerBeamRuntimeDeps } from "./eagerBeamRuntime.js";
 
@@ -54,6 +59,7 @@ export class EagerIntegrationBeamPlanner {
   }
 
   private async buildOne(project: EagerBeamProject, candidate: EagerBeamCandidate, rank: number): Promise<void> {
+    let staged: StagedEagerBeamPlan | undefined;
     try {
       const resolution = await this.facts.resolve(project, candidate);
       if (resolution.kind === "held") {
@@ -78,7 +84,6 @@ export class EagerIntegrationBeamPlanner {
         ...(this.deps.githubAppMinter === undefined ? {} : { githubAppMinter: this.deps.githubAppMinter }),
       });
       try {
-        let staged: StagedEagerBeamPlan | undefined;
         const materializer = new IntegrationNodeMaterializer(
           live.core,
           new EagerBeamMaterializationPersistence(this.beams, candidate, rank, () => staged),
@@ -93,7 +98,7 @@ export class EagerIntegrationBeamPlanner {
           localRef: eagerLocalRef(candidate.runId),
           workspacePath: live.workspacePath,
           purpose: "eager_beam",
-          beforePersist: async () => {
+          beforePersist: async (integration) => {
             staged = await this.stager.stage({
               beamWidth: this.beamWidth,
               rank,
@@ -103,6 +108,11 @@ export class EagerIntegrationBeamPlanner {
               frontierSpecId: candidate.specId,
               facts,
               gateInput: { target: live.target, workspacePath: live.workspacePath },
+              integration: {
+                ref: integration.localRef,
+                headSha: integration.headSha,
+                treeHash: integration.treeHash,
+              },
             });
             return {
               gateConfigHash: staged.proofReuseInput.gateConfigHash,
@@ -113,22 +123,38 @@ export class EagerIntegrationBeamPlanner {
         if (materialized.kind === "failed") return;
         const plan = staged;
         if (plan === undefined) throw new Error("eager materialization completed without a frozen plan");
-        await this.stager.evaluateMaterialization({
-          orgId: project.orgId,
-          projectId: project.projectId,
-          nodeId: materialized.nodeId,
-          staged: plan,
-        });
-        await this.beams.markReady({
-          orgId: project.orgId,
-          projectId: project.projectId,
-          planDigest: plan.planDigest,
-          nodeId: materialized.nodeId,
-        });
+        await this.beams.markReady(
+          {
+            orgId: project.orgId,
+            projectId: project.projectId,
+            planDigest: plan.planDigest,
+            nodeId: materialized.nodeId,
+            plan: plan.plan,
+          },
+          async () => {
+            const evaluation = await this.stager.evaluateMaterialization({
+              orgId: project.orgId,
+              projectId: project.projectId,
+              nodeId: materialized.nodeId,
+              staged: plan,
+            });
+            return {
+              proofRoot: evaluation.proofRoot,
+              ...evaluation.stamp,
+              proofUnitIds: evaluation.units.map((unit) => unit.proofUnitId),
+            };
+          },
+        );
       } finally {
         await live.release();
       }
     } catch (error) {
+      if (!shouldHoldEagerFailure(error)) {
+        // A concurrent exact coordinate won. The loser is already fenced by the
+        // ready CAS; frontier-wide hold would incorrectly stale/invalidate winner.
+        log.info("eager beam ready CAS lost; preserving winning coordinate", { projectId: project.projectId });
+        return;
+      }
       const reason = stableFailureReason(error);
       await this.beams
         .hold({
@@ -138,6 +164,7 @@ export class EagerIntegrationBeamPlanner {
           frontierSpecId: candidate.specId,
           rank,
           reason,
+          ...(staged === undefined ? {} : { planDigest: staged.planDigest }),
         })
         .catch((holdError: unknown) =>
           log.error("failed to record eager beam hold", { projectId: project.projectId }, holdError),
@@ -217,4 +244,9 @@ function stableFailureReason(error: unknown): string {
   if (error instanceof Error && error.message.includes("ancestor_stack")) return "malformed_ancestor_stack";
   if (error instanceof Error && error.message.includes("unresolved")) return "proof_identity_unresolved";
   return "materialization_held";
+}
+
+/** A ready-CAS loser is already safely fenced; do not frontier-hold its winner. */
+export function shouldHoldEagerFailure(error: unknown): boolean {
+  return !(error instanceof EagerBeamReadyCasLostError);
 }

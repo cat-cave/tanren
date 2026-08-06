@@ -30,6 +30,10 @@ export interface ProofUnitEvaluationInput {
   readonly toolchainHash: string;
   readonly designContractVersion: string;
   readonly behaviorManifestHash: string;
+  /** Eager beams atomically stamp only at their exact ready transition. */
+  readonly stampNodeProof?: boolean;
+  /** Eager beams publish node-level proof facts only with their ready CAS. */
+  readonly publishNodeEvents?: boolean;
   readonly units: readonly ProofUnitWork[];
 }
 
@@ -52,6 +56,7 @@ export class IntegrationProofUnitGraph {
   async evaluate(input: ProofUnitEvaluationInput): Promise<ProofUnitEvaluationResult> {
     const prior = await this.repository.nodeProofState(input);
     if (
+      input.publishNodeEvents !== false &&
       prior?.proofRoot !== undefined &&
       (prior.quarantineEpoch !== input.quarantineEpoch ||
         prior.toolchainHash !== input.toolchainHash ||
@@ -143,27 +148,31 @@ export class IntegrationProofUnitGraph {
     });
     await this.repository.recordEdges({ orgId: input.orgId, projectId: input.projectId, edges });
     const proofRoot = composeProofRoot(units, edges);
-    await this.repository.stampNodeProof({
-      orgId: input.orgId,
-      projectId: input.projectId,
-      nodeId: input.nodeId,
-      proofRoot,
-      quarantineEpoch: input.quarantineEpoch,
-      toolchainHash: input.toolchainHash,
-      designContractVersion: input.designContractVersion,
-      behaviorManifestHash: input.behaviorManifestHash,
-    });
-    await this.events.append({
-      orgId: input.orgId,
-      projectId: input.projectId,
-      eventType: "integration.proof_root.composed",
-      payload: {
+    if (input.stampNodeProof !== false) {
+      await this.repository.stampNodeProof({
+        orgId: input.orgId,
         projectId: input.projectId,
-        integrationNodeId: input.nodeId,
+        nodeId: input.nodeId,
         proofRoot,
-        proofUnitIds: units.map((unit) => unit.proofUnitId).sort(),
-      },
-    });
+        quarantineEpoch: input.quarantineEpoch,
+        toolchainHash: input.toolchainHash,
+        designContractVersion: input.designContractVersion,
+        behaviorManifestHash: input.behaviorManifestHash,
+      });
+    }
+    if (input.publishNodeEvents !== false) {
+      await this.events.append({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        eventType: "integration.proof_root.composed",
+        payload: {
+          projectId: input.projectId,
+          integrationNodeId: input.nodeId,
+          proofRoot,
+          proofUnitIds: units.map((unit) => unit.proofUnitId).sort(),
+        },
+      });
+    }
     return { proofRoot, units };
   }
 }

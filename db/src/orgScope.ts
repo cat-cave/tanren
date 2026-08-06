@@ -22,6 +22,8 @@ import { Pool, type PoolClient } from "pg";
 export interface OrgScope {
   /** The checked-out client bound to the open transaction. */
   client: PoolClient;
+  /** The pool that owns the checked-out client; another plane must open its own scope. */
+  pool: Pool;
   /** The org the transaction is scoped to; `null` for a system/cross-org scope. */
   orgId: string | null;
 }
@@ -120,13 +122,20 @@ export async function runWithOrgScope<T>(
   work: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   assertSafeOrgId(orgId);
+  const active = storage.getStore();
+  if (active !== undefined && active.orgId !== null && active.pool === pool) {
+    if (active.orgId !== orgId) {
+      throw new Error(`cannot enter org scope ${orgId} from active scope ${active.orgId ?? "system"}`);
+    }
+    return work(active.client);
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     // SET LOCAL cannot bind parameters; the value is validated above. The GUC
     // is transaction-local, so it is cleared on COMMIT/ROLLBACK automatically.
     await client.query(`SET LOCAL app.current_org_id = '${orgId}'`);
-    const result = await storage.run({ client, orgId }, () => work(client));
+    const result = await storage.run({ client, pool, orgId }, () => work(client));
     await client.query("COMMIT");
     return result;
   } catch (error) {
@@ -261,7 +270,7 @@ export async function runWithSystemScope<T>(pool: Pool, work: (client: PoolClien
   const client = await effectivePool.connect();
   try {
     await client.query("BEGIN");
-    const result = await storage.run({ client, orgId: null }, () => work(client));
+    const result = await storage.run({ client, pool: effectivePool, orgId: null }, () => work(client));
     await client.query("COMMIT");
     return result;
   } catch (error) {
