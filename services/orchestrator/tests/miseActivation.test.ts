@@ -10,7 +10,7 @@
 //   - the codex exec command builders contain NO mise activation (the harness path).
 
 import { describe, expect, it } from "vitest";
-import { miseProvisionCommand, withMiseActivation } from "../src/engine/ssh/miseActivate.js";
+import { miseProvisionCommand, miseSharedDirPrelude, withMiseActivation } from "../src/engine/ssh/miseActivate.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "../src/engine/providers/codexExecCommand.js";
 
 describe("withMiseActivation · the PROJECT-command path is mise-activated", () => {
@@ -55,6 +55,66 @@ describe("miseProvisionCommand · workspace-prep provisions the declared toolcha
     // GUARDED on the mise.toml being present so a no-toolchain project is a no-op skip.
     expect(cmd).toContain("[ -f 'mise.toml' ]");
     expect(cmd).toContain("skipping mise install");
+  });
+});
+
+// REGRESSION — the runner image bakes a warm mise baseline into a shared dir and
+// publishes its location via `/etc/profile.d/tanren-mise-shared-dir.sh`. A non-login
+// `ssh exec` sources no profile script, and sshd forwards none of the image ENV (no
+// SetEnv / AcceptEnv / PermitUserEnvironment on the runner), so nothing reached the
+// engine: every mise call fell back to mise's `$HOME` defaults, the baked baseline was
+// never used, and the toolchain landed in an unpinned dir shared by every concurrent run.
+describe("mise reaches the shared data/cache dirs the runner image publishes", () => {
+  it("BOTH mise seams source the image's published script — the SAME one", () => {
+    // Install-where-activation-reads. If the two seams ever diverge — or one stops
+    // sourcing — `mise install` writes somewhere `mise activate --shims` will not look,
+    // and a bare `pnpm` is `not found` again.
+    const prelude = miseSharedDirPrelude();
+    expect(withMiseActivation("pnpm install")).toContain(prelude);
+    expect(miseProvisionCommand()).toContain(prelude);
+    expect(prelude).toContain(". /etc/profile.d/tanren-mise-shared-dir.sh");
+  });
+
+  it("sources BEFORE mise runs, in both seams (a pin after the command is no pin at all)", () => {
+    const provision = miseProvisionCommand();
+    expect(provision).toContain("tanren-mise-shared-dir.sh");
+    expect(provision.indexOf("tanren-mise-shared-dir.sh")).toBeLessThan(provision.indexOf("mise trust"));
+    const activation = withMiseActivation("pnpm install");
+    expect(activation).toContain("tanren-mise-shared-dir.sh");
+    expect(activation.indexOf("tanren-mise-shared-dir.sh")).toBeLessThan(activation.indexOf("mise activate"));
+  });
+
+  it("NEGATIVE CONTROL: reads the substrate's own declaration, never an invented path", () => {
+    // The fail-open this blocks. Two of them, in fact:
+    //   1. An unconditional `export MISE_DATA_DIR=/opt/tanren/mise` would point every
+    //      `manual_ssh` host and every non-Tanren runner image at a dir that does not
+    //      exist. So the engine hard-codes NO mise dir — it sources the script the image
+    //      itself wrote, and the VALUES stay the image's to choose.
+    //   2. Reading `$TANREN_MISE_DATA_DIR` instead would be a silent no-op on the real
+    //      path: that variable is the sshd DAEMON's environment, which sshd does not
+    //      forward into the session. A container-exec probe shows it set; over ssh it is
+    //      empty. Assert the prelude does not depend on it.
+    const prelude = miseSharedDirPrelude();
+    expect(prelude).toContain("[ -r /etc/profile.d/tanren-mise-shared-dir.sh ]");
+    expect(prelude).not.toContain("TANREN_MISE_DATA_DIR");
+    expect(prelude).not.toContain("export MISE_DATA_DIR");
+    expect(prelude).not.toContain("export MISE_CACHE_DIR");
+  });
+
+  it("is `set -e` safe — a runner without the script must not abort the command", () => {
+    // The provision command runs as `set -e; <provision>`. A `[ -r … ] && . …` chain
+    // returns 1 when the file is absent, which under `set -e` would kill the whole
+    // command on exactly the runners this is supposed to leave alone. It must be `if/fi`.
+    const prelude = miseSharedDirPrelude();
+    expect(prelude.startsWith("if [ -r ")).toBe(true);
+    expect(prelude.trimEnd().endsWith("fi;")).toBe(true);
+    expect(prelude).not.toContain("&& .");
+  });
+
+  it("stays a no-op for a project that declared no toolchain (lives inside the mise.toml guard)", () => {
+    const wrapped = withMiseActivation("echo hi");
+    expect(wrapped).toContain("fi; echo hi");
+    expect(wrapped.indexOf("[ -f 'mise.toml' ]")).toBeLessThan(wrapped.indexOf("tanren-mise-shared-dir.sh"));
   });
 });
 

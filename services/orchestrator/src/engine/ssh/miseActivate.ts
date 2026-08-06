@@ -31,6 +31,57 @@ import { quoteSshShellArg } from "./command.js";
 // guard tests for THIS file in the command's cwd before activating.
 const MISE_CONFIG_REL_PATH = "mise.toml";
 
+// The script the runner image writes to publish its SHARED mise data + cache dirs
+// (runner/Dockerfile: `printf 'export MISE_DATA_DIR=…\nexport MISE_CACHE_DIR=…\n' >
+// /etc/profile.d/tanren-mise-shared-dir.sh`). The image OWNS this path and its contents;
+// the engine only sources it.
+const MISE_SHARED_DIR_PROFILE_SCRIPT = "/etc/profile.d/tanren-mise-shared-dir.sh";
+
+// Make the runner image's WARM mise baseline actually reachable, for every mise
+// invocation the engine makes.
+//
+// The image bakes a warm baseline into a shared, world-readable dir and publishes its
+// location three ways (runner/Dockerfile): the `TANREN_MISE_*` image ENV, the
+// `/etc/profile.d` script above, and an append to `~/.bashrc`. NONE of them reach us:
+//
+//   - We run commands over a NON-LOGIN, NON-INTERACTIVE `ssh exec` (ssh2Substrate →
+//     `client.exec`), which sources neither `/etc/profile.d` nor — past Debian's early
+//     non-interactive return — `~/.bashrc`.
+//   - The image ENV belongs to the sshd DAEMON's process environment. sshd builds a
+//     fresh environment for the session and does NOT forward arbitrary daemon variables;
+//     the runner's sshd_config sets no `SetEnv`, `AcceptEnv` or `PermitUserEnvironment`,
+//     and the entrypoint writes no `/etc/environment`. So `$TANREN_MISE_DATA_DIR` is
+//     EMPTY in the session, even though a container-exec probe (which DOES inherit the
+//     image ENV) shows it set — a trap when reproducing this by hand.
+//
+// So `MISE_DATA_DIR` arrives unset and mise silently resolves its own `$HOME` defaults:
+//
+//   $ ssh runner 'mise doctor'          # the exec the engine actually performs
+//   dirs:
+//     data:  ~/.local/share/mise        # cold — re-downloaded every run
+//     cache: ~/.cache/mise
+//
+// The whole warm-baseline mechanism is inert: every run re-downloads a toolchain the
+// image already ships, into a dir shared by every concurrent run on that runner and
+// pinned by nobody.
+//
+// The fix uses the one publication route that survives a non-login exec: SOURCE the
+// image's own script. GUARDED on it being readable, so a runner that publishes no shared
+// dir (a bare `manual_ssh` host, a non-Tanren image) keeps mise's defaults exactly as
+// before — the engine never invents a path the substrate did not offer. Written as
+// `if … fi` rather than `[ -r … ] && .` because the provision command runs under
+// `set -e`, where a false `&&` chain would abort the whole command.
+//
+// Both mise seams below share this prelude ON PURPOSE: `mise install` must write where
+// `mise activate --shims` will later read. Pinning one without the other would install
+// the toolchain into a dir the activation does not look in.
+const MISE_SHARED_DIR_PRELUDE = `if [ -r ${MISE_SHARED_DIR_PROFILE_SCRIPT} ]; then . ${MISE_SHARED_DIR_PROFILE_SCRIPT}; fi; `;
+
+/** The shared-dir prelude, exported for the agreement + guard assertions in the tests. */
+export function miseSharedDirPrelude(): string {
+  return MISE_SHARED_DIR_PRELUDE;
+}
+
 // The mise activation prelude. It uses the `--shims` mode of `mise activate`, which
 // emits a plain, POSIX `export PATH="…/shims:$PATH"` that IMMEDIATELY puts the project's
 // mise shims on PATH for the rest of the `bash -c`/`sh -c` command (the shims dispatch
@@ -58,7 +109,7 @@ const MISE_CONFIG_REL_PATH = "mise.toml";
 function miseActivationPrelude(): string {
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `export MISE_YES=1; eval "$(mise activate bash --shims)"; fi; `
+    `export MISE_YES=1; ${MISE_SHARED_DIR_PRELUDE}eval "$(mise activate bash --shims)"; fi; `
   );
 }
 
@@ -83,7 +134,8 @@ export function withMiseActivation(command: string): string {
 export function miseProvisionCommand(): string {
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `export MISE_YES=1; mise trust ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} && mise install; ` +
+    `export MISE_YES=1; ${MISE_SHARED_DIR_PRELUDE}` +
+    `mise trust ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} && mise install; ` +
     `else echo ${quoteSshShellArg("tanren: no mise.toml - skipping mise install (project declared no toolchain)")}; fi`
   );
 }
