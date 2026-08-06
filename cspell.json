@@ -771,7 +771,7 @@
     "zombied",
     "zstd"
   ],
-  "ignoreRegExpList": ["/\\b[0-9a-f]{7,40}\\b/", "/[A-Za-z0-9+/]{24,}={0,2}/"],
+  "ignoreRegExpList": ["/\\b[0-9a-f]{7,40}\\b/", "/[A-Za-z0-9+/]{24,}={0,2}/", "/%2[Ff][A-Za-z0-9-]*/"],
   "dictionaries": ["typescript", "node", "npm", "html", "css", "softwareTerms", "bash", "filetypes"],
   "overrides": [
     {

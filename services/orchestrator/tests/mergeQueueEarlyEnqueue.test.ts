@@ -116,6 +116,8 @@ async function publishWithSeam(input: {
     repoUrl: context.repoUrl,
     targetBranch: context.targetBranch,
     runBranch: context.runBranch,
+    sourceRef: "a".repeat(40),
+    publishedHeadSha: "a".repeat(40),
     title: "Tanren: Add fixture",
     githubCredentialRef: "credential/github/org/org_42/dev",
     ...seam,

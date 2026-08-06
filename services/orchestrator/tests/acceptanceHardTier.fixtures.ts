@@ -328,10 +328,17 @@ export class RecordingAllocator implements Allocator {
 }
 
 export class RecordingSsh implements CommandSubstrate {
-  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    const stdout =
+      command.command.includes("git rev-parse HEAD") ||
+      (command.command.includes("git rev-parse") && command.command.includes("refs/tanren/pr-clean"))
+        ? `${CLEAN_HEAD_SHA}\n`
+        : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
+
+const CLEAN_HEAD_SHA = "a".repeat(40);
 
 // PR publish + CI poll GitHub script (same tail the easy worker test uses). The
 // merge stage is driven by the injected mergeProbe, not this HTTP client.
@@ -366,6 +373,7 @@ export function hardTierGitHub(): ScriptedGitHubHttp {
 }
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {
+  private hardTierBranchAbsenceConsumed = false;
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -373,6 +381,16 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     // identity read, answered out-of-band so the ordered response queue is intact.
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
+    // First draft publication must prove the exact branch is absent before its
+    // force-with-lease push; do not consume the scripted PR/CI sequence.
+    if (
+      input.method === "GET" &&
+      input.path === "/repos/cat-cave/tanren-fixture-hard/git/ref/heads/tanren%2Fhard-tier" &&
+      !this.hardTierBranchAbsenceConsumed
+    ) {
+      this.hardTierBranchAbsenceConsumed = true;
+      return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();
     if (response === undefined) {

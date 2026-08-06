@@ -180,6 +180,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
   ...rulesFor("github.branch.pushed", [
     ["repoUrl", "public"],
     ["branch", "public"],
+    ["headSha", "public"],
+    ["sourceRef", "public"],
     ["credentialRef", "redacted"],
     ["redacted", "public"],
   ]),

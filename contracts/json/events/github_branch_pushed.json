@@ -8,17 +8,27 @@
     "credentialRef": {
       "type": "string"
     },
+    "headSha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
     "redacted": {
       "const": true,
       "type": "boolean"
     },
     "repoUrl": {
       "type": "string"
+    },
+    "sourceRef": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
     }
   },
   "required": [
     "repoUrl",
     "branch",
+    "headSha",
+    "sourceRef",
     "credentialRef",
     "redacted"
   ],
