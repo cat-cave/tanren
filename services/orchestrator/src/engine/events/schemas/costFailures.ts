@@ -40,18 +40,35 @@ export const CostRouteUnmeterablePayload = z
   })
   .strict();
 
-// cost.ceiling_unenforceable — a configured dollar ceiling over a per_token route
-// with NO real-spend capture. Every call lands cost_usd = NULL / per_token, which
-// the budget gate counts as unpriced and fails CLOSED on; because the rows are the
-// run's OWN, raising the ceiling cannot clear the pause. The run is refused at
-// SETUP instead of deadlocking mid-flight, and `remedy` names the fix that works.
+// Why a configured ceiling cannot be ENFORCED. A SUPERSET of UnmeterableReason,
+// and deliberately a separate enum: the two metering limitations are facts about
+// what tanren/the harness CANNOT do, whereas `unrecognized_credential_ref` is an
+// operator MISCONFIGURATION. Widening `UnmeterableReason` itself would let a config
+// error be narrated by `cost.route_unmeterable` as a platform limitation, which is
+// exactly the laundering `costs/meterability.ts` refuses to do. Both nevertheless
+// deadlock a run under a ceiling identically (NULL cost_usd on a real-spend-bearing
+// billing mode ⇒ `unpriced_spend` on the run's OWN rows), so both are refused here.
+const CeilingUnenforceableReason = z.enum([
+  "harness_discards_generation_id",
+  "byok_upstream_invoice",
+  "unrecognized_credential_ref",
+]);
+
+// cost.ceiling_unenforceable — a configured dollar ceiling over a route whose rows
+// all land cost_usd = NULL on a REAL-spend-bearing billing mode (`per_token` with no
+// capture path, or `unattributed` from an unrecognized ref). The budget gate counts
+// exactly those as unpriced and fails CLOSED on them; because the rows are the run's
+// OWN, raising the ceiling cannot clear the pause. The run is refused at SETUP
+// instead of deadlocking mid-flight, and `remedy` names the fix that works.
 export const CostCeilingUnenforceablePayload = z
   .object({
     refKind: z.string(),
     cli: z.string(),
+    // `per_token` for the two metering limitations, `unattributed` for an
+    // unrecognized ref — the billing mode the run's NULL-cost rows will carry.
     billingMode: z.string(),
     ceilingUsd: z.number().nonnegative(),
-    reason: UnmeterableReason,
+    reason: CeilingUnenforceableReason,
     detail: z.string(),
     remedy: z.string(),
   })
