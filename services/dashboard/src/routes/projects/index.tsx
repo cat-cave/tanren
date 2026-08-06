@@ -6,16 +6,14 @@
 import type { Context, Hono } from "hono";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import { getProjectDag, ProjectDagUnavailableError } from "../../api/projectDag.js";
 import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
-import { ProjectDagBody, ProjectDagUnavailableBody } from "../../components/project/ProjectDagBody.js";
-import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
-import { buildProjectViewModel, summarizeRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
 import { resolveConfig } from "./projectConfig.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
-import { mountSpecDetailRoutes, notFoundBody, resolveProjectMode } from "./specRoutes.js";
+import { mountSpecDetailRoutes, notFoundBody } from "./specRoutes.js";
+import { loadProjectView } from "./projectViewLoader.js";
+import { renderProjectView } from "./projectViewRenderer.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
@@ -44,84 +42,9 @@ function asArray(value: string | string[] | undefined): string[] {
 
 export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
-  // Chat-primary project view (overrides the placeholder).
+  // Project view (overrides the placeholder).
   // -------------------------------------------------------------------------
-  app.get("/projects/:projectId", async (c) => {
-    const projectId = c.req.param("projectId");
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId });
-    if (ctx.org === undefined || ctx.project === undefined) {
-      return renderShell(
-        c,
-        ctx,
-        { title: `tanren · ${projectId}` },
-        <div class="p2b">
-          <div class="page-head">
-            <div>
-              <div class="eyebrow">project · not found</div>
-              <div class="page-title">project not found</div>
-            </div>
-          </div>
-          <div class="page-body">
-            <section class="placeholder-card">
-              <p>No project {projectId} is visible to you.</p>
-            </section>
-          </div>
-        </div>,
-      );
-    }
-    const orgId = ctx.org.id;
-    // GET is read-only: never mint forge threads/turns from a safe method.
-    // Live narration is POST /forge/project-narration (inbound CSRF + outbound
-    // clientDepsFor). Pulse falls back to data-derived copy when undefined.
-    const client = clientFor(c, deps);
-    const mode = resolveProjectMode(c);
-    const [runsMaybe, insights, milestones, feed] = await Promise.all([
-      client.listRunsMaybe(orgId, projectId),
-      client.listInsights(orgId, projectId),
-      client.listMilestones(orgId, projectId),
-      client.listFeed(orgId, projectId),
-    ]);
-    const runs = runsMaybe ?? [];
-    const model = buildProjectViewModel({
-      projectId,
-      projectName: ctx.project.name,
-      runs,
-      runsAvailable: runsMaybe !== undefined,
-      insights,
-      milestones,
-      feed,
-      narration: undefined,
-      weekSpend: summarizeRunCosts(runs),
-    });
-    const view = (
-      <ProjectViewBody
-        projectId={projectId}
-        projectName={ctx.project.name}
-        orgId={orgId}
-        model={model}
-        insights={insights}
-        csrfToken={ctx.csrfToken}
-      />
-    );
-    if (mode !== "dag") return renderShell(c, ctx, { title: `tanren · ${ctx.project.name}` }, view);
-    try {
-      const dag = await getProjectDag(client, orgId, projectId);
-      return renderShell(
-        c,
-        ctx,
-        { title: `tanren · ${ctx.project.name} · dag` },
-        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
-      );
-    } catch (error) {
-      if (!(error instanceof ProjectDagUnavailableError)) throw error;
-      return renderShell(
-        c,
-        ctx,
-        { title: `tanren · ${ctx.project.name} · dag` },
-        <ProjectDagUnavailableBody projectId={projectId} projectName={ctx.project.name} model={model} />,
-      );
-    }
-  });
+  app.get("/projects/:projectId", async (c) => renderProjectView(c, await loadProjectView(c, deps)));
 
   // -------------------------------------------------------------------------
   // Spec list.
