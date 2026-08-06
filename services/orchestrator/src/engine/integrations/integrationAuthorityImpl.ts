@@ -236,19 +236,19 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     ) {
       throw new TypeError("legacy integration request fingerprint must be sha256");
     }
-    const endpointlessLegacyRetry = input.legacyRetryOnly === true;
+    const legacyRetryWithoutEndpoint = input.legacyRetryOnly === true;
     const canMigrateLegacy =
       input.providerKind === "sentry" &&
-      !endpointlessLegacyRetry &&
+      !legacyRetryWithoutEndpoint &&
       input.legacyRequestFingerprint !== undefined &&
       input.legacyRequestFingerprint !== input.requestFingerprint;
-    if (endpointlessLegacyRetry && input.providerKind !== "sentry") {
+    if (legacyRetryWithoutEndpoint && input.providerKind !== "sentry") {
       throw new Error("legacy integration retry is restricted to Sentry");
     }
-    if (endpointlessLegacyRetry && input.legacyRequestFingerprint !== undefined) {
+    if (legacyRetryWithoutEndpoint && input.legacyRequestFingerprint !== undefined) {
       throw new Error("endpoint-less legacy retry cannot include a migration fingerprint");
     }
-    if (!endpointlessLegacyRetry && input.legacyRequestFingerprint !== undefined && !canMigrateLegacy) {
+    if (!legacyRetryWithoutEndpoint && input.legacyRequestFingerprint !== undefined && !canMigrateLegacy) {
       throw new Error("legacy integration fingerprint migration is restricted to Sentry v2 requests");
     }
     const operationId = randomUUID();
@@ -309,8 +309,9 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
       );
     }
     const isLegacyRow = canMigrateLegacy && row.request_fingerprint === input.legacyRequestFingerprint;
-    const isEndpointlessLegacyRow = endpointlessLegacyRetry && row.request_fingerprint === input.requestFingerprint;
-    if (row.request_fingerprint !== input.requestFingerprint && !isLegacyRow && !isEndpointlessLegacyRow) {
+    const isLegacyRowWithoutEndpoint =
+      legacyRetryWithoutEndpoint && row.request_fingerprint === input.requestFingerprint;
+    if (row.request_fingerprint !== input.requestFingerprint && !isLegacyRow && !isLegacyRowWithoutEndpoint) {
       throw new IntegrationIdempotencyConflictError(
         "integration idempotency key is already bound to a different immutable request",
       );
