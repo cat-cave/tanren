@@ -163,9 +163,14 @@ describe("buildSubtaskCostContext", () => {
       appended.push({ type, payload: payload as Record<string, unknown>, taskId });
     }) as AppendEvent;
     const built = buildSubtaskCostContext(
-      { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1" },
+      { recorder, runId: "run_1", specId: "spec_1", projectId: "proj_1", orgId: "org_1" },
       appendEvent,
     );
+    // The org scope is REQUIRED by the input type and NOT NULL on `events.org_id`, so
+    // a context built without it could not append a single derived cost event in
+    // production. Pin that the builder carries it through verbatim rather than
+    // leaving the field's presence to the (currently un-typechecked) test sources.
+    expect(built.orgId).toBe("org_1");
     await built.emitTokenAccountingFailed?.({ role: "writer", cli: "claude", model: "claude-opus-4", taskId: "t1" });
     await built.emitProviderCaptureFailed?.({ generationId: "gen-1", detail: "boom", taskId: "t2" });
     await built.emitGenerationIdMissing?.({ cli: "codex", taskId: "t3" });
@@ -185,7 +190,7 @@ describe("buildSubtaskCostContext", () => {
     const { recorder } = recordingRecorder();
     const appendEvent = (async () => {}) as AppendEvent;
     const built = buildSubtaskCostContext(
-      { recorder, runId: "r", specId: "s", projectId: "p", captureRealProviderCost: sharedCapturer },
+      { recorder, runId: "r", specId: "s", projectId: "p", orgId: "org_1", captureRealProviderCost: sharedCapturer },
       appendEvent,
     );
     expect(built.captureRealProviderCost).toBe(sharedCapturer);
