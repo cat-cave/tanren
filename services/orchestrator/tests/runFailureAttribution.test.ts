@@ -45,7 +45,7 @@ import { WorkspaceDepsInstallError } from "../src/engine/workspace/index.js";
 // ─────────────────────────────────────────────────────────────────────────────────────
 
 describe("classifyRunFailure — the error classes that produced the live 93%-`internal` reading", () => {
-  it("PersistentSshOutageError (~122 of 225 live failures) is NOT `internal` — it is a runner_ssh precondition", () => {
+  it("PersistentSshOutageError (~122 of 225 live failures) is NOT `internal` — and NOT a precondition", () => {
     // The single largest live failure class. Every occurrence landed on the opaque
     // `internal` default, so an SSH outage was indistinguishable from any other unknown
     // throw and three of them in a row read as one repeating state.
@@ -57,11 +57,14 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
     expect(outage.retriesObserved).toBe(9);
     const classified = classifyRunFailure(outage);
     expect(classified.code).not.toBe("internal");
-    expect(classified).toMatchObject({
-      cause: "runner_ssh_outage",
-      attribution: "environment",
-      precondition: "runner_ssh",
-    });
+    expect(classified).toMatchObject({ cause: "runner_ssh_outage", attribution: "environment" });
+    // NOT a precondition. This class is the OUTPUT of `transientRetry.ts`'s own convergence
+    // detector — its doc says "a proven fixed point" and its message says "NOT retrying a
+    // fixed point forever". A precondition buys an UNBOUNDED re-drive whose rows are filtered
+    // out of every convergence history, so tagging a proven fixed point with one discards the
+    // proof and makes the loop unbounded again, one layer up. It takes the ordinary
+    // convergence path instead: it re-drives, and a sustained outage parks.
+    expect(classified.precondition).toBeUndefined();
   });
 
   it("MissingGithubCredentialRefError (49 live failures) is NOT `internal` — it is a github_credential precondition", () => {
@@ -94,19 +97,51 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
     });
   });
 
-  it("RunStateWriteTransportError is attributed to TANREN yet still carries a precondition", () => {
-    // Attribution and precondition are INDEPENDENT axes. Attribution answers "who fixes the
-    // bug" (tanren's own control plane is misbehaving); precondition answers "may this
-    // park" (no — the endpoint accepting writes again is an external condition that clears).
-    const error = new RunStateWriteTransportError(500, "/internal/append-event", "internal server error");
-    // Same husk hazard, reversed: the signature is (status, endpoint, body).
-    expect(error.status).toBe(500);
-    expect(error.endpoint).toBe("/internal/append-event");
-    expect(classifyRunFailure(error)).toMatchObject({
-      cause: "control_plane_write_failed",
-      attribution: "tanren",
-      precondition: "control_plane",
-    });
+  it.each([408, 429, 502, 503, 504])(
+    "RunStateWriteTransportError keeps the control_plane precondition on a %s — a status that asserts a retry",
+    (status) => {
+      // Attribution and precondition are INDEPENDENT axes. Attribution answers "who fixes the
+      // bug" (tanren's own control plane); precondition answers "may this park". These
+      // statuses say "come back later" in their own right, so the wait is supported.
+      const error = new RunStateWriteTransportError(status, "/internal/append-event", "unavailable");
+      // Same husk hazard, reversed: the signature is (status, endpoint, body).
+      expect(error.status).toBe(status);
+      expect(error.endpoint).toBe("/internal/append-event");
+      expect(classifyRunFailure(error)).toMatchObject({
+        cause: "control_plane_write_failed",
+        attribution: "tanren",
+        precondition: "control_plane",
+      });
+    },
+  );
+
+  it.each([400, 401, 403, 404, 409, 422, 500, 501])(
+    "RunStateWriteTransportError DROPS the precondition on a %s — the status does not support the claim",
+    (status) => {
+      // The class is thrown on ANY non-2xx and the precondition used to be attached
+      // statically. A permanent 500 from tanren's own defect — which is exactly what
+      // `attribution: "tanren"` says it is — was then indistinguishable from a transient 503,
+      // and looped forever on a fixed 30s cadence with no escalation and no convergence
+      // signal, because precondition rows are excluded from both histories. The two axes
+      // contradicted each other on the same row: "our bug" and "clears on its own".
+      //
+      // Dropping the precondition does NOT abandon it: it re-drives on the ordinary
+      // convergence path, so a transient 500 still recovers unattended, and a permanent one
+      // reaches a proven fixed point and parks.
+      const error = new RunStateWriteTransportError(status, "/internal/append-event", "boom");
+      const classified = classifyRunFailure(error);
+      expect(classified).toMatchObject({ cause: "control_plane_write_failed", attribution: "tanren" });
+      expect(classified.precondition).toBeUndefined();
+    },
+  );
+
+  it("RunStateWriteTransportError with an unreadable status fails CLOSED to no precondition", () => {
+    // The refinement reads a typed field off a known class. If it is not a number the claim
+    // cannot be supported, and the conservative direction is the one that can still park:
+    // parking is recoverable via an operator requeue, an invisible probe loop is not.
+    const error = new RunStateWriteTransportError(503, "/internal/append-event", "unavailable");
+    Object.defineProperty(error, "status", { value: "503", configurable: true });
+    expect(classifyRunFailure(error).precondition).toBeUndefined();
   });
 
   it("RunnerClaimLiveRowError is TANREN's bug with NO precondition (nothing external clears it)", () => {
@@ -205,7 +240,7 @@ describe("precondition_block rows are excluded from the convergence history in B
         { failureCode: "internal", cause: "runner_double_claim", stage: "bootstrap" },
         { failureCode: "credential", cause: "github_credential_missing", source: "precondition_block" },
         { failureCode: "internal", cause: "runner_double_claim", stage: "bootstrap" },
-        { failureCode: "workspace", cause: "runner_ssh_outage", source: "precondition_block" },
+        { failureCode: "credential", cause: "credential_missing", source: "precondition_block" },
       ]),
     );
     const result = await reader({

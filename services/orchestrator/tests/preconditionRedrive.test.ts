@@ -198,18 +198,41 @@ describe("THE RECOVERY PROOF — a precondition-blocked spec never parks and res
     expect(sim.redrivenRows()).toHaveLength(ATTEMPTS);
   });
 
-  it("an unreachable runner behaves identically — 8 SSH outages in a row park nothing", async () => {
+  it("a SUSTAINED SSH outage is NOT a wait — it already carries a fixed-point proof, and it PARKS", async () => {
+    // The counter-case to everything above, and the correction to what this test asserted
+    // when it was first written ("8 SSH outages in a row park nothing").
+    //
+    // `PersistentSshOutageError` is not raised when SSH fails. `ssh/transientRetry.ts`
+    // raises it only after ITS OWN convergence detector proves a fixed point — the class
+    // doc says "a proven fixed point" and the message says "NOT retrying a fixed point
+    // forever". Treating that conclusion as a precondition made the run layer retry it
+    // forever anyway, with the rows filtered out of both convergence histories so nothing
+    // downstream could re-derive the proof. A system that can prove it is stuck and keeps
+    // going is the exact failure this cluster exists to remove; a precondition tag is not
+    // a license to reintroduce it one layer up.
     const sim = new SpecSimulator();
+    const buckets: string[] = [];
     for (let attempt = 1; attempt <= 8; attempt += 1) {
-      expect(
+      buckets.push(
         await sim.attemptThrowing(
           new PersistentSshOutageError({ stuckSignature: "handshake-lost recurred", retriesObserved: 9 }),
         ),
-      ).toBe("re_drive");
+      );
+      if (sim.parked() !== undefined) break;
     }
-    expect(sim.parked()).toBeUndefined();
-    expect(sim.redrivenRows().every((r) => r["source"] === "precondition_block")).toBe(true);
-    expect(sim.redrivenRows().every((r) => r["precondition"] === "runner_ssh")).toBe(true);
+    // It still RE-DRIVES first: one outage is not proof at the run layer either, so an
+    // outage that clears on the next attempt recovers unattended exactly as before.
+    expect(buckets[0]).toBe("re_drive");
+    // But a sustained one reaches the proven fixed point and PARKS — bounded, and
+    // attributable, rather than an invisible 30s probe loop with no escalation.
+    expect(buckets).toContain("genuine_halt");
+    expect(buckets.length).toBeLessThan(8);
+    const parked = sim.parked();
+    expect(parked).toBeDefined();
+    expect(parked?.payload).toMatchObject({ cause: "runner_ssh_outage", attribution: "environment" });
+    // And it is NEVER tagged as a wait, so it is real convergence evidence in both readers.
+    expect(sim.redrivenRows().every((r) => r["source"] === undefined)).toBe(true);
+    expect(sim.redrivenRows().every((r) => r["precondition"] === undefined)).toBe(true);
   });
 
   it("the precondition wait is invisible to the WANDERING-halt detector too, not only the fixed-point one", async () => {

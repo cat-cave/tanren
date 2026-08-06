@@ -15,6 +15,7 @@
 // An unrecognized error falls CLOSED to the generic `internal` code with a fixed
 // summary — never a pass-through of the raw string.
 
+import { refineControlPlaneWrite } from "./controlPlaneWriteRefinement.js";
 import type { RunFailureAttribution, RunFailureCause, RunPrecondition } from "./runFailureCause.js";
 
 // Re-exported so the many existing import sites of this module pick up the new
@@ -211,17 +212,31 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
   // The SSH transport to the run's allocated runner stayed down across the SATURATED
   // retry backoff (`ssh/transientRetry.ts`). This was the single largest live failure
   // class — ~122 of 225 failures — and every one of them landed on the opaque
-  // `internal` default. It is neither codebase's bug: the route (key, host, network)
-  // is absent right now and RETURNS on its own, which is exactly what a precondition
-  // names. `workspace` is the honest broad code (the runner IS the workspace
-  // transport); `runner_ssh_outage` carries the precision.
+  // `internal` default. `workspace` is the honest broad code (the runner IS the
+  // workspace transport); `runner_ssh_outage` carries the precision, and
+  // `environment` is the honest attribution: it is neither codebase's bug.
+  //
+  // DELIBERATELY NOT A PRECONDITION, though an SSH outage looks like the textbook one.
+  // This class is not raised on an SSH failure — it is raised by `transientRetry.ts`
+  // ONLY after that layer's own convergence detector PROVES a fixed point: "the SAME
+  // transient signal recurring at the SATURATED backoff with no new information", and
+  // its message ends "surfacing as a sustained outage, NOT retrying a fixed point
+  // forever". Tagging that conclusion `precondition: "runner_ssh"` made the run layer
+  // re-drive forever, on a fixed cadence, with the rows filtered out of BOTH convergence
+  // histories — so the proof the inner layer computed was discarded and nothing
+  // downstream could re-derive it. That is the same defect this cluster exists to fix
+  // (a proven fixed point that changes the label but not the behaviour), one layer up.
+  //
+  // Without a precondition it takes the ordinary convergence path: a first outage still
+  // re-drives, a genuinely sustained one reaches a proven fixed point and parks
+  // `needs_attention` naming `runner_ssh_outage` / `environment` — which an operator can
+  // act on. An outage that clears on the next attempt still recovers unattended.
   PersistentSshOutageError: {
     code: "workspace",
     stage: "workspace",
     summary: "the SSH route to the run's runner stayed unavailable across the retry backoff",
     cause: "runner_ssh_outage",
     attribution: "environment",
-    precondition: "runner_ssh",
   },
   // A GitHub token credential ref IS configured but the secret store has nothing at it
   // (`credentials/githubTokenResolver.ts`). 49 live failures, all read as `internal`.
@@ -245,12 +260,14 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     attribution: "environment",
     precondition: "github_app_credential",
   },
-  // The control-plane run-state write endpoint failed at the TRANSPORT (a 500, an
-  // unreachable host) — `worker/httpRunStateWriter.ts`. That is tanren's own control
-  // plane misbehaving, so the attribution is `tanren`; but the run is nonetheless
-  // BLOCKED on an external condition (the endpoint accepting writes again) that clears
-  // without the spec changing, so it also carries a precondition. Attribution answers
-  // "who fixes the bug"; precondition answers "may this park" — they are independent.
+  // The control-plane run-state write endpoint failed at the TRANSPORT —
+  // `worker/httpRunStateWriter.ts`, which throws this on ANY non-2xx. That is tanren's
+  // own control plane misbehaving, so the attribution is `tanren`.
+  //
+  // The `precondition` here is CONDITIONAL on the status and is applied by
+  // `refineControlPlaneWrite` below, NOT by this table — see that function for why a
+  // static precondition on this class was wrong. The entry carries the transient form;
+  // the refinement strips it when the status does not support the claim.
   RunStateWriteTransportError: {
     code: "internal",
     stage: "run",
@@ -434,6 +451,9 @@ export function classifyRunFailure(error: unknown): ClassifiedRunFailure {
   if (error instanceof Error && error.name !== "" && Object.hasOwn(BY_ERROR_NAME, error.name)) {
     const matched = BY_ERROR_NAME[error.name];
     if (matched !== undefined) {
+      // A class whose precondition depends on the INSTANCE, not the class name, gets a
+      // typed refinement. The table alone cannot express "this one clears, that one does not".
+      if (error.name === "RunStateWriteTransportError") return refineControlPlaneWrite(error, matched);
       return matched;
     }
   }
