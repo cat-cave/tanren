@@ -308,20 +308,22 @@ describe("withMiseActivation · the provisioned toolchain reaches the project's 
     const wrapped = withMiseActivation("just bootstrap", RUN_A);
     expect(wrapped).toContain("[ -f 'mise.toml' ]");
     expect(wrapped).toContain(`[ -f "${miseRunScope(RUN_A).markerFile}" ]`);
-    // The mise.toml branch keeps mise's own shim activation, byte for byte as before.
-    expect(wrapped).toContain('eval "$(mise activate bash --shims)"');
+    // The mise.toml branch keeps mise's own shim activation — the SAME source as before,
+    // now captured and status-checked before it is evaluated (`eval "$(…)"` reports EVAL's
+    // status, never the substitution's; see ./miseActivation.test.ts for that regression).
+    expect(wrapped).toContain('__tanren_mise_activate="$(mise activate bash --shims)"');
     // The detected-toolchain branch uses `mise env`, which puts ONLY the resolved tools
     // on PATH. Using the shims dir here would shadow every other tool in the runner's
     // shared mise store with a version-less shim — measured on the golden image, a repo
     // declaring only pnpm loses its working `go` to `No version is set for shim: go`.
-    expect(wrapped).toContain('eval "$(mise env -s bash)"');
+    expect(wrapped).toContain('__tanren_mise_activate="$(mise env -s bash)"');
     // BOTH branches carry the whole preamble, not just the mise.toml one: the detected-
     // toolchain branch reads back what the provision wrote, so if the two disagree on the
     // data dir or on the config file, the marker is present, the activation resolves
     // nothing, and `pnpm` is gone again.
     const preamble = `${miseSharedDirPrelude()}export MISE_YES=1 MISE_GLOBAL_CONFIG_FILE="${miseRunScope(RUN_A).configFile}"`;
-    expect(wrapped).toContain(`${preamble}; eval "$(mise activate bash --shims)"`);
-    expect(wrapped).toContain(`${preamble}; eval "$(mise env -s bash)"`);
+    expect(wrapped).toContain(`${preamble}; __tanren_mise_activate="$(mise activate bash --shims)"`);
+    expect(wrapped).toContain(`${preamble}; __tanren_mise_activate="$(mise env -s bash)"`);
     // Still a skip, not a gate: with neither trigger the command runs unchanged.
     expect(wrapped).toContain("fi; just bootstrap");
     expect(wrapped).not.toContain("fi && just bootstrap");
