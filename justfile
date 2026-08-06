@@ -1264,7 +1264,7 @@ smoke-aggregate: \
   smoke-rls-verification-reads \
   smoke-rls-proof-dashboard
 
-smoke:
+smoke: smoke-aggregate-config-test
   # Validate once and export through the nested just invocation so all leaves
   # inherit the same mapped owner URL.
   DATABASE_URL="$(scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL; exec just smoke-aggregate
