@@ -3,12 +3,8 @@
   "version": "0.2",
   "language": "en",
   "caseSensitive": false,
-  "files": [
-    "**/*.{ts,tsx,js,mjs,md,yml,yaml}"
-  ],
-  "enableFiletypes": [
-    "mjs"
-  ],
+  "files": ["**/*.{ts,tsx,js,mjs,md,yml,yaml}"],
+  "enableFiletypes": ["mjs"],
   "ignorePaths": [
     "node_modules/**",
     "**/dist/**",
@@ -775,20 +771,8 @@
     "zombied",
     "zstd"
   ],
-  "ignoreRegExpList": [
-    "/\\b[0-9a-f]{7,40}\\b/",
-    "/[A-Za-z0-9+/]{24,}={0,2}/"
-  ],
-  "dictionaries": [
-    "typescript",
-    "node",
-    "npm",
-    "html",
-    "css",
-    "softwareTerms",
-    "bash",
-    "filetypes"
-  ],
+  "ignoreRegExpList": ["/\\b[0-9a-f]{7,40}\\b/", "/[A-Za-z0-9+/]{24,}={0,2}/"],
+  "dictionaries": ["typescript", "node", "npm", "html", "css", "softwareTerms", "bash", "filetypes"],
   "overrides": [
     {
       "filename": [
@@ -815,10 +799,7 @@
       ]
     },
     {
-      "filename": [
-        "services/orchestrator/tests/**",
-        "services/dashboard/tests/**"
-      ],
+      "filename": ["services/orchestrator/tests/**", "services/dashboard/tests/**"],
       "comment": "Synthetic fake-data identifiers used only as test fixtures.",
       "words": [
         "akia",

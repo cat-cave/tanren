@@ -18,6 +18,11 @@ export function timedAnswererAdapter<TOutput>(
     kind: inner.kind,
     cli: inner.cli,
     authRef: inner.authRef,
+    // Forward the wrapped adapter's REAL model id so the cost path — which reads it
+    // through this timing decorator (the instance the loop holds) — records the model
+    // actually requested. Absent when the inner adapter declares none (a fake fixture),
+    // which the recorder treats as the honest notional-NULL path.
+    ...(inner.model !== undefined && { model: inner.model }),
     // Forward the wrapped adapter's per-call token telemetry so the cost path can
     // read it through this timing decorator (the decorator is the instance the loop
     // holds). Absent when the inner adapter exposes none (e.g. a fake fixture).
