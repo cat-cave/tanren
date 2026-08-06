@@ -78,6 +78,15 @@ export class EagerBeamStampMissError extends Error {
   }
 }
 
+/** A content-addressed plan belongs to another durable frontier coordinate. */
+export class EagerBeamPlanDigestCollisionError extends Error {
+  public override readonly name = "EagerBeamPlanDigestCollisionError";
+
+  public constructor() {
+    super("eager beam plan digest collides outside its frontier");
+  }
+}
+
 /** PG reader/writer used exclusively by the production EAGER planner. */
 export class PgEagerBeamStore {
   public constructor(private readonly pool: pg.Pool) {}
@@ -197,8 +206,40 @@ export class PgEagerBeamStore {
           input.plan.rank,
         ],
       );
-      const persisted = beam.rows[0];
-      if (persisted === undefined) throw new Error("eager beam plan digest collides outside its frontier");
+      let persisted = beam.rows[0];
+      if (persisted === undefined) {
+        const conflict = await client.query<{
+          project_id: string;
+          frontier_run_id: string;
+          frontier_spec_id: string;
+          state: "building" | "ready" | "stale" | "held";
+        }>(
+          `SELECT project_id, frontier_run_id, frontier_spec_id, state
+             FROM merge_eager_beams
+            WHERE org_id = $1 AND plan_digest = $2
+            FOR UPDATE`,
+          [input.record.orgId, input.planDigest],
+        );
+        const prior = conflict.rows[0];
+        if (prior === undefined) throw new EagerBeamPlanDigestCollisionError();
+        const sameCoordinate =
+          prior.project_id === input.plan.projectId &&
+          prior.frontier_run_id === input.plan.frontierRunId &&
+          prior.frontier_spec_id === input.plan.frontierSpecId;
+        if (!sameCoordinate || prior.state === "ready") {
+          if (sameCoordinate) throw new EagerBeamReadyCasLostError();
+          throw new EagerBeamPlanDigestCollisionError();
+        }
+        const revived = await client.query<BeamRow>(
+          `UPDATE merge_eager_beams
+              SET integration_node_id = $3, rank = $4, state = 'building', stale_reason = NULL, updated_at = now()
+            WHERE org_id = $1 AND plan_digest = $2 AND state <> 'ready'
+            RETURNING id, generation`,
+          [input.record.orgId, input.planDigest, nodeId, input.plan.rank],
+        );
+        persisted = revived.rows[0];
+        if (persisted === undefined) throw new EagerBeamPlanDigestCollisionError();
+      }
       await events.append({
         orgId: input.record.orgId,
         projectId: input.record.projectId,
