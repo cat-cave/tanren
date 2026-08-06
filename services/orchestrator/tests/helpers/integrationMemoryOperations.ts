@@ -12,6 +12,7 @@ export function dispatchOperationSql(
     return insertOperation(operations, sql, params);
   }
   if (sql.startsWith("UPDATE org_integration_connection_operations")) {
+    if (sql.includes("SET request_fingerprint = $1")) return migrateRequestFingerprint(operations, params);
     return updateOperation(operations, sql, params);
   }
   if (sql.includes("FROM org_integration_connection_operations") && sql.includes("idempotency_key")) {
@@ -107,6 +108,16 @@ export function dispatchOperationSql(
     return rowsOf(op ? [{ id: op.id }] : []);
   }
   return null;
+}
+
+function migrateRequestFingerprint(operations: MemoryOperation[], params: unknown[]): IntegrationQueryResult {
+  const [nextFingerprint, orgId, operationId, legacyFingerprint] = params as [string, string, string, string];
+  const operation = operations.find(
+    (row) => row.org_id === orgId && row.id === operationId && row.request_fingerprint === legacyFingerprint,
+  );
+  if (operation === undefined) return rowsOf([]);
+  operation.request_fingerprint = nextFingerprint;
+  return rowsOf([{ request_fingerprint: nextFingerprint }]);
 }
 
 function insertOperation(operations: MemoryOperation[], sql: string, params: unknown[]): IntegrationQueryResult {

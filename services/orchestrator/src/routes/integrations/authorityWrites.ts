@@ -3,11 +3,17 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { isKnownProviderKind } from "../../engine/contracts/integrationCatalog.js";
-import { IntegrationIdempotencyConflictError } from "../../engine/contracts/integrationAuthority.js";
+import {
+  IntegrationIdempotencyConflictError,
+  IntegrationLegacyOperationNotFoundError,
+} from "../../engine/contracts/integrationAuthority.js";
 import type { IntegrationSecretStore } from "../../engine/contracts/integrationSecretStore.js";
 import type { EventStore } from "../../engine/eventStore.js";
 import type { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
-import { integrationRequestFingerprint } from "../../engine/integrations/integrationOperationFingerprint.js";
+import {
+  integrationRequestFingerprint,
+  legacyIntegrationRequestFingerprint,
+} from "../../engine/integrations/integrationOperationFingerprint.js";
 import { hasPrincipalVerifier, principalVerifierFor } from "../../engine/integrations/principalVerifiers.js";
 import * as sentry from "../../engine/integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
@@ -55,6 +61,9 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+const PRE_ENDPOINT_SENTRY_ENDPOINT = "https://sentry.io";
+
 function linkVerifierEndpoint(providerKind: string, value: string | undefined): string | undefined {
   if (providerKind !== "sentry") {
     if (value !== undefined) throw new Error("provider endpoint is not accepted");
@@ -114,21 +123,34 @@ export function mountIntegrationAuthorityWrites(
     const parsed = LinkBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
     let providerEndpoint: string | undefined;
+    let legacyRetryOnly = false;
     try {
-      providerEndpoint = linkVerifierEndpoint(providerKind, parsed.data.baseUrl);
+      if (providerKind === "sentry" && parsed.data.baseUrl === undefined) {
+        // The pre-endpoint route always used Sentry's hosted endpoint. This is
+        // retry-only: the authority refuses to create a new operation here.
+        providerEndpoint = PRE_ENDPOINT_SENTRY_ENDPOINT;
+        legacyRetryOnly = true;
+      } else {
+        providerEndpoint = linkVerifierEndpoint(providerKind, parsed.data.baseUrl);
+      }
     } catch {
       return c.json({ error: "invalid_provider_endpoint" }, 400);
     }
 
     try {
-      const requestFingerprint = integrationRequestFingerprint({
+      const fingerprintInput = {
         orgId,
         providerKind,
         operationKind: "link",
         providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
-      });
+      } as const;
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const legacyRequestFingerprint =
+        providerKind === "sentry" && providerEndpoint !== undefined
+          ? legacyIntegrationRequestFingerprint(fingerprintInput)
+          : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
         authority.authorizePrincipalVerification(client, {
           orgId,
@@ -136,6 +158,8 @@ export function mountIntegrationAuthorityWrites(
           operationKind: "link",
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
+          ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
         }),
       );
@@ -243,6 +267,9 @@ export function mountIntegrationAuthorityWrites(
       }
       return c.json(linkCompletedPayload(orgId, permit.operationId, providerKind, outcome.result), 202);
     } catch (error) {
+      if (error instanceof IntegrationLegacyOperationNotFoundError) {
+        return c.json({ error: "invalid_provider_endpoint" }, 400);
+      }
       if (error instanceof IntegrationIdempotencyConflictError) {
         return c.json({ error: "idempotency_conflict" }, 409);
       }
@@ -279,7 +306,7 @@ export function mountIntegrationAuthorityWrites(
     }
 
     try {
-      const requestFingerprint = integrationRequestFingerprint({
+      const fingerprintInput = {
         orgId,
         providerKind,
         operationKind: "rotate",
@@ -287,7 +314,12 @@ export function mountIntegrationAuthorityWrites(
         providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
-      });
+      } as const;
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const legacyRequestFingerprint =
+        providerKind === "sentry" && providerEndpoint !== undefined
+          ? legacyIntegrationRequestFingerprint(fingerprintInput)
+          : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
         authority.authorizePrincipalVerification(client, {
           orgId,
@@ -296,6 +328,7 @@ export function mountIntegrationAuthorityWrites(
           connectionId,
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
           actor: { kind: "operator", id: actor.userId },
         }),
       );

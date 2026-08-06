@@ -129,6 +129,13 @@ export type AuthorizePrincipalVerificationInput = {
   connectionId?: string;
   /** Digest binding the idempotency key to actor, target, and credential bytes. */
   requestFingerprint: string;
+  /**
+   * Exact pre-endpoint v1 digest. Only the Sentry link/rotate route may use it
+   * to migrate a historically endpoint-less operation to the current digest.
+   */
+  legacyRequestFingerprint?: string;
+  /** Do not create a new operation while replaying an endpoint-less legacy request. */
+  legacyRetryOnly?: boolean;
   actor: ActorRef;
 };
 
@@ -139,6 +146,10 @@ export type ResumePrincipalVerificationInput = {
 
 export class IntegrationIdempotencyConflictError extends Error {
   public override readonly name = "IntegrationIdempotencyConflictError";
+}
+
+export class IntegrationLegacyOperationNotFoundError extends Error {
+  public override readonly name = "IntegrationLegacyOperationNotFoundError";
 }
 
 export type AuthorizeOperationInput = EligibleOperationExpectation & {
