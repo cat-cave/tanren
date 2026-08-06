@@ -101,6 +101,13 @@ export interface IntegrationNodeRowShape {
 /**
  * Load every authoritative node for a dependent run (member participation or branch ref).
  * Callers map rows through {@link loadAuthoritativeMembers}.
+ *
+ * The result is a UNION of two DIFFERENT things: the run's OWN branch-ref node, and every
+ * merge-batch / eager-beam node that merely lists the run as a member. `node_id` is a random
+ * uuid, so a bare `ORDER BY node_id` made "the first row" a coin flip; the run's own node
+ * sorts FIRST here. Consumers that need a specific node must still select by identity (a
+ * caller must never depend on this ordering for correctness) — this only makes the read
+ * reproducible.
  */
 export async function selectNodesForDependentRun(
   client: QueryRunner,
@@ -119,7 +126,7 @@ export async function selectNodesForDependentRun(
              WHERE m.org_id = n.org_id AND m.node_id = n.node_id AND m.run_id = $3
           )
         )
-      ORDER BY n.node_id ASC`,
+      ORDER BY (n.ref = $2) DESC, n.node_id ASC`,
     [input.projectId, input.branch, input.runId],
   );
   return result.rows;

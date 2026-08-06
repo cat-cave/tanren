@@ -7,15 +7,12 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { IntegrationNodeMember } from "../contracts/integrationNodes.js";
 import type { QueryRunner } from "./integrationNodesPg.js";
+// ONE vocabulary: the cause union is declared with the ports the drivers implement, so the
+// pure builder that produces it and this writer that persists it cannot drift apart.
+import type { BaseShiftInvalidationCause } from "./baseShiftPorts.js";
 
 export type BaseShiftDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
-export type BaseShiftInvalidationCause =
-  | "ancestor_landed"
-  | "base_moved"
-  | "member_head_moved"
-  | "stack_restack"
-  | "policy_changed"
-  | "proof_stale";
+export type { BaseShiftInvalidationCause };
 
 export interface BaseShiftOperationInput {
   orgId: string;

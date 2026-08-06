@@ -78,6 +78,17 @@ CREATE POLICY "rls_org_isolation" ON "base_shift_operations" AS PERMISSIVE FOR A
 DROP POLICY IF EXISTS "rls_org_isolation" ON "integration_node_members";--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "integration_node_members" AS PERMISSIVE FOR ALL TO public USING ("integration_node_members"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("integration_node_members"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 -- Backfill normalized members from the legacy JSON vector (camelCase keys).
+--
+-- The predicate is NODE-LEVEL ALL-OR-NOTHING, and every one of the four required fields is
+-- checked for null-or-empty, for two fail-closed reasons:
+--   1. `elem ? 'branch'` is TRUE for `{"branch": null}` (the KEY exists), and `->>` then
+--      yields NULL into a NOT NULL column — the whole migration aborts. An empty string
+--      passes the column but `decodeMembersStrict` rejects it, so the node would become
+--      permanently unreadable (`loadAuthoritativeMembers` throws forever after).
+--   2. Filtering only the BAD elements of an otherwise-good node would leave the member rows
+--      and the JSON mirror disagreeing, which `sameOrderedMembers` treats as divergence — the
+--      node fails closed for good. Skipping such a node WHOLE leaves it exactly as it was
+--      (JSON-only, as before this migration) instead of half-migrated into a permanent error.
 INSERT INTO "integration_node_members" (
   "org_id", "project_id", "node_id", "ordinal", "spec_id", "run_id", "branch", "head_sha", "included"
 )
@@ -94,10 +105,16 @@ SELECT
 FROM "integration_nodes" n
 CROSS JOIN LATERAL jsonb_array_elements(n."members") WITH ORDINALITY AS ord(elem, ordinality)
 WHERE jsonb_typeof(n."members") = 'array'
-  AND elem ? 'specId'
-  AND elem ? 'runId'
-  AND elem ? 'branch'
-  AND elem ? 'headSha'
   AND COALESCE(elem ->> 'specId', '') <> ''
   AND COALESCE(elem ->> 'runId', '') <> ''
+  AND COALESCE(elem ->> 'branch', '') <> ''
+  AND COALESCE(elem ->> 'headSha', '') <> ''
+  AND NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(n."members") AS bad(elem)
+    WHERE COALESCE(bad.elem ->> 'specId', '') = ''
+       OR COALESCE(bad.elem ->> 'runId', '') = ''
+       OR COALESCE(bad.elem ->> 'branch', '') = ''
+       OR COALESCE(bad.elem ->> 'headSha', '') = ''
+  )
 ON CONFLICT DO NOTHING;

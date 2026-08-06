@@ -229,6 +229,7 @@ const driveRebase = (coord: BaseShiftCoordinator) =>
     newBaseRef: "main",
     nonSpeculative: true,
     ancestorSpecId: "main",
+    invalidationCause: "base_moved",
     toSha: "main",
   });
 
@@ -279,6 +280,7 @@ describe("the LIVE base-shift seams — unconditional + loud-throw on absent dep
         nonSpeculative: false,
         ancestorStack: [{ specId: "spec_a", runId: "run_a", branch: "tanren/run_a", headSha: "sha-a-new" }],
         ancestorSpecId: "spec_a",
+        invalidationCause: "member_head_moved",
         toSha: "sha-a-new",
       }),
     ).rejects.toBeInstanceOf(BaseShiftHeldError);

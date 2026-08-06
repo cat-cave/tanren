@@ -56,6 +56,14 @@ export function buildBaseShiftRebaseHook(deps: {
         // non-percolation base advance is empty, not a fabricated sha).
         ancestorSpecId: input.baseBranch,
         toSha: "",
+        // …and for the SAME reason `lineageAncestorSpecId` is left ABSENT: the durable
+        // `base_shift_operations.ancestor_spec_id` has NO foreign key, so the base branch
+        // name would insert cleanly and the history API would serve `"main"` as a spec id.
+        // No ancestor spec exists here, so the record honestly carries none.
+        //
+        // The behind path is a base-branch advance, full stop — the one unambiguous
+        // `base_moved` in the vocabulary (nothing landed, no member head moved).
+        invalidationCause: "base_moved",
       });
       // `rebased_clean` / `rebased_resolved` ⇒ the branch advanced onto base (the dispatcher
       // re-gates then merges); every durable recovery outcome holds with its exact truth.
