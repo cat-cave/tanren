@@ -4,7 +4,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
-import { captureBaselineSha, captureGitStateAfterWriter, writerExitReasonFor } from "./writerGit.js";
+import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
 
@@ -104,7 +104,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
       if (reasonix.failure !== undefined || reasonix.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: writerExitReasonFor(gitState), tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -225,5 +225,5 @@ function failedResult(
   telemetry: ReasonixEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

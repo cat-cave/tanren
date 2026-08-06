@@ -36,6 +36,8 @@ describe("opencode writer adapter", () => {
       ok(`${baselineSha}\n`),
       // opencode run
       ok(`${usageLine}\n`),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -64,7 +66,7 @@ describe("opencode writer adapter", () => {
     expect(ssh.commands[2]?.command.command).toContain(`--model '${ZAI_GLM_MODEL}'`);
     expect(ssh.commands[2]?.command.command).toContain("--cwd '/workspace/repo'");
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
-    expect(ssh.commands[3]?.command.command).toContain("git commit -m 'opencode writer'");
+    expect(ssh.commands[4]?.command.command).toContain("git commit -m 'opencode writer'");
     expect(writer.cli).toBe("opencode");
     expect(result).toMatchObject({
       diff: "diff --git a/Y.md b/Y.md\n+done\n",
@@ -136,6 +138,8 @@ describe("opencode writer adapter", () => {
       ok(`${baselineSha}\n`),
       // opencode run
       ok("{}\n"),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -223,7 +227,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWith(opencodeResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), opencodeResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), opencodeResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/opencode/dev", value: authJson });
   const writer = createOpencodeWriter({

@@ -23,6 +23,8 @@ describe("pi writer adapter", () => {
       ok(`${baselineSha}\n`),
       // pi run
       ok("Edited Y.md\nTokens: 1,200 sent, 340 received\n"),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -72,7 +74,7 @@ describe("pi writer adapter", () => {
   });
 
   it("resolves the underlying-LLM API key from the credential store and passes it via stdin (never argv)", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/pi/dev", value: apiKey });
     const writer = createPiWriter({
@@ -133,7 +135,7 @@ describe("pi writer adapter", () => {
   // platform key via OPENAI_API_KEY + OPENAI_BASE_URL. Asserts the COMMAND
   // outcome, not mocks.
   it("points pi at the managed endpoint with the OpenAI key when an override is set", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/openrouter/platform/default", value: "or-platform-key" });
     const writer = createPiWriter({
@@ -182,7 +184,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWith(piResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), piResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), piResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/pi/dev", value: apiKey });
   const writer = createPiWriter({

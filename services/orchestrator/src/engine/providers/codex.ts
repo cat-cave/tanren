@@ -8,7 +8,7 @@ import { buildActivityWatchdog, outputOnlyWatchdog, quoteSshShellArg } from "../
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterCodex, writerExitReasonFor } from "./codexGit.js";
+import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
@@ -172,8 +172,6 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
 
       return {
         ...gitState,
-        // The PROJECT's commit gate votes LAST (writerCommitGate.writerExitReasonFor).
-        exitReason: writerExitReasonFor(gitState),
         tokenUsage: telemetry.tokenUsage,
         telemetry,
       };
@@ -494,5 +492,5 @@ function failedResult(
   telemetry: CodexEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

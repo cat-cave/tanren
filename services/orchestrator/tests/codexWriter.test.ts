@@ -29,6 +29,7 @@ describe("Codex writer adapter", () => {
       ok('{"type":"usage","usage":{"input_tokens":12,"output_tokens":5,"cached_input_tokens":3}}\n'),
       ok(refreshedAuthJson()),
       ok(""),
+      ok(""),
       ok("diff --git a/LIVE.md b/LIVE.md\n+done\n"),
       ok(""),
     ]);
@@ -53,7 +54,7 @@ describe("Codex writer adapter", () => {
       `CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json -m 'gpt-5.6-luna' -c 'model_reasoning_effort="high"' --ignore-user-config --cd '/workspace/repo' -`,
     );
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
-    expect(ssh.commands[4]?.command.command).toContain("git commit -m 'codex writer'");
+    expect(ssh.commands[5]?.command.command).toContain("git commit -m 'codex writer'");
     expect(result).toMatchObject({
       diff: "diff --git a/LIVE.md b/LIVE.md\n+done\n",
       commits: [],
@@ -130,10 +131,11 @@ describe("Codex writer adapter", () => {
     const baseSha = "a".repeat(40);
     // Managed script order: no baseline capture (baseSha threaded) AND no
     // auth write-back cat (managed) ⇒ 0 materialize-config, 1 codex exec,
-    // 2 commit, 3 diff, 4 log.
+    // 2 stage, 3 commit, 4 diff, 5 log.
     const ssh = new ScriptedSsh([
       ok(""),
       ok("{}\n"),
+      ok(""),
       ok(""),
       ok("diff --git a/MANAGED.md b/MANAGED.md\n+managed\n"),
       ok(`${commitSha("f")}\tcodex writer\n`),
@@ -168,8 +170,8 @@ describe("Codex writer adapter", () => {
     expect(ssh.commands[1]?.command.command).toContain("openrouter.env' && CODEX_HOME=");
     expect(ssh.commands[1]?.command.command).not.toContain("--ignore-user-config");
     expect(ssh.commands[1]?.command.stdin).toBe("make a managed edit");
-    // No auth write-back: a managed run must NOT cat auth.json back into the
-    // secret store. With the script above, command[2] is the commit, not a cat.
+    // No auth write-back: a managed run must NOT cat auth.json back into the secret
+    // store. With the script above, command[2] is the stage and command[3] the commit.
     const commandText = ssh.commands.map((item) => item.command.command);
     expect(commandText.some((c) => c.includes("/codex-home/auth.json'") && c.startsWith("cat "))).toBe(false);
     expect(result.exitReason).toBe("completed");
@@ -218,6 +220,7 @@ describe("Codex writer adapter", () => {
       ok("{}\n"),
       ok(authJson),
       ok(""),
+      ok(""),
       ok("diff\n"),
       ok(""),
     ]);
@@ -252,6 +255,7 @@ describe("Codex writer adapter", () => {
       ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
       ok("{}\n"),
       ok(rotatedAuthJson),
+      ok(""),
       ok(""),
       ok("diff --git a/CODEX.md b/CODEX.md\n+codex\n"),
       ok(`${commitSha("e")}\tcodex writer\n`),
@@ -358,12 +362,13 @@ describe("Codex writer adapter", () => {
   it("diffs against the threaded run-base sha and skips the per-subtask HEAD capture", async () => {
     const baseSha = "a".repeat(40);
     // Script order when baseSha is provided (no baseline capture step):
-    //   0 materialize-auth, 1 codex exec, 2 persist-auth cat, 3 commit,
-    //   4 diff, 5 log.
+    //   0 materialize-auth, 1 codex exec, 2 persist-auth cat, 3 stage,
+    //   4 commit, 5 diff, 6 log.
     const ssh = new ScriptedSsh([
       ok(""),
       ok("{}\n"),
       ok(refreshedAuthJson()),
+      ok(""),
       ok(""),
       ok("diff --git a/GREETING.md b/GREETING.md\n+hello\n"),
       ok(`${commitSha("c")}\tcodex writer\n`),
@@ -410,6 +415,7 @@ describe("Codex writer adapter", () => {
       ok(""),
       ok("{}\n"),
       ok(refreshedAuthJson()),
+      ok(""),
       ok(""),
       ok(cumulativeDiff),
       ok(`${commitSha("d")}\tcreate GREETING.md\n`),
@@ -461,6 +467,7 @@ async function runWithCodexResult(
     ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
     codexResult,
     ok(refreshedAuthJson()),
+    ok(""),
     ok(""),
     ok(gitState.diff),
     ok(gitState.log),

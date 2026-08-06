@@ -5,7 +5,7 @@ import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { apiKeyEnvVarForModel } from "./aider.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
-import { captureBaselineSha, captureGitStateAfterWriter, writerExitReasonFor } from "./writerGit.js";
+import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 
 // pi harness adapter (`@earendil-works/pi-coding-agent`) — a Writer-only CLI
@@ -120,7 +120,7 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
       if (pi.failure !== undefined || pi.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: writerExitReasonFor(gitState), tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -245,5 +245,5 @@ function failedResult(
   telemetry: PiTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

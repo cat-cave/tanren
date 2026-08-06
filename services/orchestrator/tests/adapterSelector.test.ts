@@ -80,7 +80,7 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
   });
 
   it("threads a chain-selected Codex OpenRouter model into its per-run config", async () => {
-    const ssh = new ScriptedSsh([ok(""), ok("{}\n"), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(""), ok("{}\n"), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/openrouter/org/o1/default", value: "sk-or-test" });
     const writer = buildWriterAdapter(

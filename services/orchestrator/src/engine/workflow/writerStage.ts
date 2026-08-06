@@ -340,9 +340,19 @@ function classifyFailedExit(writerResult: WriterResult): WriterFailedExitDescrip
         message: commitRejectedMessage(writerResult.commitRejection),
         outcome: (writer) => ({ kind: "failed", writer, failureKind: "commit_rejected" }),
       };
-    default:
-      // `completed` / `token_limit` — the SUCCESS arms, not handled here.
+    // `completed` / `token_limit` — the SUCCESS arms, spelled out rather than defaulted.
+    case "completed":
+    case "token_limit":
       return undefined;
+    default: {
+      // EXHAUSTIVENESS. The old `default: return undefined` meant "not a failure", so any
+      // `exitReason` added to `WriterResult` and missed here would reach the checker as a
+      // PASSED task carrying an unusable diff — silently. That is precisely the class of
+      // defect this PR exists to remove, so the switch now fails closed: a new arm is a
+      // COMPILE error at `never`, and the throw is the unreachable runtime backstop.
+      const unhandled: never = writerResult.exitReason;
+      throw new Error(`unclassified writer exitReason: ${String(unhandled)}`);
+    }
   }
 }
 

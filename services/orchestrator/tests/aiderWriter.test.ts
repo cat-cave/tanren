@@ -28,6 +28,8 @@ describe("aider writer adapter", () => {
       ok(`${baselineSha}\n`),
       // aider run
       ok("Applied edit to Y.md\nTokens: 1,200 sent, 340 received\n"),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -79,7 +81,7 @@ describe("aider writer adapter", () => {
   });
 
   it("resolves the underlying-LLM API key from the credential store and passes it via stdin (never argv)", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/aider/dev", value: apiKey });
     const writer = createAiderWriter({
@@ -156,7 +158,7 @@ describe("aider writer adapter", () => {
   // SaaS Tier-B #5: managed mode points aider at the OpenRouter endpoint with
   // the platform key via OPENAI_API_KEY. Asserts the COMMAND outcome, not mocks.
   it("points aider at the managed endpoint with the OpenAI key when an override is set", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/openrouter/platform/default", value: "or-platform-key" });
     const writer = createAiderWriter({
@@ -220,7 +222,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWith(aiderResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), aiderResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), aiderResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/aider/dev", value: apiKey });
   const writer = createAiderWriter({

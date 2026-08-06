@@ -8,7 +8,7 @@ import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterWriter, writerExitReasonFor } from "./writerGit.js";
+import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // opencode CLI Writer adapter. opencode is a Writer-only provider in
 // this expansion and is pinned to the Zai GLM 5.1 model (`zai/glm-5.1`). It
@@ -113,7 +113,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
       if (opencode.failure !== undefined || opencode.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: writerExitReasonFor(gitState), tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -263,7 +263,7 @@ function failedResult(
   telemetry: OpencodeEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }
 
 // Re-export so callers can persist a refreshed opencode auth bundle the same

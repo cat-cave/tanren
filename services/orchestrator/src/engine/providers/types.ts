@@ -82,7 +82,18 @@ export interface WriterResult {
   // with the hook's own output as steering, under the same convergence budget a
   // failed gate tier uses. Carries `commitRejection`.
   exitReason: "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted" | "commit_rejected";
-  /** Set iff `exitReason === "commit_rejected"` — the hook's verdict, for writer steering. */
+  /**
+   * Set iff `exitReason === "commit_rejected"` — the hook's verdict, for writer steering.
+   *
+   * "Iff" is load-bearing and is NOT free. The adapters capture git state — and therefore
+   * the rejection — BEFORE they branch on stalled / usage-limit / nonzero-exit, so a writer
+   * that stalled mid-edit and left a tree the hook then also refused has BOTH a rejection
+   * and a `timeout`. Each adapter's `failedResult` therefore builds its result from an
+   * EXPLICIT `{ diff, commits }` pick rather than `...gitState`, so a failure arm cannot
+   * carry a rejection that does not describe it. Reintroducing the spread would restore the
+   * leak SILENTLY: the wider captured object is structurally assignable to the narrower
+   * parameter type, so the compiler says nothing. (#1420 review.)
+   */
   commitRejection?: CommitRejection;
   tokenUsage?: TokenUsage;
   telemetry?: {

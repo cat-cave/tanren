@@ -41,9 +41,12 @@
  * burning iterations against an unfixable condition. They keep propagating as
  * fatal, exactly as before. This distinction is the sharpest edge in the module.
  */
-import type { CommandResult } from "../contracts/commandSubstrate.js";
-import { WorkspaceCommandError } from "../workspace/index.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { runWorkspaceSshCommand } from "../workspace/index.js";
+import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { CommitRejection } from "./types.js";
+import { WorkspaceCommandError } from "../workspace/index.js";
 
 /**
  * The bound on the hook report handed back to the writer. Generous next to the
@@ -116,6 +119,35 @@ export function classifyCommitRejection(error: unknown): CommitRejection | undef
  */
 export function writerExitReasonFor(gitState: { commitRejection?: CommitRejection }): "completed" | "commit_rejected" {
   return gitState.commitRejection === undefined ? "completed" : "commit_rejected";
+}
+
+/**
+ * Stage the writer's edits as a command of its OWN, before the gated commit.
+ *
+ * WHY IT IS SEPARATE. `git add -A` and `git commit` used to share one `set -eu` script.
+ * `runWorkspaceSshCommand` reports the script's exit, so a staging fault — an
+ * `index.lock` left by a crashed git, a permission error, an unreadable path — arrived at
+ * `classifyCommitRejection` looking exactly like a hook NO vote: a `WorkspaceCommandError`
+ * with no `failure`, no `stalled`, and a nonzero exit. The writer was then told "the
+ * project's own pre-commit gate REJECTED your work" for a fault that is not in its diff,
+ * and the loop burned iterations against it until the fixed point.
+ *
+ * The guard for that is not a sentinel exit code (a hook is free to exit 3 too) — it is
+ * making sure only the COMMIT's exit is ever offered to the classifier. Staging throws,
+ * like every other workspace command, and never reaches the gate seam at all.
+ */
+export async function stageWorkspaceChanges(
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
+  workspace: string,
+  label: string,
+): Promise<void> {
+  await runWorkspaceSshCommand(ssh, target, {
+    label,
+    cwd: workspace,
+    command: "git add -A",
+    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
+  });
 }
 
 /**

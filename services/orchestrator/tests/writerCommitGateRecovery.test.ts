@@ -21,19 +21,11 @@
 // the SAME convergence budget, converging to the usual loud P0 fixed point if it cannot be
 // satisfied. No new retry budget, no commit retry, no weakening of the hook.
 import { describe, expect, it } from "vitest";
-import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
-import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommitRejection, WriterAdapter, WriterResult } from "../src/engine/providers/types.js";
 import { captureGitStateAfterCodex } from "../src/engine/providers/codexGit.js";
 import { captureGitStateAfterWriter } from "../src/engine/providers/writerGit.js";
-import {
-  COMMIT_REJECTION_OUTPUT_LIMIT,
-  classifyCommitRejection,
-  commitRejectionOutput,
-  writerExitReasonFor,
-} from "../src/engine/providers/writerCommitGate.js";
+import { COMMIT_REJECTION_OUTPUT_LIMIT, commitRejectionOutput } from "../src/engine/providers/writerCommitGate.js";
 import { commitRejectionReason } from "../src/engine/workflow/commitGateSteering.js";
-import { WorkspaceCommandError } from "../src/engine/workspace/index.js";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import {
   buildPlan,
@@ -48,36 +40,15 @@ import {
   makeTriage,
   triageAllTasks,
 } from "./helpers/plannerLoopHelpers.js";
-
-const target: RunnerHandle = {
-  backend: "ssh",
-  host: "runner",
-  port: 22,
-  username: "tanren",
-  hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity",
-};
-
-const WORKSPACE = "/workspace/runs/run_gate/repo";
-const BASELINE_SHA = "b".repeat(40);
-const WRITER_DIFF = "diff --git a/x b/x\n";
-
-// The rejection VERBATIM from the bench run, split across the two streams the way the real
-// tooling splits it: cspell writes its findings (the actionable part — the files, the lines,
-// the unknown word) to STDOUT, and husky writes only its epilogue to STDERR.
-const CSPELL_STDOUT = [
-  "backend/tests/unit/events/test_treatmentx_isolation.py:37:36 - Unknown word (TREATMENTX)",
-  "backend/tests/unit/events/test_event_enums.py:164:25 - Unknown word (TREATMENTX)",
-  "CSpell: Files checked: 4, Issues found: 23 in 4 files.",
-].join("\n");
-const HUSKY_STDERR = [
-  "Lint-staged failed. Please fix the issues above.",
-  "husky - pre-commit script failed (code 1)",
-].join("\n");
-
-function isCommit(command: string): boolean {
-  return /git (?:-c [^ ]+ )?commit /u.test(command);
-}
+import {
+  BASELINE_SHA,
+  CSPELL_STDOUT,
+  HUSKY_STDERR,
+  HookRejectsSsh,
+  WORKSPACE,
+  WRITER_DIFF,
+  target,
+} from "./helpers/commitGateFixtures.js";
 
 /**
  * A scripted writer that can report a commit the project's hook rejected. Local to this
@@ -114,24 +85,6 @@ function makeCommitGateWriter(
       };
     },
   };
-}
-
-/** A substrate whose project pre-commit hook rejects the writer's commit, cspell-style. */
-class HookRejectsSsh implements CommandSubstrate {
-  readonly commands: RunnerCommand[] = [];
-
-  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-    this.commands.push(command);
-    const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
-    if (isCommit(command.command)) {
-      return { exitCode: 1, stdout: CSPELL_STDOUT, stderr: HUSKY_STDERR, timedOut: false };
-    }
-    // No commit landed, so the baseline..HEAD log is empty.
-    if (command.command.includes("git log")) return ok;
-    if (command.command.includes("git diff --no-color")) return { ...ok, stdout: WRITER_DIFF };
-    if (command.command.includes("git rev-parse HEAD")) return { ...ok, stdout: `${BASELINE_SHA}\n` };
-    return ok;
-  }
 }
 
 describe("the project's commit gate reaches the writer instead of killing the run", () => {
@@ -210,81 +163,6 @@ describe("the project's commit gate reaches the writer instead of killing the ru
 // reasons and only ONE of them is the project rendering a judgment. A substrate fault or a
 // watchdog stall means the hook never ran at all; re-telling either as "your work is bad"
 // would send the writer chasing a defect that is not in its diff, burning iterations
-// against a condition it cannot fix.
-const result = (over: Partial<CommandResult>): CommandResult => ({
-  exitCode: 1,
-  stdout: "",
-  stderr: "",
-  ...over,
-});
-
-describe("only a HOOK VERDICT is recoverable — infrastructure faults stay fatal", () => {
-  it("a plain nonzero exit IS the hook's verdict", () => {
-    const rejection = classifyCommitRejection(
-      new WorkspaceCommandError("boom", "commit codex workspace changes", result({ stdout: CSPELL_STDOUT })),
-    );
-
-    expect(rejection?.exitCode).toBe(1);
-    expect(rejection?.output).toContain("TREATMENTX");
-  });
-
-  it("a SUBSTRATE FAILURE is not a verdict — it must keep propagating", () => {
-    const rejection = classifyCommitRejection(
-      new WorkspaceCommandError("boom", "commit codex workspace changes", result({ failure: { reason: "ssh_error" } })),
-    );
-
-    expect(rejection).toBeUndefined();
-  });
-
-  it("a WATCHDOG STALL is not a verdict — it must keep propagating", () => {
-    const rejection = classifyCommitRejection(
-      new WorkspaceCommandError("boom", "commit codex workspace changes", result({ stalled: true })),
-    );
-
-    expect(rejection).toBeUndefined();
-  });
-
-  it("a non-WorkspaceCommandError throw is never reinterpreted", () => {
-    expect(classifyCommitRejection(new Error("something else"))).toBeUndefined();
-  });
-
-  it("a zero or absent exit code is not a verdict either", () => {
-    // Defense in depth. `runWorkspaceSshCommand` cannot produce these once the failure
-    // and stalled arms are excluded, so reaching here means the error did not come from
-    // the hook — and inventing a rejection from it would fabricate a verdict the project
-    // never rendered, then steer the writer with an empty complaint.
-    const label = "commit codex workspace changes";
-    expect(classifyCommitRejection(new WorkspaceCommandError("x", label, result({ exitCode: 0 })))).toBeUndefined();
-    expect(classifyCommitRejection(new WorkspaceCommandError("x", label, result({ exitCode: null })))).toBeUndefined();
-  });
-
-  it("classifies the writer's exitReason from the presence of a rejection", () => {
-    // The seam all six adapters share (writerExitReasonFor). A writer whose commit landed
-    // is `completed`; one whose commit the hook refused is `commit_rejected` — inverting
-    // this would either lose the recovery entirely or mark clean work as rejected.
-    expect(writerExitReasonFor({})).toBe("completed");
-    expect(writerExitReasonFor({ commitRejection: undefined })).toBe("completed");
-    expect(writerExitReasonFor({ commitRejection: { label: "l", exitCode: 1, output: "o" } })).toBe("commit_rejected");
-  });
-
-  it("captureGitStateAfterCodex still THROWS when the substrate itself failed at the commit", async () => {
-    // End-to-end negative control: the recovery path must not have made every failed
-    // commit survivable, only the ones the project actually judged.
-    class SubstrateFailsSsh implements CommandSubstrate {
-      async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-        if (isCommit(command.command)) {
-          return { exitCode: null, stdout: "", stderr: "", failure: { reason: "ssh_error" } };
-        }
-        return { exitCode: 0, stdout: "", stderr: "" };
-      }
-    }
-
-    await expect(captureGitStateAfterCodex(new SubstrateFailsSsh(), target, WORKSPACE, BASELINE_SHA)).rejects.toThrow(
-      "commit codex workspace changes failed",
-    );
-  });
-});
-
 describe("the steering handed to the writer", () => {
   it("carries the hook's own output so the writer fixes the named violation", () => {
     const reason = commitRejectionReason({
@@ -318,8 +196,10 @@ describe("the steering handed to the writer", () => {
     // A rejection the caller could not supply — the steering must still stand alone.
     const absent: CommitRejection | undefined = undefined;
     const noRejection = commitRejectionReason(absent);
-    expect(noRejection).toContain("the project's own pre-commit gate REJECTED your work");
-    expect(noRejection).not.toContain("exit");
+    // The header LINE, not `not.toContain("exit")`: the point is that the header claims no
+    // exit code it does not have, and a substring ban would also fire on any future wording
+    // that merely contains those four letters ("existing", "exit criteria").
+    expect(noRejection.split("\n")[0]).toBe("the project's own pre-commit gate REJECTED your work");
     expect(noRejection).not.toContain("Commit gate output:");
   });
 
@@ -464,7 +344,11 @@ describe("the inner loop RECOVERS — the live bench failure, end to end", () =>
 
     // It HALTED LOUDLY — it neither looped forever nor laundered the rejection into a pass.
     expect(outcome.kind).toBe("convergence_stalled");
-    expect(writer.calls.length).toBeGreaterThan(1);
-    expect(writer.calls.length).toBeLessThan(20);
+    // EXACTLY two. The scripted writer returns a byte-identical diff and a byte-identical
+    // rejection every round, so the fixed-point detector has a determinate answer: attempt 1
+    // establishes the signature, attempt 2 repeats it and IS the fixed point. A bound like
+    // `toBeLessThan(20)` proves only termination — it would sit green through a regression
+    // that made the detector need six rounds to notice a repeat it can see in one.
+    expect(writer.calls.length).toBe(2);
   });
 });

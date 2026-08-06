@@ -30,6 +30,8 @@ describe("reasonix writer adapter", () => {
           '{"type":"done","usage":{"prompt_tokens":1500,"prompt_cache_hit_tokens":300,"completion_tokens":340,"reasoning_tokens":60}}\n',
         // reasonix run (NDJSON)
       ),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -77,7 +79,7 @@ describe("reasonix writer adapter", () => {
   });
 
   it("resolves the DeepSeek API key from the credential store via authRef", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/reasonix/dev", value: apiKey });
     const writer = createReasonixWriter({
@@ -156,7 +158,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWith(reasonixResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), reasonixResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), reasonixResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/reasonix/dev", value: apiKey });
   const writer = createReasonixWriter({
