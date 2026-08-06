@@ -3,13 +3,7 @@
 // service reads branch-protection required contexts.
 
 import { describe, expect, it } from "vitest";
-import {
-  FetchGitHubHttpClient,
-  GitHubStatusService,
-  type GitHubHttpClient,
-  type GitHubHttpRequest,
-  type GitHubHttpResponse,
-} from "../src/engine/providers/github.js";
+import { FetchGitHubHttpClient, GitHubStatusService } from "../src/engine/providers/github.js";
 import {
   GitHubOutageError,
   isSecondaryRateLimitBody,
@@ -19,6 +13,12 @@ import {
   TRANSIENT_BACKOFF_MS,
 } from "../src/engine/providers/githubRetry.js";
 import { evaluateCiObservation } from "../src/engine/workflow/ciObservation.js";
+import {
+  baseBranchCheckResponses,
+  githubTestPaths,
+  requestedPaths,
+  ScriptedGitHubHttp,
+} from "./helpers/scriptedGitHubHttp.js";
 
 function headers(map: Record<string, string>): Headers {
   const h = new Headers();
@@ -26,6 +26,10 @@ function headers(map: Record<string, string>): Headers {
     h.set(key, value);
   }
   return h;
+}
+
+function expectRequestedPaths(http: ScriptedGitHubHttp, ...expected: string[]): void {
+  expect(requestedPaths(http)).toEqual(expected);
 }
 
 const get =
@@ -232,8 +236,12 @@ describe("github rate-limit backoff (P3-0028)", () => {
 });
 
 describe("github required-context awareness (P3-0028)", () => {
+  const paths = githubTestPaths;
+
   it("reads required status check contexts from branch protection", async () => {
-    const http = new ScriptedHttp([{ status: 200, body: { checks: [{ context: "build" }, { context: "e2e" }] } }]);
+    const http = new ScriptedGitHubHttp({
+      [paths.requiredStatusChecks]: { status: 200, body: { checks: [{ context: "build" }, { context: "e2e" }] } },
+    });
     const required = await new GitHubStatusService(http).fetchRequiredContexts({
       repo: { owner: "o", name: "r" },
       token: "t",
@@ -243,16 +251,11 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("omits required gating only with separate authoritative protected=false proof", async () => {
-    const http = new ScriptedHttp([
-      { status: 200, body: { object: { sha: "deadbeef" } } },
-      {
-        status: 200,
-        body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
-      },
-      { status: 200, body: { statuses: [] } },
-      { status: 404, body: { message: "Not Found" } },
-      { status: 200, body: { name: "main", protected: false } },
-    ]);
+    const http = new ScriptedGitHubHttp({
+      ...baseBranchCheckResponses,
+      [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+      [paths.branch]: { status: 200, body: { name: "main", protected: false } },
+    });
     const checks = await new GitHubStatusService(http).fetchBranchChecks({
       repo: { owner: "o", name: "r" },
       token: "t",
@@ -263,16 +266,12 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("accepts review/restriction protection with an explicit proof of no classic status checks", async () => {
-    const http = new ScriptedHttp([
-      { status: 200, body: { object: { sha: "deadbeef" } } },
-      {
-        status: 200,
-        body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
-      },
-      { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
-      { status: 404, body: { message: "Not Found" } },
-      { status: 200, body: { name: "main", protected: true } },
-      {
+    const http = new ScriptedGitHubHttp({
+      ...baseBranchCheckResponses,
+      [paths.status]: { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
+      [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+      [paths.branch]: { status: 200, body: { name: "main", protected: true } },
+      [paths.protection]: {
         status: 200,
         body: {
           required_status_checks: null,
@@ -280,8 +279,8 @@ describe("github required-context awareness (P3-0028)", () => {
           restrictions: { users: [], teams: [], apps: [] },
         },
       },
-      { status: 200, body: [{ type: "pull_request" }] },
-    ]);
+      [paths.rules(1)]: { status: 200, body: [{ type: "pull_request" }] },
+    });
     const checks = await new GitHubStatusService(http).fetchBranchChecks({
       repo: { owner: "o", name: "r" },
       token: "t",
@@ -292,12 +291,12 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("accepts ruleset-only protection only after the rules document proves no status requirement", async () => {
-    const http = new ScriptedHttp([
-      { status: 404, body: { message: "Not Found" } },
-      { status: 200, body: { name: "main", protected: true } },
-      { status: 404, body: { message: "Not Found" } },
-      { status: 200, body: [{ type: "pull_request" }, { type: "deletion" }] },
-    ]);
+    const http = new ScriptedGitHubHttp({
+      [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+      [paths.branch]: { status: 200, body: { name: "main", protected: true } },
+      [paths.protection]: { status: 404, body: { message: "Not Found" } },
+      [paths.rules(1)]: { status: 200, body: [{ type: "pull_request" }, { type: "deletion" }] },
+    });
     await expect(
       new GitHubStatusService(http).fetchRequiredContexts({
         repo: { owner: "o", name: "r" },
@@ -318,15 +317,13 @@ describe("github required-context awareness (P3-0028)", () => {
         /require status checks/u,
       ],
     ] as const) {
-      const http = new ScriptedHttp([
-        { status: 200, body: { object: { sha: "deadbeef" } } },
-        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
-        { status: 200, body: { statuses: [] } },
-        { status: 404, body: { message: "Not Found" } },
-        { status: 200, body: { name: "main", protected: true } },
-        protection,
-        rules,
-      ]);
+      const http = new ScriptedGitHubHttp({
+        ...baseBranchCheckResponses,
+        [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+        [paths.branch]: { status: 200, body: { name: "main", protected: true } },
+        [paths.protection]: protection,
+        [paths.rules(1)]: rules,
+      });
       let passedEffects = 0;
       await expect(
         new GitHubStatusService(http)
@@ -336,18 +333,26 @@ describe("github required-context awareness (P3-0028)", () => {
           }),
       ).rejects.toThrow(message);
       expect(passedEffects).toBe(0);
+      expectRequestedPaths(
+        http,
+        paths.ref,
+        paths.checkRuns,
+        paths.status,
+        paths.requiredStatusChecks,
+        paths.branch,
+        paths.protection,
+        paths.rules(1),
+      );
     }
   });
 
   it("fails closed when the unprotected branch proof has no matching branch identity", async () => {
     for (const proof of [{ protected: false }, { name: "release", protected: false }]) {
-      const http = new ScriptedHttp([
-        { status: 200, body: { object: { sha: "deadbeef" } } },
-        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
-        { status: 200, body: { statuses: [] } },
-        { status: 404, body: { message: "Not Found" } },
-        { status: 200, body: proof },
-      ]);
+      const http = new ScriptedGitHubHttp({
+        ...baseBranchCheckResponses,
+        [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+        [paths.branch]: { status: 200, body: proof },
+      });
       let passedEffects = 0;
       await expect(
         new GitHubStatusService(http)
@@ -357,6 +362,7 @@ describe("github required-context awareness (P3-0028)", () => {
           }),
       ).rejects.toThrow(/branch response name did not match requested branch/u);
       expect(passedEffects).toBe(0);
+      expectRequestedPaths(http, paths.ref, paths.checkRuns, paths.status, paths.requiredStatusChecks, paths.branch);
     }
   });
 
@@ -367,17 +373,24 @@ describe("github required-context awareness (P3-0028)", () => {
       { status: 403, body: { message: "Resource not accessible by integration" } },
       { status: 200, body: { name: "main" } },
     ]) {
-      const http = new ScriptedHttp([{ status: 404, body: { message: "Not Found" } }, proof]);
+      const http = new ScriptedGitHubHttp({
+        [paths.requiredStatusChecks]: { status: 404, body: { message: "Not Found" } },
+        [paths.branch]: proof,
+      });
       await expect(new GitHubStatusService(http).fetchRequiredContexts(input)).rejects.toThrow(
         /branch-protection|branch response/u,
       );
+      expectRequestedPaths(http, paths.requiredStatusChecks, paths.branch);
     }
   });
 
   it("rejects malformed required-context evidence instead of silently dropping it", async () => {
-    const http = new ScriptedHttp([
-      { status: 200, body: { checks: [{ context: "build" }, { context: 7 }], contexts: ["build"] } },
-    ]);
+    const http = new ScriptedGitHubHttp({
+      [paths.requiredStatusChecks]: {
+        status: 200,
+        body: { checks: [{ context: "build" }, { context: 7 }], contexts: ["build"] },
+      },
+    });
     await expect(
       new GitHubStatusService(http).fetchRequiredContexts({
         repo: { owner: "o", name: "r" },
@@ -392,12 +405,10 @@ describe("github required-context awareness (P3-0028)", () => {
       { checks: [], contexts: "not-an-array" },
       { checks: "not-an-array", contexts: ["build"] },
     ]) {
-      const http = new ScriptedHttp([
-        { status: 200, body: { object: { sha: "deadbeef" } } },
-        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
-        { status: 200, body: { statuses: [] } },
-        { status: 200, body },
-      ]);
+      const http = new ScriptedGitHubHttp({
+        ...baseBranchCheckResponses,
+        [paths.requiredStatusChecks]: { status: 200, body },
+      });
       let passedEffects = 0;
       await expect(
         new GitHubStatusService(http)
@@ -407,11 +418,14 @@ describe("github required-context awareness (P3-0028)", () => {
           }),
       ).rejects.toThrow(/non-array (checks|contexts) field/u);
       expect(passedEffects).toBe(0);
+      expectRequestedPaths(http, paths.ref, paths.checkRuns, paths.status, paths.requiredStatusChecks);
     }
   });
 
   it("rejects a PR response without a base branch before assembling a check snapshot", async () => {
-    const http = new ScriptedHttp([{ status: 200, body: { head: { sha: "deadbeef", ref: "feat" } } }]);
+    const http = new ScriptedGitHubHttp({
+      [paths.pull]: { status: 200, body: { head: { sha: "deadbeef", ref: "feat" } } },
+    });
     await expect(
       new GitHubStatusService(http).fetchPullRequestChecks({
         repo: { owner: "o", name: "r" },
@@ -422,9 +436,9 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("THROWS loudly on a 403 (token lacks Administration:read) — never a silent 'no gating'", async () => {
-    // No-silent-fallback: a 403 silently degraded to `undefined` would DISABLE required-
-    // check gating and let a PR merge without its required checks. It must surface loudly.
-    const http = new ScriptedHttp([{ status: 403, body: { message: "Resource not accessible by integration" } }]);
+    const http = new ScriptedGitHubHttp({
+      [paths.requiredStatusChecks]: { status: 403, body: { message: "Resource not accessible by integration" } },
+    });
     await expect(
       new GitHubStatusService(http).fetchRequiredContexts({
         repo: { owner: "o", name: "r" },
@@ -459,15 +473,15 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("includes requiredContexts in fetchPullRequestChecks when the base branch is protected", async () => {
-    const http = new ScriptedHttp([
-      { status: 200, body: { head: { sha: "deadbeef", ref: "feat" }, base: { ref: "main" } } },
-      {
+    const http = new ScriptedGitHubHttp({
+      [paths.pull]: { status: 200, body: { head: { sha: "deadbeef", ref: "feat" }, base: { ref: "main" } } },
+      [paths.checkRuns]: {
         status: 200,
         body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
       },
-      { status: 200, body: { statuses: [] } },
-      { status: 200, body: { contexts: ["build"] } },
-    ]);
+      [paths.status]: { status: 200, body: { statuses: [] } },
+      [paths.requiredStatusChecks]: { status: 200, body: { contexts: ["build"] } },
+    });
     const checks = await new GitHubStatusService(http).fetchPullRequestChecks({
       repo: { owner: "o", name: "r" },
       token: "t",
@@ -477,15 +491,3 @@ describe("github required-context awareness (P3-0028)", () => {
     expect(checks.head.sha).toBe("deadbeef");
   });
 });
-
-class ScriptedHttp implements GitHubHttpClient {
-  constructor(private readonly responses: GitHubHttpResponse[]) {}
-
-  async request(_input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    const response = this.responses.shift();
-    if (response === undefined) {
-      throw new Error("unexpected GitHub request");
-    }
-    return response;
-  }
-}
