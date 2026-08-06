@@ -21,6 +21,7 @@ import { runWithOrgScope } from "@tanren/db";
 import { createLogger } from "../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
 import { assessWanderingHalt } from "./wanderingHaltDetector.js";
+import { eventsAfterAttentionResolvedSql } from "./attentionResolutionBoundary.js";
 import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
 
 const log = createLogger("run-redrive-reader");
@@ -42,14 +43,25 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
           ts: string;
         }>(
+          // The history is BOUNDED by the most recent operator requeue: only re-drives
+          // AFTER the spec's latest `dag.spec.attention_resolved` count. Without the bound a
+          // requeued spec re-entered carrying its whole spent history and the very next
+          // same-code failure instantly re-tripped cycle detection (see
+          // `attentionResolutionBoundary.ts`). No resolution event ⇒ the full history, exactly
+          // as before. The bound flows into the WANDERING history below too (it derives from
+          // the same `structuralRows`), so a requeued spec also gets a fresh wandering window.
           `SELECT payload, ts FROM events
              WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
+               AND ${eventsAfterAttentionResolvedSql(1)}
              ORDER BY ts ASC, id ASC`,
           [facts.specId],
         );
         // apex v67 #122 — read the spec-level PR / merge markers (their earliest timestamps,
-        // so we can determine which re-drives in the history had them in place). ONE round-trip
-        // covers both events; an absent event row yields a null timestamp.
+        // so we can determine which re-drives in the history had them in place). DELIBERATELY
+        // NOT bounded by the requeue boundary: a PR that genuinely exists is still real
+        // deliverable progress after an operator requeue — forgetting it would make the
+        // wandering detector re-judge a spec that HAS shipped a PR as having shipped nothing.
+        // ONE round-trip covers both events; an absent event row yields a null timestamp.
         const progressRows = await client.query<{ event_type: string; first_ts: string | null }>(
           `SELECT event_type, MIN(ts) AS first_ts FROM events
              WHERE spec_id = $1 AND event_type IN ('github.pr.created', 'merge.completed')
