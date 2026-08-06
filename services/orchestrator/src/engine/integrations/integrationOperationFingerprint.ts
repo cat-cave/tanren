@@ -27,7 +27,6 @@ export function integrationRequestFingerprint(input: {
       input.providerKind,
       input.operationKind,
       input.connectionId ?? null,
-      null,
       input.actorId,
       input.credential,
     ]);

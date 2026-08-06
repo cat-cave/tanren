@@ -143,7 +143,7 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       credential: "token",
     };
     expect(integrationRequestFingerprint({ ...request, providerKind: "slack" })).toBe(
-      digest(["tanren.integration-operation.v1", "o", "slack", "link", null, null, "u", "token"]),
+      digest(["tanren.integration-operation.v1", "o", "slack", "link", null, "u", "token"]),
     );
     expect(integrationRequestFingerprint({ ...request, providerEndpoint: "https://sentry.example/a" })).toBe(
       digest([

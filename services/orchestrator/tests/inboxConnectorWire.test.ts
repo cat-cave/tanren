@@ -246,7 +246,7 @@ describe("github issues connector — normalization", () => {
       { number: 1, title: "valid" },
       { number: 2, title: "invalid", pull_request },
     ]);
-    await expect(githubConnector(client).fetch(githubSource)).rejects.toThrow(/Invalid input/u);
+    await expect(githubConnector(client).fetch(githubSource)).rejects.toThrow(IntakeSourceFetchError);
   });
   it("rejects a structural NUL collision before another page request", async () => {
     const nextPagePath = "/repos/cat-cave/app/issues?state=open&per_page=50&labels%00a=b&page=2";
