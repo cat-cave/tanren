@@ -4,6 +4,7 @@
 import { memberKey, type IntegrationNode, type IntegrationNodeMember } from "../contracts/integrationNodes.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { BaseShiftInvalidationCause } from "./baseShiftPorts.js";
 
 export interface BaseShiftLineagePayload {
   nodeId?: string;
@@ -13,18 +14,37 @@ export interface BaseShiftLineagePayload {
   toMemberKey: string;
   fromMembers: IntegrationNodeMember[];
   toMembers: IntegrationNodeMember[];
-  invalidationCause: "ancestor_landed";
+  invalidationCause: BaseShiftInvalidationCause;
 }
 
 /** Pure: map prior nodes + re-resolved stack into a durable base-shift lineage snapshot. */
 export function buildBaseShiftLineage(input: {
   dependent: SpeculativeDependent;
+  /** The dependent's OWN branch — the identity that picks its node out of `priorNodes`. */
+  branch: string;
   newBaseSha: string;
   ancestorStack?: AncestorStack;
-  ancestorSpecId?: string;
+  /**
+   * The ancestor SPEC whose landing/advance drove this restack, when one exists. DISTINCT
+   * from the coordinator's marker `ancestorSpecId`: on the merge-`behind` path that marker
+   * deliberately carries the base BRANCH name (it keys the marker on the shift's `from`),
+   * and `base_shift_operations.ancestor_spec_id` has no FK to catch it — a branch name would
+   * insert cleanly and the history API would serve `"main"` as a spec id. So the durable
+   * record takes THIS field, which is populated only from a real ancestor spec.
+   */
+  lineageAncestorSpecId?: string;
   priorNodes?: ReadonlyArray<IntegrationNode>;
+  /** REQUIRED: the driver's real invalidation cause (never guessed here — the builder
+   *  cannot tell an ancestor landing from a base advance from a member head move). */
+  invalidationCause: BaseShiftInvalidationCause;
 }): BaseShiftLineagePayload {
-  const prior = input.priorNodes?.[0];
+  // `priorNodes` is a UNION (`selectNodesForDependentRun`): the run's OWN branch-ref node
+  // PLUS every merge-batch / eager-beam node that merely LISTS this run as a member. Those
+  // describe DIFFERENT integrations, so taking index 0 recorded whichever `inode_<uuid>`
+  // happened to sort first — a coin flip that could attribute this run's restack to a batch
+  // node's id, members and base sha. Pick by IDENTITY (the run's own branch ref); when the
+  // run has no node of its own, record NO prior node rather than a neighbor's lineage.
+  const prior = input.priorNodes?.find((node) => node.ref === input.branch);
   const fromMembers = prior === undefined ? [] : [...prior.members];
   const fromBaseSha = prior?.baseSha ?? input.newBaseSha;
   const fromMemberKey =
@@ -48,12 +68,12 @@ export function buildBaseShiftLineage(input: {
   const persistedNodeId = prior !== undefined && !prior.nodeId.startsWith("inode_compat_") ? prior.nodeId : undefined;
   return {
     ...(persistedNodeId !== undefined && { nodeId: persistedNodeId }),
-    ...(input.ancestorSpecId !== undefined && { ancestorSpecId: input.ancestorSpecId }),
+    ...(input.lineageAncestorSpecId !== undefined && { ancestorSpecId: input.lineageAncestorSpecId }),
     fromBaseSha,
     fromMemberKey,
     toMemberKey,
     fromMembers,
     toMembers,
-    invalidationCause: "ancestor_landed",
+    invalidationCause: input.invalidationCause,
   };
 }

@@ -7,6 +7,7 @@ import { emitHeldOnPendingRegate } from "./baseShiftEmit.js";
 import {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
+  type BaseShiftInvalidationCause,
   type ReGateResult,
   type ReGateVerdict,
 } from "./baseShiftPorts.js";
@@ -30,8 +31,9 @@ export async function reGateOrHold(
     branch: string;
     newBaseSha: string;
     ancestorStack?: AncestorStack;
-    ancestorSpecId?: string;
+    lineageAncestorSpecId?: string;
     priorNodes?: ReadonlyArray<IntegrationNode>;
+    invalidationCause: BaseShiftInvalidationCause;
   },
 ): Promise<{ verdict: "passed" | "failed"; gateError?: string }> {
   let result: ReGateVerdict | ReGateResult;

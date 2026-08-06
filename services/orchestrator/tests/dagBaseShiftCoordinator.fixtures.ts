@@ -21,6 +21,7 @@ import {
   type ReGateResult,
   type ReGateVerdict,
 } from "../src/engine/dag/baseShiftCoordinator.js";
+import type { BaseShiftLineagePayload } from "../src/engine/dag/baseShiftLineage.js";
 import { ownedPlannerRecovery, settleRecoveryForTest } from "./fixtures/scriptedRecoverySettlement.js";
 
 export const PROJECT = "project_base_shift";
@@ -209,6 +210,9 @@ export class RecordingEventEmitter implements BaseShiftEventEmitter {
   // The FULL emitted payload (the never-discard `sameRunId: true` mirror the production
   // `appendIntegrationRebaseEvent` builds) — for asserting contract-validity.
   readonly rawEvents: Array<Record<string, unknown>> = [];
+  // The durable gv-17 lineage the pg emitter would write to `base_shift_operations` — the
+  // ONLY place the recorded `ancestorSpecId` / `invalidationCause` are observable.
+  readonly lineages: Array<BaseShiftLineagePayload> = [];
   async emitRebase(input: {
     specId: string;
     runId: string;
@@ -217,7 +221,11 @@ export class RecordingEventEmitter implements BaseShiftEventEmitter {
     headSha: string;
     rebaseConflicted: boolean;
     decision: RebaseDecision;
+    lineage?: BaseShiftLineagePayload;
   }): Promise<void> {
+    if (input.lineage !== undefined) {
+      this.lineages.push(input.lineage);
+    }
     this.events.push({
       runId: input.runId,
       decision: input.decision,

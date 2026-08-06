@@ -23,6 +23,7 @@ import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type {
   BaseShiftEventEmitter,
+  BaseShiftInvalidationCause,
   BaseShiftNodeReader,
   BaseShiftPersistence,
   RebaseDecision,
@@ -179,13 +180,7 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
         branch: string;
         headSha: string;
       }>;
-      invalidationCause?:
-        | "ancestor_landed"
-        | "base_moved"
-        | "member_head_moved"
-        | "stack_restack"
-        | "policy_changed"
-        | "proof_stale";
+      invalidationCause: BaseShiftInvalidationCause;
     };
   }): Promise<void> {
     // Org-scoped event append for non-held decisions. Held still records durable
@@ -213,7 +208,9 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
         fromMembers: input.lineage.fromMembers,
         toMembers: input.lineage.toMembers,
         decision: input.decision,
-        invalidationCause: input.lineage.invalidationCause ?? "stack_restack",
+        // No `?? "stack_restack"`: the cause is REQUIRED on the port, so a default here could
+        // only ever paper over a caller that forgot to say why — an unfalsifiable history row.
+        invalidationCause: input.lineage.invalidationCause,
       });
     }
   }

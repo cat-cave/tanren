@@ -5,7 +5,7 @@ import type { SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { RebaseResult } from "../contracts/workspaceVcsCore.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import { buildBaseShiftLineage } from "./baseShiftLineage.js";
-import type { BaseShiftEventEmitter, RebaseDecision } from "./baseShiftPorts.js";
+import type { BaseShiftEventEmitter, BaseShiftInvalidationCause, RebaseDecision } from "./baseShiftPorts.js";
 
 export type BaseShiftEmitInput = {
   projectId: string;
@@ -14,8 +14,10 @@ export type BaseShiftEmitInput = {
   newBaseSha: string;
   rebase: RebaseResult;
   ancestorStack?: AncestorStack;
-  ancestorSpecId?: string;
+  /** Only ever a REAL ancestor spec id — never the marker's base-branch key (see the builder). */
+  lineageAncestorSpecId?: string;
   priorNodes?: ReadonlyArray<IntegrationNode>;
+  invalidationCause: BaseShiftInvalidationCause;
 };
 
 export async function emitBaseShiftRebase(
@@ -47,8 +49,9 @@ export async function emitHeldOnPendingRegate(
     branch: string;
     newBaseSha: string;
     ancestorStack?: AncestorStack;
-    ancestorSpecId?: string;
+    lineageAncestorSpecId?: string;
     priorNodes?: ReadonlyArray<IntegrationNode>;
+    invalidationCause: BaseShiftInvalidationCause;
   },
 ): Promise<void> {
   await emitBaseShiftRebase(
@@ -60,8 +63,11 @@ export async function emitHeldOnPendingRegate(
       newBaseSha: lineageContext.newBaseSha,
       rebase: { outcome: "clean", headSha: rebasedHeadSha },
       ...(lineageContext.ancestorStack !== undefined && { ancestorStack: lineageContext.ancestorStack }),
-      ...(lineageContext.ancestorSpecId !== undefined && { ancestorSpecId: lineageContext.ancestorSpecId }),
+      ...(lineageContext.lineageAncestorSpecId !== undefined && {
+        lineageAncestorSpecId: lineageContext.lineageAncestorSpecId,
+      }),
       ...(lineageContext.priorNodes !== undefined && { priorNodes: lineageContext.priorNodes }),
+      invalidationCause: lineageContext.invalidationCause,
     },
     false,
     "held",

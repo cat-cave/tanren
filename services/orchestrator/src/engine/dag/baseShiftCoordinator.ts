@@ -14,6 +14,7 @@ import {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
   type BaseShiftGateReworkRouter,
+  type BaseShiftInvalidationCause,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type RebaseDecision,
@@ -22,7 +23,7 @@ import {
 } from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
 import { rebaseDecisionFromRecovery, settleBaseShiftRecovery } from "./baseShiftRecovery.js";
-import { emitBaseShiftRebase } from "./baseShiftEmit.js";
+import { emitBaseShiftRebase, type BaseShiftEmitInput } from "./baseShiftEmit.js";
 import { reGateOrHold } from "./baseShiftRegate.js";
 
 const log = createLogger("base-shift");
@@ -32,6 +33,7 @@ export {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
   type BaseShiftGateReworkRouter,
+  type BaseShiftInvalidationCause,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type RebaseDecision,
@@ -175,6 +177,12 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       ancestorStack: input.ancestorStack,
       ancestorSpecId: input.decision.ancestorSpecId,
       toSha: input.decision.toSha,
+      // A percolation IS driven by a real ancestor spec, so the durable lineage may carry it.
+      lineageAncestorSpecId: input.decision.ancestorSpecId,
+      // The detector already knows WHY: `ancestor_merged` is literally an ancestor landing;
+      // every other percolation severity is the ancestor's head/verdict moving under us.
+      invalidationCause:
+        input.decision.immediateSeverity === "ancestor_merged" ? "ancestor_landed" : "member_head_moved",
       ...(input.decision.immediateSeverity === "changes_requested" && {
         reviewVerdict: "changes_requested" as const,
       }),
@@ -205,8 +213,17 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
      * empty stack); the kick-off path passes the unmerged set.
      */
     ancestorStack?: AncestorStack;
+    /**
+     * The MARKER key (the shift's `from`). The merge-`behind` path deliberately passes the
+     * base BRANCH here — see `buildBaseShiftRebaseHook`. It must therefore NEVER reach the
+     * durable lineage record's `ancestor_spec_id`; `lineageAncestorSpecId` carries that.
+     */
     ancestorSpecId: string;
     toSha: string;
+    /** The REAL ancestor spec, when this shift has one. Absent ⇒ the record carries none. */
+    lineageAncestorSpecId?: string;
+    /** REQUIRED: why the prior integration is invalid — the driver knows; the builder cannot. */
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
   }): Promise<BaseShiftRebaseOutcome> {
     const { projectId, dependent } = input;
@@ -285,6 +302,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
+    lineageAncestorSpecId?: string;
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult;
     priorNodes: ReadonlyArray<IntegrationNode>;
@@ -293,7 +312,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       branch: input.branch,
       newBaseSha: input.newBaseSha,
       ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
-      ancestorSpecId: input.ancestorSpecId,
+      ...(input.lineageAncestorSpecId !== undefined && { lineageAncestorSpecId: input.lineageAncestorSpecId }),
+      invalidationCause: input.invalidationCause,
       priorNodes: input.priorNodes,
     });
     if (result.verdict === "passed") {
@@ -323,6 +343,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorStack?: AncestorStack;
     ancestorSpecId: string;
     toSha: string;
+    lineageAncestorSpecId?: string;
+    invalidationCause: BaseShiftInvalidationCause;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult & { outcome: "conflicted" };
     priorNodes: ReadonlyArray<IntegrationNode>;
@@ -366,7 +388,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       branch: input.branch,
       newBaseSha: input.newBaseSha,
       ...(input.ancestorStack !== undefined && { ancestorStack: input.ancestorStack }),
-      ancestorSpecId: input.ancestorSpecId,
+      ...(input.lineageAncestorSpecId !== undefined && { lineageAncestorSpecId: input.lineageAncestorSpecId }),
+      invalidationCause: input.invalidationCause,
       priorNodes: input.priorNodes,
     });
     if (result.verdict === "passed") {
@@ -382,11 +405,6 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     return { ...routed, headSha: input.rebase.headSha };
   }
 
-  /**
-   * Re-gate the rebased/resolved branch; a `pending` verdict is a fail-closed HOLD. Returns
-   * `{ verdict, gateError? }` — the gate error (present on `failed`) is the writer-rework
-   * steering. Accepts both a bare verdict string and a `ReGateResult` from the re-gate seam.
-   */
   /**
    * A CLEAN-tree (rebased or resolved) GATE-tier re-gate failure → WRITER REWORK: the tree is
    * byte-clean (no conflict), the code just fails a deterministic gate on the shifted base, which
@@ -468,20 +486,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
    * It carries NO token/wall-clock figure — the `rebase_vs_rebuild` read-side joins
    * that cost at read time (engine/insights/integration).
    */
-  private async emit(
-    input: {
-      projectId: string;
-      dependent: SpeculativeDependent;
-      branch: string;
-      newBaseSha: string;
-      rebase: RebaseResult;
-      ancestorStack?: AncestorStack;
-      ancestorSpecId?: string;
-      priorNodes?: ReadonlyArray<IntegrationNode>;
-    },
-    rebaseConflicted: boolean,
-    decision: RebaseDecision,
-  ): Promise<void> {
+  private async emit(input: BaseShiftEmitInput, rebaseConflicted: boolean, decision: RebaseDecision): Promise<void> {
     await emitBaseShiftRebase(this.deps.events, input, rebaseConflicted, decision);
   }
 }
