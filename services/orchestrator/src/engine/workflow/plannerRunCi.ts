@@ -30,17 +30,14 @@
 
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActorIdentity } from "../contracts/codeHostTypes.js";
-import { prepareCleanPrBranch, resolveWorkspaceHeadSha } from "../workspace/index.js";
+import { resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type CiWhen } from "../ci/index.js";
 import { type GateOutcome, publishGateVerdictBestEffort, runNativeMergeGate } from "./gate/index.js";
 import { buildProjectHostSeams } from "../providers/hostFactory.js";
 import { parseGitHubRepository } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import type { EventName, EventPayload, EventStore } from "../eventStore.js";
-import { publishDraftPullRequestWithDurableLease } from "./githubDraftPrDurableLease.js";
-import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
-import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
-import { appTokenSeam, mergeQueueEarlyEnqueueSeam } from "./plannerRunSeams.js";
+import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
 import {
   applyFailedMergeGate,
@@ -51,6 +48,13 @@ import {
 import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
+import { publishCleanedDraftPr, requirePublishedHeadSha } from "./plannerRunDraftPublish.js";
+export {
+  discriminateNoCommits,
+  publishCleanedDraftPr,
+  type NoCommitsDisposition,
+  type PublishCleanedDraftPrResult,
+} from "./plannerRunDraftPublish.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("gate");
@@ -67,20 +71,6 @@ export interface MergeGateRunContext {
 }
 
 /**
- * The branch being PR'd had NOTHING ahead of the base (GitHub's 422 "No commits between
- * base and head"). The PR-creation stage discriminates the two legitimate causes and routes
- * each WITHOUT a hard escalating `internal` failure (mirroring the empty-diff accept #586 at
- * the PR layer):
- *   - `converged`: the writer DID author a commit ahead of the clone base, but its content
- *     is already present in the base (the spec is satisfied by the base / a prior iteration
- *     landed) ⇒ the spec CONVERGES (merged/done), the same terminal-success the merge path
- *     takes, so the DAG advances + dependents unblock.
- *   - `redrive`: the cleaned PR head EQUALS the clone base (the writer produced no commit
- *     this attempt — a degraded/slow codex returned nothing) ⇒ a TRANSIENT re-drive.
- */
-export type NoCommitsDisposition = "converged" | "redrive";
-
-/**
  * The writer produced NO commit ahead of the base this attempt (the `redrive` branch of a
  * "No commits between base and head" 422). A TRANSIENT — classified `empty_writer_output`
  * (retriable), so the unified finalize RE-DRIVES it under the consecutive-same-failure cap
@@ -92,130 +82,6 @@ export class EmptyWriterCommitError extends Error {
     super(`the writer produced no commit on ${branch} ahead of ${baseBranch} this attempt`);
     this.name = "EmptyWriterCommitError";
   }
-}
-
-export type PublishCleanedDraftPrResult =
-  | { kind: "published"; pushSource: CleanedPushSource; pullRequest: PublishedDraftPullRequest }
-  | { kind: "no_commits"; pushSource: CleanedPushSource; disposition: NoCommitsDisposition };
-
-type CleanedPushSource = Awaited<ReturnType<typeof prepareCleanPrBranch>>;
-
-function requirePublishedHeadSha(headSha: string): string {
-  if (!/^[0-9a-f]{40}$/u.test(headSha)) {
-    throw new Error("cleaned draft PR head is invalid; refusing to publish without a durable lease witness");
-  }
-  return headSha;
-}
-
-/**
- * Prepare the cleaned PR branch + publish the draft PR for one writer-loop pass. Replays
- * the writer commits onto the clone HEAD, dropping the synthetic bootstrap commit (+
- * install artifacts) so the pushed branch / PR carries only the writer's changes (the
- * working HEAD is left intact so a review/merge-gate-rework re-entry keeps its bootstrapSha
- * diff base — no-op on fake-SSH), then publishes the draft PR. Returns both the cleaned
- * push source (its `headSha` is the commit the `pre_merge` gate + land authority bind to,
- * §5) and the published PR.
- *
- * GRACEFUL EMPTY-BRANCH HANDLING (v35): when GitHub rejects the open with "No commits
- * between base and head" ({@link NoCommitsBetweenBaseAndHeadError}), the branch has NOTHING
- * ahead of the base — this is NOT a hard internal error. We DISCRIMINATE here using the
- * cleaned PR head vs the clone base (the rebase `--onto` target the PR diffs against): a
- * head EQUAL to the clone base means the writer produced no commit (`redrive` — transient),
- * and a head AHEAD of the base whose content GitHub still finds empty means the work is
- * already present in the base (`converged` — done). Extracted from the loop body to keep
- * plannerRun.ts under cap.
- */
-export async function publishCleanedDraftPr(
-  input: RunPlannerLoopInput,
-  ctx: { target: RunnerHandle; workspacePath: string; eventStore: EventStore },
-  context: PlannerRunContext,
-  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity },
-): Promise<PublishCleanedDraftPrResult> {
-  const pushSource = await prepareCleanPrBranch({
-    ssh: input.ssh,
-    target: ctx.target,
-    workspacePath: ctx.workspacePath,
-    cloneHeadSha: shas.cloneHeadSha,
-    bootstrapSha: shas.bootstrapSha,
-    // Stamped into the composed commit's message for run provenance.
-    runId: context.runId,
-    // Attribute the composed PR head to the resolved pushing identity.
-    ...(shas.pushIdentity !== undefined && { pushIdentity: shas.pushIdentity }),
-  });
-  const publishedHeadSha = requirePublishedHeadSha(pushSource.headSha);
-  try {
-    // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
-    // the tenant-scope invariant), so the appended events stamp a real org id —
-    // no empty-sentinel fallback.
-    const appendEventOrgId = context.orgId;
-    const pullRequest = await publishDraftPullRequestWithDurableLease(
-      {
-        pool: input.pool,
-        eventStore: ctx.eventStore,
-        runStateWriter: input.runStateWriter,
-        orgId: context.orgId,
-        appendEventOrgId,
-        secrets: input.secrets,
-        githubHttp: input.githubHttp,
-        ssh: input.ssh,
-        target: ctx.target,
-        // `prepareCleanPrBranch` deliberately leaves the workspace HEAD at the
-        // writer tip (and PR_CLEAN_REF can be moved later). Publish the immutable
-        // resolved commit, so the git effect and github.branch.pushed witness
-        // remain bound to the same validated head.
-        sourceRef: publishedHeadSha,
-        publishedHeadSha,
-        runId: context.runId,
-        specId: context.specId,
-        projectId: context.projectId,
-        workspacePath: ctx.workspacePath,
-        repoUrl: context.repoUrl,
-        targetBranch: context.targetBranch,
-        // WS-A PR-5 (§3.1): the ancestor stack so the draft PR bases on the immediate
-        // ancestor's PR-head branch (flag-gated stacked PR); flag-off ⇒ `targetBranch`.
-        ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-        runBranch: context.runBranch,
-        title: `Tanren: ${context.specTitle}`,
-        body: context.specDescription,
-        githubCredentialRef: context.githubCredentialRef,
-        ...appTokenSeam(context, input),
-        // Loop-close: when this project is `native_queue` AND the worker
-        // wired the enqueuer, fire the merge_queue INSERT + `merge.scheduled` event
-        // RIGHT AFTER `github.pr.created`. The PR is durable on GitHub the moment we
-        // get here; the merge coordinator must own it whether the writer's downstream
-        // gate/review chain succeeds, halts, or throws. The hook is idempotent (the
-        // late-path `mergeForRun → enqueueNative` becomes a no-op on the second call).
-        ...mergeQueueEarlyEnqueueSeam(input, context, ctx.eventStore, appendEventOrgId),
-      },
-      { orgId: context.orgId, specId: context.specId, branch: context.runBranch },
-      publishDraftPullRequest,
-    );
-    return { kind: "published", pushSource, pullRequest };
-  } catch (error) {
-    if (error instanceof NoCommitsBetweenBaseAndHeadError) {
-      const disposition = discriminateNoCommits(pushSource.headSha, shas.cloneHeadSha);
-      return { kind: "no_commits", pushSource, disposition };
-    }
-    throw error;
-  }
-}
-
-/**
- * DISCRIMINATE a "No commits between base and head" 422 (the v35 graceful path). The cleaned
- * PR head is the writer's commits replayed onto the clone base (`cloneHeadSha`, the `--onto`
- * target the PR diffs against), with the bootstrap commit dropped:
- *   - head EQUAL to the clone base ⇒ the writer authored NO commit ahead of the base this
- *     attempt ⇒ `redrive` (a transient empty output; re-drive, never a hard strand).
- *   - head AHEAD of the base (a real writer commit) but GitHub finds the diff empty ⇒ the
- *     work is ALREADY PRESENT in the base ⇒ `converged` (the spec is satisfied → done).
- * On a fake-SSH unit path the head sha is "" (no real workspace) — treat as `redrive` (the
- * conservative transient), never a spurious converge.
- */
-export function discriminateNoCommits(cleanedHeadSha: string, cloneHeadSha: string): NoCommitsDisposition {
-  if (cleanedHeadSha === "" || cleanedHeadSha === cloneHeadSha) {
-    return "redrive";
-  }
-  return "converged";
 }
 
 /**

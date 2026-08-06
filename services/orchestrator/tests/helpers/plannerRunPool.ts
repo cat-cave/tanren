@@ -7,6 +7,7 @@
 
 import type { AppendEventInput } from "../../src/engine/eventStore.js";
 import type { PlannerRunContext } from "../../src/engine/workflow/plannerRun.js";
+import { routeGithubPushIntentQuery, type GithubPushIntentRow } from "./githubPushIntentPool.js";
 
 const nonEmptyString = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 
@@ -18,6 +19,7 @@ export class PlannerRunPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   prUrl: string | null = null;
   readonly taskKinds: string[] = [];
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
   /** Every `UPDATE specs SET status = ...` in spec-write order. */
   readonly specStatuses: string[] = [];
   private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
@@ -52,6 +54,8 @@ export class PlannerRunPool {
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, trimmed, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
       return { rows: [...this.costRows], rowCount: this.costRows.length };
     }

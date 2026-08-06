@@ -5,6 +5,7 @@
 import type { RunnerHandle } from "../../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
+import { routeGithubPushIntentQuery, type GithubPushIntentRow } from "./githubPushIntentPool.js";
 
 export class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
@@ -57,8 +58,11 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
 
 export class RecordingPool {
   readonly updates: Array<{ runId: string; prUrl: string }> = [];
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, sql, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     if (sql === "UPDATE runs SET pr_url = $2 WHERE run_id = $1") {
       this.updates.push({ runId: String(params[0]), prUrl: String(params[1]) });
     }

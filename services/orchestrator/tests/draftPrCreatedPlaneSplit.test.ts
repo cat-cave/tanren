@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 import { RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
+import { routeGithubPushIntentQuery, type GithubPushIntentRow } from "./helpers/githubPushIntentPool.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -44,9 +45,12 @@ const target: RunnerHandle = {
  */
 class DenyingEventsPool {
   readonly queries: string[] = [];
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
+
   async query(sql: string, _params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     this.queries.push(sql);
     const text = sql.trim();
+    const params = _params ?? [];
     if (
       text.startsWith("BEGIN") ||
       text.startsWith("SET LOCAL") ||
@@ -56,6 +60,8 @@ class DenyingEventsPool {
     ) {
       return { rows: [], rowCount: 0 };
     }
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, text, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     // Mirror `tanren_dataplane` REVOKE: any events write is 42501.
     if (/INSERT\s+INTO\s+events\b/iu.test(text) || (text.startsWith("INSERT INTO") && text.includes("event_type"))) {
       throw Object.assign(new Error("permission denied for table events"), { code: "42501" });
