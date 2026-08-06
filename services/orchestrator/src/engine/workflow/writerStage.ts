@@ -74,10 +74,13 @@ export interface WriterStageInput {
 //     RECOVERABLE §4.3 condition); the loop halts the run as window pressure.
 //   - `crashed` / `timeout` → a hard, typed failure routed back through the
 //     planner-rework/retry-budget path; the task row lands `failed`, not `passed`.
+//   - `commit_rejected` → the writer produced work and the PROJECT's own commit hook
+//     refused it. Routed back to the writer with the hook's output as steering, under
+//     the same convergence budget a failed gate tier uses (subtaskInnerLoop).
 export type WriterStageOutcome =
   | { kind: "completed"; writer: WriterResult }
   | { kind: "window_exhausted"; writer: WriterResult }
-  | { kind: "failed"; writer: WriterResult; failureKind: "crashed" | "timeout" };
+  | { kind: "failed"; writer: WriterResult; failureKind: "crashed" | "timeout" | "commit_rejected" };
 
 export async function runWriterStage(args: WriterStageInput): Promise<WriterStageOutcome> {
   await insertChildTask(
@@ -221,8 +224,7 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
   // `failureKind`. The branches now select only the per-kind `WriterFailedExit`
   // descriptor (kind + message + WriterStageOutcome shape) and route through ONE
   // helper, so the event payload + atomic terminal contract are written down ONCE.
-  const exitReason = writerResult.exitReason;
-  const failedExit = classifyFailedExit(exitReason);
+  const failedExit = classifyFailedExit(writerResult);
   if (failedExit !== undefined) {
     return await emitWriterSubtaskTerminalFailure(args, writerResult, failedExit);
   }
@@ -309,15 +311,15 @@ async function emitWriterSubtaskFailed(
 // shape returned to the caller. Centralized so all three branches use ONE
 // payload+atomic-terminal contract — adding a future failed-exit kind only edits
 // this descriptor.
-type WriterFailedExitKind = "window_exhausted" | "crashed" | "timeout";
+type WriterFailedExitKind = "window_exhausted" | "crashed" | "timeout" | "commit_rejected";
 interface WriterFailedExitDescriptor {
   failureKind: WriterFailedExitKind;
   message: string;
   outcome: (writer: WriterResult) => WriterStageOutcome;
 }
 
-function classifyFailedExit(exitReason: WriterResult["exitReason"]): WriterFailedExitDescriptor | undefined {
-  switch (exitReason) {
+function classifyFailedExit(writerResult: WriterResult): WriterFailedExitDescriptor | undefined {
+  switch (writerResult.exitReason) {
     case "window_exhausted":
       return {
         failureKind: "window_exhausted",
@@ -336,10 +338,38 @@ function classifyFailedExit(exitReason: WriterResult["exitReason"]): WriterFaile
         message: "writer crashed mid-subtask",
         outcome: (writer) => ({ kind: "failed", writer, failureKind: "crashed" }),
       };
-    default:
-      // `completed` / `token_limit` — the SUCCESS arms, not handled here.
+    case "commit_rejected":
+      return {
+        failureKind: "commit_rejected",
+        // CONTENT-FREE by construction. `writer.subtask.failed.message` is a
+        // `public` sensitivity tier (events/sensitivityRules.ts), and the hook's
+        // output is the target repository's own source text — file paths, code
+        // excerpts, spell-check tokens. The timeline gets the classification and
+        // the (Tanren-owned, constant) command label; the actionable hook output
+        // goes where it can be acted on, into the writer's next prompt.
+        message: commitRejectedMessage(writerResult.commitRejection),
+        outcome: (writer) => ({ kind: "failed", writer, failureKind: "commit_rejected" }),
+      };
+    // `completed` / `token_limit` — the SUCCESS arms, spelled out rather than defaulted.
+    case "completed":
+    case "token_limit":
       return undefined;
+    default: {
+      // EXHAUSTIVENESS. The old `default: return undefined` meant "not a failure", so any
+      // `exitReason` added to `WriterResult` and missed here would reach the checker as a
+      // PASSED task carrying an unusable diff — silently. That is precisely the class of
+      // defect this PR exists to remove, so the switch now fails closed: a new arm is a
+      // COMPILE error at `never`, and the throw is the unreachable runtime backstop.
+      const unhandled: never = writerResult.exitReason;
+      throw new Error(`unclassified writer exitReason: ${String(unhandled)}`);
+    }
   }
+}
+
+function commitRejectedMessage(rejection: WriterResult["commitRejection"]): string {
+  const exit = rejection === undefined ? "unknown exit" : `exit ${rejection.exitCode}`;
+  const label = rejection === undefined ? "the writer commit" : rejection.label;
+  return `the project's commit hook rejected the writer's work ("${label}", ${exit})`;
 }
 
 // task #22: the SINGLE writer-failed terminal helper. Every failed-exit branch

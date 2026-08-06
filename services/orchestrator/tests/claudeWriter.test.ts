@@ -43,6 +43,8 @@ describe("Claude writer adapter", () => {
       ok(`${baselineSha}\n`),
       // claude run
       ok(`${usageLine}\n`),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -73,7 +75,7 @@ describe("Claude writer adapter", () => {
     expect(ssh.commands[2]?.command.command).toContain("--permission-mode acceptEdits");
     expect(ssh.commands[2]?.command.command).toContain("--model 'claude-opus-4-8'");
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
-    expect(ssh.commands[3]?.command.command).toContain("git commit -m 'claude writer'");
+    expect(ssh.commands[4]?.command.command).toContain("git commit -m 'claude writer'");
     expect(result).toMatchObject({
       diff: "diff --git a/X.md b/X.md\n+done\n",
       commits: [],
@@ -175,6 +177,8 @@ describe("Claude writer adapter", () => {
       ok(`${baselineSha}\n`),
       // claude run
       ok("{}\n"),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -261,7 +265,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWithClaudeResult(claudeResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), claudeResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), claudeResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/claude/dev", value: authJson });
   const writer = createClaudeWriter({
@@ -284,6 +288,11 @@ class ScriptedSsh implements CommandSubstrate {
     const result = this.results.shift();
     if (result === undefined) {
       throw new Error(`unexpected SSH command: ${command.command}`);
+    }
+    // Staging carries the staged-change probe (stageWorkspaceChanges); a scripted empty
+    // stdout stands in for "there IS a staged delta" so the gated commit is reached.
+    if (command.command.includes("git add -A") && result.stdout === "") {
+      return { ...result, stdout: "STAGED_CHANGES\n" };
     }
     return result;
   }

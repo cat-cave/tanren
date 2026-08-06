@@ -128,7 +128,7 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
       if (aider.failure !== undefined || aider.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -276,5 +276,5 @@ function failedResult(
   telemetry: AiderTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

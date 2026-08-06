@@ -31,6 +31,8 @@ describe("reasonix writer adapter", () => {
           '{"type":"done","usage":{"prompt_tokens":1500,"prompt_cache_hit_tokens":300,"completion_tokens":340,"reasoning_tokens":60}}\n',
         // reasonix run (NDJSON)
       ),
+      // stage
+      ok(""),
       // commit
       ok(""),
       // diff
@@ -78,7 +80,7 @@ describe("reasonix writer adapter", () => {
   });
 
   it("resolves the DeepSeek API key from the credential store via authRef", async () => {
-    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/reasonix/dev", value: apiKey });
     const writer = createReasonixWriter({
@@ -185,7 +187,7 @@ function ok(stdout: string): CommandResult {
 }
 
 async function runWith(reasonixResult: CommandResult) {
-  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), reasonixResult, ok(""), ok(""), ok("")]);
+  const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), reasonixResult, ok(""), ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/reasonix/dev", value: apiKey });
   const writer = createReasonixWriter({
@@ -208,6 +210,11 @@ class ScriptedSsh implements CommandSubstrate {
     const result = this.results.shift();
     if (result === undefined) {
       throw new Error(`unexpected SSH command: ${command.command}`);
+    }
+    // Staging carries the staged-change probe (stageWorkspaceChanges); a scripted empty
+    // stdout stands in for "there IS a staged delta" so the gated commit is reached.
+    if (command.command.includes("git add -A") && result.stdout === "") {
+      return { ...result, stdout: "STAGED_CHANGES\n" };
     }
     return result;
   }

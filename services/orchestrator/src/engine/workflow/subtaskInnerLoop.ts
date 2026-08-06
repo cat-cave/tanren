@@ -23,6 +23,8 @@ import type { GateOutcome } from "./gate/index.js";
 // re-exported here so every writer-steering renderer is reachable from one module.
 import { testRegressionDirective } from "./gate/index.js";
 export { testRegressionDirective };
+import { commitRejectionReason } from "./commitGateSteering.js";
+import type { WriterStageOutcome } from "./writerStage.js";
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
@@ -160,20 +162,22 @@ async function runOneSubtask(args: {
     // reset the consecutive-crash streak (a crash-then-clean-run is progress, never a wedge).
     crashAttempts.length = 0;
     if (writerOutcome.kind === "failed") {
-      // A writer TIMEOUT (the only remaining hard-failure kind here). Unlike a crash, a timeout
-      // CARRIES progress information — the writer ran and produced a PARTIAL diff that grows
-      // attempt over attempt — so it stays in the WORK convergence. The next attempt must NOT
-      // re-run the IDENTICAL subtask to the IDENTICAL timeout (the apex-v36 "timed out
-      // mid-subtask, identical output" non-convergence) — it must CHANGE APPROACH. So:
-      //   (1) steer the writer to change strategy (`writerFailureReason`): the subtask was too
-      //       large for one call — commit the partial progress it already made, narrow to the
-      //       smallest next increment, and don't restart from scratch;
-      //   (2) record the PARTIAL diff as the work signature so genuine incremental progress
-      //       (a growing partial diff each attempt) reads as progress, while a byte-identical
-      //       partial (the writer making no headway) converges the fixed-point detector to a
-      //       residual finding instead of re-driving forever. An empty partial diff has no
-      //       work signature — progress then keys off the rejection reason changing.
-      lastReason = writerFailureReason("timeout");
+      // The two remaining hard-failure kinds — a writer TIMEOUT, and a commit REJECTED by the
+      // project's own pre-commit gate — share this arm: unlike a crash, each CARRIES progress (the
+      // writer ran and produced a real diff), so each belongs in the WORK convergence, steered by
+      // `writerRejectionReason` below (commit-gate text: commitGateSteering.ts). A rejected commit
+      // reaching here AT ALL is the fix for a run-killer — it used to throw an uncaught
+      // WorkspaceCommandError, be mislabelled `crashed`, and kill the whole run, discarding every
+      // passed subtask and all convergence state (see providers/writerCommitGate.ts). BOUNDED BY
+      // CONSTRUCTION — no new retry budget: both record into the SAME work-convergence history the
+      // gate/checker rejections use (progress is "rejection changed OR diff changed"), so a writer
+      // that cannot satisfy the hook converges to the usual loud P0 fixed-point finding. This
+      // re-drives the WRITER, never the commit — nothing is re-attempted without new work.
+      lastReason = writerRejectionReason(writerOutcome);
+      // The work signature: a timeout's partial diff (which grows attempt over attempt), or the
+      // diff a rejected commit tried to land (still in the tree — only `git commit` was refused).
+      // An unchanged diff plus an unchanged rejection is a genuine fixed point; an empty diff has
+      // no work signature, so progress then keys off the rejection reason changing.
       const partial = writerOutcome.writer.diff;
       const stuck = await recordAttemptAndCheckFixedPoint(
         attempts,
@@ -470,6 +474,14 @@ export function failedStepOutputTail(failure: Extract<GateOutcome, { passed: fal
 // describes MULTIPLE concerns, tackle ONE concern completely this attempt and let the
 // next planner iteration split off the rest. Doctrinal reinforcement — no mechanical
 // splitter, just clearer guidance to the LLM.
+// Steering for a writer that produced work and had it rejected: a commit refused by the
+// project's pre-commit gate renders from the hook's OWN output (commitGateSteering.ts).
+function writerRejectionReason(outcome: Extract<WriterStageOutcome, { kind: "failed" }>): string {
+  return outcome.failureKind === "commit_rejected"
+    ? commitRejectionReason(outcome.writer.commitRejection)
+    : writerFailureReason(outcome.failureKind);
+}
+
 export function writerFailureReason(failureKind: "crashed" | "timeout"): string {
   if (failureKind === "timeout") {
     return (

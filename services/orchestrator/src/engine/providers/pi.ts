@@ -120,7 +120,7 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
       if (pi.failure !== undefined || pi.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -245,5 +245,5 @@ function failedResult(
   telemetry: PiTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

@@ -111,7 +111,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
       if (reasonix.failure !== undefined || reasonix.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
-      return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
+      return { ...gitState, tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
 }
@@ -229,5 +229,5 @@ function failedResult(
   telemetry: ReasonixEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }
