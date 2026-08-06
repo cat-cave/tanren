@@ -57,6 +57,7 @@ export {
   events,
 };
 export { runners } from "./schemaRunners.js";
+export { githubPushIntents } from "./schemaGithubPushIntents.js";
 export { mergeEagerBeams } from "./schemaEagerBeams.js";
 export { mergeRuntimeOutcomes } from "./schemaMergeRuntimeOutcomes.js";
 export { mergeQueueCommands, mergeQueuePolicies, mergeQueueWindows } from "./schemaQueuePolicy.js";

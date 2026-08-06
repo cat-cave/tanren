@@ -1,6 +1,4 @@
 /* eslint-disable import/max-dependencies -- draft PR publication composes the canonical tenant, event, runner, and GitHub seams */
-import type pg from "pg";
-import { z } from "zod";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { sshRunnerHandle } from "../contracts/allocator.js";
@@ -17,39 +15,19 @@ import { parseGitHubRepository } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
-import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
-import { readDraftPrPushLease } from "./githubDraftPrLease.js";
+import type { AncestorStack } from "../dag/ancestorStack.js";
 import { publishDraftPullRequestWithDurableLease, resolveBoundManualDraftPrHead } from "./githubDraftPrDurableLease.js";
+import {
+  completeDraftPushIntent,
+  findPendingDraftPushIntent,
+  prepareDraftPushIntent,
+} from "./githubDraftPrPushIntent.js";
 import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 import { appendPushedWitnessWithReconciliation } from "./githubDraftPrWitness.js";
-import { messageFromError, readGithubCredentialRef, readGithubInstallation } from "./githubDraftPrHelpers.js";
+import { messageFromError } from "./githubDraftPrHelpers.js";
+import { loadDraftPrRunContext, type RunStateClient } from "./githubDraftPrRunContext.js";
 
 export { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
-
-type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-/** Zod-decoded join row for the draft-PR run context load (no raw row cast). */
-const DraftPrRunRow = z.object({
-  run_id: z.string(),
-  spec_id: z.string(),
-  project_id: z.string(),
-  org_id: z.string(),
-  branch: z.string(),
-  // Always selected; jsonb may be SQL NULL on non-speculative runs.
-  ancestor_stack: z.unknown().nullable(),
-  repo_url: z.string(),
-  default_branch: z.string(),
-  config: z.unknown().nullable(),
-  // LEFT JOIN organizations — no org match ⇒ SQL NULL (required key, null ok).
-  org_config: z.unknown().nullable(),
-  spec_title: z.string(),
-  spec_description: z.string(),
-  // LEFT JOIN LATERAL runners — no runner ⇒ SQL NULLs (required keys, null ok).
-  ssh_host: z.string().nullable(),
-  ssh_port: z.number().nullable(),
-  host_key_fingerprint: z.string().nullable(),
-});
-type DraftPrRunRow = z.infer<typeof DraftPrRunRow>;
 
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
@@ -211,19 +189,24 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    // Every draft-PR publication (including a post-review rework) must bind its
-    // force update to the exact remote state observed immediately before it.
-    // A changed head rejects at git's authoritative CAS; this catch records the
-    // failure and lets the run re-drive rather than report false publication.
-    const forceWithLease = await readDraftPrPushLease(
+    const preparedIntent = await prepareDraftPushIntent({
+      pool: input.pool,
+      context: {
+        orgId: input.appendEventOrgId,
+        projectId: input.projectId,
+        runId: input.runId,
+        specId: input.specId,
+        repoUrl: input.repoUrl,
+        branch,
+      },
+      intendedSha: publishedHeadSha,
+      sourceRef: publishedHeadSha,
+      expectedPublishedHeadSha: input.expectedPublishedHeadSha,
       http,
       repo,
-      branch,
-      resolved.token,
-      input.expectedPublishedHeadSha,
-      publishedHeadSha,
-    );
-    if (!("alreadyPublished" in forceWithLease)) {
+      token: resolved.token,
+    });
+    if (!("alreadyPublished" in preparedIntent.forceWithLease)) {
       await pushWorkspaceBranchToGitHub({
         ssh: input.ssh,
         target: input.target,
@@ -231,18 +214,21 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         repoUrl: input.repoUrl,
         branch,
         token: resolved.token,
-        sourceRef: input.sourceRef,
-        forceWithLease,
+        sourceRef: preparedIntent.intent.sourceRef,
+        forceWithLease: preparedIntent.forceWithLease,
       });
     }
     const pushedEvent = {
-      ...context,
+      runId: preparedIntent.intent.runId,
+      specId: preparedIntent.intent.specId,
+      projectId: preparedIntent.intent.projectId,
+      orgId: preparedIntent.intent.orgId,
       eventType: "github.branch.pushed" as const,
       payload: {
         repoUrl: input.repoUrl,
         branch,
-        headSha: publishedHeadSha,
-        sourceRef: publishedHeadSha,
+        headSha: preparedIntent.intent.intendedSha,
+        sourceRef: preparedIntent.intent.sourceRef,
         credentialRef: ledgerRef,
         redacted: true as const,
       },
@@ -254,9 +240,13 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       repo,
       branch,
       token: resolved.token,
-      publishedHeadSha,
-      idempotencyKey: `${input.runId}:github.branch.pushed:${branch}:${publishedHeadSha}`,
+      publishedHeadSha: preparedIntent.intent.intendedSha,
+      idempotencyKey: `${preparedIntent.intent.runId}:github.branch.pushed:${branch}:${preparedIntent.intent.intendedSha}`,
     });
+    // The intent remains pending if witness append throws. This update is deliberately
+    // after the sole event-store witness authority, so a restart can reconcile the
+    // remote CAS and re-drive the same immutable SHA.
+    await completeDraftPushIntent(input.pool, preparedIntent.intent, preparedIntent.intent.intendedSha);
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);
     const pr = await visibility.openOrUpdateChangeRequest({
@@ -333,16 +323,30 @@ export async function publishDraftPullRequestForRun(
     hostKeyFingerprint: context.runner.hostKeyFingerprint,
     identitySecretRef: input.identitySecretRef,
   });
-  const { predecessorSha: durablePredecessor, headSha: publishedHeadSha } = await resolveBoundManualDraftPrHead({
-    pool: input.pool,
+  const pendingIntent = await findPendingDraftPushIntent(input.pool, {
     orgId: context.orgId,
+    projectId: context.projectId,
+    runId: context.runId,
     specId: context.specId,
-    branch: context.branch,
     repoUrl: context.repoUrl,
-    ssh: input.ssh,
-    target,
-    workspacePath,
+    branch: context.branch,
   });
+  const { predecessorSha: durablePredecessor, headSha: publishedHeadSha } =
+    pendingIntent === undefined
+      ? await resolveBoundManualDraftPrHead({
+          pool: input.pool,
+          orgId: context.orgId,
+          specId: context.specId,
+          branch: context.branch,
+          repoUrl: context.repoUrl,
+          ssh: input.ssh,
+          target,
+          workspacePath,
+        })
+      : {
+          predecessorSha: pendingIntent.leasePredecessorSha,
+          headSha: pendingIntent.intendedSha,
+        };
 
   return await publishDraftPullRequestWithDurableLease(
     {
@@ -382,72 +386,6 @@ export async function publishDraftPullRequestForRun(
     publishDraftPullRequest,
   );
 }
-async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {
-  const result = await pool.query(
-    // v68 fix: select runs.org_id (NOT NULL) so the operator PR-open route stamps
-    // events.org_id directly rather than via the prior derive-from-project subquery.
-    `SELECT
-       r.run_id,
-       r.spec_id,
-       r.project_id,
-       r.org_id,
-       r.branch,
-       r.ancestor_stack,
-       p.repo_url,
-       p.default_branch,
-       p.config,
-       o.config AS org_config,
-       s.title AS spec_title,
-       s.description AS spec_description,
-       runner.ssh_host,
-       runner.ssh_port,
-       runner.host_key_fingerprint
-     FROM runs r
-     JOIN projects p ON p.project_id = r.project_id
-     LEFT JOIN organizations o ON o.id = p.org_id
-     JOIN specs s ON s.spec_id = r.spec_id
-     LEFT JOIN LATERAL (
-       SELECT ssh_host, ssh_port, host_key_fingerprint
-       FROM runners
-       WHERE run_id = r.run_id
-       ORDER BY created_at DESC
-       LIMIT 1
-     ) runner ON true
-     WHERE r.run_id = $1`,
-    [runId],
-  );
-  const raw = result.rows[0];
-  if (raw === undefined) {
-    return undefined;
-  }
-  const row = DraftPrRunRow.parse(raw);
-  // Re-hydrate the ordered ancestor stack from `runs.ancestor_stack` (the jj-local base
-  // source). Empty for a non-speculative run. The stacked-PR base reads it so the operator
-  // route opens the same base the loop does.
-  const ancestorStack = resolveAncestorStack({ ancestorStack: row.ancestor_stack });
-  return {
-    runId: row.run_id,
-    specId: row.spec_id,
-    projectId: row.project_id,
-    orgId: row.org_id,
-    branch: row.branch,
-    ...(ancestorStack.length > 0 && { ancestorStack }),
-    repoUrl: row.repo_url,
-    defaultBranch: row.default_branch,
-    configuredGithubCredentialRef: readGithubCredentialRef(row.config, row.org_id),
-    installation: readGithubInstallation(row.org_config, row.org_id),
-    specTitle: row.spec_title,
-    specDescription: row.spec_description,
-    runner:
-      row.ssh_host === null || row.ssh_port === null || row.host_key_fingerprint === null
-        ? undefined
-        : {
-            sshHost: row.ssh_host,
-            sshPort: row.ssh_port,
-            hostKeyFingerprint: row.host_key_fingerprint,
-          },
-  };
-}
 
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
   // Callers MUST pass githubCredentialRef directly; projectConfig fallback was removed.
@@ -468,29 +406,5 @@ function eventContext(input: PublishDraftPullRequestInput) {
     specId: input.specId,
     projectId: input.projectId,
     orgId: input.appendEventOrgId,
-  };
-}
-
-interface DraftPrRunContext {
-  runId: string;
-  specId: string;
-  projectId: string;
-  /** v68 fix: the run's tenant key (NOT NULL on runs.org_id). */
-  orgId: string;
-  branch: string;
-  /** §3.1: the ordered ancestor stack (the stacked-PR base source), when speculative. */
-  ancestorStack?: AncestorStack;
-  repoUrl: string;
-  defaultBranch: string;
-  /** Resolved from `projects.config.githubCredentialRef` — the operator route uses this
-   *  to fall back to the project's configured cred when the request body omitted it. */
-  configuredGithubCredentialRef?: string;
-  installation?: OrgGithubAppInstallation;
-  specTitle: string;
-  specDescription: string;
-  runner?: {
-    sshHost: string;
-    sshPort: number;
-    hostKeyFingerprint: string;
   };
 }

@@ -18,6 +18,7 @@ export class PlannerRunPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   prUrl: string | null = null;
   readonly taskKinds: string[] = [];
+  readonly pushIntents = new Map<string, Record<string, unknown>>();
   /** Every `UPDATE specs SET status = ...` in spec-write order. */
   readonly specStatuses: string[] = [];
   private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
@@ -52,6 +53,37 @@ export class PlannerRunPool {
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
+    if (trimmed.includes("FROM github_push_intents") && trimmed.includes("status = 'pending'")) {
+      const match = [...this.pushIntents.values()].find(
+        (row) => row.org_id === params[0] && row.spec_id === params[1] && row.branch === params[2],
+      );
+      return { rows: match === undefined ? [] : [match], rowCount: match === undefined ? 0 : 1 };
+    }
+    if (trimmed.includes("FROM github_push_intents") && trimmed.includes("intent_id = $2")) {
+      const row = this.pushIntents.get(String(params[1]));
+      return { rows: row === undefined ? [] : [row], rowCount: row === undefined ? 0 : 1 };
+    }
+    if (trimmed.startsWith("INSERT INTO github_push_intents")) {
+      this.pushIntents.set(String(params[0]), {
+        intent_id: params[0],
+        org_id: params[1],
+        project_id: params[2],
+        run_id: params[3],
+        spec_id: params[4],
+        repo_url: params[5],
+        branch: params[6],
+        intended_sha: params[7],
+        source_ref: params[8],
+        lease_predecessor_sha: params[9],
+        status: "pending",
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (trimmed.startsWith("UPDATE github_push_intents")) {
+      const row = this.pushIntents.get(String(params[1]));
+      if (row !== undefined) row.status = "completed";
+      return { rows: [], rowCount: 1 };
+    }
     if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
       return { rows: [...this.costRows], rowCount: this.costRows.length };
     }
