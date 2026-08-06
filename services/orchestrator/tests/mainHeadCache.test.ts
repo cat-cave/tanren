@@ -8,7 +8,7 @@ import { MainHeadCache, mainHeadCacheKey } from "../src/engine/providers/mainHea
 import { GitHubCodeHost } from "../src/engine/providers/githubCodeHost.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 
-describe("MainHeadCache (apex-v35 volume guard)", () => {
+describe("MainHeadCache caching behavior", () => {
   it("returns the cached value within the TTL, then re-reads after it expires", async () => {
     let clock = 0;
     const cache = new MainHeadCache({ ttlMs: 5_000, now: () => clock });
