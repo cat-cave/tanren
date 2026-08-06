@@ -123,7 +123,10 @@ describe("run worker — single-finalize: the workflow's own finalize is NOT dou
     pool.successorRunCount = 0;
     // The identical `internal@run` crash RECURS across prior re-drives (a proven cycle, not a
     // single transient repeat) ⇒ this one is a fixed point ⇒ persistent_failure. No count.
-    pool.priorRedrivenFailureCodes = Array.from({ length: 3 }, () => "internal");
+    // The convergence signature keys on the FINE-GRAINED `cause` now, so the prior rows
+    // carry `unclassified` — the cause a bare `Error` classifies to — i.e. the identical
+    // crash recurring. (Under the old code-keyed signature this read `internal`.)
+    pool.priorRedrivenSignatures = Array.from({ length: 3 }, () => "unclassified");
     const jobQueue = new FakeJobQueue();
     await enqueue(jobQueue, run);
 

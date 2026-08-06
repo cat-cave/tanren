@@ -17,7 +17,13 @@ import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent } from "./runStateL
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
-import { decideRunDisposition, redriveBackoffSeconds } from "../workflow/runFinalizeAuthority.js";
+import {
+  attributionAsk,
+  decideRunDisposition,
+  redriveBackoffSeconds,
+  type RunDisposition,
+} from "../workflow/runFinalizeAuthority.js";
+import { causeFields, preconditionFields } from "../workflow/redriveEventFields.js";
 import {
   type OrphanConsecutiveReadResult,
   readOrphanConsecutive,
@@ -129,7 +135,13 @@ export async function finalizeRunRecoverable(
     projectId,
     orgId: runOrgId,
     eventType: "run.failed" as const,
-    payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
+    payload: {
+      status: "halted",
+      failureCode: failure.code,
+      stage: failure.stage,
+      message: failure.summary,
+      ...causeFields(failure),
+    },
   });
 
   // When a remote writer is wired AND the run has an org, route
@@ -227,82 +239,90 @@ async function loadRunOrgId(pool: pg.Pool, runId: string, l: typeof log): Promis
 // into RE-DRIVE, and the only worker-orphan path to `needs_attention` is the bounded
 // persistent-failure escalation — the unified 3-bucket model, applied at the worker too.
 
-/** The `dag.spec.redriven` payload a worker-level orphan re-drive emits (the OBSERVABLE retry).
- * `priorSameFixedPoint` is the shared detector's fixed-point streak (0 ⇒ progress). */
+/** The `dag.spec.redriven` payload a worker-level orphan re-drive emits (the OBSERVABLE
+ * retry). The counter + backoff come from the AUTHORITY's own re-drive disposition rather
+ * than being recomputed here, so a precondition block's `consecutiveSameFailure: 0` (a wait
+ * is not a strike) and its fixed probe cadence carry through unaltered. */
 function orphanRedrivenPayload(
   runId: string,
   specId: string,
   failure: ClassifiedRunFailure,
-  priorSameFixedPoint: number,
+  redrive: Extract<RunDisposition, { bucket: "re_drive" }>,
 ) {
   return {
     specId,
     runId,
     failureCode: failure.code,
     stage: failure.stage,
-    consecutiveSameFailure: priorSameFixedPoint + 1,
-    backoffSeconds: redriveBackoffSeconds(priorSameFixedPoint),
+    // The FINE-GRAINED axis the convergence readers key on now (the code stays as the
+    // public contract and the fallback signature for rows written before this change).
+    ...causeFields(failure),
+    consecutiveSameFailure: redrive.consecutiveSameFailure,
+    backoffSeconds: redrive.backoffSeconds,
+    // Tagged exactly as on the planner path, so BOTH readers exempt the wait.
+    ...preconditionFields(redrive.preconditionBlock),
   };
 }
 
-/** The `dag.spec.needs_attention` payload a worker-level persistent-failure escalation emits. */
+/** The `dag.spec.needs_attention` payload a worker-level genuine halt emits.
+ *
+ * The `reason`, the `message` and the attempt count are the AUTHORITY's — never re-derived
+ * here. Re-deriving them was a lossy hop with no symptom: a `misconfiguration` halt (an
+ * `UnscopedOrgError`, decided terminal on its FIRST occurrence) was published to the
+ * operator as `reason: "persistent_failure"` with "reached a FIXED POINT … crashed the
+ * identical way across re-drives" and `attempts: 1` — a fluent, checkable-looking sentence
+ * describing a convergence history that never happened. The planner-path sibling
+ * (`plannerRunRedrive.ts` `applyGenuineHalt`) has always passed the authority's own values
+ * through; this brings the orphan path to parity. */
 function orphanPersistentPayload(
   runId: string,
   specId: string,
   failure: ClassifiedRunFailure,
-  priorSameFixedPoint: number,
+  halt: Extract<RunDisposition, { bucket: "genuine_halt" }>,
 ) {
   return {
     source: "strand" as const,
     specId,
-    reason: "persistent_failure" as const,
+    reason: halt.reason,
     terminalRuns: [{ runId, status: "halted" }],
-    attempts: priorSameFixedPoint + 1,
-    message:
-      `the run reached a FIXED POINT (${failure.code} @ ${failure.stage}: ${failure.summary}) — it crashed the ` +
-      `identical way with no new information across re-drives; the spec is genuinely stuck (a bug or mis-spec, not a ` +
-      `flake), so a human must intervene; requeue after addressing the cause`,
+    attempts: halt.consecutiveSameFailure,
+    // A halt is a BUG REPORT: name WHAT broke and WHOSE bug it is, both as structured
+    // fields and inline in the ask, so the operator knows which repository to open.
+    ...causeFields(failure),
+    message: `${halt.message} ${attributionAsk(failure.attribution)}`,
   };
 }
 
-/** Decide the orphan disposition (re-drive while progressing, genuine-halt at a fixed point). */
-function decideOrphan(failure: ClassifiedRunFailure, priorSameFixedPoint: number): "re_drive" | "genuine_halt" {
-  const disposition = decideRunDisposition(
-    { kind: "error", error: new OrphanFailureProxy(failure) },
-    { priorSameFixedPoint },
-  );
-  return disposition.bucket === "genuine_halt" ? "genuine_halt" : "re_drive";
+/** Decide the orphan disposition (re-drive while progressing, genuine-halt at a fixed point).
+ *
+ * Hands the authority the ALREADY-CLASSIFIED failure via the `classified_error` outcome. The
+ * previous shape round-tripped the classification back through a synthetic error NAME
+ * (code → error-class name → `classifyRunFailure` → code) via an `OrphanFailureProxy` and a
+ * `ORPHAN_PROXY_NAME_BY_CODE` table. That hop is LOSSY by construction — it can only carry
+ * what the CODE alone determines — so it silently dropped the `cause`, the `attribution`
+ * and, critically, the `precondition`: an orphaned run blocked on a missing credential would
+ * still have parked. Removing the hop (rather than widening the table) is the fix, and it
+ * deletes the table with it. */
+function decideOrphan(
+  failure: ClassifiedRunFailure,
+  priorSameFixedPoint: number,
+): Extract<RunDisposition, { bucket: "re_drive" | "genuine_halt" }> {
+  const disposition = decideRunDisposition({ kind: "classified_error", failure }, { priorSameFixedPoint });
+  if (disposition.bucket === "re_drive") return disposition;
+  // Return the halt WHOLE. Narrowing it to the bucket discarded the authority's `reason`,
+  // its `message` and its attempt count, and the payload builder then invented replacements.
+  if (disposition.bucket === "genuine_halt") return disposition;
+  // A `pause_for_capacity` / `converge` bucket is not a park — treat it as the orphan path
+  // always has: re-drive the spec (behavior-identical to the prior proxy mapping).
+  return {
+    bucket: "re_drive",
+    failure,
+    runOutcome: "halted",
+    subReason: failure.code,
+    backoffSeconds: redriveBackoffSeconds(priorSameFixedPoint),
+    consecutiveSameFailure: priorSameFixedPoint + 1,
+  };
 }
-
-// A minimal proxy so the orphan path reuses the SAME authority decision as the workflow
-// path: it carries the already-classified failure CODE via its `name`, which
-// `classifyRunFailure` keys off (the authority then maps code → bucket). This keeps the
-// 3-bucket mapping in ONE place rather than re-implementing it here.
-class OrphanFailureProxy extends Error {
-  constructor(failure: ClassifiedRunFailure) {
-    super(failure.summary);
-    this.name = ORPHAN_PROXY_NAME_BY_CODE[failure.code];
-  }
-}
-// The error-class name each code maps to, so `classifyRunFailure` recovers the same code.
-const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], string>> = {
-  workspace: "WorkspaceBootstrapError",
-  credential: "MissingCredentialError",
-  usage_limit: "CodexUsageLimitError",
-  merge: "__OrphanMergeFault",
-  deploy: "__OrphanDeployFault",
-  empty_writer_output: "EmptyWriterCommitError",
-  speculative_assembly: "SpeculativeAssemblyError",
-  // Codex round-3 #3: the four PR #740 + #745 typed errors carried through the
-  // orphan proxy so the reader-side classification recovers the same code (the
-  // proxy round-trips through `classifyRunFailure` keyed off `error.name`).
-  malformed_ancestor_stack: "MalformedAncestorStackError",
-  design_contract_corrupt: "DesignContractCorruptError",
-  design_oracle_actor_config: "DesignOracleActorConfigError",
-  malformed_design_oracle_result: "MalformedDesignOracleResultError",
-  spec_persistently_invalid: "PersistentlyInvalidSpecError",
-  internal: "__OrphanInternalFault",
-};
 
 /**
  * Re-drive (or, at the cap, genuine-halt) a GENUINELY orphaned spec over the control
@@ -348,16 +368,24 @@ async function parkStrandedSpecRemote(
   // Audit C2 #1/#2 — read_failed sentinel is normalized via `resolveOrphanConsecutive` +
   // forces RE-DRIVE (never genuine-halt on unknown facts) with a LOUD `log.warn`.
   const consecutive = resolveOrphanConsecutive(slot.consecutive, { runId, specId, orgId });
-  const redrive = slot.consecutive.kind === "read_failed" || decideOrphan(failure, consecutive) === "re_drive";
+  const decided = decideOrphan(failure, consecutive);
+  // A read failure DEFERS escalation (never a genuine-halt on unknown facts) — force the
+  // re-drive shape the authority would have produced at progress.
+  const disposition = slot.consecutive.kind === "read_failed" ? decideOrphan(failure, 0) : decided;
+  const redrive = disposition.bucket === "re_drive";
   // Task #48 Site E / F: the spec flip + the matching event (`dag.spec.redriven`
   // or `dag.spec.needs_attention`) are now ATOMIC via the writer's
   // `updateSpecWithEvent` seam (one org-scoped transaction server-side).
-  const event = redrive
-    ? { eventType: "dag.spec.redriven" as const, payload: orphanRedrivenPayload(runId, specId, failure, consecutive) }
-    : {
-        eventType: "dag.spec.needs_attention" as const,
-        payload: orphanPersistentPayload(runId, specId, failure, consecutive),
-      };
+  const event =
+    disposition.bucket === "re_drive"
+      ? {
+          eventType: "dag.spec.redriven" as const,
+          payload: orphanRedrivenPayload(runId, specId, failure, disposition),
+        }
+      : {
+          eventType: "dag.spec.needs_attention" as const,
+          payload: orphanPersistentPayload(runId, specId, failure, disposition),
+        };
   await writer.updateSpecWithEvent({
     spec: {
       specId,
@@ -395,7 +423,11 @@ export async function parkStrandedSpecInProcess(
   // failure forces a RE-DRIVE this tick (never a genuine-halt on unknown facts) with a
   // LOUD `log.warn`; a genuinely-stuck spec still escalates once the DB recovers.
   const consecutive = resolveOrphanConsecutive(consecutiveResult, { runId, specId, orgId });
-  const redrive = consecutiveResult.kind === "read_failed" || decideOrphan(failure, consecutive) === "re_drive";
+  // A read failure DEFERS escalation (never a genuine-halt on unknown facts) — force the
+  // re-drive shape the authority would have produced at progress.
+  const disposition =
+    consecutiveResult.kind === "read_failed" ? decideOrphan(failure, 0) : decideOrphan(failure, consecutive);
+  const redrive = disposition.bucket === "re_drive";
   // Task #48 Site G: the guarded spec flip + the matching event are now ATOMIC
   // via `applyUpdateSpecWithEvent` (the in-process mirror of the writer's
   // `updateSpecWithEvent`). The prior split (`UPDATE … RETURNING` + a
@@ -412,12 +444,16 @@ export async function parkStrandedSpecInProcess(
   // `in_flight,review` guard implied).
   const targetStatus = redrive ? "open" : "needs_attention";
   const notFromStatuses = ["open", "merged", "needs_attention", "cancelled"];
-  const event = redrive
-    ? { eventType: "dag.spec.redriven" as const, payload: orphanRedrivenPayload(runId, specId, failure, consecutive) }
-    : {
-        eventType: "dag.spec.needs_attention" as const,
-        payload: orphanPersistentPayload(runId, specId, failure, consecutive),
-      };
+  const event =
+    disposition.bucket === "re_drive"
+      ? {
+          eventType: "dag.spec.redriven" as const,
+          payload: orphanRedrivenPayload(runId, specId, failure, disposition),
+        }
+      : {
+          eventType: "dag.spec.needs_attention" as const,
+          payload: orphanPersistentPayload(runId, specId, failure, disposition),
+        };
   // Sentinel `orgId` for the applier (caller owns the GUC scope); v68: EVENT carries the real org_id.
   await applyUpdateSpecWithEvent(client, {
     spec: { specId, orgId: "in-process", status: targetStatus, notFromStatuses },

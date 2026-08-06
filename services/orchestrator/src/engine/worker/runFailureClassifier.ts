@@ -15,6 +15,13 @@
 // An unrecognized error falls CLOSED to the generic `internal` code with a fixed
 // summary — never a pass-through of the raw string.
 
+import { refineControlPlaneWrite } from "./controlPlaneWriteRefinement.js";
+import type { RunFailureAttribution, RunFailureCause, RunPrecondition } from "./runFailureCause.js";
+
+// Re-exported so the many existing import sites of this module pick up the new
+// vocabulary without a second import (several files sit at their dependency cap).
+export type { RunFailureAttribution, RunFailureCause, RunPrecondition };
+
 /** Closed vocabulary of run-failure codes surfaced on the public timeline. */
 export type RunFailureCode =
   | "workspace"
@@ -76,27 +83,218 @@ export interface ClassifiedRunFailure {
   stage: RunFailureStage;
   /** A FIXED safe summary (never the raw error string) — safe for a public event payload. */
   summary: string;
+  /**
+   * The FINE-GRAINED cause id (a second, NARROWER axis alongside `code`) — safe for a
+   * public event payload. `code` is the broad public class and is UNCHANGED by design
+   * (it is timeline contract and other code branches on it); `cause` is what the
+   * convergence detector keys its fixed point on, so two categorically different
+   * failures never alias into one repeating state. See `runFailureCause.ts`.
+   */
+  cause: RunFailureCause;
+  /** WHOSE bug this is (tanren / target repo / environment / unknown) — closed vocabulary. */
+  attribution: RunFailureAttribution;
+  /**
+   * Set ONLY when the failure is blocked on a NAMED, externally-observable condition
+   * that can later become true WITHOUT the spec changing. Its presence flips the
+   * disposition to an indefinite `precondition_block` re-drive instead of a park.
+   */
+  precondition?: RunPrecondition;
 }
 
-// error.name → (code, stage, summary). Keyed by the error CLASS name (stable),
-// NOT the message. Every entry's summary is a fixed, human-authored, secret-free
-// sentence — the operator/monitor sees WHAT failed + WHERE, never the raw detail.
+// error.name → (code, stage, summary, cause, attribution, precondition?). Keyed by the
+// error CLASS name (stable), NOT the message. Every entry's summary is a fixed,
+// human-authored, secret-free sentence — the operator/monitor sees WHAT failed + WHERE,
+// never the raw detail. `cause` / `attribution` / `precondition` are likewise closed
+// vocabularies selected by the class name; none is ever derived from the error text.
+//
+// The vocabulary is TOTAL: every entry carries a cause + an attribution, and the
+// fail-closed default carries `unclassified` / `unknown`.
 const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
-  WorkspaceBootstrapError: { code: "workspace", stage: "workspace", summary: "workspace bootstrap failed" },
-  WorkspaceDepsInstallError: { code: "workspace", stage: "workspace", summary: "workspace dependency install failed" },
-  MissingCredentialError: { code: "credential", stage: "credentials", summary: "a required credential is missing" },
-  UnscopedOrgError: { code: "credential", stage: "credentials", summary: "credential resolution lost its org scope" },
+  WorkspaceBootstrapError: {
+    code: "workspace",
+    stage: "workspace",
+    summary: "workspace bootstrap failed",
+    cause: "workspace_bootstrap_failed",
+    // Bootstrap spans tanren's provisioning AND the repo's own shape (a clone that
+    // needs LFS, a submodule that 404s). The class name does not separate them.
+    attribution: "unknown",
+  },
+  WorkspaceDepsInstallError: {
+    code: "workspace",
+    stage: "workspace",
+    summary: "workspace dependency install failed",
+    cause: "workspace_deps_install_failed",
+    // The target repo's own dependency graph failed to install in a clean container —
+    // a repo-side reproducibility defect, and one the repo can fix.
+    attribution: "target_repo",
+  },
+  MissingCredentialError: {
+    code: "credential",
+    stage: "credentials",
+    summary: "a required credential is missing",
+    cause: "credential_missing",
+    attribution: "environment",
+    // Seeding the credential makes this true without touching the spec.
+    precondition: "credential",
+  },
+  UnscopedOrgError: {
+    code: "credential",
+    stage: "credentials",
+    summary: "credential resolution lost its org scope",
+    cause: "credential_org_scope_lost",
+    // A tanren-side scoping defect: the resolver was reached without the tenant scope
+    // it requires. Nothing external becomes true to fix this — no precondition, so it
+    // remains a GENUINE terminal (see `GENUINE_TERMINAL_CODES` in runFinalizeAuthority).
+    attribution: "tanren",
+  },
   OrgProviderModeUnresolved: {
     code: "credential",
     stage: "credentials",
     summary: "the org's provider mode could not be resolved",
+    cause: "provider_mode_unresolved",
+    // A tanren-side scoping defect, NOT a waitable external condition. The class is raised
+    // when a `{ kind: "org" }` scope's `organizations` row reads back EMPTY for a NON-EMPTY
+    // org id — a scoping/RLS-denial bug (the read ran off-scope and deny-by-default returned
+    // zero rows), never a legitimate "org has no config" signal (that path is the explicit
+    // `{ kind: "unscopedPlatform" }` scope). Nothing external becomes true to fix it, so it
+    // carries NO precondition and stays a GENUINE terminal (code `credential` ∈
+    // `GENUINE_TERMINAL_CODES`), mirroring the sibling `UnscopedOrgError`. Tagging it
+    // `precondition: "provider_config"` short-circuited it into an INDEFINITE re-drive (the
+    // precondition check in `runFinalizeAuthority` runs BEFORE the genuine-terminal check),
+    // silently hot-looping a scoping/RLS bug instead of halting loudly for a human to fix.
+    attribution: "tanren",
   },
-  CodexUsageLimitError: { code: "usage_limit", stage: "agent", summary: "the agent hit its provider usage limit" },
-  JobOrgContextLostError: { code: "internal", stage: "bootstrap", summary: "the run's org context was not reachable" },
+  CodexUsageLimitError: {
+    code: "usage_limit",
+    stage: "agent",
+    summary: "the agent hit its provider usage limit",
+    cause: "provider_usage_window_exhausted",
+    // Capacity always returns; the window-pause prober owns the resume (task #82),
+    // so this routes to `pause_for_capacity` upstream and needs no precondition.
+    attribution: "environment",
+  },
+  // Sibling of `CodexUsageLimitError` for the Claude answerer path. It was ABSENT from
+  // this allowlist, so a Claude window exhaustion fell to the `internal` default and
+  // was re-driven as a fault instead of routed to the window-pause bucket — the same
+  // omission class that produced the live 93%-`internal` reading.
+  ClaudeUsageLimitError: {
+    code: "usage_limit",
+    stage: "agent",
+    summary: "the agent hit its provider usage limit",
+    cause: "provider_usage_window_exhausted",
+    attribution: "environment",
+  },
+  // The typed transient every answerer-call consumer raises when a call produced no
+  // forward motion (`providers/answererSchemaError.ts`). A degraded provider, not a
+  // defect in either codebase — it re-drives on the normal convergence path.
+  AnswererStalledError: {
+    code: "internal",
+    stage: "agent",
+    summary: "the agent produced no forward motion this attempt",
+    cause: "answerer_stalled",
+    attribution: "environment",
+  },
+  // The answerer returned output that failed its structured-output schema. Could be a
+  // provider regression or a tanren-side schema the model cannot satisfy — the class
+  // name does not say which, so it fails closed to `unknown`.
+  AnswererSchemaValidationError: {
+    code: "internal",
+    stage: "agent",
+    summary: "the agent's structured output failed schema validation",
+    cause: "answerer_schema_invalid",
+    attribution: "unknown",
+  },
+  JobOrgContextLostError: {
+    code: "internal",
+    stage: "bootstrap",
+    summary: "the run's org context was not reachable",
+    cause: "job_org_context_lost",
+    attribution: "tanren",
+  },
   RunExecutionContextNotFoundError: {
     code: "internal",
     stage: "bootstrap",
     summary: "the run's execution context could not be loaded",
+    cause: "run_context_unresolvable",
+    attribution: "tanren",
+  },
+  // The SSH transport to the run's allocated runner stayed down across the SATURATED
+  // retry backoff (`ssh/transientRetry.ts`). This was the single largest live failure
+  // class — ~122 of 225 failures — and every one of them landed on the opaque
+  // `internal` default. `workspace` is the honest broad code (the runner IS the
+  // workspace transport); `runner_ssh_outage` carries the precision, and
+  // `environment` is the honest attribution: it is neither codebase's bug.
+  //
+  // DELIBERATELY NOT A PRECONDITION, though an SSH outage looks like the textbook one.
+  // This class is not raised on an SSH failure — it is raised by `transientRetry.ts`
+  // ONLY after that layer's own convergence detector PROVES a fixed point: "the SAME
+  // transient signal recurring at the SATURATED backoff with no new information", and
+  // its message ends "surfacing as a sustained outage, NOT retrying a fixed point
+  // forever". Tagging that conclusion `precondition: "runner_ssh"` made the run layer
+  // re-drive forever, on a fixed cadence, with the rows filtered out of BOTH convergence
+  // histories — so the proof the inner layer computed was discarded and nothing
+  // downstream could re-derive it. That is the same defect this cluster exists to fix
+  // (a proven fixed point that changes the label but not the behaviour), one layer up.
+  //
+  // Without a precondition it takes the ordinary convergence path: a first outage still
+  // re-drives, a genuinely sustained one reaches a proven fixed point and parks
+  // `needs_attention` naming `runner_ssh_outage` / `environment` — which an operator can
+  // act on. An outage that clears on the next attempt still recovers unattended.
+  PersistentSshOutageError: {
+    code: "workspace",
+    stage: "workspace",
+    summary: "the SSH route to the run's runner stayed unavailable across the retry backoff",
+    cause: "runner_ssh_outage",
+    attribution: "environment",
+  },
+  // A GitHub token credential ref IS configured but the secret store has nothing at it
+  // (`credentials/githubTokenResolver.ts`). 49 live failures, all read as `internal`.
+  // Seeding the secret clears it with no spec change.
+  MissingGithubCredentialRefError: {
+    code: "credential",
+    stage: "credentials",
+    summary: "the configured GitHub credential ref resolves to no secret",
+    cause: "github_credential_missing",
+    attribution: "environment",
+    precondition: "github_credential",
+  },
+  // The GitHub App sibling (`credentials/githubApp.ts`). 20 live failures — and until
+  // this change they were thrown as a BARE `Error`, so they could not be classified at
+  // all. See the class definition for why it now mirrors the token resolver's shape.
+  MissingGithubAppCredentialRefError: {
+    code: "credential",
+    stage: "credentials",
+    summary: "the configured GitHub App credential ref resolves to no secret",
+    cause: "github_app_credential_missing",
+    attribution: "environment",
+    precondition: "github_app_credential",
+  },
+  // The control-plane run-state write endpoint failed at the TRANSPORT —
+  // `worker/httpRunStateWriter.ts`, which throws this on ANY non-2xx. That is tanren's
+  // own control plane misbehaving, so the attribution is `tanren`.
+  //
+  // The `precondition` here is CONDITIONAL on the status and is applied by
+  // `refineControlPlaneWrite` below, NOT by this table — see that function for why a
+  // static precondition on this class was wrong. The entry carries the transient form;
+  // the refinement strips it when the status does not support the claim.
+  RunStateWriteTransportError: {
+    code: "internal",
+    stage: "run",
+    summary: "a control-plane run-state write failed at the transport",
+    cause: "control_plane_write_failed",
+    attribution: "tanren",
+    precondition: "control_plane",
+  },
+  // A runner row already carried a LIVE claim and the second claim was refused
+  // (`allocators/runnerStore.ts`). A tanren-side lifecycle defect — two claimants for
+  // one runner. Nothing external becomes true; it re-drives on the normal convergence
+  // path and escalates as a genuine bug if it truly repeats.
+  RunnerClaimLiveRowError: {
+    code: "internal",
+    stage: "bootstrap",
+    summary: "the run's runner already carried a live claim",
+    cause: "runner_double_claim",
+    attribution: "tanren",
   },
   // The writer produced NO commit ahead of the base this attempt (GitHub rejected the PR
   // open with "No commits between base and head", and the pushed head equals the run base).
@@ -107,6 +305,10 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "empty_writer_output",
     stage: "agent",
     summary: "the writer produced no commit ahead of the base this attempt",
+    cause: "empty_writer_output",
+    // A degraded/slow agent returning nothing, or a spec whose change is genuinely
+    // already present in the repo. The class name does not separate the two.
+    attribution: "unknown",
   },
   // apex v56 #61: every fail-closed throw on the dependent-run speculative base-assembly
   // path normalizes to this CLASS (the `phase` discriminator stays internal-only for log
@@ -117,6 +319,9 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "speculative_assembly",
     stage: "workspace",
     summary: "the dependent run's speculative base assembly failed",
+    cause: "speculative_assembly_failed",
+    // The dependent-run base assembly is entirely tanren's machinery.
+    attribution: "tanren",
   },
   // apex v65: `WorkspaceCommandError` is the catch-all thrown by `workspace/ssh.ts` for
   // any SSH command that exits non-zero (a `git rebase` blocked by an unstaged-change tree,
@@ -132,6 +337,16 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "workspace",
     stage: "workspace",
     summary: "a workspace command failed during the run",
+    cause: "workspace_command_failed",
+    // DELIBERATELY `unknown`. This is the catch-all for ANY SSH command exiting
+    // non-zero, so the class name cannot say whether the fault is tanren's (the
+    // command ran without the environment it needs) or the target repo's (the
+    // command itself is broken in a clean container). The worked example in
+    // `runFailureCause.ts` walks a real live instance of exactly this ambiguity.
+    // Narrowing it — by attributing the specific failing command, never by parsing
+    // its output — is follow-up work owned elsewhere; guessing here would route
+    // fixes to the wrong repository.
+    attribution: "unknown",
   },
   // Codex round-3 #3: PR #740 + #745 typed errors that can throw from context-hydration
   // + design-oracle pre-row paths BEFORE the stage-level finalize guard is entered.
@@ -144,21 +359,33 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "malformed_ancestor_stack",
     stage: "bootstrap",
     summary: "the run's ancestor stack failed schema parse",
+    cause: "ancestor_stack_malformed",
+    // Tanren wrote the row it cannot now read back.
+    attribution: "tanren",
   },
   DesignContractCorruptError: {
     code: "design_contract_corrupt",
     stage: "bootstrap",
     summary: "the persisted design contract failed schema parse",
+    cause: "design_contract_corrupt",
+    attribution: "tanren",
   },
   DesignOracleActorConfigError: {
     code: "design_oracle_actor_config",
     stage: "agent",
     summary: "the design oracle actor is misconfigured",
+    cause: "design_oracle_actor_misconfigured",
+    // The stage was invoked with an actor tanren itself assembled (a null-org actor).
+    attribution: "tanren",
   },
   MalformedDesignOracleResultError: {
     code: "malformed_design_oracle_result",
     stage: "agent",
     summary: "the design oracle result was malformed",
+    cause: "design_oracle_result_malformed",
+    // The oracle answerer returned an incomplete result — a provider-behavior fault
+    // more often than a tanren one, but the class name cannot prove either.
+    attribution: "unknown",
   },
   // apex v82 defense-in-depth: mirror arm to `stageFailureKind.ts`'s
   // `spec_persistently_invalid`. A spec the spec-quality gate could not make valid at a
@@ -169,21 +396,31 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "spec_persistently_invalid",
     stage: "agent",
     summary: "a spec could not be made valid and requires human attention",
+    cause: "spec_persistently_invalid",
+    // A spec the quality gate cannot make valid may be an unclear ask (the roadmap's
+    // side) or a gate that is too strict (tanren's). Fails closed to `unknown`.
+    attribution: "unknown",
   },
   SimulatedReviewPublicationError: {
     code: "merge",
     stage: "merge",
     summary: "strict simulated-review publication failed",
+    cause: "simulated_review_publication_failed",
+    attribution: "tanren",
   },
   SimulatedReviewPublishFenceBusyError: {
     code: "merge",
     stage: "merge",
     summary: "strict simulated-review publication is contended",
+    cause: "simulated_review_publish_contended",
+    attribution: "tanren",
   },
   SimulatedReviewHeadStaleError: {
     code: "merge",
     stage: "merge",
     summary: "the pull request advanced before strict simulated-review publication",
+    cause: "simulated_review_head_stale",
+    attribution: "tanren",
   },
 };
 
@@ -199,6 +436,12 @@ const DEFAULT_FAILURE: ClassifiedRunFailure = {
   code: "internal",
   stage: "run",
   summary: "the run failed with an internal error",
+  // The cause axis fails closed the same way the code axis does: an unrecognized
+  // throw is `unclassified` / `unknown`, never a guess and never message-derived.
+  // Every `unclassified` on the timeline is a MISSING ALLOWLIST ENTRY — the live
+  // 93%-`internal` reading was exactly that signal, unread.
+  cause: "unclassified",
+  attribution: "unknown",
 };
 
 /**
@@ -208,9 +451,18 @@ const DEFAULT_FAILURE: ClassifiedRunFailure = {
  * `run.failed` event — none echo the raw error message.
  */
 export function classifyRunFailure(error: unknown): ClassifiedRunFailure {
-  if (error instanceof Error && error.name !== "") {
+  // `Object.hasOwn`, NOT `!== undefined`: `BY_ERROR_NAME` is an object literal, so a bare
+  // index lookup also resolves `Object.prototype` members. An error named `toString` /
+  // `constructor` / `valueOf` would return an inherited FUNCTION, which is not `undefined`,
+  // so the fail-closed default would be skipped and a classification whose every field is
+  // `undefined` would flow into the strict `run.failed` / `dag.spec.redriven` payloads —
+  // the exact opposite of this module's fail-closed contract.
+  if (error instanceof Error && error.name !== "" && Object.hasOwn(BY_ERROR_NAME, error.name)) {
     const matched = BY_ERROR_NAME[error.name];
     if (matched !== undefined) {
+      // A class whose precondition depends on the INSTANCE, not the class name, gets a
+      // typed refinement. The table alone cannot express "this one clears, that one does not".
+      if (error.name === "RunStateWriteTransportError") return refineControlPlaneWrite(error, matched);
       return matched;
     }
   }

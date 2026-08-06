@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { JsonlObjectDecodeFailureSchema } from "../../contracts/jsonlDecodeFailure.js";
+import { RUN_FAILURE_ATTRIBUTIONS, RUN_FAILURE_CAUSES } from "../../worker/runFailureCause.js";
 
 // Lifecycle events (run.* and task.*) cover the orchestrator workflow's
 // terminal state transitions. Payloads are intentionally narrow so consumer
@@ -54,6 +55,15 @@ export const RunFailedPayload = z
     stage: z.string(),
     // A FIXED safe summary of the failure — never the raw caught-error string.
     message: z.string(),
+    // The FINE-GRAINED cause + the ATTRIBUTION (whose bug this is). Both are CLOSED
+    // vocabularies enumerated from the classifier's own arrays — unlike `failureCode` /
+    // `stage` above (historically loose `z.string()`), these two cannot carry an
+    // arbitrary string at all, so the public-leak property is enforced by the SCHEMA and
+    // not only by the classifier. Neither is ever derived from the caught error's
+    // message. OPTIONAL so rows written before this change still parse, and so the
+    // faultless genuine-halt path (which carries no classified failure) can omit them.
+    cause: z.enum(RUN_FAILURE_CAUSES).optional(),
+    attribution: z.enum(RUN_FAILURE_ATTRIBUTIONS).optional(),
   })
   .strict();
 

@@ -13,7 +13,7 @@ import { finalizeWorkflowError } from "../src/engine/workflow/plannerRunFinalize
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { isAllowedSpecTransition } from "../src/engine/state/spec.js";
-import { MissingCredentialError } from "../src/engine/credentials/resolveCredentials.js";
+import { MissingCredentialError, UnscopedOrgError } from "../src/engine/credentials/resolveCredentials.js";
 import { type RedriveHistoryReader } from "../src/engine/workflow/plannerRunRedrive.js";
 
 /** Records the spec-status UPDATEs + the run finalize so we can assert the transition. */
@@ -110,11 +110,15 @@ function needsAttention(events: CapturedEvent[]): { source: string; reason: stri
 }
 
 describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-HALTS (not just halts the run)", () => {
-  it("a MissingCredentialError (misconfiguration) lands the run failed AND escalates the spec with a SPECIFIC diagnostic", async () => {
+  it("an UnscopedOrgError (a tanren-side misconfiguration with no precondition) lands the run failed AND escalates the spec with a SPECIFIC diagnostic", async () => {
+    // Re-pointed from `MissingCredentialError`, which now carries the `credential`
+    // PRECONDITION and therefore re-drives indefinitely instead of parking (the sibling
+    // assertion below pins that). `UnscopedOrgError` is the class that REMAINS genuinely
+    // terminal: a tanren-side scoping defect with no external condition that could clear it.
     const pool = new RecordingPool();
     const { events, appendEvent, finalizeRunState, input } = harness(pool);
 
-    const disposition = await finalizeWorkflowError(new MissingCredentialError("github_token"), {
+    const disposition = await finalizeWorkflowError(new UnscopedOrgError(), {
       finalizeRunState,
       appendEvent,
       workspacePath: "/workspace/runs/run_1",
@@ -135,6 +139,37 @@ describe("finalizeWorkflowError — a GENUINE-TERMINAL misconfiguration GENUINE-
     expect(na?.message).toContain("a human must fix");
     // And there is NO re-drive — a misconfiguration is never re-driven.
     expect(redriven(events)).toBeUndefined();
+  });
+
+  it("a MissingCredentialError does NOT park — it precondition-blocks, keeping the spec live for an unattended resume", async () => {
+    // The behavior inversion at the heart of this change: an absent credential used to park
+    // the spec on its FIRST occurrence (`GENUINE_TERMINAL_CODES`), and only an operator
+    // `requeue` could free it. It is now a named precondition, so the spec returns to `open`
+    // and re-drives on a cadence until the secret is seeded.
+    const pool = new RecordingPool();
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReturning(0));
+
+    const disposition = await finalizeWorkflowError(new MissingCredentialError("github_token"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    expect(disposition).toBe("re_drive");
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    const r = events.find((x) => x.eventType === "dag.spec.redriven")?.payload as Record<string, unknown>;
+    expect(r).toMatchObject({
+      source: "precondition_block",
+      precondition: "credential",
+      cause: "credential_missing",
+      attribution: "environment",
+      // A WAIT IS NOT A STRIKE — the counter never advances, so waiting cannot accumulate
+      // toward the fixed point that would park the spec.
+      consecutiveSameFailure: 0,
+    });
   });
 
   it("a recoverable usage-limit fault PAUSES (task #82 — pause_for_capacity bucket, spec stays in_flight, NOT needs_attention)", async () => {

@@ -48,11 +48,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outcome", "public"],
   ]),
   // run.failed is PUBLIC, and the worker-level catch wraps a WHOLE run, so the raw caught error (URLs / refs / command fragments / secret-adjacent text) is NEVER put here: the worker classifies it into a closed-vocab `failureCode` + `stage` + a FIXED safe `message` summary (worker/runFailureClassifier); the raw detail goes to the INTERNAL job_queue.failure_message + a redacted log. All three are safe.
+  // The fine-grained `cause` + the `attribution` (whose bug this is) are CLOSED z.enum vocabularies built from the classifier's own arrays (worker/runFailureCause), selected by the error CLASS name and never derived from the error message — so neither can carry a URL, a repo ref, a command fragment, or secret-adjacent text. Both are strictly NARROWER than the already-public `failureCode`, hence equally public.
   ...rulesFor("run.failed", [
     ["status", "public"],
     ["failureCode", "public"],
     ["stage", "public"],
     ["message", "public"],
+    ["cause", "public"],
+    ["attribution", "public"],
   ]),
 
   // task lifecycle

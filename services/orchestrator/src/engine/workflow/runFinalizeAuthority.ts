@@ -23,10 +23,11 @@
 // returns one bucket identically for workflow, worker, and orphan paths.
 
 import {
+  type ClassifiedRunFailure,
   classifyRunFailure,
   explicitRunFailureRetryability,
+  type RunFailureCause,
   type RunFailureCode,
-  type RunFailureStage,
 } from "../worker/runFailureClassifier.js";
 import type { WanderingHaltVerdict } from "./wanderingHaltDetector.js";
 
@@ -43,194 +44,49 @@ export function redriveBackoffSeconds(consecutiveSameFailure: number): number {
   return Math.min(grown, REDRIVE_BACKOFF_MAX_SECONDS);
 }
 
-// A GENUINE-TERMINAL failure CODE: a STRUCTURAL cause a human must fix (a
-// misconfiguration / missing-or-unscoped credential / unresolvable provider mode). These
-// never self-heal on retry, so they escalate to `needs_attention` IMMEDIATELY (NOT subject
-// to the re-drive convergence detector) with a specific diagnostic. `usage_limit` is NOT here (it is the
-// recoverable window-exhausted halt → re-drive); `workspace` is NOT here (a deps-install /
-// bootstrap fault is transient → re-drive). Everything ELSE (`internal`, `merge`, `deploy`,
-// and any unrecognized error → the `internal` default) is RETRIABLE — a random fault.
+// A GENUINE-TERMINAL failure CODE: a STRUCTURAL cause a human must fix. These never
+// self-heal on retry, so they escalate to `needs_attention` IMMEDIATELY (NOT subject to
+// the re-drive convergence detector) with a specific diagnostic. `usage_limit` is NOT here
+// (it is the recoverable window-exhausted halt → pause for capacity); `workspace` is NOT
+// here (a deps-install / bootstrap fault is transient → re-drive). Everything ELSE
+// (`internal`, `merge`, `deploy`, and any unrecognized error → the `internal` default) is
+// RETRIABLE — a random fault.
+//
+// WHAT REMAINS REACHABLE HERE, AND WHY THE SET STAYS. The PRECONDITION check below now runs
+// BEFORE this one, and every `credential`-coded class that is merely WAITING on something
+// external carries a precondition: `MissingCredentialError`,
+// `MissingGithubCredentialRefError` and `MissingGithubAppCredentialRefError` all
+// short-circuit into an indefinite re-drive and never reach this line. What is LEFT is the
+// scoping-defect pair `UnscopedOrgError` (credential resolution reached without its org
+// scope) and `OrgProviderModeUnresolved` (the org row read back empty for a non-empty org id
+// — an off-scope / RLS-denied read). Both are `attribution: "tanren"`: defects in the
+// orchestrator, with NO external condition that could become true to fix them, so neither
+// carries a precondition. Retrying them forever would be a hot loop with no probe — exactly
+// what the precondition mechanism is designed to avoid — so they SHOULD halt loudly and
+// immediately. The set is therefore live code with two live members — not a vestige. (It is
+// spelled by CODE rather than by cause because `code` is the stable public contract; a
+// future genuinely-terminal class simply must not carry a precondition.)
 const GENUINE_TERMINAL_CODES: ReadonlySet<RunFailureCode> = new Set<RunFailureCode>(["credential"]);
 
-/**
- * A terminal run-outcome, expressed in the vocabulary THIS authority decides over. Every
- * terminal site (the workflow error catch, the writer-non-pass exit, the merge-gate /
- * review stalls, the merge-stage outcome, the worker orphan reconciler) normalizes its
- * outcome into ONE of these before asking for a disposition — so the 3-bucket mapping
- * lives in ONE place, never re-implemented per site.
- */
-export type TerminalOutcome =
-  // A thrown run-error (the workflow catch / the worker orphan path). The authority
-  // classifies it through the SAME closed run-failure vocabulary the public events use.
-  | { kind: "error"; error: unknown }
-  // A non-pass planner-loop exit (the writer never converged / a window exhausted / a
-  // convergence stall / a merge-gate budget spent / a review stall). ALL transient:
-  // the spec re-drives (or, for a `window_exhausted` detail, the run pauses — task
-  // #82). The `detail` is a public-safe sub-reason for observability. The
-  // OPTIONAL `window` snapshot rides a `window_exhausted` non-pass so the
-  // applier can stamp the `run.paused` event with the real provider/slot/percent
-  // the subtask loop observed (the diagnostic the prober reads to schedule
-  // its capacity re-probe). Absent on every other detail.
-  | {
-      kind: "non_pass";
-      detail: NonPassDetail;
-      window?: { provider: string; slot: string; usedPercent: number; resetsAt: string };
-    }
-  // The merge stage's terminal outcome (see `MergeOutcomeKind`). `merged` converges;
-  // a genuine HITL/changes-requested human-decision (`needs_attention`) genuine-halts;
-  // every other hold/conflict/handoff re-drives.
-  | { kind: "merge"; mergeOutcome: MergeOutcomeForDisposition }
-  // A benign ancestor-not-ready wait: the dependent ran ahead of a non-terminal ancestor
-  // that has not published its head yet. NOT a fault — a clean re-drive (no failure code,
-  // so it never counts toward the consecutive-same-failure cap).
-  | { kind: "ancestor_wait" };
-
-/** The public-safe sub-reason for a non-pass planner-loop exit (never the raw error string). */
-export type NonPassDetail =
-  | "window_exhausted"
-  | "convergence_stalled"
-  | "merge_gate_unsatisfied"
-  | "pre_merge_behavior_unsatisfied"
-  | "review_stalled"
-  | "halted";
-
-/** The subset of `MergeOutcomeKind` this authority decides over (mirrors mergeDispatchTypes). */
-export type MergeOutcomeForDisposition =
-  | "merged"
-  | "queued"
-  | "handed_off"
-  | "conflict"
-  | "failed"
-  | "blocked"
-  // A post-auto-rebase native re-gate not yet terminal (still running / infra blip) — a
-  // recoverable hold the recovery surface re-drives (same bucket as `blocked`/`conflict`).
-  | "re_gate_pending"
-  | "needs_attention";
-
-/**
- * The diagnostic sub-reason carried on a disposition — folded into the OBSERVABLE event
- * payload (the old per-path strand reasons live on here as a DIAGNOSTIC detail, NOT as a
- * distinct terminal behavior). For a re-drive it is the failure code that the
- * consecutive-same-failure counter keys off; for a genuine-halt it names WHY a human is
- * needed.
- */
-export type GenuineHaltReason =
-  // A structural misconfiguration a human must fix (credential / provider-mode).
-  | "misconfiguration"
-  // The SAME classified failure recurring at a FIXED POINT (identical failure + identical
-  // work, no new information) — a genuinely stuck spec (bug/mis-spec), NOT a flake.
-  | "persistent_failure"
-  // A genuine human-decision at the merge boundary (HITL hold / changes-requested at land).
-  | "human_decision";
-
-/**
- * The disposition the authority returns: the bucket + the diagnostic detail every caller
- * needs to drive the lifecycle writes (the run terminal status, the spec status, the
- * observable event). A pure value — the I/O (the run/spec UPDATE, the event append) is the
- * caller's, so this module stays a clock-free, DB-free decision core.
- *
- * task #82 (window-pause auto-resume): the FOURTH bucket — `pause_for_capacity` —
- * is the doctrine extension. A provider whose usage window is currently exhausted
- * is NOT dead (it is gated on a refresh signal that can land via the natural
- * reset OR a free reset the provider awards at any time); routing it through
- * `re_drive` would burn fresh runs / converge to `needs_attention` (the v62
- * wedge). Instead the run flips to the NEW non-terminal `paused` status, the
- * SPEC stays `in_flight`, and a background prober resumes it when capacity
- * returns — sign-of-life, never a wall-clock deadline.
- */
-export type RunDisposition =
-  | {
-      bucket: "re_drive";
-      // The public-safe classified failure code (the consecutive-same-failure key) +
-      // stage + a FIXED safe summary. `undefined` for a benign ancestor-wait (no fault).
-      failure?: { code: RunFailureCode; stage: RunFailureStage; summary: string };
-      // The recoverable run.outcome to persist — `halted` for most re-drives, but a
-      // `convergence_stalled` non-pass preserves its distinct WHY on the run row
-      // (the recovery surface keys off it) while the SPEC still re-drives.
-      runOutcome: "halted" | "convergence_stalled";
-      // The public-safe sub-reason for the timeline (the old strand reasons as diagnostics).
-      subReason: string;
-      // The walker-honored cooldown before the spec is re-picked.
-      backoffSeconds: number;
-      // The consecutive-same-failure count (this failure included); 0 for a no-fault re-drive.
-      consecutiveSameFailure: number;
-    }
-  | {
-      // task #82 — window-pause auto-resume. The run hit a provider usage-window
-      // exhaustion (writer's `window_exhausted` exit / answerer's
-      // `CodexUsageLimitError` / preflight pressure escalation). UNBOUNDED — a
-      // window pressure never escalates to `genuine_halt`; capacity always returns
-      // (natural reset or free reset). The applier writes the run to the
-      // NON-TERMINAL `paused` status, leaves the spec `in_flight`, and emits
-      // `run.paused`; the background prober owns the resume.
-      bucket: "pause_for_capacity";
-      // The provider hint (writer's CLI label, e.g. "codex") — diagnostic, not
-      // used by the convergence detector (window pressure has no fixed-point cap).
-      provider: string;
-      // A safe human-readable summary for the timeline ("the writer's usage
-      // window was exhausted mid-subtask" / "the planner hit the codex usage limit").
-      summary: string;
-    }
-  | {
-      bucket: "genuine_halt";
-      reason: GenuineHaltReason;
-      // The classified failure (for a misconfiguration / persistent-failure halt).
-      failure?: { code: RunFailureCode; stage: RunFailureStage; summary: string };
-      // A SPECIFIC, actionable human-decision message (never a bare "an error occurred").
-      message: string;
-      // The escalating consecutive-same-failure count, for the persistent-failure case.
-      consecutiveSameFailure: number;
-      // apex v67 #122 — which detector fired the genuine-halt: the existing FIXED-POINT
-      // detector ("strand", the default — the SAME-failure-repeating case) OR the NEW
-      // WANDERING-HALT detector ("wandering_halt" — N re-drives with different failures
-      // but no deliverable progress). Surfaces on the `dag.spec.needs_attention` event's
-      // `source` field so operators can distinguish the two halt patterns. Defaults to
-      // "strand" so every existing call site keeps its prior behavior.
-      source?: "strand" | "wandering_halt";
-      // apex v67 #122 — the wandering-halt diagnostics. Present ONLY when
-      // `source === "wandering_halt"`; absent on the strand path so the existing payload
-      // shape is unchanged for the fixed-point case.
-      wanderingDiagnostics?: {
-        totalRedrives: number;
-        noProgressStreak: number;
-        distinctFailureCodes: string[];
-      };
-    }
-  | { bucket: "converge" };
-
-/**
- * The CONVERGENCE FACTS the authority reasons over, instead of a hardcoded cap: the count
- * of CONSECUTIVE prior re-drives at the SAME structural fixed point (the same classified
- * failure AND — when observable — the same produced work), read from the durable event
- * log. `0` ⇒ the first attempt / a different failure than last time (progress) ⇒ ALWAYS
- * re-drive. `>= 1` ⇒ the loop is at a fixed point (this attempt is structurally identical
- * to the prior) ⇒ the run-finalize escalation rule fires (a PROVEN dead-end — no count).
- *
- * `priorSameFixedPoint` is the trailing run length the caller computed via the shared
- * `convergenceDetector` over the spec's `dag.spec.redriven` history (matching BOTH the
- * failure code AND, when present, the produced-work signature). A different failure code OR
- * a different produced-work signature breaks the run (progress), so the loop is UNBOUNDED
- * while it keeps changing the failure or the work — exactly the binding principle.
- */
-export interface ConvergenceFacts {
-  priorSameFixedPoint: number;
-  /**
-   * apex v67 #122 — the SECOND convergence signal: a wandering halt (N consecutive
-   * re-drives with DIFFERENT failure codes but ZERO deliverable progress between them).
-   * Computed by the caller via `assessWanderingHalt` over the spec's full re-drive
-   * history + the spec-level PR/merge progress markers (see
-   * `engine/workflow/wanderingHaltDetector.ts`). The fixed-point detector
-   * (`priorSameFixedPoint`) keys on the SAME failure repeating; the wandering-halt
-   * detector catches the changing-failure-no-progress trap the fixed-point judge
-   * structurally cannot see.
-   *
-   * Optional + defaults to `{ wandering: false }` for back-compat with call sites that
-   * have not been wired (e.g. the worker-orphan path, which has no spec-level PR/merge
-   * facts at hand). When omitted, the authority falls back to the fixed-point-only
-   * behavior — never a regression.
-   */
-  wandering?: WanderingHaltVerdict;
-}
+// The authority's TYPE surface (TerminalOutcome / NonPassDetail / MergeOutcomeForDisposition
+// / GenuineHaltReason / RunDisposition / ConvergenceFacts) lives in its own module for the
+// 500-line cap — see `runFinalizeAuthorityTypes.ts`. RE-EXPORTED here so every existing
+// import site keeps importing them from the authority.
+export type {
+  ConvergenceFacts,
+  GenuineHaltReason,
+  MergeOutcomeForDisposition,
+  NonPassDetail,
+  RunDisposition,
+  TerminalOutcome,
+} from "./runFinalizeAuthorityTypes.js";
+import type {
+  ConvergenceFacts,
+  MergeOutcomeForDisposition,
+  NonPassDetail,
+  RunDisposition,
+  TerminalOutcome,
+} from "./runFinalizeAuthorityTypes.js";
 
 /**
  * THE decision. Maps a terminal outcome (+ the convergence facts the caller read from the
@@ -283,11 +139,22 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
         code: "internal",
         stage: "agent",
         summary: nonPassSummary(outcome.detail),
+        // The non-pass exits kept ONE failure code (`internal`) between them, so a spec
+        // that stalled, then failed its merge gate, then stalled its review presented
+        // three IDENTICAL convergence signatures and read as a fixed point. Each detail
+        // now carries its own cause; the public `code` is unchanged.
+        cause: nonPassCause(outcome.detail),
+        attribution: "unknown",
         runOutcome: nonPassRunOutcome(outcome.detail),
       },
       outcome.detail,
       facts,
     );
+  }
+  if (outcome.kind === "classified_error") {
+    // The worker orphan path already classified the raw throw; decide on it directly so
+    // the cause / attribution / precondition survive to the disposition.
+    return decideClassifiedFailure(outcome.failure, facts);
   }
   // A thrown run-error: classify it through the SAME closed vocabulary the public events
   // use, then decide on the CODE (a credential misconfiguration genuine-halts;
@@ -314,10 +181,16 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
       consecutiveSameFailure: facts.priorSameFixedPoint + 1,
     };
   }
+  return decideClassifiedFailure(classified, facts);
+}
+
+/** Decide over an already-classified failure — the shared tail of BOTH the thrown-error
+ * path and the worker orphan path, so the two agree by construction. */
+function decideClassifiedFailure(classified: ClassifiedRunFailure, facts: ConvergenceFacts): RunDisposition {
   if (classified.code === "usage_limit") {
-    // task #82: the answerer-path's `CodexUsageLimitError` (planner / checker /
-    // auditor hit the provider window). Routes to the SAME pause bucket as the
-    // writer's `window_exhausted` outcome — one disposition for the whole
+    // task #82: the answerer-path's `CodexUsageLimitError` / `ClaudeUsageLimitError`
+    // (planner / checker / auditor hit the provider window). Routes to the SAME pause
+    // bucket as the writer's `window_exhausted` outcome — one disposition for the whole
     // window-pressure family.
     return {
       bucket: "pause_for_capacity",
@@ -333,18 +206,51 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
  * task #82: `window_exhausted` is GONE from this union — a window-pressure
  * outcome routes to the new `pause_for_capacity` bucket at the top of
  * `decideRunDisposition`, never through the re-drive convergence detector. */
-interface FailureFacts {
-  code: RunFailureCode;
-  stage: RunFailureStage;
-  summary: string;
+interface FailureFacts extends ClassifiedRunFailure {
   runOutcome: "halted" | "convergence_stalled";
 }
 
 /** Decide the disposition for a classified failure (the error + non-pass shared core). */
 function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: ConvergenceFacts): RunDisposition {
-  const { code, stage, summary, runOutcome } = failureFacts;
-  const failure = { code, stage, summary };
+  const { runOutcome, ...failure } = failureFacts;
+  const { code, stage, summary, precondition } = failure;
   const { priorSameFixedPoint } = facts;
+  // ── PRECONDITION BLOCK ─────────────────────────────────────────────────────────────
+  // Checked FIRST — ahead of the genuine-terminal set and ahead of the convergence
+  // detector — because a run blocked on a named external condition is not FAILING, it is
+  // WAITING, and neither of those mechanisms is a correct judge of a wait.
+  //
+  // The doctrine: "Halts are not tolerable. If tanren is working correctly, a user has
+  // budget, and the roadmap is not complete, halting means a fundamental failure in
+  // tanren." Every blocking cause observed on the live instance — an absent SSH
+  // key, an unseeded credential, a mis-set config, a control plane returning 500 — was
+  // environmental, and every one of them CLEARED later. Tanren resumed for none of them,
+  // because a missing credential parked on its FIRST occurrence and an SSH outage
+  // manufactured a false fixed point on its third.
+  //
+  // The mechanism is deliberately NOT new: it is `usage/pausedRunResumeProber.ts`'s
+  // "RE-DRIVE IS THE PROBE" pattern, generalized from the one hard-coded condition it
+  // already handles (a provider usage window) to any NAMED condition. The next run's own
+  // attempt IS the test of whether the condition cleared — no separate health-check, no
+  // new run status, no operator action. Exactly as with `prober_resume`, the emitted row
+  // is tagged with a `source` that BOTH history readers exclude, so the wait can never
+  // itself become the evidence that the spec is stuck.
+  //
+  // `consecutiveSameFailure: 0` states the same thing on the payload: a wait is not a
+  // strike. The backoff is the base rung of the existing curve — a fixed probe CADENCE
+  // (the prober's own model: "sign-of-life, never a deadline"), not an escalating
+  // punishment, since there is no streak to escalate against.
+  if (precondition !== undefined) {
+    return {
+      bucket: "re_drive",
+      failure,
+      runOutcome,
+      subReason: `precondition_${precondition}`,
+      backoffSeconds: redriveBackoffSeconds(0),
+      consecutiveSameFailure: 0,
+      preconditionBlock: precondition,
+    };
+  }
   // A STRUCTURAL misconfiguration (credential / provider-mode) — a human must fix it; it
   // never self-heals, so it genuine-halts IMMEDIATELY (not subject to the convergence detector).
   if (GENUINE_TERMINAL_CODES.has(code)) {
@@ -390,12 +296,36 @@ function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: Co
     reason: "persistent_failure",
     failure,
     message:
-      `the run reached a FIXED POINT (${code} @ ${stage}: ${summary}) — it produced the identical failure ` +
-      `(and identical work, where observable) with no new information across re-drives; the spec is ` +
-      `genuinely stuck (a bug or mis-spec, not a flake), so a human must intervene; requeue after addressing the cause`,
+      `the run reached a FIXED POINT (${failure.cause} / ${code} @ ${stage}: ${summary}) — it produced the identical ` +
+      `failure (and identical work, where observable) with no new information across re-drives; the spec is ` +
+      `genuinely stuck (a bug or mis-spec, not a flake), so a human must intervene. ` +
+      `${attributionAsk(failure.attribution)} Requeue after addressing the cause`,
     consecutiveSameFailure: priorSameFixedPoint + 1,
     source: "strand",
   };
+}
+
+/**
+ * The human-readable half of the ATTRIBUTION, folded into every parked-state message.
+ *
+ * A halt is a BUG REPORT, not a terminal state: it means either a bug in tanren or a bug
+ * in the target repository, and BOTH get fixed. An operator reading a parked spec should
+ * not have to work out which repository to open — the message says so outright. When the
+ * classifier honestly cannot tell (a catch-all class), the message says THAT instead of
+ * guessing, because a confident wrong answer sends the fix to the wrong codebase.
+ */
+export function attributionAsk(attribution: ClassifiedRunFailure["attribution"]): string {
+  const asks: Record<ClassifiedRunFailure["attribution"], string> = {
+    tanren: "ATTRIBUTION: this is a bug in TANREN — fix it in the orchestrator.",
+    target_repo: "ATTRIBUTION: this is a bug in the TARGET REPOSITORY — fix it there.",
+    environment:
+      "ATTRIBUTION: this is an ENVIRONMENT condition (a provisioned resource is absent or " +
+      "unreachable) — neither codebase is wrong; restore the resource.",
+    unknown:
+      "ATTRIBUTION: UNKNOWN — the failure class cannot yet say whether this is tanren's bug " +
+      "or the target repository's; narrowing the classifier for this class is itself the fix.",
+  };
+  return asks[attribution];
 }
 
 /**
@@ -412,7 +342,7 @@ function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: Co
  * callers that don't compute wandering facts) OR when the verdict says "not wandering".
  */
 function maybeWanderingHalt(
-  failure: { code: RunFailureCode; stage: RunFailureStage; summary: string },
+  failure: ClassifiedRunFailure,
   wandering: WanderingHaltVerdict | undefined,
 ): RunDisposition | undefined {
   if (wandering === undefined || !wandering.wandering) return undefined;
@@ -425,7 +355,8 @@ function maybeWanderingHalt(
       `the spec re-drove ${totalRedrives} times across ${distinctFailureCodes.length} distinct failure ` +
       `classes (${distinctFailureCodes.join(", ")}) without making any deliverable progress (no PR opened, ` +
       `no merge, no new pipeline stage reached) — a WANDERING halt: the autonomous self-heal is changing its ` +
-      `failure mode without converging on a solution, so a human must intervene; requeue after addressing the cause`,
+      `failure mode without converging on a solution, so a human must intervene. ` +
+      `${attributionAsk(failure.attribution)} Requeue after addressing the cause`,
     consecutiveSameFailure: 0,
     source: "wandering_halt",
     wanderingDiagnostics: { totalRedrives, noProgressStreak, distinctFailureCodes },
@@ -476,6 +407,21 @@ function decideMergeOutcome(mergeOutcome: MergeOutcomeForDisposition): RunDispos
 function nonPassRunOutcome(detail: NonPassDetail): "halted" | "convergence_stalled" {
   if (detail === "convergence_stalled") return "convergence_stalled";
   return "halted";
+}
+
+/** The FINE-GRAINED cause for each non-pass sub-reason — one per detail, so two different
+ * non-pass exits are two different convergence states rather than one repeated `internal`. */
+function nonPassCause(detail: NonPassDetail): RunFailureCause {
+  const causes: Record<NonPassDetail, RunFailureCause> = {
+    // Routed to `pause_for_capacity` upstream, so this arm is only for totality.
+    window_exhausted: "provider_usage_window_exhausted",
+    convergence_stalled: "planner_convergence_stalled",
+    merge_gate_unsatisfied: "merge_gate_unsatisfied",
+    pre_merge_behavior_unsatisfied: "pre_merge_behavior_unsatisfied",
+    review_stalled: "review_stalled",
+    halted: "run_halted_without_change",
+  };
+  return causes[detail];
 }
 
 /** A FIXED, public-safe summary for each non-pass sub-reason (never the raw error string). */
