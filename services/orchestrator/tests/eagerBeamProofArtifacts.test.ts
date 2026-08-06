@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { contentDigestOf } from "../src/engine/contracts/cas.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
-import { resolveEagerProofArtifacts } from "../src/engine/merge/eagerBeamProofArtifacts.js";
+import {
+  MAX_EAGER_PROOF_ARTIFACT_BYTES,
+  resolveEagerProofArtifacts,
+} from "../src/engine/merge/eagerBeamProofArtifacts.js";
 import { EagerBeamPlanStager, eagerProofReuseDigest } from "../src/engine/merge/eagerBeamPlanStager.js";
 import { FragmentEvidenceManifestV1Schema } from "../src/engine/templates/fragments/fragmentEvidenceContract.js";
 import { LOCAL_HANDLE } from "./conformance/fakes/localCommandSubstrate.js";
@@ -25,6 +29,9 @@ const DESIGN_CONTRACT = { version: 1, domain: "saas-web", identity: "calm", inte
 class ArtifactSubstrate implements CommandSubstrate {
   public identity = INTEGRATION;
   public evidence = EVIDENCE;
+  public evidenceBytes: Uint8Array | undefined;
+  public manifestBytes: Uint8Array | undefined;
+  public dataReads = 0;
 
   public constructor(
     public manifest = '{"schemaVersion":"fragment_behavior_manifest.v1","behaviors":["invite"]}',
@@ -35,9 +42,16 @@ class ArtifactSubstrate implements CommandSubstrate {
     if (command.command.startsWith("git rev-parse")) {
       return { exitCode: 0, stdout: `${this.identity.headSha}\n${this.identity.treeHash}\n`, stderr: "" };
     }
-    if (command.command.includes("evidence-contract.json")) return { exitCode: 0, stdout: this.evidence, stderr: "" };
-    if (command.command.includes("behavior-manifest.json")) {
-      return { exitCode: this.manifestExitCode, stdout: this.manifest, stderr: "" };
+    const bytes = command.command.includes("evidence-contract.json")
+      ? (this.evidenceBytes ?? Buffer.from(this.evidence, "utf8"))
+      : (this.manifestBytes ?? Buffer.from(this.manifest, "utf8"));
+    if (command.command.includes("git cat-file -s")) {
+      return { exitCode: 0, stdout: `${bytes.byteLength}\n`, stderr: "" };
+    }
+    if (command.command.includes("git show")) {
+      this.dataReads += 1;
+      const output = Buffer.from(bytes).toString("base64");
+      return { exitCode: this.manifestExitCode, stdout: `${output}\n`, stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   }
@@ -124,15 +138,42 @@ describe("EAGER proof artifact bindings", () => {
       "behavior-manifest artifact is malformed",
     ));
 
-  it("accepts valid exact-head evidence and behavior JSON padded beyond 64 KiB", async () => {
-    const behavior = new ArtifactSubstrate(`${" ".repeat(64 * 1024 + 1)}${new ArtifactSubstrate().manifest}`);
-    const evidence = new ArtifactSubstrate();
-    evidence.evidence = `${" ".repeat(64 * 1024 + 1)}${EVIDENCE}`;
-    for (const ssh of [behavior, evidence]) {
-      const pool = new StagerPool();
-      await expect(stage(pool, ssh)).resolves.toBeDefined();
-      expect(pool.casWrites).toBe(1);
-    }
+  it.each(["evidence", "behavior"] as const)(
+    "NEGATIVE CONTROL — rejects an oversized valid-looking %s manifest before the blob read",
+    async (kind) => {
+      const ssh = new ArtifactSubstrate();
+      if (kind === "evidence") {
+        ssh.evidence = `${" ".repeat(MAX_EAGER_PROOF_ARTIFACT_BYTES + 1)}${EVIDENCE}`;
+      } else {
+        ssh.manifest = `${" ".repeat(MAX_EAGER_PROOF_ARTIFACT_BYTES + 1)}${ssh.manifest}`;
+      }
+      const before = ssh.dataReads;
+      await expect(resolve(new ArtifactPool(), ssh)).rejects.toThrow("exceeds");
+      expect(ssh.dataReads).toBe(before + (kind === "evidence" ? 0 : 1));
+    },
+  );
+
+  it.each(["evidence", "behavior"] as const)(
+    "NEGATIVE CONTROL — rejects malformed UTF-8 in the %s artifact before digesting",
+    async (kind) => {
+      const ssh = new ArtifactSubstrate();
+      const bytes = Buffer.from(kind === "evidence" ? ssh.evidence : ssh.manifest, "utf8");
+      const malformed = new Uint8Array(bytes.byteLength + 1);
+      malformed.set(bytes.slice(0, Math.floor(bytes.byteLength / 2)));
+      malformed[Math.floor(bytes.byteLength / 2)] = 0xff;
+      malformed.set(bytes.slice(Math.floor(bytes.byteLength / 2)), Math.floor(bytes.byteLength / 2) + 1);
+      if (kind === "evidence") ssh.evidenceBytes = malformed;
+      else ssh.manifestBytes = malformed;
+      await expect(resolve(new ArtifactPool(), ssh)).rejects.toThrow("not valid UTF-8");
+    },
+  );
+
+  it("preserves valid raw UTF-8 bytes for the behavior-manifest digest", async () => {
+    const ssh = new ArtifactSubstrate('{"schemaVersion":"fragment_behavior_manifest.v1","behaviors":["café"]}');
+    const raw = Buffer.from(ssh.manifest, "utf8");
+    ssh.manifestBytes = raw;
+    const resolved = await resolve(new ArtifactPool(), ssh);
+    expect(resolved.behaviorManifestDigest).toBe(contentDigestOf(raw));
   });
 
   it("rejects a ref identity mismatch and a non-canonical evidence manifest before CAS staging", async () => {
@@ -169,7 +210,11 @@ describe("EAGER proof artifact bindings", () => {
       "sha256:36cf5e92516ee88d257066aa9b8ad8cffff9a570bdbcfd3a6d8a872abecbf2be",
     );
     const evaluation = await evaluate(pool, ssh, staged);
-    expect(evaluation.units.map((unit) => [unit.kind, unit.artifactHash]).sort()).toEqual([
+    expect(
+      evaluation.units
+        .map((unit) => [unit.kind, unit.artifactHash])
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ).toEqual([
       ["eager_behavior_manifest_binding", staged.proofArtifacts.behaviorManifestDigest],
       ["eager_design_contract_binding", staged.proofArtifacts.designContractDigest],
       ["eager_fragment_evidence_binding", staged.proofArtifacts.fragmentEvidenceDigest],
