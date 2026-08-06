@@ -126,7 +126,10 @@ export const WriterCompletedPayload = z
   .object({
     diff: z.string(),
     commits: z.array(CommitSummary),
-    exitReason: z.enum(["completed", "timeout", "crashed", "token_limit", "window_exhausted"]),
+    // Mirrors `WriterResult.exitReason` (providers/types.ts) — every arm the adapters
+    // can classify must be representable here, or a run that hits a new arm fails
+    // schema validation on the way to the timeline instead of being reported.
+    exitReason: z.enum(["completed", "timeout", "crashed", "token_limit", "window_exhausted", "commit_rejected"]),
     tokenUsage: TokenUsageSummary.optional(),
     telemetry: z
       .object({

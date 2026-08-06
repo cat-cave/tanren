@@ -46,6 +46,13 @@ class ScriptedSsh implements CommandSubstrate {
   async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command.command);
     const reply = this.replies.find((entry) => command.command.includes(entry.match));
+    // The writer's stage+probe command (stageWorkspaceChanges) reports staged-change
+    // detection on stdout; with no explicit reply, stand in for "there IS a staged delta" so
+    // the gated commit is reached. Keyed on the probe text (NOT `git add -A`) so it does not
+    // collide with the bootstrap command, which also stages but returns a sha.
+    if (reply === undefined && command.command.includes("git diff --cached --quiet --exit-code")) {
+      return { exitCode: 0, stdout: "STAGED_CHANGES\n", stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: reply?.stdout ?? "", stderr: "", timedOut: false };
   }
 }

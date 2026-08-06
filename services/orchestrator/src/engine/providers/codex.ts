@@ -179,7 +179,6 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
 
       return {
         ...gitState,
-        exitReason: "completed",
         tokenUsage: telemetry.tokenUsage,
         telemetry,
       };
@@ -495,5 +494,5 @@ function failedResult(
   telemetry: CodexEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
-  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+  return { diff: gitState.diff, commits: gitState.commits, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }
