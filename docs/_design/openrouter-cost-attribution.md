@@ -254,11 +254,11 @@ The check is generalized to `assertBudgetCeilingEnforceable`, covering all three
 | **unattributable (new)** | an UNRECOGNIZED ref                  | every row NULL/`unattributed` → same permanent latch        | fail closed at setup |
 
 The third row was missed on the first pass and found in review. An unrecognized ref
-records `billing_mode='unattributed'` / `cost_usd` NULL, and `dag/budgetGate.ts`
-counts those NULLs as unpriced on **exactly the same footing** as `'per_token'`
-NULLs — the identical unclearable deadlock by a different road. A usage probe does
-not rescue it: `costs/reconciler.ts` back-fills `per_token` rows only, so the
-refusal precedes the probe check. It is refused but **not** called unmeterable —
+records `billing_mode='unattributed'` / `cost_usd` NULL, which `dag/budgetGate.ts`
+counts as unpriced on **exactly the same footing** as a `'per_token'` NULL — the
+identical unclearable deadlock by a different road, and one a usage probe does not
+rescue (`costs/reconciler.ts` back-fills `per_token` rows only), so the refusal
+precedes the probe check. It is refused but **not** called unmeterable:
 `costs/meterability.ts` declines to classify an unrecognized ref at all, because
 calling a misconfiguration a platform limitation launders a typo into "tanren cannot
 do this". `cost.ceiling_unenforceable.reason` therefore carries its own enum (the
@@ -269,11 +269,9 @@ other two, this remedy is one the operator can actually apply.
 New event `cost.ceiling_unenforceable` (payload: `refKind`, `cli`, `billingMode`,
 `ceilingUsd`, `reason`, `detail`, `remedy`) and `UnenforceableBudgetCeilingError`,
 whose message names the route, says in as many words that **raising the ceiling will
-not help**, and points at the remedy that does work.
-
-Refusing at setup is strictly better than parking mid-run: no runner is burned and
-no uncounted money is spent. `UnreachableBudgetCeilingError` is retained as a
-subclass alias so existing catchers and tests keep working.
+not help**, and points at the remedy that does. Refusing at setup is strictly better than parking
+mid-run: no runner is burned and no uncounted money is spent.
+`UnreachableBudgetCeilingError` stays a subclass alias so existing catchers work.
 
 ### 4.3 Narrate the route on every run, not just budgeted ones
 
@@ -296,37 +294,34 @@ Two different meanings of "BYOK" are conflated:
 
 - tanren-BYOK — the _tenant's_ credential rather than the platform's. Says nothing
   about who OpenRouter bills.
-- OpenRouter-BYOK — the tenant has attached their own _upstream provider_ keys
-  inside OpenRouter, so OpenRouter charges only a routing fee and the real
-  inference cost lands on the upstream provider's invoice.
+- OpenRouter-BYOK — the tenant attached their own _upstream provider_ keys inside
+  OpenRouter, so OpenRouter charges only a routing fee and the real inference cost
+  lands on the upstream provider's invoice.
 
 `openRouterCost.ts` correctly refuses to record a figure in the second case — but
 it decides which case it is from a **caller-declared flag** (`billingModel`) fed
 by the _first_ meaning. That is a guess in the shape of a fact.
 
 Fixed both ways: the capturer is built whenever the run routes through OpenRouter
-with an OpenRouter credential (the same predicate `codexMaterializer.ts` uses:
-managed **or** `providerSlugForRef(ref) === "openrouter"`), and the
-upstream-billed determination becomes **data-driven** — OpenRouter's own
+with an OpenRouter credential (the predicate `codexMaterializer.ts` uses: managed
+**or** `providerSlugForRef(ref) === "openrouter"`), and the upstream-billed
+determination becomes **data-driven** — OpenRouter's own
 `cost_details.upstream_inference_cost` on the generation record. A positive value
-means the account was charged only a routing fee, so `total_cost` is _not_ the
-whole real spend and is refused as authoritative (NULL + loud), exactly as before
-but for a checkable reason instead of a declared one.
-
-This changes no behavior today (there is still no generation id to query with),
-but it means the capture path is _correct_ when codex is fixed, rather than
-correct-only-for-managed.
+means the account was charged only a routing fee, so `total_cost` is _not_ the whole
+real spend and is refused as authoritative (NULL + loud) — same outcome as before,
+for a checkable reason instead of a declared one. No behavior changes today (there
+is still no id to query with); the capture path is simply _correct_ when codex is
+fixed, rather than correct-only-for-managed.
 
 **(b) `plannerRunUsage.ts:88` fires a spurious `usage.read_failed` every preflight.**
 `defaultUsageProbe` wires the codexbar subscription-window monitor when
 `endpointBaseUrl === undefined`. The intent (per its own comment) is "wire it only
-for a BYOK _ChatGPT-subscription_ run, because a run routed through OpenRouter has
-no account window and codexbar exits nonzero by design". But a BYOK
+for a BYOK _ChatGPT-subscription_ run, because a run routed through OpenRouter has no
+account window and codexbar exits nonzero by design". But a BYOK
 `credential/openrouter/` run — the common deployment — has no `endpointBaseUrl`
-either, so it gets the monitor, codexbar exits nonzero, and every pre-flight emits
-a spurious `usage.read_failed`. Fixed by gating on the credential actually being a
-ChatGPT bundle (`credential/codex/`), which is what "has an account window"
-literally means.
+either, so it gets the monitor and every pre-flight emits a spurious
+`usage.read_failed`. Fixed by gating on the credential actually being a ChatGPT
+bundle (`credential/codex/`), which is what "has an account window" means.
 
 ### 4.5 Operator legibility
 
@@ -336,12 +331,11 @@ computes it and then throws it away. `failClosed: "unpriced_spend"` with
 
 ### 4.6 Drift detection in the other direction
 
-`subtaskCost.ts`'s `captureRealProviderCostUsd` silently returns `null` when no
-generation id is present. On a route classified **meterable**, that silence is the
-symptom of exactly the regression this document is about. It now emits
-`cost.generation_id_missing` (once per run — the flag lives on the cost context)
-so the day codex's vocabulary changes again, tanren says so instead of quietly
-reverting to NULL.
+`subtaskCost.ts`'s `captureRealProviderCostUsd` silently returned `null` when no
+generation id is present — on a route classified **meterable**, the symptom of
+exactly the regression this document is about. It now emits
+`cost.generation_id_missing` once per run, so the day codex's vocabulary changes
+again tanren says so instead of quietly reverting to NULL.
 
 ## 5. The `role` column decision
 
@@ -390,8 +384,8 @@ First, so the ledger is balanced, what this change **does** recover:
 
   > **CORRECTED (§10).** Measured WRONG on a live run of the build that shipped it:
   > the id never reached the recorder (the decorators drop `model`), LiteLLM does not
-  > list the OpenRouter id anyway, and the guard silenced the empty-model case. That is not real spend —
-  > it is a computed list value — but it is the only usable number an operator gets
+  > list the OpenRouter id anyway, and the guard silenced the empty-model case. A
+  > computed list value, not real spend — but the only usable number an operator gets
   > on an unmeterable route, and it was broken.
 
 - The **correctness** (not the reachability) of the per-call capture path for BYOK
@@ -414,21 +408,19 @@ Now the part that matters, stated plainly:
    tanren cannot read. Unchanged, now named.
 4. **OpenRouter-BYOK (tenant upstream keys attached inside OpenRouter) stays
    partially unattributable** even once the id flows: `total_cost` is the routing
-   fee, and the inference cost is on the upstream provider's bill. The design now
-   _detects_ this from `upstream_inference_cost` and refuses to record the partial
-   figure, rather than under-counting.
+   fee, the inference cost is on the upstream provider's bill. The design now
+   _detects_ this from `upstream_inference_cost` and refuses the partial figure.
 5. **Per-call exactness is unreachable without either the codex fix or the shim.**
-   Option D would give exact _run-level_ totals, apportioned to rows — good enough
-   for reporting, not for the in-run gate.
+   Option D gives exact _run-level_ totals — good enough for reporting, not the gate.
 
 ## 7. Can a ceiling now be safely set?
 
-- **On a codex→OpenRouter project: no**, and tanren now says so at setup rather
-  than discovering it three calls in. Set the limit on the OpenRouter key.
+- **On a codex→OpenRouter project: no**, and tanren now says so at setup rather than
+  discovering it three calls in. Set the limit on the OpenRouter key.
 - **On a subscription (`credential/codex/`) project with a usage probe: yes**,
   unchanged — ccusage / credit drawdown reconcile prices those rows at run end.
-- **On a route with a per-call capture path: yes** — and after §4.4(a) that
-  correctly includes BYOK OpenRouter, once codex surfaces the id.
+- **On a route with a per-call capture path: yes** — after §4.4(a) that correctly
+  includes BYOK OpenRouter, once codex surfaces the id.
 
 The gate itself was never unsafe. It was illegible.
 
@@ -484,15 +476,13 @@ on the same unmeterable route still runs.
 ## 9. Follow-ups (not implemented here)
 
 1. **Upstream**: file the codex issue — surface the provider response id and
-   `usage.cost` on `turn.completed` in `codex exec --json`. That single change
-   turns this whole document off; `resolveRouteMetering`'s
-   `harness_discards_generation_id` branch is then deleted and every existing
-   tanren capture module starts working unmodified.
+   `usage.cost` on `turn.completed` in `codex exec --json`. That single change turns
+   this whole document off: `resolveRouteMetering`'s
+   `harness_discards_generation_id` branch is deleted and every existing tanren
+   capture module starts working unmodified.
 2. **Option D as a reporting basis**: per-run OpenRouter key + `GET /api/v1/keys/{hash}`
-   usage delta as a third `applyReconcile` basis (`cost_basis='provider_response'`,
-   apportioned by token share). Accurate run totals; still not an in-run gate.
-3. **`role` column** with its own migration slot, backfilled from
-   `cost_source_raw->>'role'`.
+   usage delta as a third `applyReconcile` basis, apportioned by token share.
+3. **`role` column** with its own migration slot, from `cost_source_raw->>'role'`.
 4. **The shim**, only if upstream declines.
 
 ---
@@ -504,10 +494,7 @@ a live run of the build that shipped it: `cost.resolved` still carried `"model":
 and a null notional on 100% of rows, because the observability decorators rebuild the
 adapter and never copied `model`. Two further defects (no OpenRouter price source; a
 loud-event guard that silenced exactly this case) meant a real model id would not
-have priced anything either.
-
-Diagnosed and fixed in
+have priced anything either. Diagnosed and fixed in
 [`openrouter-cost-attribution-notional.md`](./openrouter-cost-attribution-notional.md),
 which also re-verifies §1's codex finding **structurally** — against the shipped
-binary's serde tables rather than one captured run — and reaches the same
-conclusion.
+binary's serde tables rather than one captured run — and reaches the same conclusion.

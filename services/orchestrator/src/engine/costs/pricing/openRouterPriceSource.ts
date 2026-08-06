@@ -62,6 +62,12 @@ export const OPENROUTER_PROVIDER = "openrouter";
 // "priced by whichever model the router picks", i.e. genuinely unknown in advance.
 // Coercing `-1` into a rate would invent a negative cost. Rejecting it makes the
 // model unpriceable, which is the truth.
+// A JSON NUMBER is deliberately NOT accepted — see the rejection test. Wholesale
+// serialization drift (every rate becoming a number) empties the table, and
+// `fetchOpenRouterPriceMap` THROWS on an empty table, so the prior table is kept,
+// the refresh is loud, and the axis reports `price_source_unavailable`: an
+// infrastructure fault, repriceable, and never a verdict about the model. Quietly
+// coercing the new shape would absorb the drift instead of surfacing it.
 function parseRate(raw: unknown): number | undefined {
   if (typeof raw !== "string" || raw.trim() === "") {
     return undefined;

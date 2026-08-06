@@ -180,12 +180,22 @@ describe("CompositeModelPriceSource", () => {
     expect(new CompositeModelPriceSource(empty, empty).health()).toBe("unavailable");
   });
 
-  it("reports the OpenRouter leg's health separately from the composite's", () => {
+  it("reports the OpenRouter leg's health for an OpenRouter route, not the union", () => {
     // A ready LiteLLM leg must not be allowed to claim the marketplace is reachable —
-    // that is what would mislabel an outage as `model_not_listed`.
+    // that is what mislabels an outage as `model_not_listed`.
+    //
+    // REGRESSION: this used to be asserted against a separate `openRouterHealth()`
+    // accessor that NOTHING called. `computeNotionalUsd` asked the bare `health()`,
+    // whose OR is `ready` whenever the vendored-seeded LiteLLM leg is — which is
+    // always. So the distinction this whole reason-code split exists for was
+    // structurally unreachable in production. The route hint is now part of the
+    // `ModelPriceLookup` contract, and the notional call site passes the same one it
+    // passes to `lookup`.
     const composite = new CompositeModelPriceSource(new ModelPriceSource({}), liteLlm);
+    expect(composite.health("openrouter")).toBe("unavailable");
+    // A direct-vendor route is still answerable by the LiteLLM leg.
+    expect(composite.health("anthropic")).toBe("ready");
     expect(composite.health()).toBe("ready");
-    expect(composite.openRouterHealth()).toBe("unavailable");
   });
 
   it("satisfies the ModelPriceLookup contract the cost path is typed on", () => {
@@ -205,9 +215,11 @@ describe("costPriceSource — the production wiring", () => {
   it("composes the OpenRouter leg in front of the LiteLLM leg", () => {
     // Under vitest both legs are frozen and network-free: OpenRouter has no seed
     // (so its leg is unavailable) while LiteLLM has the vendored seed (so it is
-    // ready). That asymmetry is exactly what distinguishes the two legs here.
+    // ready). That asymmetry is exactly what distinguishes the two legs here — and
+    // it is the PRODUCTION cold-start shape, not a test artifact, which is why an
+    // OpenRouter route must read `unavailable` here.
     const source = costPriceSource();
-    expect(source.openRouterHealth()).toBe("unavailable");
+    expect(source.health("openrouter")).toBe("unavailable");
     expect(source.health()).toBe("ready");
   });
 

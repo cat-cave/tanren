@@ -12,8 +12,12 @@ export const CostProviderCaptureFailedPayload = z
 
 // The CLOSED subset of NotionalReason values that represent an ACTIONABLE GAP (as
 // opposed to an honest empty or an already-narrated misconfig). Only these fire
-// `cost.notional_unpriced`. Mirrors `LOUD_NOTIONAL_REASONS` in `costs/sources.ts`.
-const UnpricedNotionalReason = z.enum(["model_id_absent", "model_not_listed", "price_source_unavailable"]);
+// `cost.notional_unpriced`. Mirrors `LoudNotionalReason` in `costs/notional.ts`
+// (which is where the notional axis moved; this pointer said `costs/sources.ts`,
+// its former home). The event schemas may not import the engine's cost modules, so
+// the two enums are duplicated ON PURPOSE — `costsNotionalReasonParity.test.ts`
+// pins them equal, which is the only thing that keeps the duplication honest.
+export const UnpricedNotionalReason = z.enum(["model_id_absent", "model_not_listed", "price_source_unavailable"]);
 
 export const CostNotionalUnpricedPayload = z
   .object({
@@ -33,7 +37,7 @@ export const CostNotionalUnpricedPayload = z
 // The CLOSED set of reasons a route can produce no real-spend FACT. Mirrors
 // `costs/meterability.ts` UnmeterableReason — an unmeterable route must always name
 // WHICH known limitation it hit, never "unknown".
-const UnmeterableReason = z.enum(["harness_discards_generation_id", "byok_upstream_invoice"]);
+export const UnmeterableReason = z.enum(["harness_discards_generation_id", "byok_upstream_invoice"]);
 
 // cost.route_unmeterable — emitted ONCE at run setup, ceiling or no ceiling,
 // whenever the run's (cli × credential) route can produce no per-call real-spend
