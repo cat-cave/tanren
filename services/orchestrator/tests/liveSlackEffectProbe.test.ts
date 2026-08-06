@@ -83,7 +83,7 @@ function probe(snapshot: SlackHistorySnapshot) {
   return { effectProbe, events, observations };
 }
 
-function snapshot(
+function historySnapshot(
   messages: SlackHistorySnapshot["messages"],
   overrides: Partial<SlackHistorySnapshot> = {},
 ): SlackHistorySnapshot {
@@ -92,7 +92,7 @@ function snapshot(
 
 describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   it("records a provider-confirmed effect at the exact sealed binding coordinate", async () => {
-    const { effectProbe, events, observations } = probe(snapshot([{ ts: "11", text: `sent ${CORRELATION}` }]));
+    const { effectProbe, events, observations } = probe(historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }]));
 
     const result = await effectProbe.effectsForProvider(input());
 
@@ -120,7 +120,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
       transport: {
         history: async ({ channelId }) => {
           channels.push(channelId);
-          return snapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
+          return historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
             binding: { ...BINDING, bindingGeneration: 9, channelId: "sealed-channel-9" },
           });
         },
@@ -137,7 +137,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   });
 
   it("DECISIVE negative control: a complete provider snapshot with no match records observed absence", async () => {
-    const { effectProbe, events, observations } = probe(snapshot([{ ts: "11", text: "unrelated" }]));
+    const { effectProbe, events, observations } = probe(historySnapshot([{ ts: "11", text: "unrelated" }]));
 
     const result = await effectProbe.effectsForProvider(input());
 
@@ -150,7 +150,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   });
 
   it("FAIL-CLOSED: a paginated or otherwise incomplete provider snapshot cannot prove absence", async () => {
-    const { effectProbe, events, observations } = probe(snapshot([], { complete: false }));
+    const { effectProbe, events, observations } = probe(historySnapshot([], { complete: false }));
 
     await expect(effectProbe.effectsForProvider(input())).rejects.toThrow("snapshot is incomplete or malformed");
 
@@ -160,7 +160,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
 
   it("FAIL-CLOSED: limited or cross-tenant history cannot certify an effect", async () => {
     const { effectProbe, events, observations } = probe(
-      snapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
+      historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
         binding: { ...BINDING, orgId: "other-org" },
       }),
     );
@@ -247,7 +247,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
 
   it("captures the latest complete provider cursor before a live trigger", async () => {
     const { effectProbe } = probe(
-      snapshot([
+      historySnapshot([
         { ts: "20", text: "new" },
         { ts: "11", text: "old" },
       ]),

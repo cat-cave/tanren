@@ -14,11 +14,8 @@
 // critic-arc R1 #3 / R2): the 429 (rate-limit) retry path is UNBOUNDED and waits the
 // SERVER-supplied `Retry-After`. There is NO attempt count and NO header CLAMP — Slack's
 // `Retry-After` IS the authoritative external constraint; clamping it just generates more
-// 429s. The convergence detector escalates to a {@link PersistentSlackRateLimitError} only
-// on intelligent NON-CONVERGENCE — the IDENTICAL 429 signal recurring at the saturated
-// backoff with no new information (a sustained rate-limit outage at the right layer).
-
-import { assessStructuralProgress, type AttemptSignature } from "../../workflow/convergenceDetector.js";
+// 429s. Repeated throttling remains pending/retryable until Slack supplies a non-429
+// response or an operator stops the owning workflow.
 
 const SLACK_API_BASE = "https://slack.com/api";
 
@@ -107,84 +104,28 @@ export class SlackRateLimited extends Error {
   }
 }
 
-/**
- * A loud, terminal classification of a SUSTAINED Slack 429 outage — the SAME 429 signal
- * recurring at the SATURATED retry cadence with no new information (a proven fixed point).
- * NOT an attempt cap: surfaces only when the convergence detector proves the signal is
- * stuck (a genuine sustained rate-limit at the right layer).
- */
-export class PersistentSlackRateLimitError extends Error {
-  readonly stuckSignature: string;
-  readonly retriesObserved: number;
-
-  constructor(input: { stuckSignature: string; retriesObserved: number; cause?: unknown }) {
-    super(
-      `slack rate-limit outage: '${input.stuckSignature}' recurred at the saturated backoff with no progress ` +
-        `over ${input.retriesObserved} retries — surfacing as a sustained 429 outage, not retrying a fixed point forever`,
-    );
-    this.name = "PersistentSlackRateLimitError";
-    this.stuckSignature = input.stuckSignature;
-    this.retriesObserved = input.retriesObserved;
-    if (input.cause !== undefined) {
-      this.cause = input.cause;
-    }
-  }
-}
-
-// The 429 retry's saturation threshold: how many consecutive 429s the convergence
-// detector considers "still ramping" before treating an IDENTICAL recurring signal as a
-// proven fixed point. Mirrors `templates/creation/answererRetry.ts` (the curve-length
-// threshold there). Small because the Slack signature is identity-based — a real 429
-// repeats verbatim, and we want the convergence loop to surface a sustained outage
-// promptly, not wait through a long curve.
-const SLACK_429_SATURATION_THRESHOLD = 4;
-
-// Has the 429 retry loop reached a NON-CONVERGENCE fixed point — the SAME 429 signal
-// recurring with no new information, AND only once the convergence loop has SATURATED
-// (so a still-ramping cadence never escalates)? Mirrors
-// `templates/creation/answererRetry.ts#transientFixedPointReached`.
-function slack429FixedPointReached(signatures: ReadonlyArray<string>): boolean {
-  if (signatures.length <= SLACK_429_SATURATION_THRESHOLD) {
-    return false;
-  }
-  const history: AttemptSignature[] = signatures.map((sig) => ({ failureSignature: sig }));
-  return assessStructuralProgress(history) === "fixed_point";
-}
-
 export interface Slack429RetryOptions {
   /** Override the sleep (tests inject a no-wait sleep). */
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * Run `operation`, retrying ONLY a typed {@link SlackRateLimited} (a 429) UNBOUNDED while
- * the 429 cadence is RAMPING — escalates to a {@link PersistentSlackRateLimitError} only
- * when the convergence detector proves the signal is stuck. Backoff = the server-supplied
- * `retryAfterMs` (NOT a fixed curve — Slack tells us when to come back, verbatim, no
- * clamp). Any other thrown error is re-thrown immediately — never treated as transient.
+ * Run `operation`, retrying ONLY a typed {@link SlackRateLimited} (a 429) UNBOUNDED.
+ * Backoff = the server-supplied `retryAfterMs` (NOT a fixed curve — Slack tells us when
+ * to come back, verbatim, no clamp). Any other thrown error is re-thrown immediately —
+ * never treated as transient.
  */
 export async function withSlack429Retry<T>(
   operation: () => Promise<T>,
   options: Slack429RetryOptions = {},
 ): Promise<T> {
   const sleep = options.sleep ?? defaultSleep429Sleep;
-  const signatures: string[] = [];
   for (;;) {
     try {
       return await operation();
     } catch (error) {
       if (!(error instanceof SlackRateLimited)) {
         throw error;
-      }
-      // A 429 is identity-based — every Slack rate-limit is the SAME signal, distinguished
-      // only by the server's Retry-After. The convergence history records one entry per 429.
-      signatures.push("slack-429");
-      if (slack429FixedPointReached(signatures)) {
-        throw new PersistentSlackRateLimitError({
-          stuckSignature: signatures.at(-1) ?? "slack-429",
-          retriesObserved: signatures.length,
-          cause: error,
-        });
       }
       // Honor the server-supplied wait verbatim — no clamp. Slack's Retry-After IS the
       // authoritative external constraint; clamping just generates more 429s.
@@ -262,9 +203,8 @@ export class FetchSlackApiTransport implements SlackApiTransport {
   // never silently swallows a Slack error). A 429 (rate-limit) is the one retryable
   // status: this layer throws a typed {@link SlackRateLimited} carrying the server-supplied
   // `Retry-After`, and the surrounding {@link withSlack429Retry} wrapper retries UNBOUNDED
-  // (no count) on the server-directed cadence, surfacing a
-  // {@link PersistentSlackRateLimitError} only on intelligent NON-CONVERGENCE (a sustained
-  // 429 outage at the right layer).
+  // (no count) on the server-directed cadence. A sustained 429 remains pending rather than
+  // being falsely classified as provider success or a terminal product failure.
   private async call<T extends SlackApiEnvelope>(method: string, params: Record<string, string>): Promise<T> {
     return await withSlack429Retry(
       async () => {
