@@ -17,6 +17,7 @@ import { GithubAppTokenMinter } from "../../src/engine/providers/githubAppTokenM
 import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware/auth.js";
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../../src/routes/projects/index.js";
+import type { GreenfieldCreateDeps } from "../../src/routes/projects/greenfield.js";
 import { FakeRepoCreateHttp } from "../conformance/fakes/fakeRepoCreateHttp.js";
 import { completeCaptureExtras } from "../fixtures/forge/completeCapture.js";
 import { RoutesPool } from "./routesPool.js";
@@ -73,6 +74,11 @@ const stubMaterialize = (): MaterializeTemplate => async () => seededTemplate;
 export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
+  // The notify seams (`preflightNotify`/`prepareNotify`) route to the PROJECT
+  // create state machine, not onboarding, so they are NOT keys on
+  // `OnboardingRoutesOptions`; picking them there would violate the `keyof`
+  // constraint. They live in a separate override type with their real
+  // `GreenfieldCreateDeps` signatures, intersected with the onboarding pick.
   onboardingOverrides: Partial<
     Pick<
       OnboardingRoutesOptions,
@@ -85,7 +91,10 @@ export function appWithGreenfieldRoutes(
       | "designAgentFactory"
       | "composeDesignSystem"
     >
-  > = {},
+  > & {
+    preflightNotify?: GreenfieldCreateDeps["preflightNotify"];
+    prepareNotify?: GreenfieldCreateDeps["prepareNotify"];
+  } = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
   // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution
   // INFRA failure (Vault outage / corrupt config) PROPAGATES as a 500, never mislabeled
@@ -111,7 +120,9 @@ export function appWithGreenfieldRoutes(
   }
   const githubAppMinter = fakeGithubAppMinter();
   const preflightDeploy = onboardingOverrides.preflightDeploy;
+  const preflightNotify = onboardingOverrides.preflightNotify;
   const prepareDeploy = onboardingOverrides.prepareDeploy;
+  const prepareNotify = onboardingOverrides.prepareNotify;
   const bootstrapProject =
     onboardingOverrides.bootstrapProject ??
     (async (input) => pool.seedDerivationBootstrap(input.orgId, input.projectId));
@@ -161,14 +172,22 @@ export function appWithGreenfieldRoutes(
       ...(preflightDeploy === undefined
         ? {}
         : {
-            greenfieldPreflightDeploy: async (input) =>
-              preflightDeploy({
+            greenfieldPreflightDeploy: async (input) => {
+              // The project deploy preflight is only ever invoked with a deploy
+              // provider kind (the state machine forwards `deploy.providerKind`).
+              // The shared `GreenfieldProviderKind` input widened to include
+              // `"slack"` for the notify seam, so narrow before bridging to the
+              // deploy-only onboarding callback.
+              if (input.providerKind === "slack") return;
+              return preflightDeploy({
                 orgId: input.orgId,
                 providerKind: input.providerKind,
                 ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
                 ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
-              }),
+              });
+            },
           }),
+      ...(preflightNotify === undefined ? {} : { greenfieldPreflightNotify: preflightNotify }),
       ...(prepareDeploy === undefined
         ? {}
         : {
@@ -190,6 +209,7 @@ export function appWithGreenfieldRoutes(
                 ...(input.deploy.name === undefined ? {} : { name: input.deploy.name }),
               }),
           }),
+      ...(prepareNotify === undefined ? {} : { greenfieldPrepareNotify: prepareNotify }),
     }),
   );
   // `githubHttp` is the repo-create transport fake; its `createdRepositories` is the

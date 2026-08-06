@@ -328,6 +328,11 @@ export const ProjectConfigV1 = z
     deployAppId: z.string().min(1).optional(),
     deployAppName: z.string().min(1).optional(),
     envAttachmentRef: z.string().min(1).optional(),
+    // The Tanren-owned Slack notify channel provisioned for this project. The
+    // bot credential remains an org-scoped integration secret; config stores
+    // only stable, non-secret channel coordinates.
+    slackChannelId: z.string().min(1).optional(),
+    slackChannelName: z.string().min(1).optional(),
     // optional credential refs the run executor resolves before a run.
     // Absent ⇒ the resolver falls back to the org defaults. Refs are the spec-creation
     // managed namespace (`credential/<kind>/<scope>/...`), not vault:// URIs.

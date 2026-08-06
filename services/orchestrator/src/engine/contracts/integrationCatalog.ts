@@ -3,9 +3,10 @@
  * Consent revision is issued by authenticated administrative action, not callers.
  */
 
-// v3 adds the direct product Slack channel-create/join scopes. Existing grants
-// remain ineligible until authority reissues consent against this exact policy.
-export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v3" as const;
+// v5 adds groups:read because conversations.list can return private channels.
+// Existing grants remain
+// ineligible until authority reissues consent against this exact policy.
+export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v5" as const;
 
 export type IntegrationProviderKind =
   | "slack"
@@ -44,9 +45,21 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
       {
         id: "notify",
         operations: [
-          { id: "discover", requiredScopes: ["channels:read"], plane: "control" },
-          { id: "provision", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
-          { id: "bind", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
+          { id: "discover", requiredScopes: ["channels:read", "groups:read"], plane: "control" },
+          {
+            id: "provision",
+            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
+            plane: "control",
+          },
+          {
+            // `bind` links an EXISTING channel: it lists (`channels:read`/
+            // `groups:read`) then joins (`conversations.join` → `channels:join`)
+            // and never creates or renames one, so it does NOT need
+            // `channels:manage` (kept on `provision`, which creates the channel).
+            id: "bind",
+            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:join"],
+            plane: "control",
+          },
         ],
       },
       {

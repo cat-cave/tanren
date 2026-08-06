@@ -52,7 +52,9 @@ interface ProjectRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
   bootstrapProject?: GreenfieldCreateDeps["bootstrapProject"];
   greenfieldPreflightDeploy?: GreenfieldCreateDeps["preflightDeploy"];
+  greenfieldPreflightNotify?: GreenfieldCreateDeps["preflightNotify"];
   greenfieldPrepareDeploy?: GreenfieldCreateDeps["prepareDeploy"];
+  greenfieldPrepareNotify?: GreenfieldCreateDeps["prepareNotify"];
   repositoryVisibilityService?: RepositoryVisibilityService;
 }
 
@@ -135,7 +137,11 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       ...(options.greenfieldPreflightDeploy === undefined
         ? {}
         : { preflightDeploy: options.greenfieldPreflightDeploy }),
+      ...(options.greenfieldPreflightNotify === undefined
+        ? {}
+        : { preflightNotify: options.greenfieldPreflightNotify }),
       ...(options.greenfieldPrepareDeploy === undefined ? {} : { prepareDeploy: options.greenfieldPrepareDeploy }),
+      ...(options.greenfieldPrepareNotify === undefined ? {} : { prepareNotify: options.greenfieldPrepareNotify }),
     });
   });
 

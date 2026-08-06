@@ -224,7 +224,7 @@ describe("integration routes auth + sanitization", () => {
     expect(providerFetch).not.toHaveBeenCalled();
   });
 
-  it("fails Slack enable closed before provisioner/provider I/O", async () => {
+  it("returns Slack link-first state instead of rejecting the capability before authority", async () => {
     const provisioner = new RecordingProvisioner();
     const { app } = harness({ actor: admin, provisioner });
     const response = await app.request(provisionPath, {
@@ -232,8 +232,8 @@ describe("integration routes auth + sanitization", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ capability: "notify", mode: "greenfield" }),
     });
-    expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: "slack_bot_delivery_adapter_unavailable" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "not_linked", capability: "notify", providerKind: "slack" });
     expect(provisioner.calls).toBe(0);
   });
 });

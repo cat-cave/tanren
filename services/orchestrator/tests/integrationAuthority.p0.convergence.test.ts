@@ -121,7 +121,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       generation: 1,
       capabilities: ["notify"],
       operations: ["discover", "provision", "bind"],
-      provider_scopes: ["channels:read", "channels:manage"],
+      provider_scopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
       policy_revision: integrationCatalogRevision(),
       consent_revision: "consent.test",
       status: "active",
@@ -243,7 +243,10 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       async () =>
         new Response(JSON.stringify({ ok: true, team_id: "T1", team: "Acme", user_id: "U1" }), {
           status: 200,
-          headers: { "content-type": "application/json", "x-oauth-scopes": "channels:read,channels:manage" },
+          headers: {
+            "content-type": "application/json",
+            "x-oauth-scopes": "chat:write,channels:read,groups:read,channels:manage,channels:join",
+          },
         }),
     );
     const ok = await new SlackPrincipalVerifier(fetchWithScopes as unknown as typeof fetch).verify(
@@ -253,7 +256,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     );
     expect(ok).toMatchObject({
       status: "verified",
-      scopes: expect.arrayContaining(["channels:read", "channels:manage"]),
+      scopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
     });
 
     const fetchNoScopes = vi.fn<typeof fetch>(

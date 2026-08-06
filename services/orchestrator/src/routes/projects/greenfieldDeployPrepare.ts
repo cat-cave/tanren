@@ -1,7 +1,9 @@
 import type pg from "pg";
+import { runWithOrgScope } from "@tanren/db";
 import {
   buildIntegrationProvisioner,
   resolveSmartDefault,
+  type IntegrationProvisioner,
   type OrgGrant,
   type ProvisionedArtifact,
 } from "../../engine/contracts/integrationProvisioner.js";
@@ -15,6 +17,8 @@ import {
   type ProvisionedResult,
   type SelectionRequiredResult,
 } from "../../engine/integrations/provisioningEngine.js";
+import { persistProvisionedArtifact } from "../../engine/integrations/provisioningPersistence.js";
+import { systemActor } from "../../engine/state/actor.js";
 import {
   authorizeGreenfieldDeploy,
   greenfieldOrgLogin,
@@ -154,4 +158,156 @@ export async function prepareGreenfieldDeploy(input: {
     },
   };
   return { outcome, projectConfig };
+}
+
+export interface PreparedGreenfieldNotify {
+  outcome: ProvisionedResult;
+  projectConfig: Record<string, unknown>;
+}
+
+/**
+ * Prepare Tanren's greenfield notification capability through the same exact
+ * persisted grant selection and per-effect authority path as deploy. This is a
+ * separate entrypoint because the project creation lifecycle still requires a
+ * deploy target; notify must never be coerced into that deploy-only contract.
+ */
+export async function prepareGreenfieldNotify(input: {
+  pool: pg.Pool;
+  secrets: SecretStore;
+  orgId: string;
+  projectId: string;
+  actorId: string;
+  projectName: string;
+  /** Test seam; production omits this and uses the registered Slack provisioner. */
+  buildProvisioner?: (kind: "slack") => IntegrationProvisioner;
+  notify: {
+    providerKind: "slack";
+    mode: "greenfield" | "brownfield";
+    connectionId?: string;
+    grantId?: string;
+    chosenResourceId?: string;
+    name?: string;
+  };
+}): Promise<NotLinkedResult | SelectionRequiredResult | IneligibleResult | PreparedGreenfieldNotify> {
+  if (input.notify.providerKind !== "slack") {
+    throw new Error("greenfield notify requires providerKind 'slack'");
+  }
+  const candidate = await runWithOrgScope(input.pool, input.orgId, (client) =>
+    resolveGreenfieldSelectionCandidate({
+      client,
+      orgId: input.orgId,
+      providerKind: "slack",
+      capability: "notify",
+      actorId: input.actorId,
+      ...(input.notify.connectionId === undefined ? {} : { connectionId: input.notify.connectionId }),
+      ...(input.notify.grantId === undefined ? {} : { grantId: input.notify.grantId }),
+    }),
+  );
+  if ("status" in candidate) return candidate;
+  await runWithOrgScope(input.pool, input.orgId, (client) =>
+    persistGreenfieldDeploySelection(
+      client,
+      {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        providerKind: "slack",
+        connectionId: candidate.connectionId,
+        grantId: candidate.grantId,
+        authGeneration: candidate.authGeneration,
+        grantGeneration: candidate.grantGeneration,
+      },
+      input.actorId,
+    ),
+  );
+  const orgSlug = await runWithOrgScope(input.pool, input.orgId, (client) =>
+    greenfieldOrgLogin(client, input.orgId, input.actorId),
+  );
+  const projectCtx = {
+    projectId: input.projectId,
+    orgId: input.orgId,
+    orgSlug,
+    name: input.notify.name ?? input.projectName,
+  };
+  const authorize = (
+    operation: "discover" | "provision" | "bind",
+    target: Parameters<typeof authorizeGreenfieldDeploy>[0]["target"],
+  ) =>
+    runWithOrgScope(input.pool, input.orgId, (client) =>
+      authorizeGreenfieldDeploy({
+        client,
+        orgId: input.orgId,
+        projectId: input.projectId,
+        providerKind: "slack",
+        capability: "notify",
+        actorId: input.actorId,
+        operation,
+        target,
+      }),
+    );
+  const provisioner =
+    input.buildProvisioner === undefined
+      ? buildIntegrationProvisioner("slack", productionProvisionerDeps(input.secrets))
+      : input.buildProvisioner("slack");
+  let action: "provision" | "bind";
+  let artifact: ProvisionedArtifact;
+  let grant: OrgGrant;
+  if (input.notify.chosenResourceId !== undefined && input.notify.chosenResourceId !== "") {
+    action = "bind";
+    const resolved = await authorize(
+      "bind",
+      projectIntegrationOperationTarget(projectCtx, input.notify.chosenResourceId),
+    );
+    if ("status" in resolved) return resolved;
+    grant = resolved;
+    artifact = await provisioner.bind(grant, input.notify.chosenResourceId, projectCtx);
+  } else {
+    const discovery = await authorize("discover", {});
+    if ("status" in discovery) return discovery;
+    const discovered = await provisioner.discover(discovery, projectCtx);
+    const smart = resolveSmartDefault(discovered, input.notify.mode, { name: projectCtx.name });
+    if (smart.action === "bind") {
+      action = "bind";
+      const resolved = await authorize("bind", projectIntegrationOperationTarget(projectCtx, smart.resourceId));
+      if ("status" in resolved) return resolved;
+      grant = resolved;
+      artifact = await provisioner.bind(grant, smart.resourceId, projectCtx);
+    } else {
+      action = "provision";
+      const resolved = await authorize("provision", projectIntegrationOperationTarget(projectCtx));
+      if ("status" in resolved) return resolved;
+      grant = resolved;
+      artifact = await provisioner.provision(grant, projectCtx);
+    }
+  }
+  const projectConfig = artifact.projectConfig ?? {};
+  if (artifact.notificationTarget?.kind !== "slack" || typeof projectConfig["slackChannelId"] !== "string") {
+    throw new Error("notify provision failed: slack returned no notification target config");
+  }
+  const surfaces = await runWithOrgScope(input.pool, input.orgId, (client) =>
+    persistProvisionedArtifact(
+      client,
+      { orgId: input.orgId, projectId: input.projectId, name: projectCtx.name },
+      artifact,
+      input.actorId === "system" ? systemActor : { kind: "operator", id: input.actorId },
+    ),
+  );
+  return {
+    outcome: {
+      status: "provisioned",
+      capability: "notify",
+      providerKind: "slack",
+      action,
+      mode: input.notify.mode,
+      authority: {
+        connectionId: grant.connectionId,
+        grantId: grant.grantId,
+        providerPrincipalId: grant.providerPrincipalId,
+        authGeneration: grant.authGeneration,
+        grantGeneration: grant.grantGeneration,
+      },
+      secretRefNames: Object.values(artifact.secretRefs ?? {}),
+      surfaces,
+    },
+    projectConfig,
+  };
 }

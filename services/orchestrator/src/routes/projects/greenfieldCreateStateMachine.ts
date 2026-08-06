@@ -1,4 +1,5 @@
 import { migrateProjectConfig } from "../../engine/config/index.js";
+import { runWithOrgScope } from "@tanren/db";
 import { mutateProjectConfig } from "../../engine/config/projectConfigMutate.js";
 import type { PreparedGreenfieldDeploy } from "../../engine/forge/interview/index.js";
 import {
@@ -17,8 +18,8 @@ import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/p
 import { createDerivationShell, loadExactDerivationShell } from "../../engine/workflow/projectDerivationShell.js";
 import type { ProjectContract } from "../../engine/workflow/projectSpec.js";
 import { createGreenfieldRepository } from "./greenfieldRepoCreate.js";
-import { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
-import { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
+import { preflightGreenfieldDeploy, preflightGreenfieldNotifyEligibility } from "./greenfieldDeployAuthority.js";
+import { prepareGreenfieldDeploy, prepareGreenfieldNotify } from "./greenfieldDeployPrepare.js";
 import type { GreenfieldCreateDeps } from "./greenfield.js";
 
 type Unavailable = Exclude<Awaited<ReturnType<typeof preflightGreenfieldDeploy>>, undefined>;
@@ -27,6 +28,7 @@ export type DirectGreenfieldResult =
   | { kind: "unavailable"; outcome: Unavailable }
   | { kind: "conflict"; reason: "request_changed" | "repo_bound_without_derivation" | "project_not_deriving" }
   | { kind: "deploy_failed"; error: unknown }
+  | { kind: "notify_failed"; error: unknown }
   | { kind: "bootstrap_failed"; bootstrap: ProvisionAutonomousProjectResult }
   | {
       kind: "complete";
@@ -55,6 +57,33 @@ async function ensurePreflight(deps: GreenfieldCreateDeps): Promise<Unavailable 
     actorId: deps.actor.userId,
     ...(deploy.connectionId === undefined ? {} : { connectionId: deploy.connectionId }),
     ...(deploy.grantId === undefined ? {} : { grantId: deploy.grantId }),
+  });
+}
+
+/**
+ * Notify selection must be checked before the deriving shell is made durable:
+ * an unlinked Slack request is rejected before repo creation, deploy preparation,
+ * or any project-scoped selection write.
+ */
+async function ensureNotifyPreflight(deps: GreenfieldCreateDeps): Promise<Unavailable | undefined> {
+  const notify = deps.input.notify;
+  if (notify === undefined) return undefined;
+  // This is the first Slack eligibility read. It must use the tenant runtime
+  // role with an explicit org GUC before any derivation shell or provider effect.
+  return runWithOrgScope(deps.pool, deps.orgId, (client) => {
+    const input = {
+      client,
+      orgId: deps.orgId,
+      providerKind: "slack" as const,
+      capability: "notify" as const,
+      actorId: deps.actor.userId,
+      ...(notify.connectionId === undefined ? {} : { connectionId: notify.connectionId }),
+      ...(notify.grantId === undefined ? {} : { grantId: notify.grantId }),
+    };
+    if (deps.preflightNotify !== undefined) {
+      return deps.preflightNotify(input);
+    }
+    return preflightGreenfieldNotifyEligibility(input);
   });
 }
 
@@ -93,6 +122,8 @@ export async function runDirectGreenfieldDerivation(
     if (shell === undefined) {
       const unavailable = await ensurePreflight(deps);
       if (unavailable !== undefined) return { kind: "unavailable", outcome: unavailable };
+      const unavailableNotify = await ensureNotifyPreflight(deps);
+      if (unavailableNotify !== undefined) return { kind: "unavailable", outcome: unavailableNotify };
       shell = await createDerivationShell(deps.pool, {
         identity,
         actor: { ...deps.actor, orgId: deps.orgId },
@@ -194,6 +225,30 @@ export async function runDirectGreenfieldDerivation(
         } catch (error) {
           await ProjectDerivationStore.recordFailure(deps.pool, operation, error);
           return { kind: "deploy_failed", error };
+        }
+      }
+
+      if (deps.input.notify !== undefined) {
+        try {
+          const prepared = await (deps.prepareNotify ?? prepareGreenfieldNotify)({
+            pool: deps.pool,
+            secrets: deps.secrets,
+            orgId: deps.orgId,
+            projectId: project.projectId,
+            actorId: deps.actor.userId,
+            projectName: deps.input.name,
+            notify: deps.input.notify,
+          });
+          if ("status" in prepared) return { kind: "unavailable", outcome: prepared };
+          await mutateProjectConfig(deps.pool, project.projectId, { kind: "operator", id: deps.actor.userId }, (raw) =>
+            migrateProjectConfig({ ...migrateProjectConfig(raw), greenfield: true, ...prepared.projectConfig }),
+          );
+        } catch (error) {
+          // A Slack notify failure must be reported as its own effect: deploy has
+          // already recorded its receipt above, so classifying this as deploy_failed
+          // would misdirect an operator to retry the already-successful deployment.
+          await ProjectDerivationStore.recordFailure(deps.pool, operation, error);
+          return { kind: "notify_failed", error };
         }
       }
 

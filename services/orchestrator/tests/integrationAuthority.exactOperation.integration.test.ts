@@ -15,11 +15,16 @@ import { systemActor } from "../src/engine/state/actor.js";
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
+const RUNTIME_ROLE = "tanren_app";
+const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
 const ORG_ID = "org_exact_operation";
+const OTHER_ORG_ID = "org_exact_operation_other";
 const PROJECT_ID = "project_exact_operation";
 const CONNECTION_ID = "connection_exact_operation";
 const GRANT_ID = "grant_exact_operation";
 const CREDENTIAL_REF = "secret://org/exact/integration/deploy.vercel/connection/exact/token/g/1";
+const SLACK_CONNECTION_ID = "connection_exact_operation_slack";
+const SLACK_GRANT_ID = "grant_exact_operation_slack";
 const DEPLOY_TARGET = {
   resourceId: "app-allowed",
   sourceRepo: "cat-cave/product",
@@ -36,10 +41,19 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
+function runtimeUrl(adminUrl: string, database: string): string {
+  const parsed = new URL(adminUrl);
+  parsed.username = RUNTIME_ROLE;
+  parsed.password = RUNTIME_PASSWORD;
+  parsed.pathname = `/${database}`;
+  return parsed.toString();
+}
+
 describeDb("IN-1 exact operation authority — real PostgreSQL", () => {
   const dbName = databaseName();
   const authority = new PgIntegrationAuthority();
   let owner: Pool;
+  let runtime: Pool;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -47,6 +61,7 @@ describeDb("IN-1 exact operation authority — real PostgreSQL", () => {
     await admin.end();
     owner = new Pool({ connectionString: withDatabase(ADMIN_URL, dbName) });
     await migrate(owner);
+    runtime = new Pool({ connectionString: runtimeUrl(ADMIN_URL, dbName) });
 
     await owner.query(
       `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
@@ -57,6 +72,11 @@ describeDb("IN-1 exact operation authority — real PostgreSQL", () => {
       `INSERT INTO projects (project_id, name, repo_url, org_id)
        VALUES ($1, 'Exact Project', 'https://example.com/exact.git', $2)`,
       [PROJECT_ID, ORG_ID],
+    );
+    await owner.query(
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+       VALUES ($1, 'oidc', $1, 'exact-other', 'Exact Other Org', '{"version":1}'::jsonb)`,
+      [OTHER_ORG_ID],
     );
     await runWithOrgScope(owner, ORG_ID, async (client) => {
       await client.query(
@@ -116,10 +136,46 @@ describeDb("IN-1 exact operation authority — real PostgreSQL", () => {
       if (selected?.connectionId !== CONNECTION_ID || selected.grantId !== GRANT_ID) {
         throw new Error("exact operation fixture selection failed");
       }
+      await client.query(
+        `INSERT INTO org_integration_connections
+           (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
+            principal_metadata, health, status, current_auth_generation, owner_id)
+         VALUES ($1, $2, 'slack', 'team-exact', 'team', 'Exact Slack', '{}'::jsonb, 'healthy', 'active', 1, 'admin')`,
+        [ORG_ID, SLACK_CONNECTION_ID],
+      );
+      await client.query(
+        `INSERT INTO org_integration_connection_auth_generations
+           (org_id, provider_kind, connection_id, generation, credential_ref, auth_kind, status)
+         VALUES ($1, 'slack', $2, 1, 'secret://org/exact/slack/token/g/1', 'bot_token', 'active')`,
+        [ORG_ID, SLACK_CONNECTION_ID],
+      );
+      await client.query(
+        `INSERT INTO org_integration_grants
+           (org_id, id, provider_kind, connection_id, plane, environment, current_generation, status)
+         VALUES ($1, $2, 'slack', $3, 'control', 'control', 1, 'active')`,
+        [ORG_ID, SLACK_GRANT_ID, SLACK_CONNECTION_ID],
+      );
+      await client.query(
+        `INSERT INTO org_integration_grant_generations
+           (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
+            provider_scopes, resource_constraints, policy_revision, consent_revision,
+            consent_actor_id, consented_at, status)
+         VALUES ($1, 'slack', $2, $3, 1, ARRAY['notify'], ARRAY['discover','provision','bind'],
+                 ARRAY['chat:write','channels:read','groups:read','channels:manage','channels:join'],
+                 $4::jsonb, $5, 'consent.exact', 'admin', now(), 'active')`,
+        [
+          ORG_ID,
+          SLACK_CONNECTION_ID,
+          SLACK_GRANT_ID,
+          JSON.stringify({ version: 1, projectBinding: "selected", resourceIds: "*", environments: ["production"] }),
+          integrationCatalogRevision(),
+        ],
+      );
     });
   }, 120_000);
 
   afterAll(async () => {
+    await runtime?.end();
     await owner?.end();
     const admin = new Pool({ connectionString: ADMIN_URL });
     await admin.query(
@@ -142,6 +198,37 @@ describeDb("IN-1 exact operation authority — real PostgreSQL", () => {
         actor: systemActor,
       }),
     );
+
+  it("scopes Slack preflight to its org and rejects cross-org or no-scope reads", async () => {
+    const input = {
+      providerKind: "slack" as const,
+      capability: "notify",
+      operation: "discover" as const,
+      target: {},
+      connectionId: SLACK_CONNECTION_ID,
+      grantId: SLACK_GRANT_ID,
+    };
+    await expect(
+      runWithOrgScope(runtime, ORG_ID, (client) =>
+        authority.preflightExactOperation(client, { orgId: ORG_ID, ...input }),
+      ),
+    ).resolves.toEqual({ status: "eligible" });
+    await expect(
+      runWithOrgScope(runtime, OTHER_ORG_ID, (client) =>
+        authority.preflightExactOperation(client, { orgId: OTHER_ORG_ID, ...input }),
+      ),
+    ).resolves.toEqual({ status: "not_linked" });
+    const client = await runtime.connect();
+    try {
+      await client.query("BEGIN");
+      await expect(authority.preflightExactOperation(client, { orgId: ORG_ID, ...input })).resolves.toEqual({
+        status: "not_linked",
+      });
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  }, 60_000);
 
   it("issues only the selected exact resource and blocks operation reuse or revocation before secret I/O", async () => {
     const authorized = await authorize();
