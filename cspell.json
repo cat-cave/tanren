@@ -3,12 +3,8 @@
   "version": "0.2",
   "language": "en",
   "caseSensitive": false,
-  "files": [
-    "**/*.{ts,tsx,js,mjs,md,yml,yaml}"
-  ],
-  "enableFiletypes": [
-    "mjs"
-  ],
+  "files": ["**/*.{ts,tsx,js,mjs,md,yml,yaml}"],
+  "enableFiletypes": ["mjs"],
   "ignorePaths": [
     "node_modules/**",
     "**/dist/**",
@@ -813,10 +809,7 @@
       ]
     },
     {
-      "filename": [
-        "services/orchestrator/tests/**",
-        "services/dashboard/tests/**"
-      ],
+      "filename": ["services/orchestrator/tests/**", "services/dashboard/tests/**"],
       "comment": "Synthetic fake-data identifiers used only as test fixtures.",
       "words": [
         "akia",
