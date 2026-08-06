@@ -3,6 +3,7 @@
 // FINDING (not a halt) so it joins the triage set alongside the auditor + demo
 // findings. Kept here so subtaskLoop.ts stays under the 500-line architecture cap.
 import type { Finding } from "../contracts/findings.js";
+import { fenceAsData } from "../answerers/promptData.js";
 import {
   type CandidateSpec,
   PersistentlyInvalidSpecError,
@@ -16,6 +17,7 @@ import type { RoutedWorkItem } from "./loopPolicy.js";
 import type { NewSpecRequest } from "./subtaskLoop.js";
 import { BOOTSTRAP_GATE_TIER, CI_CONFIG_GATE_TIER, type GateOutcome } from "./gate/index.js";
 import { evidenceInsufficientDirective, failedStepOutputTail } from "./subtaskInnerLoop.js";
+import { TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING } from "./gateOutputSafety.js";
 
 /**
  * Turn a failed SPEC GATE (tier-2: tests + full checks) into a P0 FINDING. A CI failure
@@ -33,7 +35,11 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
   // fixes the config in-place rather than chasing a phantom build failure. The stable
   // id (`gate-tanren-ci-config-validate`) dedupes a recurring invalid config across loops.
   if (failure.tier === CI_CONFIG_GATE_TIER) {
-    const issues = failure.steps[0]?.outputTail ?? failure.failedStep;
+    const output = failure.steps[0]?.outputTail;
+    const issues =
+      output === undefined
+        ? failure.failedStep
+        : [TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING, fenceAsData("GATE OUTPUT", output)].join("\n");
     return {
       id: `gate-${failure.tier}-${failure.failedStep}`,
       severity: "P0",
@@ -50,7 +56,11 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
   // failure across loops, so the convergence answerer bounds the self-heal loop. The
   // mise toolchain provision is NOT routed here — it halts terminally at workspace-prep.
   if (failure.tier === BOOTSTRAP_GATE_TIER) {
-    const output = failure.steps[0]?.outputTail ?? failure.failedStep;
+    const output = failure.steps[0]?.outputTail;
+    const outputDetail =
+      output === undefined
+        ? failure.failedStep
+        : [TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING, fenceAsData("GATE OUTPUT", output)].join("\n");
     const exit =
       failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;
     return {
@@ -61,7 +71,7 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
         `The project's deps install (\`just bootstrap\`) failed during the ${failure.when} gate with ${exit}, so ` +
         `the tree cannot build or test (fail-closed — an unbuildable tree is NOT a pass). This is almost always a ` +
         `defect in the scaffold you authored (e.g. a \`package.json\` that does not install cleanly). Fix the ` +
-        `scaffold in this spec so \`just bootstrap\` succeeds. Bootstrap output: ${output}`,
+        `scaffold in this spec so \`just bootstrap\` succeeds. Bootstrap output: ${outputDetail}`,
     };
   }
   const exit = failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;
@@ -74,7 +84,14 @@ export function gateFindings(gate: Extract<GateOutcome, { passed: false }>): Fin
   // failure, runs the project's declared formatter/fix step). This mirrors the fast-tier
   // (`gateReason`) and merge-tier (`mergeGateRejection`) gate steering, which already feed it.
   const output = failedStepOutputTail(failure);
-  const detail = output === "" ? "" : `\nGate output (last lines):\n${output}`;
+  const detail =
+    output === ""
+      ? ""
+      : [
+          "\nGate output (last lines):",
+          TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING,
+          fenceAsData("GATE OUTPUT", output),
+        ].join("\n");
   // EVIDENCE-INSUFFICIENT (apex v57 task #64): when the gate failed because the step
   // exited 0 but produced no positive proof of its declared contract, prepend the
   // SPECIFIC contract-violation diagnosis. The class name (`gate-evidence-insufficient-<reason>`)

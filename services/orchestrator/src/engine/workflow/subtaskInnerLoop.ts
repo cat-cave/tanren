@@ -17,6 +17,7 @@
 // where the intelligent escalation judgment lives) — NEVER a retry-cap halt.
 import { createHash, randomUUID } from "node:crypto";
 import type { PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
+import { fenceAsData } from "../answerers/promptData.js";
 import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "./gate/index.js";
 // The regression directive lives with the judgment that produces it (gate/regressionJudgment);
@@ -28,6 +29,7 @@ import { type SubtaskCostContext } from "./subtaskCost.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
 import { canonicalizeFailureSignature } from "./convergenceSignatureCanonical.js";
 import { writerPromptFor } from "./subtaskWriterPrompt.js";
+import { TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING } from "./gateOutputSafety.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 // The result of walking a plan's subtasks (per-task WRITER → FAST GATE → CHECKER):
@@ -371,7 +373,15 @@ export function gateReason(gate: Extract<GateOutcome, { passed: false }>): strin
   const parts: string[] = [header];
   if (evidenceDirective !== undefined) parts.push(evidenceDirective);
   if (regressionDirective !== undefined) parts.push(regressionDirective);
-  if (outputTail !== "") parts.push(`Gate output (last lines):\n${outputTail}`);
+  if (outputTail !== "") {
+    parts.push(
+      [
+        "Gate output (last lines):",
+        TARGET_REPOSITORY_TOOLING_OUTPUT_WARNING,
+        fenceAsData("GATE OUTPUT", outputTail),
+      ].join("\n"),
+    );
+  }
   return parts.join("\n");
 }
 
