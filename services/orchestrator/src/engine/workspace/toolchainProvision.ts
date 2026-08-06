@@ -26,31 +26,30 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { quoteSshShellArg } from "../ssh/command.js";
-import {
-  MISE_CONFIG_REL_PATH,
-  miseProvisionCommand,
-  miseRunScope,
-  miseScopeExport,
-  underMiseLock,
-} from "../ssh/miseActivate.js";
+import { miseProvisionCommand, miseRunScope, miseScopeExport, underMiseLock } from "../ssh/miseActivate.js";
 import { combinedOutput, commandSucceeded, failureReason, tailOf } from "./outputTail.js";
+import {
+  newDeclarationNonce,
+  parseToolchainDeclarationOutput,
+  toolchainDeclarationReadCommand,
+} from "./toolchainDeclarationRead.js";
 import {
   detectToolchainRequirements,
   provisionableBinaries,
   TOOLCHAIN_CONTENT_DECLARATION_PATHS,
   TOOLCHAIN_PRESENCE_DECLARATION_PATHS,
-  type ToolchainDeclarationFile,
   type ToolchainDetection,
   type ToolchainRequirement,
 } from "./toolchainDeclarations.js";
 
-/** Frame emitted around each declaration file the read command finds. Long and
- * Tanren-specific so ordinary file content cannot be mistaken for a frame. */
-const DECLARATION_FRAME = "===TANREN-TOOLCHAIN-DECLARATION:";
-
-// Bounded per-file read. Root manifests are small; the bound exists so a pathological
-// file can never flood the substrate, not as a policy on file size.
-const DECLARATION_READ_BYTES = 65_536;
+// The declaration READ + its invocation-bound framing live in ./toolchainDeclarationRead.ts
+// — the one seam in this area whose input is repository-controlled bytes. Re-exported so
+// callers and tests keep a single import site.
+export {
+  newDeclarationNonce,
+  parseToolchainDeclarationOutput,
+  toolchainDeclarationReadCommand,
+} from "./toolchainDeclarationRead.js";
 
 /** Printed when a repo ships no declaration Tanren recognizes. Stated, not silent. */
 export const NO_DECLARATION_NOTICE = "tanren: no toolchain declaration found - nothing to provision";
@@ -62,47 +61,12 @@ export const NOTHING_PROVISIONABLE_NOTICE =
 /** Printed only after every declared binary has been proven to resolve. */
 export const TOOLCHAIN_VERIFIED_NOTICE = "tanren: declared toolchain provisioned and verified on PATH";
 
-/**
- * One round-trip that emits every toolchain declaration file the workspace ships.
- * Content paths are emitted with their bytes; presence paths (lockfiles, which name a
- * tool but no version) are emitted as an empty frame, so a large or binary lockfile is
- * never piped back. A repo `mise.toml` is probed too because its presence short-
- * circuits detection entirely.
- */
-export function toolchainDeclarationReadCommand(): string {
-  const frame = (path: string): string =>
-    `printf '%s%s===\\n' ${quoteSshShellArg(DECLARATION_FRAME)} ${quoteSshShellArg(path)}`;
-  const parts: string[] = [];
-  for (const path of [MISE_CONFIG_REL_PATH, ...TOOLCHAIN_PRESENCE_DECLARATION_PATHS]) {
-    parts.push(`if [ -f ${quoteSshShellArg(path)} ]; then ${frame(path)}; fi`);
-  }
-  for (const path of TOOLCHAIN_CONTENT_DECLARATION_PATHS) {
-    parts.push(
-      `if [ -f ${quoteSshShellArg(path)} ]; then ${frame(path)}; ` +
-        `head -c ${String(DECLARATION_READ_BYTES)} ${quoteSshShellArg(path)}; printf '\\n'; fi`,
-    );
-  }
-  return parts.join("; ");
-}
-
-/** Parse {@link toolchainDeclarationReadCommand}'s stdout back into files. Pure. */
-export function parseToolchainDeclarationOutput(stdout: string): ToolchainDeclarationFile[] {
-  const files: ToolchainDeclarationFile[] = [];
-  let current: { path: string; lines: string[] } | undefined;
-  const flush = (): void => {
-    if (current !== undefined) files.push({ path: current.path, contents: current.lines.join("\n") });
-  };
-  for (const line of stdout.split("\n")) {
-    if (line.startsWith(DECLARATION_FRAME) && line.endsWith("===")) {
-      flush();
-      current = { path: line.slice(DECLARATION_FRAME.length, line.length - 3), lines: [] };
-      continue;
-    }
-    current?.lines.push(line);
-  }
-  flush();
-  return files;
-}
+/** Printed when `mise env` — the step that puts the freshly-installed tools on PATH for
+ * everything that follows in this shell — exits nonzero. Its status is invisible through
+ * `eval "$(…)"`, so it is captured and reported rather than evaluated as an empty string. */
+export const MISE_ENV_FAILED_MESSAGE =
+  "tanren: toolchain provision FAILED - 'mise env' exited nonzero, so the provisioned toolchain could not be " +
+  "put on PATH. Proceeding would run the project's own commands against an undeclared toolchain.";
 
 /** The mise spec string handed to `mise use` for a requirement. */
 export function toolchainSpec(requirement: ToolchainRequirement): string {
@@ -152,22 +116,42 @@ export function toolchainProvisionCommand(detection: ToolchainDetection, workspa
   // unsynchronised, two runs race on `installs/<tool>/latest` (`ln -sf … File exists`).
   // `mise trust` clears mise's config-trust gate for the Tanren-authored config, exactly
   // as the golden image does for its own off-default global config (runner/Dockerfile).
+  //
+  // EVERY STEP BELOW FAILS CLOSED ON ITS OWN, and none of them may lean on the caller's
+  // `set -e`. `provisionMiseToolchain` supplies one; the per-gate caller
+  // (`ensureWorkspaceDepsInstalled`) deliberately does NOT, because the provision must
+  // leave its `export`s and its `mise env` PATH in the SAME shell that then runs the
+  // project's bootstrap — a subshell or an `exit`-on-first-error wrapper would discard
+  // exactly the environment the whole step exists to establish. So the chain is `&&`-ed
+  // where a later step depends on an earlier one, and each remaining step carries its own
+  // `|| { …; exit 1; }`. Under a `;`-joined list the group's status is only its LAST
+  // element's, which is how a failed install used to be reported as a successful provision.
   const specs = detection.requirements.map((r) => quoteSshShellArg(toolchainSpec(r))).join(" ");
   parts.push(
     underMiseLock(
       scope,
-      `[ -f "${scope.configFile}" ] || : > "${scope.configFile}"; ` +
-        `mise trust "${scope.configFile}"; mise use --global ${specs}`,
+      `{ [ -f "${scope.configFile}" ] || : > "${scope.configFile}"; } && ` +
+        `mise trust "${scope.configFile}" && mise use --global ${specs}`,
     ),
   );
-  parts.push('eval "$(mise env -s bash)"');
+  // `eval "$(…)"` reports the status of `eval`, NEVER of the command substitution: a
+  // `mise env` that died leaves an EMPTY eval that "succeeds", and the verification below
+  // would then be probing the un-updated PATH. Capture, check, then evaluate.
+  parts.push(
+    `__tanren_mise_env="$(mise env -s bash)" || { ${echoErr(MISE_ENV_FAILED_MESSAGE)}; exit 1; }`,
+    'eval "$__tanren_mise_env"',
+  );
   for (const requirement of detection.requirements) {
     parts.push(
       `command -v ${quoteSshShellArg(requirement.bin)} >/dev/null 2>&1 || ` +
         `{ ${echoErr(missingBinaryMessage(requirement))}; exit 1; }`,
     );
   }
-  parts.push(`: > "${scope.markerFile}"`);
+  // The marker is the ACTIVATION TRIGGER for every later command in this run
+  // (ssh/miseActivate.ts branch 2). A marker that silently failed to write means every
+  // subsequent gate command runs without the toolchain that was just installed, so the
+  // write is checked like any other provisioning step.
+  parts.push(`: > "${scope.markerFile}" || { ${echoErr(markerWriteFailedMessage(scope.markerFile))}; exit 1; }`);
   parts.push(echo(TOOLCHAIN_VERIFIED_NOTICE));
   return parts.join("; ");
 }
@@ -185,6 +169,13 @@ function missingBinaryMessage(requirement: ToolchainRequirement): string {
     `tanren: toolchain provision FAILED - ${requirement.declaredIn} declares ` +
     `${toolchainSpec(requirement)} but the '${requirement.bin}' binary is still not on PATH after ` +
     `'mise use --global'. The declared toolchain could not be provisioned on this runner.`
+  );
+}
+
+function markerWriteFailedMessage(markerFile: string): string {
+  return (
+    `tanren: toolchain provision FAILED - could not write the provisioned marker (${markerFile}). Without it no ` +
+    `later command in this run activates the toolchain that was just installed, so the run halts here instead.`
   );
 }
 
@@ -232,8 +223,12 @@ export interface ProvisionMiseToolchainInput {
  * silent form, that this whole change exists to remove).
  */
 export async function resolveWorkspaceToolchain(input: ProvisionMiseToolchainInput): Promise<ToolchainDetection> {
+  // ONE nonce per read: the frames the runner emits back are trusted only if they carry it,
+  // so bytes committed to the repository cannot forge a declaration file. See the note on
+  // {@link DECLARATION_FRAME}.
+  const nonce = newDeclarationNonce();
   const result = await input.ssh.run(input.target, {
-    command: toolchainDeclarationReadCommand(),
+    command: toolchainDeclarationReadCommand(nonce),
     cwd: input.workspacePath,
     watchdog: watchdogFor(input),
   });
@@ -245,7 +240,7 @@ export async function resolveWorkspaceToolchain(input: ProvisionMiseToolchainInp
       result.stalled === true,
     );
   }
-  return detectToolchainRequirements(parseToolchainDeclarationOutput(result.stdout));
+  return detectToolchainRequirements(parseToolchainDeclarationOutput(result.stdout, nonce));
 }
 
 /**
@@ -337,8 +332,18 @@ export function classifyToolchainFault(input: {
   command: string;
   exitCode: number | null;
   outputTail: string;
+  /** Whether the activity watchdog surfaced a no-sign-of-life stall. A STALL IS A LIVENESS
+   * FAULT, never a missing-binary one, and the two must not be confused: a guard that
+   * stalled can carry a partial `pnpm: not found` written by the project's bootstrap
+   * moments before it wedged, and reading that as "the toolchain is not on this runner"
+   * both halts a run the writer path could have re-driven and prints `exited unknown`
+   * (the exit code of a stall is `null`) instead of saying the command stopped responding. */
+  stalled: boolean;
   detection: ToolchainDetection;
 }): WorkspaceToolchainUnavailableError | undefined {
+  if (input.stalled) {
+    return undefined;
+  }
   const missing = MISSING_BINARY_PATTERN.exec(input.outputTail)?.[1];
   if (missing === undefined) {
     return undefined;

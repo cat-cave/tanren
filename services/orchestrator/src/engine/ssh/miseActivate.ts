@@ -112,9 +112,28 @@ const RUN_WORKSPACE_PATTERN = /^(\/workspace\/runs\/run_[A-Za-z0-9_-]+)\/repo$/u
  * runner: two runs holding two different locks would serialise nothing. */
 export const MISE_SHARED_LOCK_FILE = "$HOME/.tanren-mise.lock";
 
-/** Bounded wait for {@link MISE_SHARED_LOCK_FILE}. Generous — the holder may be doing a
- * cold toolchain download — but BOUNDED, and a timeout is a loud nonzero exit. */
+/** Bounded TOTAL wait for {@link MISE_SHARED_LOCK_FILE}. Generous — the holder may be doing
+ * a cold toolchain download — but BOUNDED, and a timeout is a loud nonzero exit. */
 export const MISE_LOCK_WAIT_SECONDS = 900;
+
+/**
+ * The slice the wait is taken in, so it stays OBSERVABLE.
+ *
+ * A single `flock -w 900` is a 15-minute silence, and the watchdog every mise seam runs
+ * under (ssh/activityWatchdog.ts, class `vcs`) is output-driven with the WORKSPACE tree as
+ * its liveness probe. The shared lock and the shared mise data dir are both OUTSIDE the
+ * workspace, so a run parked on the lock writes nothing the probe can see and emits nothing:
+ * three identical signatures at the 15s probe cadence (~45s) and the substrate DESTROYS the
+ * connection and surfaces a stall. The 900s budget was therefore unreachable — a contended
+ * lock did not wait, it killed the command, roughly twenty times sooner than the constant
+ * above claims.
+ *
+ * So the wait is taken in slices and says so between them. The heartbeat is sign-of-life the
+ * watchdog resets on (any stdout OR stderr chunk resets it), which makes the declared budget
+ * the budget that is actually enforced. It goes to STDERR so the provision's stdout stays
+ * exactly the frame stream its parsers read.
+ */
+export const MISE_LOCK_SLICE_SECONDS = 10;
 
 /** The mise state a single run owns, plus the lock it shares with every other run. */
 export interface MiseRunScope {
@@ -192,28 +211,81 @@ export function miseScopeExport(scope: MiseRunScope): string {
  *     sentinel is set INSIDE the group, so a skipped group is caught after it.
  * Either way the shared installs tree is never written unsynchronised — which is the
  * `ln -sf … File exists` defect itself — and never silently skipped.
+ *
+ * AND A THIRD WAY TO FAIL: `body` ITSELF. The lock sentinel test was the LAST command of
+ * the construct, so ITS status — 0 whenever the lock opened — became the construct's
+ * status and a failed `mise trust`/`mise install`/`mise use` inside the group was
+ * overwritten with success. That stayed invisible because ONE caller
+ * (`provisionMiseToolchain`) wraps the whole provision in `set -e`; the per-gate caller
+ * (`ensureWorkspaceDepsInstalled`) deliberately does NOT, and there the masked failure let
+ * the project's bootstrap run against a toolchain that never installed — the exact silent
+ * degradation this module exists to remove. So `body`'s status is CAPTURED inside the
+ * group and re-raised after the sentinel check: nonzero under EITHER caller. The `||`
+ * around it is also what stops `set -e` from bailing out BEFORE the lock is released.
+ *
+ * NOT `( set -e; … )` AT THE CALL SITE, which is the obvious-looking alternative and does
+ * neither job. POSIX ignores `-e` for any command of an AND-OR list other than the last,
+ * and that extends into a subshell: `( set -e; false; echo x ) && y` runs both — measured
+ * in sh, bash and dash. A subshell would also DISCARD the `export`s and the `mise env`
+ * PATH the provision must leave behind for the bootstrap chained after it.
  */
 export function underMiseLock(scope: MiseRunScope, body: string): string {
-  return (
-    `__tanren_mise_lock=0; { flock -w ${String(MISE_LOCK_WAIT_SECONDS)} 9 || ` +
+  const slice = String(MISE_LOCK_SLICE_SECONDS);
+  const budget = String(MISE_LOCK_WAIT_SECONDS);
+  // The sliced, ANNOUNCED wait. `flock` exits 1 on timeout; ANY other nonzero (127 when the
+  // runner has no flock at all) is not a contended lock and must not be retried in a loop.
+  const acquire =
+    `while :; do flock -w ${slice} 9 && { __tanren_mise_lock=1; break; }; __tanren_flock_rc=$?; ` +
+    `[ "$__tanren_flock_rc" = 1 ] || ` +
+    `{ printf '%s\\n' ${quoteSshShellArg(lockUnavailableMessage(scope))} >&2; exit 1; }; ` +
+    `__tanren_mise_waited=$((__tanren_mise_waited + ${slice})); ` +
+    `[ "$__tanren_mise_waited" -lt ${budget} ] || ` +
     `{ printf '%s\\n' ${quoteSshShellArg(lockTimedOutMessage(scope))} >&2; exit 1; }; ` +
-    `__tanren_mise_lock=1; ${body}; } 9>"${scope.lockFile}"; ` +
-    `[ "$__tanren_mise_lock" = 1 ] || { printf '%s\\n' ${quoteSshShellArg(lockUnopenableMessage(scope))} >&2; exit 1; }`
+    `printf '%s %s/%s\\n' ${quoteSshShellArg(lockWaitingMessage(scope))} "$__tanren_mise_waited" ${budget} >&2; ` +
+    `done`;
+  return (
+    `__tanren_mise_lock=0; __tanren_mise_rc=0; __tanren_mise_waited=0; ` +
+    `{ ${acquire}; { ${body}; } || __tanren_mise_rc=$?; } 9>"${scope.lockFile}"; ` +
+    `[ "$__tanren_mise_lock" = 1 ] || { printf '%s\\n' ${quoteSshShellArg(lockUnopenableMessage(scope))} >&2; exit 1; }; ` +
+    `[ "$__tanren_mise_rc" = 0 ] || { printf '%s\\n' ${quoteSshShellArg(lockedBodyFailedMessage(scope))} >&2; ` +
+    `exit "$__tanren_mise_rc"; }`
   );
 }
 
 function lockTimedOutMessage(scope: MiseRunScope): string {
   return (
     `tanren: toolchain provision FAILED - could not take the shared mise lock (${scope.lockFile}) within ` +
-    `${String(MISE_LOCK_WAIT_SECONDS)}s, or flock is unavailable on this runner. Concurrent runs share one mise ` +
-    `data dir; Tanren will not write it unsynchronised.`
+    `${String(MISE_LOCK_WAIT_SECONDS)}s. Concurrent runs share one mise data dir; Tanren will not write it ` +
+    `unsynchronised.`
   );
+}
+
+function lockUnavailableMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - flock is unavailable on this runner, so the shared mise lock ` +
+    `(${scope.lockFile}) cannot be taken. Concurrent runs share one mise data dir; Tanren will not write it ` +
+    `unsynchronised.`
+  );
+}
+
+/** The heartbeat that makes the wait visible — to the operator tailing the run, and to the
+ * activity watchdog, which would otherwise read a silent lock wait as a wedged command. */
+function lockWaitingMessage(scope: MiseRunScope): string {
+  return `tanren: waiting for the shared mise lock (${scope.lockFile}) - another run holds it; seconds waited:`;
 }
 
 function lockUnopenableMessage(scope: MiseRunScope): string {
   return (
     `tanren: toolchain provision FAILED - could not OPEN the shared mise lock (${scope.lockFile}), so the ` +
     `toolchain install was skipped rather than run unsynchronised against the shared mise data dir.`
+  );
+}
+
+function lockedBodyFailedMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - the mise work held under the shared lock (${scope.lockFile}) exited ` +
+    `nonzero. The declared toolchain is NOT installed; Tanren halts here rather than running the project's own ` +
+    `commands against whatever the runner image happens to carry.`
   );
 }
 

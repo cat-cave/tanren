@@ -13,6 +13,7 @@ import {
   WorkspaceCommandError,
   WorkspaceDepsInstallError,
   WorkspaceMiseProvisionError,
+  WorkspaceToolchainUnavailableError,
   workspaceRepoPathForRun,
 } from "../src/engine/workspace/index.js";
 
@@ -371,6 +372,33 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     }).catch((caught: unknown) => caught);
     expect(timeoutError).toBeInstanceOf(WorkspaceDepsInstallError);
     expect((timeoutError as WorkspaceDepsInstallError).message).toContain("stalled (no sign of life)");
+  });
+
+  it("routes a MISSING TOOLCHAIN BINARY to the infrastructure halt, not to the writer", async () => {
+    // The direct classifier tests cover the pattern; this one covers the WIRING. The whole
+    // point of the class is which error leaves this function: a `WorkspaceDepsInstallError`
+    // dispatches a remediation writer at a loop no source edit can win, so the boundary has
+    // to be exercised through the real call, not only through `classifyToolchainFault`.
+    const ssh = new ScriptedSsh([
+      // Round-trip 1: the declaration probe. This repo declares nothing Tanren recognizes…
+      { exitCode: 0, stdout: "", stderr: "" },
+      // …and round-trip 2 is its own bootstrap dying on a toolchain binary nobody declared.
+      { exitCode: 127, stdout: "", stderr: "sh: 1: pnpm: not found" },
+    ]);
+    const error = await ensureWorkspaceDepsInstalled({
+      ssh,
+      target,
+      workspacePath,
+      command: "just bootstrap",
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WorkspaceToolchainUnavailableError);
+    expect(error).not.toBeInstanceOf(WorkspaceDepsInstallError);
+    const typed = error as WorkspaceToolchainUnavailableError;
+    expect(typed.missingBinary).toBe("pnpm");
+    // The halt says what the repo declared (nothing) and how to declare it — an operator
+    // reading it does not have to go find the declaration catalogue.
+    expect(typed.message).toContain("ships no toolchain declaration Tanren recognizes");
+    expect(typed.message).toContain("Declare 'pnpm'");
   });
 
   it("a FAILED declaration probe halts — it is never read as `this repo declares nothing`", async () => {

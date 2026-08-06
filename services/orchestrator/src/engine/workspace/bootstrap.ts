@@ -244,6 +244,16 @@ export async function ensureWorkspaceDepsInstalled(
   //
   // Chained with `&&` so a failed provision ABORTS the branch — the project's bootstrap
   // never runs against a tree whose toolchain is not there.
+  //
+  // WHY THERE IS NO `set -e` HERE, AND WHY THE PROVISION STILL FAILS CLOSED. The provision
+  // must run IN THIS SHELL: it leaves behind the `export`s and the `mise env` PATH the
+  // bootstrap chained after it depends on, and a `( set -e; … )` subshell would discard
+  // exactly that. It would not even fail closed — POSIX ignores `-e` for any command of an
+  // AND-OR list other than the last, and that extends into the subshell, so
+  // `( set -e; false; echo x ) && y` runs both in sh, bash and dash. The abort semantics
+  // therefore live INSIDE `toolchainProvisionCommand` (and `underMiseLock`), where every
+  // step carries its own nonzero exit, rather than in a wrapper here that cannot deliver
+  // them. The `&&` below is what turns that nonzero into "the bootstrap does not run".
   const detection = await resolveWorkspaceToolchain({
     ssh: input.ssh,
     target: input.target,
@@ -290,6 +300,8 @@ export async function ensureWorkspaceDepsInstalled(
       command,
       exitCode: result.exitCode,
       outputTail,
+      // A stall is not a missing binary — see the `stalled` note on classifyToolchainFault.
+      stalled: result.stalled === true,
       detection,
     });
     if (infraFault !== undefined) {

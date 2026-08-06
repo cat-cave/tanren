@@ -48,10 +48,29 @@ describe("detectToolchainRequirements · the mainstream polyglot repo (the live 
 
   it("a pinned declaration outranks a lockfile's unconstrained one for the same tool", () => {
     // pnpm-lock.yaml alone would say "pnpm@latest"; packageManager pins it. The pinned
-    // reading must win regardless of which file was listed first.
+    // reading must win regardless of which file was listed first — and THAT is the half
+    // this test used to leave unproven. The candidate list was built content-paths-then-
+    // presence-paths, so the pinned reading always arrived first and the "first wins" path
+    // answered every case; the branch that was supposed to express the precedence never ran.
     const detection = detectToolchainRequirements(mainstream);
     expect(detection.requirements.filter((r) => r.tool === "pnpm")).toHaveLength(1);
     expect(detection.requirements.find((r) => r.tool === "pnpm")?.spec).toBe("11.19.0");
+
+    // The same set, listed the other way round. Nothing about the RULE depends on the order
+    // the caller happens to hand the files over in.
+    const reversed = detectToolchainRequirements(mainstream.toReversed());
+    expect(reversed.requirements.filter((r) => r.tool === "pnpm")).toHaveLength(1);
+    expect(reversed.requirements.find((r) => r.tool === "pnpm")?.spec).toBe("11.19.0");
+
+    // …and it does not depend on the two path CATALOGUES staying in their current order
+    // either: an unconstrained declaration read before a pinned one still loses.
+    const lockfileFirst = detectToolchainRequirements([
+      file("pnpm-lock.yaml"),
+      file("package.json", '{ "packageManager": "pnpm@11.19.0" }'),
+    ]);
+    expect(lockfileFirst.requirements).toEqual([
+      { tool: "pnpm", spec: "11.19.0", bin: "pnpm", declaredIn: "package.json", versionDeclared: true },
+    ]);
   });
 
   it("a lockfile alone still declares its tool (unconstrained)", () => {
@@ -156,5 +175,30 @@ describe("provisionableBinaries · the boundary of the infra-fault claim", () =>
     for (const bin of ["vitest", "tsc", "eslint", "pytest"]) {
       expect(provisionableBinaries()).not.toContain(bin);
     }
+  });
+});
+
+describe("detectToolchainRequirements · repository bytes are KEYS, and keys are not trusted", () => {
+  // The tool name, the alias and the presence-path lookups are all indexed by bytes the
+  // gated repository committed. A plain object literal inherits `Object.prototype`, so
+  // `TABLE["constructor"]` returns a FUNCTION rather than `undefined`, the `=== undefined`
+  // guards downstream pass it through, and a repo's own `.tool-versions` turns a legible
+  // "Tanren has no binary mapping for this" report into an orchestrator-side TypeError.
+  it("reports an inherited-property tool name as unmappable, and never crashes on it", () => {
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      const detection = detectToolchainRequirements([file(".tool-versions", `${name} 1.2.3\n`)]);
+      expect(detection.requirements).toEqual([]);
+      expect(detection.unresolved).toHaveLength(1);
+      // The report names the tool as a STRING — the repo's own bytes, echoed back.
+      expect(detection.unresolved[0]?.reason).toContain(`declares tool "${name}"`);
+      expect(typeof detection.unresolved[0]?.tool).toBe("string");
+    }
+  });
+
+  it("does not let an inherited-property lockfile path or packageManager name through", () => {
+    expect(detectToolchainRequirements([file("constructor")]).requirements).toEqual([]);
+    const pm = detectToolchainRequirements([file("package.json", '{ "packageManager": "constructor@1.0.0" }')]);
+    expect(pm.requirements).toEqual([]);
+    expect(pm.unresolved[0]?.tool).toBe("constructor");
   });
 });
