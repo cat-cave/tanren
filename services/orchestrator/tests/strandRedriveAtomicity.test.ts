@@ -18,7 +18,17 @@ import { parkStrandedSpecInProcess } from "../src/engine/worker/runFinalize.js";
 
 type QueryResult = { rows: unknown[]; rowCount: number };
 
-const INTERNAL_FAILURE = { code: "internal", stage: "run", summary: "the run failed with an internal error" } as const;
+// A `ClassifiedRunFailure` is TOTAL — every one carries a `cause` and an `attribution`.
+// This fixture predated those two fields and never gained them, so every orphan test below
+// was driving the disposition path with a shape the classifier cannot actually produce —
+// exactly the two fields this PR threads end to end.
+const INTERNAL_FAILURE = {
+  code: "internal",
+  stage: "run",
+  summary: "the run failed with an internal error",
+  cause: "unclassified",
+  attribution: "unknown",
+} as const;
 
 /**
  * A recording client answering the orphan path's reads:
@@ -40,8 +50,14 @@ class RecordingClient {
     if (sql.includes("FROM events") && sql.includes("dag.spec.redriven")) {
       // Each prior re-drive records the ENRICHED signature (code + the stage it failed in), so the
       // orphan reader keys on `code@stage` exactly as the live path does.
+      // The row shape the CURRENT applier emits: `causeFields` puts `cause` on every
+      // `dag.spec.redriven`, so a history row carries one too. Omitting it made the history
+      // signature (`internal@run`) accidentally match a current attempt whose own `cause` was
+      // missing from the fixture — the test proved a cycle only because both halves were
+      // equally malformed. Legacy no-`cause` rows are covered separately by the back-compat
+      // test in `runFailureAttribution.test.ts`.
       const rows = Array.from({ length: this.opts.priorSameFailures ?? 0 }, () => ({
-        payload: { failureCode: "internal", stage: "run" },
+        payload: { failureCode: "internal", stage: "run", cause: "unclassified" },
       }));
       return { rows, rowCount: rows.length };
     }
