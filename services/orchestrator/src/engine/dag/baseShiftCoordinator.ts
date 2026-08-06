@@ -487,6 +487,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
    * that cost at read time (engine/insights/integration).
    */
   private async emit(input: BaseShiftEmitInput, rebaseConflicted: boolean, decision: RebaseDecision): Promise<void> {
-    await emitBaseShiftRebase(this.deps.events, input, rebaseConflicted, decision);
+    // Best-effort history/instrumentation ONLY: keepRun/recovery authority already committed, so a
+    // history-write failure must NOT propagate — percolation would misclassify a settled restack as
+    // FAILED (only a thrown BaseShiftHeldError is `held`). Log and continue.
+    try {
+      await emitBaseShiftRebase(this.deps.events, input, rebaseConflicted, decision);
+    } catch (error) {
+      log.warn("base-shift history emit failed (non-fatal)", { runId: input.dependent.runId, decision }, error);
+    }
   }
 }
