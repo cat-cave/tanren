@@ -403,6 +403,36 @@ describe("the structural fixed point is a FLOOR under the answerer's keep_going"
     expect(state.consecutiveStalls).toBe(5);
   });
 
+  it("NEGATIVE CONTROL: a WHITESPACE-ONLY blocker is unnamed too — it never floors", () => {
+    // `blockingRootCauseId` is a free-form `z.string()` an LLM fills in, so "   " is a value it
+    // can actually produce. It is not `""`, so a bare `!== ""` check reads it as a NAMED cause
+    // and the floor fires — publishing a halt whose attributable root cause is blank. An
+    // operator gets a stop with nothing to act on, which is the one thing the floor's naming
+    // requirement exists to prevent.
+    for (const blank of ["   ", "\t", "\n", " \n "]) {
+      let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+      for (let i = 0; i < 5; i += 1) {
+        expect(round(state, blank, 4).decision, `blank id ${JSON.stringify(blank)} must not floor`).toBe("continue");
+        state = round(state, blank, 4).state;
+      }
+      expect(state.consecutiveStalls).toBe(5);
+    }
+  });
+
+  it("stray whitespace cannot disguise the SAME cause as a new one — the floor still fires", () => {
+    // The inverse hazard, and the more expensive one. If the trajectory keyed on the raw
+    // string, an answerer re-reporting the identical blocker with a trailing newline would
+    // read to the cycle detector as a NEW state — exploration, not a return — and the loop
+    // would run on. A floor that a stray newline steps over is not a floor.
+    let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
+    const spellings = ["gate-slow-codegen-drift", "gate-slow-codegen-drift ", "\ngate-slow-codegen-drift"];
+    expect(round(state, spellings[0]!, 4).decision).toBe("continue");
+    state = round(state, spellings[0]!, 4).state;
+    expect(round(state, spellings[1]!, 4).decision).toBe("continue");
+    state = round(state, spellings[1]!, 4).state;
+    expect(round(state, spellings[2]!, 4).decision).toBe("halt");
+  });
+
   it("a single forward step breaks the cycle and the loop keeps running", () => {
     let state: ConvergenceState = { consecutiveStalls: 0, blockingHistory: [] };
     const cause = "gate-slow-codegen-drift";

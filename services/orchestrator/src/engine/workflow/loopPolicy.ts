@@ -136,12 +136,29 @@ export interface VelocityDeferPolicy {
   afterStalls: number;
 }
 
+// The blocking root-cause id as the TRAJECTORY should see it. `blockingRootCauseId` is a
+// free-form `z.string()` an LLM fills in, so it arrives with whatever whitespace the model
+// emitted, and BOTH directions of that are wrong in a way that reads as correct:
+//
+//   - `"   "` is not `""`, so an all-whitespace id would satisfy `namesABlockingCause` and a
+//     floor halt would be published as attributable to a cause that is literally blank.
+//   - `"pnpm-test-fails "` is not `"pnpm-test-fails"`, so the SAME blocker re-reported with a
+//     stray newline reads to the cycle detector as a NEW state — exploration, not a return.
+//     A floor that trailing whitespace can step over is not a floor.
+//
+// Normalizing once, here at the boundary where the answerer's string becomes a signature,
+// closes both. The event keeps the answerer's own text; only the trajectory is normalized.
+function normalizeBlockingId(id: string): string {
+  return id.trim();
+}
+
 // True iff the loop's latest blocking signature actually NAMES a cause. A halt must be
 // attributable — "whose bug is this?" is unanswerable when the blocker was never identified —
-// so an unnamed blocker ("") never trips the floor, however structurally stuck it looks.
+// so an unnamed blocker ("", or whitespace) never trips the floor, however structurally stuck
+// it looks.
 function namesABlockingCause(history: ReadonlyArray<AttemptSignature>): boolean {
   const latest = history.at(-1);
-  return latest !== undefined && latest.failureSignature !== "";
+  return latest !== undefined && normalizeBlockingId(latest.failureSignature).length > 0;
 }
 
 // True iff the blocking root cause is STUCK this loop — the same merge-gating finding
@@ -248,7 +265,7 @@ export function applyConvergencePolicy(input: ConvergencePolicyInput): {
   // answerer's reported progress to a stall (`regressed`). A non-oscillating loop is untouched.
   const blockingHistory: AttemptSignature[] = [
     ...state.blockingHistory,
-    { failureSignature: loopBlocking.id, magnitude: loopBlocking.pScore },
+    { failureSignature: normalizeBlockingId(loopBlocking.id), magnitude: loopBlocking.pScore },
   ];
   const effectiveProgress = effectiveBlockingProgress(blockingProgress, blockingHistory);
   // The SAME structural read, kept as its own fact because the policy now uses it TWICE: to

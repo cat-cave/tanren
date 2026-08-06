@@ -321,7 +321,7 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
     // Observed cost of having no floor: 3h42m and ~$1.73 on one run, 52 identical writer
     // attempts, a second run stalled the same way.
     const keepGoing = Array.from({ length: 4 }, () => convergenceStalledKeepGoing);
-    const { input } = defaultLoopInput({
+    const { input, events } = defaultLoopInput({
       convergencePolicy: convergencePolicyWith({ demoRunEnabled: false }),
       adapters: {
         ...defaultLoopInput().input.adapters,
@@ -333,6 +333,24 @@ describe("spec loop — CONVERGENCE is the SOLE loop bound (stall HALT, NOT a re
     const outcome = await runSubtaskLoop(input);
     // It stops at the proof rather than running to the 5th round the fixture would have passed.
     expect(outcome.kind).toBe("convergence_stalled");
+
+    // `outcome.kind` alone does NOT prove the FLOOR stopped it — several routes reach
+    // `convergence_stalled`, and a floor that fired for the wrong reason (or an unrelated path
+    // that happened to produce the same outcome) would pass that assertion unchanged. The
+    // floor-triggered halt is identified by the PAIR only this path can emit: the answerer
+    // still said `keep_going`, and the loop halted anyway — over a NAMED cause, because an
+    // unattributable halt is refused.
+    const assessed = events.events.filter((e) => e.eventType === "convergence.assessed");
+    const halting = assessed.at(-1)!;
+    expect(halting.payload).toMatchObject({
+      blockingRootCauseId: "blocker-a",
+      escalation: "keep_going",
+      decision: "halt",
+    });
+    // Every earlier round continued — the floor fires at the PROOF, not on the first stall.
+    for (const round of assessed.slice(0, -1)) {
+      expect(round.payload).toMatchObject({ decision: "continue" });
+    }
   });
 
   it("a velocity_defer convergence PASSES the spec, deferring the MILD (≤ default P3) leftovers as specs", async () => {
