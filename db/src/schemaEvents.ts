@@ -68,6 +68,13 @@ export const events = pgTable(
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
+    // Convergence-history reads (`workflow/attentionResolutionBoundary.ts` and its two
+    // readers) filter `spec_id = $1 AND event_type = '…'` and take `MAX(id)`. NO other index
+    // starts with `spec_id`, and `events_event_type` alone does not help: `dag.spec.redriven`
+    // is one of the highest-volume event types, so the planner would sift every re-drive in
+    // the install to answer a question about ONE spec. Trailing `id` makes the
+    // resolution-boundary subquery an index-only backwards scan.
+    index("events_spec_type_id").on(table.specId, table.eventType, table.id),
     uniqueIndex("events_task_terminal_unique")
       .on(table.taskId, table.eventType)
       .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
