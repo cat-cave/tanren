@@ -20,7 +20,11 @@ class FakeOpenRouterHttp implements OpenRouterHttpClient {
 
 describe("openRouterCost — authoritative per-call charge query", () => {
   it("extracts OpenRouter's REAL total_cost (the deduction from the key's account) from the generation row", async () => {
-    const http = new FakeOpenRouterHttp({ status: 200, body: { data: { id: "gen-1", total_cost: 0.0421 } } });
+    // is_byok:false is OpenRouter's explicit proof it billed the account in full.
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: { data: { id: "gen-1", total_cost: 0.0421, is_byok: false } },
+    });
     const cost = await queryGenerationCost(http, { generationId: "gen-1", token: "sk-or-test" });
     expect(cost).toEqual({
       generationId: "gen-1",
@@ -35,20 +39,96 @@ describe("openRouterCost — authoritative per-call charge query", () => {
     expect(realProviderCostFrom(cost)).toBe(0.0421);
   });
 
-  it("OPENROUTER-BYOK: a positive upstream_inference_cost means total_cost is only a routing fee — flagged and NOT recorded as real spend", async () => {
+  it("OPENROUTER-BYOK: is_byok:true means total_cost is only a routing fee — flagged and NOT recorded as real spend", async () => {
     // When the tenant attached their own UPSTREAM provider keys inside OpenRouter,
     // OpenRouter charges a routing fee and the real inference cost lands on the
     // upstream provider's bill. Recording total_cost as real spend would UNDERCOUNT.
-    // This is read from OpenRouter's OWN report — NOT from a caller-declared flag,
-    // which previously conflated "the tenant's credential" with "an upstream biller".
+    // Classification is OpenRouter's OWN explicit `is_byok` marker — NOT a caller flag
+    // (which conflated "the tenant's credential" with "an upstream biller") and NOT
+    // the `upstream_inference_cost` cost component (which is narration, not a marker).
     const http = new FakeOpenRouterHttp({
       status: 200,
-      body: { data: { id: "gen-byok", total_cost: 0.01, cost_details: { upstream_inference_cost: 0.42 } } },
+      body: {
+        data: { id: "gen-byok", total_cost: 0.01, is_byok: true, cost_details: { upstream_inference_cost: 0.42 } },
+      },
     });
     const cost = await queryGenerationCost(http, { generationId: "gen-byok", token: "sk-or-tenant" });
     expect(cost).toMatchObject({ totalCostUsd: 0.01, upstreamBilled: true, upstreamInferenceCostUsd: 0.42 });
     // The authoritative real-spend figure is deliberately null: the figure we have
     // is provably not the whole charge.
+    expect(realProviderCostFrom(cost)).toBeNull();
+  });
+
+  it("is_byok:true is upstream-billed even with NO upstream_inference_cost figure — the marker is the authority, not the cost component", async () => {
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: { data: { id: "gen-byok-bare", total_cost: 0.01, is_byok: true } },
+    });
+    const cost = await queryGenerationCost(http, { generationId: "gen-byok-bare", token: "sk-or-tenant" });
+    expect(cost).toMatchObject({ upstreamBilled: true, upstreamInferenceCostUsd: null });
+    expect(realProviderCostFrom(cost)).toBeNull();
+  });
+
+  it("FAILS CLOSED when the billing-owner marker is absent — an unproven total_cost is NOT recorded as real spend", async () => {
+    // No is_byok on the row: we cannot prove OpenRouter billed in full, so total_cost
+    // might be a BYOK routing fee. Refusing it (null) is the safe under-count-proof
+    // direction; recording it would risk under-counting a real BYOK charge.
+    const http = new FakeOpenRouterHttp({ status: 200, body: { data: { id: "gen-unmarked", total_cost: 0.05 } } });
+    const cost = await queryGenerationCost(http, { generationId: "gen-unmarked", token: "t" });
+    expect(cost).toMatchObject({ totalCostUsd: 0.05, upstreamBilled: true });
+    expect(realProviderCostFrom(cost)).toBeNull();
+  });
+
+  it("even a positive upstream_inference_cost does NOT flag a row that is explicitly is_byok:false (platform-billed in full)", async () => {
+    // The false-positive the marker fix closes: an ordinary platform-billed generation
+    // can still carry an upstream cost component; is_byok:false proves OpenRouter
+    // billed it in full, so total_cost IS the real deduction.
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: {
+        data: {
+          id: "gen-plat-upstream",
+          total_cost: 0.02,
+          is_byok: false,
+          cost_details: { upstream_inference_cost: 0.007 },
+        },
+      },
+    });
+    const cost = await queryGenerationCost(http, { generationId: "gen-plat-upstream", token: "t" });
+    expect(cost?.upstreamBilled).toBe(false);
+    expect(realProviderCostFrom(cost)).toBe(0.02);
+  });
+
+  it("reads is_byok nested under `usage` (completion-shaped responses)", async () => {
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: { data: { id: "gen-usage", total_cost: 0.02, usage: { is_byok: false } } },
+    });
+    const cost = await queryGenerationCost(http, { generationId: "gen-usage", token: "t" });
+    expect(cost?.upstreamBilled).toBe(false);
+    expect(realProviderCostFrom(cost)).toBe(0.02);
+  });
+
+  it("CONFLICTING markers across placements FAIL CLOSED — a top-level is_byok:true is not overridden by usage.is_byok:false", async () => {
+    // Only UNANIMOUS-false proves an OpenRouter-billed-in-full row; any present `true`
+    // (here at the top level) marks it upstream-billed even if another placement says
+    // false, so a routing-fee total_cost is never recorded as real spend.
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: { data: { id: "gen-conflict", total_cost: 0.01, is_byok: true, usage: { is_byok: false } } },
+    });
+    const cost = await queryGenerationCost(http, { generationId: "gen-conflict", token: "t" });
+    expect(cost?.upstreamBilled).toBe(true);
+    expect(realProviderCostFrom(cost)).toBeNull();
+  });
+
+  it("a MALFORMED (non-boolean) is_byok marker FAILS CLOSED — a present-but-unparseable marker is not proof of full billing", async () => {
+    const http = new FakeOpenRouterHttp({
+      status: 200,
+      body: { data: { id: "gen-malformed", total_cost: 0.01, is_byok: "false" } },
+    });
+    const cost = await queryGenerationCost(http, { generationId: "gen-malformed", token: "t" });
+    expect(cost?.upstreamBilled).toBe(true);
     expect(realProviderCostFrom(cost)).toBeNull();
   });
 
@@ -58,18 +138,25 @@ describe("openRouterCost — authoritative per-call charge query", () => {
     // caller-declared `billingModel: 'byok'` discarded exactly this figure.
     const http = new FakeOpenRouterHttp({
       status: 200,
-      body: { data: { id: "gen-tenant", total_cost: 0.0011782784, cost_details: { upstream_inference_cost: 0 } } },
+      body: { data: { id: "gen-tenant", total_cost: 0.0011782784, is_byok: false } },
     });
     const cost = await queryGenerationCost(http, { generationId: "gen-tenant", token: "sk-or-tenant" });
     expect(cost?.upstreamBilled).toBe(false);
     expect(realProviderCostFrom(cost)).toBe(0.0011782784);
   });
 
-  it("treats a null/absent cost_details.upstream_inference_cost as OpenRouter-billed (the documented non-BYOK shape)", async () => {
+  it("is_byok:false is OpenRouter-billed regardless of the upstream cost component shape", async () => {
     for (const details of [undefined, {}, { upstream_inference_cost: null }, { upstream_inference_cost: 0 }]) {
       const http = new FakeOpenRouterHttp({
         status: 200,
-        body: { data: { id: "g", total_cost: 0.02, ...(details === undefined ? {} : { cost_details: details }) } },
+        body: {
+          data: {
+            id: "g",
+            total_cost: 0.02,
+            is_byok: false,
+            ...(details === undefined ? {} : { cost_details: details }),
+          },
+        },
       });
       const cost = await queryGenerationCost(http, { generationId: "g", token: "t" });
       expect(cost?.upstreamBilled).toBe(false);
@@ -138,11 +225,14 @@ describe("upstream_inference_cost is read from BOTH placements", () => {
     expect(cost?.upstreamInferenceCostUsd).toBe(0.42);
   });
 
-  it("stays NOT upstream-billed when neither placement carries a positive value", async () => {
-    // Non-vacuous: the widened read must not start flagging ordinary generations.
+  it("narrates no upstream figure when neither placement carries a positive value (is_byok:false platform row)", async () => {
+    // Non-vacuous: the narration read must not fabricate an upstream figure; the
+    // explicit is_byok:false marker keeps the platform-billed row authoritative.
     const http = new FakeOpenRouterHttp({
       status: 200,
-      body: { data: { id: "gen-plain", total_cost: 0.01, upstream_inference_cost: 0, cost_details: {} } },
+      body: {
+        data: { id: "gen-plain", total_cost: 0.01, is_byok: false, upstream_inference_cost: 0, cost_details: {} },
+      },
     });
     const cost = await queryGenerationCost(http, { generationId: "gen-plain", token: "sk-or-tenant" });
     expect(cost).toMatchObject({ upstreamBilled: false, upstreamInferenceCostUsd: null });

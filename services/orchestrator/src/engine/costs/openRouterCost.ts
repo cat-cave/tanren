@@ -27,33 +27,40 @@
 // no captured charge records cost_usd NULL with cost_basis 'unknown' — real spend is
 // a metered FACT, NEVER a list-rate estimate.
 //
-// OPENROUTER-BYOK CAVEAT (now DATA-DRIVEN). When the tenant has attached their own
-// UPSTREAM provider keys inside OpenRouter, OpenRouter charges only a routing fee —
-// the real inference cost lands on the upstream provider's invoice — so `total_cost`
-// is NOT the full real spend and must never be recorded as the real deduction (it
-// would UNDER-count against a ceiling).
+// OPENROUTER-BYOK CAVEAT (read from OpenRouter's OWN billing-owner marker). When the
+// tenant has attached their own UPSTREAM provider keys inside OpenRouter, OpenRouter
+// charges only a routing fee — the real inference cost lands on the upstream
+// provider's invoice — so `total_cost` is NOT the full real spend and must never be
+// recorded as the real deduction (it would UNDER-count against a ceiling).
 //
 // This used to be decided by a caller-declared `billingModel: 'platform' | 'byok'`
 // flag, which the run wiring fed from tanren's OWN sense of "BYOK" (the tenant's
 // credential vs the platform's) — a completely different question, and therefore a
 // guess wearing a fact's clothing. It is now read from OpenRouter's OWN report:
-// `cost_details.upstream_inference_cost` is documented as 0/null for a non-BYOK
-// request and positive when an upstream provider did the billing. A positive value
-// FLAGS the row `upstreamBilled` and disqualifies it as authoritative real spend.
+// `is_byok` is the documented, explicit BYOK/billing-owner boolean on the generation
+// record (`false` ⇒ OpenRouter billed the account in full; `true` ⇒ an upstream
+// provider billed the inference). We classify on THAT marker — never by inferring
+// ownership from `upstream_inference_cost`, which is a cost COMPONENT, not a
+// discriminator. We also FAIL CLOSED: when the marker is absent/malformed we cannot
+// prove OpenRouter billed in full, so we treat the row as upstream-billed rather than
+// record a possibly-routing-fee `total_cost` as real spend — under-counting is the
+// one direction this module must never fail in. `upstream_inference_cost` is kept
+// only as narration (the evidence behind a BYOK row), not as the classifier.
 
 // One generation's cost as OpenRouter reports it. `totalCostUsd` is what OpenRouter
-// charged the account; `upstreamBilled` marks a generation whose real inference cost
-// was billed by an UPSTREAM provider (OpenRouter-BYOK), so `totalCostUsd` is only a
-// routing fee and NOT the authoritative real spend.
+// charged the account; `upstreamBilled` marks a generation NOT provably billed in
+// full by OpenRouter — either an explicit OpenRouter-BYOK row (`is_byok === true`) or
+// one whose billing-owner marker was unavailable (fail-closed) — so `totalCostUsd` is
+// only a routing fee (or unproven) and NOT the authoritative real spend.
 export interface OpenRouterGenerationCost {
   generationId: string;
   totalCostUsd: number;
   upstreamBilled: boolean;
   /**
    * OpenRouter's reported upstream-provider charge for this generation
-   * (`cost_details.upstream_inference_cost`), when positive. Null when OpenRouter
-   * itself was the biller (the ordinary case) — the evidence behind
-   * `upstreamBilled`, kept so a caller can narrate WHY a figure was refused.
+   * (`cost_details.upstream_inference_cost`), when positive. Null on the ordinary
+   * platform-billed path. NARRATION ONLY — it is NOT the billing-owner classifier
+   * (that is `is_byok`); kept so a caller can narrate an upstream-billed figure.
    */
   upstreamInferenceCostUsd: number | null;
 }
@@ -84,7 +91,7 @@ export interface OpenRouterCostQueryInput {
   // for a tenant-imported OpenRouter credential). Either way, whoever owns this key
   // is the party OpenRouter bills — so no caller-declared billing-model flag is
   // needed or accepted: whether an UPSTREAM provider did the billing instead is read
-  // from OpenRouter's own `cost_details.upstream_inference_cost` on the response.
+  // from OpenRouter's own explicit `is_byok` marker on the response.
   token: string;
   baseUrl?: string;
 }
@@ -117,23 +124,28 @@ export async function queryGenerationCost(
   if (totalCostUsd === null) {
     return null;
   }
-  // OPENROUTER-BYOK, read from OpenRouter's OWN report rather than a caller flag:
-  // a positive upstream inference cost means an upstream provider billed the real
-  // inference and OpenRouter charged only a routing fee, so `total_cost` is NOT the
-  // authoritative real deduction.
-  // Read BOTH placements. OpenRouter reports this under `cost_details` on the
-  // generation record, but also surfaces it at the TOP LEVEL of the row on some
-  // responses. Checking only the nested one lets an upstream-BYOK generation look
-  // like a fully-billed one, and `total_cost` (a routing fee) would then be recorded
-  // as the real deduction — under-counting real spend, which is the one direction
-  // this module must never fail in. First positive value wins.
+  // OPENROUTER-BYOK, classified on OpenRouter's OWN explicit billing-owner marker
+  // rather than a caller flag OR an inferred cost component. UNANIMOUS-FALSE is the
+  // ONLY proof that OpenRouter billed the account in full and `total_cost` is the real
+  // deduction: at least one `is_byok` marker must be present AND every present marker
+  // (across the top-level/`usage` placements and snake/camel aliases) must be the
+  // boolean `false`. FAIL CLOSED on everything else — a missing marker, ANY `true`, a
+  // malformed (non-boolean) value, or a CONFLICT between placements all mark the row
+  // upstream-billed, so a possibly routing-fee `total_cost` is never recorded as
+  // authoritative real spend — the one direction (under-counting) this module must
+  // never fail in.
+  const byokMarkers = billingOwnerMarkers(row);
+  const openRouterBilledInFull = byokMarkers.length > 0 && byokMarkers.every((marker) => marker === false);
+  // `upstream_inference_cost` is retained ONLY as narration (the evidence behind a
+  // BYOK row), read from both the nested `cost_details` and the top level; it does
+  // NOT drive the classification above.
   const upstreamInferenceCostUsd =
     positiveNumberField(costDetails(row), ["upstream_inference_cost", "upstreamInferenceCost"]) ??
     positiveNumberField(row, ["upstream_inference_cost", "upstreamInferenceCost"]);
   return {
     generationId: input.generationId,
     totalCostUsd,
-    upstreamBilled: upstreamInferenceCostUsd !== null,
+    upstreamBilled: !openRouterBilledInFull,
     upstreamInferenceCostUsd,
   };
 }
@@ -165,6 +177,34 @@ function generationRow(body: unknown): Record<string, unknown> | null {
 function costDetails(row: Record<string, unknown> | null): Record<string, unknown> | null {
   const details = row?.["cost_details"] ?? row?.["costDetails"];
   return typeof details === "object" && details !== null ? (details as Record<string, unknown>) : null;
+}
+
+// The `usage` sub-object, or null. Completion-shaped responses nest `is_byok` under
+// `usage`; the generation record carries it at the top level. Reading both lets one
+// query shape cover either placement.
+function usageSection(row: Record<string, unknown> | null): Record<string, unknown> | null {
+  const usage = row?.["usage"];
+  return typeof usage === "object" && usage !== null ? (usage as Record<string, unknown>) : null;
+}
+
+// Every PRESENT `is_byok` billing-owner marker OpenRouter may report — top-level and
+// nested under `usage`, snake_case and camelCase. Each entry is the RAW value (a
+// present-but-malformed marker is kept so the caller can distinguish it from an absent
+// one and FAIL CLOSED); an absent key contributes nothing. The caller accepts an
+// OpenRouter-billed-in-full row only when this is non-empty AND every entry is `false`.
+function billingOwnerMarkers(row: Record<string, unknown> | null): unknown[] {
+  const markers: unknown[] = [];
+  for (const scope of [row, usageSection(row)]) {
+    if (scope === null) {
+      continue;
+    }
+    for (const key of ["is_byok", "isByok"]) {
+      if (Object.hasOwn(scope, key)) {
+        markers.push(scope[key]);
+      }
+    }
+  }
+  return markers;
 }
 
 // The first POSITIVE finite number under any of `keys`. Tolerant by contract: a
