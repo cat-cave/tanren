@@ -221,4 +221,48 @@ describe("evaluateCiObservation — forge check snapshot reducer", () => {
       state: "wrong_app_identity",
     });
   });
+
+  it("aggregates required duplicate runs by identity before conclusion", () => {
+    const wrongIdentity = evaluateCiObservation(
+      {
+        head: { sha: "abc" },
+        checkRuns: [
+          { name: "build", status: "completed", conclusion: "success", appId: 123, url: "https://ci/build/ok" },
+          { name: "build", status: "completed", conclusion: "failure", appId: 999, url: "https://ci/build/wrong" },
+        ],
+        statuses: [],
+        requiredContexts: ["build"],
+        requiredCheckAppIds: { build: 123 },
+      },
+      { quarantinedCheckNames: new Set(["build"]) },
+    );
+    expect(wrongIdentity.status).toBe("failed");
+    expect(wrongIdentity.failingChecks).toEqual([
+      { kind: "check_run", name: "build", state: "wrong_app_identity", url: "https://ci/build/wrong" },
+    ]);
+
+    const failedConclusion = evaluateCiObservation({
+      head: { sha: "abc" },
+      checkRuns: [
+        { name: "build", status: "completed", conclusion: "success", appId: 123 },
+        { name: "build", status: "completed", conclusion: "failure", appId: 123 },
+      ],
+      statuses: [],
+      requiredContexts: ["build"],
+      requiredCheckAppIds: { build: 123 },
+    });
+    expect(failedConclusion).toMatchObject({ status: "failed", reason: "check_failed" });
+
+    const pendingConclusion = evaluateCiObservation({
+      head: { sha: "abc" },
+      checkRuns: [
+        { name: "build", status: "completed", conclusion: "success", appId: 123 },
+        { name: "build", status: "in_progress", appId: 123 },
+      ],
+      statuses: [],
+      requiredContexts: ["build"],
+      requiredCheckAppIds: { build: 123 },
+    });
+    expect(pendingConclusion).toMatchObject({ status: "pending", reason: "checks_pending" });
+  });
 });

@@ -40,6 +40,14 @@ export interface CiObservation {
  * from the failure verdict (CI-intelligence). When branch protection declares required
  * contexts the verdict gates on THOSE only: an optional check failing/pending does not
  * block, and a required context that has not reported keeps the result pending. Pure.
+ *
+ * Required duplicate check runs are reduced per context with this exact precedence:
+ * identity mismatch (including a missing App ID) > failed conclusion > pending run >
+ * successful conclusion. An App-bound context must have every observed run authored by
+ * its exact required App ID; one matching success cannot override a wrong-identity run.
+ * A required-context quarantine is applied only after this reduction, so it cannot hide
+ * either identity evidence or a required failure. A required context without an App
+ * binding uses the same conclusion precedence without the identity step.
  */
 export function evaluateCiObservation(
   checks: GitHubPullRequestChecks,
@@ -53,25 +61,18 @@ export function evaluateCiObservation(
   const required = [...new Set([...(checks.requiredContexts ?? []), ...Object.keys(checks.requiredCheckAppIds ?? {})])];
   const gated = required.length > 0;
   const requiredSet = new Set(required);
+  const requiredRunObservations = aggregateRequiredCheckRuns(checks.checkRuns, required, checks.requiredCheckAppIds);
   const allFailing = [
     ...checks.checkRuns
-      .filter(
-        (check) =>
-          isFailedCheckRun(check) ||
-          (checks.requiredCheckAppIds?.[check.name] !== undefined &&
-            check.appId !== checks.requiredCheckAppIds[check.name]),
-      )
+      .filter((check) => !requiredSet.has(check.name))
+      .filter((check) => isFailedCheckRun(check))
       .map((check) => ({
         kind: "check_run" as const,
         name: check.name,
-        state:
-          checks.requiredCheckAppIds?.[check.name] !== undefined &&
-          check.appId !== checks.requiredCheckAppIds[check.name]
-            ? "wrong_app_identity"
-            : (check.conclusion ?? check.status),
+        state: check.conclusion ?? check.status,
         url: check.url,
-      }))
-      .filter((check) => !quarantined.has(check.name) || (gated && requiredSet.has(check.name))),
+      })),
+    ...requiredRunObservations.failing,
     ...checks.statuses.filter(isFailedStatus).map((status) => ({
       kind: "commit_status" as const,
       name: status.context,
@@ -80,12 +81,16 @@ export function evaluateCiObservation(
     })),
   ].filter((check) => !quarantined.has(check.name) || (gated && requiredSet.has(check.name)));
   const allPending = [
-    ...checks.checkRuns.filter(isPendingCheckRun).map((check) => ({
-      kind: "check_run" as const,
-      name: check.name,
-      state: check.status,
-      url: check.url,
-    })),
+    ...checks.checkRuns
+      .filter(isPendingCheckRun)
+      .map((check) => ({
+        kind: "check_run" as const,
+        name: check.name,
+        state: check.status,
+        url: check.url,
+      }))
+      .filter((check) => !requiredSet.has(check.name)),
+    ...requiredRunObservations.pending,
     ...checks.statuses.filter(isPendingStatus).map((status) => ({
       kind: "commit_status" as const,
       name: status.context,
@@ -143,6 +148,62 @@ export function evaluateCiObservation(
     failingChecks,
     pendingChecks: pendingWithMissing,
   };
+}
+
+type ObservationCheck = CiObservation["failingChecks"][number];
+
+function aggregateRequiredCheckRuns(
+  checkRuns: GitHubCheckRun[],
+  required: string[],
+  requiredCheckAppIds: Record<string, number> | undefined,
+): { failing: ObservationCheck[]; pending: CiObservation["pendingChecks"] } {
+  const runsByContext = new Map<string, GitHubCheckRun[]>();
+  for (const check of checkRuns) {
+    if (!required.includes(check.name)) continue;
+    const runs = runsByContext.get(check.name) ?? [];
+    runs.push(check);
+    runsByContext.set(check.name, runs);
+  }
+
+  const failing: ObservationCheck[] = [];
+  const pending: CiObservation["pendingChecks"] = [];
+  for (const context of required) {
+    const runs = runsByContext.get(context) ?? [];
+    if (runs.length === 0) continue;
+    const expectedAppId = requiredCheckAppIds?.[context];
+    const wrongIdentity = expectedAppId === undefined ? undefined : runs.find((check) => check.appId !== expectedAppId);
+    if (wrongIdentity !== undefined) {
+      failing.push({
+        kind: "check_run",
+        name: context,
+        state: "wrong_app_identity",
+        url: wrongIdentity.url,
+      });
+      continue;
+    }
+
+    const failed = runs.find((check) => isFailedCheckRun(check));
+    if (failed !== undefined) {
+      failing.push({
+        kind: "check_run",
+        name: context,
+        state: failed.conclusion ?? failed.status,
+        url: failed.url,
+      });
+      continue;
+    }
+
+    const pendingRun = runs.find((check) => isPendingCheckRun(check));
+    if (pendingRun !== undefined) {
+      pending.push({
+        kind: "check_run",
+        name: context,
+        state: pendingRun.status,
+        url: pendingRun.url,
+      });
+    }
+  }
+  return { failing, pending };
 }
 
 function missingRequiredContexts(required: string[], checks: GitHubPullRequestChecks): string[] {
