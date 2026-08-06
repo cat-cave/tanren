@@ -14,10 +14,20 @@
 //   3. wakes the DagWalker for the project (a re-opened spec has no run-terminal
 //      notification to re-trigger the walker, so we notify the DAG channel directly).
 //
-// The `dag.spec.attention_resolved` event also marks the budget-reset boundary for the
-// merge-conflict re-plan cap: the conflict resolver counts only the re-plan-routed
-// events AFTER the most recent resolution, so an operator-requeued spec genuinely
-// re-runs the full retry budget rather than immediately re-escalating.
+// The `dag.spec.attention_resolved` event also marks the CONVERGENCE-HISTORY boundary for
+// the run-finalize escalation paths: BOTH fixed-point readers
+// (`workflow/redriveHistoryReader.ts` and `worker/orphanConsecutiveReader.ts`) count only
+// the `dag.spec.redriven` events AFTER the most recent resolution, so an operator-requeued
+// spec genuinely re-runs the full retry budget rather than immediately re-escalating on its
+// FIRST post-requeue failure. See `workflow/attentionResolutionBoundary.ts` for the shared
+// predicate and why it compares on `events.id` rather than `ts`.
+//
+// CAVEAT (accurate as of this writing): the MERGE-CONFLICT re-plan cap does NOT yet honor
+// this boundary. `merge/driveConflictResolve.ts#priorConflictSignatures` and
+// `workflow/reviewMerge/conflictResolver/replanEnqueuerPg.ts#buildPriorReplanReader` still
+// read the spec's ENTIRE `merge.conflict.replan_routed` history. An earlier version of this
+// comment claimed otherwise; that was an intent, never an implementation. Left out of scope
+// here deliberately — it is a different detector over a different event class.
 
 import { getSystemPool, notifyDagChanged, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";

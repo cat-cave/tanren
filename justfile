@@ -775,6 +775,15 @@ smoke-rls-org-bootstrap:
 smoke-rls-operator-flow:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOperatorFlow.integration.test.ts
 
+# Operator-requeue convergence boundary (real PG): `dag.spec.attention_resolved`
+# bounds BOTH fixed-point readers' `dag.spec.redriven` history, so an operator
+# requeue genuinely restores the full retry budget instead of buying one attempt
+# before the next same-code failure re-parks the spec. The boundary IS a SQL
+# predicate, so it is proven against a real events table (ordering ties included),
+# never a fake pool. Regression lock for fix/convergence-history-resolution-boundary.
+smoke-convergence-attention-boundary:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/convergenceAttentionBoundary.integration.test.ts
+
 # RLS HTTP-route scoping (real PG, enforced `tanren_app` role): drives the FULL
 # operator→run flow live validation walked, across ALL route shapes — including
 # the RESOURCE-keyed root routes #181 left unscoped. bootstrap (multi-org) →
@@ -1204,6 +1213,7 @@ smoke: \
   smoke-rls-early-finalize \
   smoke-rls-org-bootstrap \
   smoke-rls-operator-flow \
+  smoke-convergence-attention-boundary \
   smoke-rls-http-route-scoping \
   smoke-rls-org-costs \
   smoke-rls-run-lifecycle \
