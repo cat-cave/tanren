@@ -13,7 +13,7 @@
 // the runner loudly; the applier owns release on its terminal publish/abort thereafter.
 
 import { runWithJobOrgId } from "@tanren/db";
-import { bootstrapCommand, type CiWhen } from "../ci/index.js";
+import { bootstrapCommand, setupCommand, type CiWhen } from "../ci/index.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import {
   advisoryStepNamesForPosture,
@@ -307,6 +307,11 @@ function buildBaseShiftReGate(
     // explicit `.tanren/ci.yml` `bootstrap.run` wins, else the stack-agnostic
     // `DEFAULT_BOOTSTRAP_COMMAND` LOUD-fallback. A failure throws (no silent skip), which
     // the resolver surfaces as a fail-closed re-gate failure (never an unverified pass).
+    // The repo's once-per-workspace `setup.run`, from the SAME already-parsed config. The
+    // base-shift resolver clones its OWN jj workspace and never runs `prepareRunWorkspace`,
+    // so — like the drive / fresh-runner re-gates — it must honor setup here, else the
+    // re-gate runs against a tree whose environment was never prepared. Absent ⇒ no round-trip.
+    const workspaceSetup = setupCommand(config);
     await ensureWorkspaceDepsInstalled({
       ssh: deps.ssh,
       target,
@@ -315,6 +320,7 @@ function buildBaseShiftReGate(
       // read), or — when the config omits `bootstrap.run` — the stack-agnostic
       // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
+      ...(workspaceSetup === undefined ? {} : { setupCommand: workspaceSetup }),
     });
     return runGateForWhen({
       ssh: deps.ssh,

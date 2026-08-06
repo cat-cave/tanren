@@ -8,7 +8,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import { bootstrapCommand, type CiWhen } from "../ci/index.js";
+import { bootstrapCommand, setupCommand, type CiWhen } from "../ci/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
@@ -441,6 +441,11 @@ function buildDriveGate(
     // explicit `.tanren/ci.yml` `bootstrap.run` wins, else the stack-agnostic
     // `DEFAULT_BOOTSTRAP_COMMAND` LOUD-fallback. A failure throws (no silent skip), which
     // the resolver surfaces as a re-gate failure (fail-closed, never an unverified pass).
+    // The repo's once-per-workspace `setup.run`, from the SAME already-parsed config. This
+    // re-gate clones its OWN workspace and never runs `prepareRunWorkspace`, so — like the
+    // fresh-runner / batch re-gates — it must honor setup here, else a re-gate runs against a
+    // tree whose environment was never prepared. Absent ⇒ no round-trip.
+    const workspaceSetup = setupCommand(config);
     await ensureWorkspaceDepsInstalled({
       ssh: deps.ssh,
       target,
@@ -449,6 +454,7 @@ function buildDriveGate(
       // read), or — when the config omits `bootstrap.run` — the stack-agnostic
       // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback.
       command: bootstrapCommand(config) ?? DEFAULT_BOOTSTRAP_COMMAND,
+      ...(workspaceSetup === undefined ? {} : { setupCommand: workspaceSetup }),
     });
     return runGateForWhen({
       ssh: deps.ssh,

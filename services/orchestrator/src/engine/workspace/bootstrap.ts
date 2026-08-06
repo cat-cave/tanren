@@ -23,9 +23,9 @@ import { runWorkspaceSshCommand } from "./ssh.js";
 // branch carry only the writer's real changes — never bootstrap-generated files.
 export const BOOTSTRAP_COMMIT_MESSAGE = "tanren: bootstrap";
 
-// The path of the conventional lifecycle file (engine/forge/scaffold/skeleton.ts):
-// a project declares its stack's bootstrap in `just bootstrap`. This LOUD-fallback
-// probes for it before refusing to assume a stack.
+// The conventional lifecycle file (engine/forge/scaffold/skeleton.ts): a project
+// declares its stack's bootstrap in `just bootstrap`. This LOUD-fallback probes for
+// it before refusing to assume a stack.
 const JUSTFILE_PATH = "justfile";
 
 // The bootstrap command used ONLY when the repo declares NO install command — i.e.
@@ -39,14 +39,13 @@ const JUSTFILE_PATH = "justfile";
 // bootstrap`, not in Tanren.
 //
 // NO-OP (not loud) on a missing justfile: the cold bootstrap runs over a FRESHLY
-// CLONED workspace — for a greenfield scaffold that is an EMPTY repo, BEFORE the
-// writer has authored the justfile that declares the lifecycle. There is genuinely
-// nothing to bootstrap yet, so this skips with a note (a legitimate-empty case, not
-// a silent stack assumption — there is NO Node/pnpm/npm probe). Contract ENFORCEMENT
-// lives at the GATE, not here: once the writer authors the justfile, the gate runs
-// `just tier-1`/etc.; a repo that never declares a justfile fails the gate loudly,
-// which surfaces as a P0 finding (worker-resilient, see gateConfigFailure / #443) the
-// loop fixes — rather than bricking an empty repo before it can be scaffolded.
+// CLONED workspace — a greenfield scaffold is an EMPTY repo BEFORE the writer has
+// authored the lifecycle justfile, so there is genuinely nothing to bootstrap yet and
+// this skips with a note (a legitimate-empty case, not a silent stack assumption —
+// NO Node/pnpm/npm probe). Contract ENFORCEMENT lives at the GATE: once the writer
+// authors the justfile the gate runs `just tier-1`/etc., and a repo that never declares
+// one fails the gate loudly as a P0 finding (worker-resilient, gateConfigFailure / #443)
+// the loop fixes — rather than bricking an empty repo before it can be scaffolded.
 // Double-quoted message (no embedded single-quotes/parens) so the shell parses clean.
 export const DEFAULT_BOOTSTRAP_COMMAND =
   `if [ -f ${JUSTFILE_PATH} ]; then just bootstrap; ` +
@@ -156,14 +155,12 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
 // provisioning through mise, and the post-provision binary verification that turns a
 // silently-skipped toolchain into a loud, attributable halt.
 
-// The sentinel the guarded install prints on the NO-OP path (manifest absent, or
-// deps already installed). It rides on stdout so the caller can distinguish a
-// real install run from a skip without a second round-trip — used to cache the
-// "deps installed" flag so the next gate's ensure call is a pure no-op.
+// The sentinel the guarded install prints on the NO-OP path (contract absent). It rides
+// on stdout so the caller can distinguish a real install run from a skip without a second
+// round-trip — used to cache the "deps installed" flag so the next ensure call is a no-op.
 const DEPS_NOOP_SENTINEL = "tanren: deps-ensure no-op";
-// The sentinel the guarded install prints right before it runs the install
-// command, so the caller can observe (and the diagnostic can reflect) that the
-// install path was actually taken.
+// The sentinel the guarded install prints right before it runs the install command, so
+// the caller can observe (and the diagnostic reflect) that the install path was taken.
 const DEPS_INSTALL_SENTINEL = "tanren: deps-ensure installing";
 
 export interface EnsureWorkspaceDepsInput {
