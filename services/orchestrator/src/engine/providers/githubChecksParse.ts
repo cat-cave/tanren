@@ -100,6 +100,90 @@ function sameContexts(left: string[], right: string[]): boolean {
   return sortedLeft.every((context, index) => context === sortedRight[index]);
 }
 
+/**
+ * Prove that the full classic branch-protection document explicitly has no
+ * required status checks. Its abbreviated sibling endpoint returning 404 is
+ * not enough evidence on its own.
+ */
+export function parseNoClassicRequiredStatusChecks(value: unknown): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("GitHub full branch-protection response was not an object");
+  }
+  const required = (value as Record<string, unknown>)["required_status_checks"];
+  if (required !== null) {
+    throw new TypeError("GitHub full branch-protection response did not prove no required status checks");
+  }
+}
+
+// These are the documented rule types whose effects do not create a required
+// check context. Every other present or future type is rejected: returning an
+// empty context list is a proof claim, so an unfamiliar rule cannot be treated
+// as harmless. In particular workflows/code scanning/deployments cannot be
+// represented by this classic status-context reader.
+const RULE_TYPES_WITHOUT_UNREPRESENTABLE_CHECK_REQUIREMENTS = new Set([
+  "branch_name_pattern",
+  "commit_author_email_pattern",
+  "commit_message_pattern",
+  "committer_email_pattern",
+  "creation",
+  "deletion",
+  "file_path_restriction",
+  "max_file_path_length",
+  "non_fast_forward",
+  "pull_request",
+  "required_linear_history",
+  "required_signatures",
+  "tag_name_pattern",
+  "update",
+]);
+
+/**
+ * Validate the rules currently governing a branch and reject a ruleset whose
+ * status requirements this classic-status reader cannot safely represent.
+ * Returns whether at least one ruleset rule positively explains protection.
+ */
+export function parseRulesWithoutRequiredStatusChecks(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    throw new TypeError("GitHub branch rules response was not an array");
+  }
+  for (const rule of value) {
+    if (typeof rule !== "object" || rule === null || Array.isArray(rule)) {
+      throw new TypeError("GitHub branch rules response had an invalid rule");
+    }
+    const type = (rule as Record<string, unknown>)["type"];
+    if (typeof type !== "string" || type === "") {
+      throw new TypeError("GitHub branch rules response had a rule missing type");
+    }
+    if (type === "required_status_checks") {
+      throw new TypeError("GitHub branch rules require status checks that were not observed");
+    }
+    if (!RULE_TYPES_WITHOUT_UNREPRESENTABLE_CHECK_REQUIREMENTS.has(type)) {
+      throw new TypeError(`GitHub branch rules contain unrepresentable or check-producing rule type ${type}`);
+    }
+  }
+  return value.length > 0;
+}
+
+/**
+ * Parse the documented branch identity and `protected` boolean from
+ * `GET /branches/{branch}`. The identity check prevents a redirect or rename
+ * race from authoritatively proving a different branch unprotected.
+ */
+export function parseBranchProtected(value: unknown, expectedBranch: string): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("GitHub branch response was not an object");
+  }
+  const object = value as Record<string, unknown>;
+  if (object["name"] !== expectedBranch) {
+    throw new TypeError("GitHub branch response name did not match requested branch");
+  }
+  const isProtected = object["protected"];
+  if (typeof isProtected !== "boolean") {
+    throw new TypeError("GitHub branch response missing protected boolean");
+  }
+  return isProtected;
+}
+
 export function parseCheckRuns(value: unknown): GitHubCheckRun[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub check-runs response was not an object");
