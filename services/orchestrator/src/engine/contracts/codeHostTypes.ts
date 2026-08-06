@@ -139,6 +139,8 @@ export interface VcsCredentialContext {
 export interface ResolvedVcsToken {
   token: string;
   source: "github_app" | "static";
+  /** Non-secret org/credential scope used to isolate cached forge evidence. */
+  authorizationIdentity?: string;
   /** Re-mint / re-read the token (the 401-refresh retry path). */
   refresh(): Promise<string>;
   /**

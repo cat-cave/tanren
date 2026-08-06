@@ -17,6 +17,12 @@ export { decodeBase64Content } from "../contracts/repoHostErrors.js";
 // retired `buildVcsProvider.js` convenience re-export used to provide).
 export { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 import { appendErrorDetail } from "./githubRetry.js";
+import {
+  DEFAULT_GITHUB_API_ENDPOINT,
+  GitHubProtectionProofCache,
+  githubProtectionProofCacheKey,
+  type GitHubProtectionProofContext,
+} from "./githubProtectionProofCache.js";
 
 export {
   asPullArray,
@@ -144,6 +150,8 @@ export function withErrorDetail(base: string, response: GitHubHttpResponse): str
 }
 
 export interface GitHubHttpClient {
+  /** Stable API endpoint identity used to prevent cross-endpoint proof reuse. */
+  readonly endpointIdentity?: string;
   request(input: GitHubHttpRequest): Promise<GitHubHttpResponse>;
 }
 
@@ -153,15 +161,36 @@ export interface GitHubHttpClient {
 // shared helpers/types from this file), so importers pull the service from
 // `./githubPullRequestReuse.js` directly.
 
-export class GitHubStatusService {
-  constructor(private readonly http: GitHubHttpClient) {}
+export interface GitHubStatusServiceOptions {
+  /** Fresh cache seam for tests or a separately scoped host. */
+  protectionProofCache?: GitHubProtectionProofCache;
+  /** Explicit endpoint identity when the transport does not expose one. */
+  endpointIdentity?: string;
+}
 
-  async fetchPullRequestChecks(input: {
-    repo: GitHubRepository;
-    token: string;
-    pullNumber: number;
-    refreshToken?: () => Promise<string>;
-  }): Promise<GitHubPullRequestChecks> {
+type GitHubStatusInput = {
+  repo: GitHubRepository;
+  token: string;
+  refreshToken?: () => Promise<string>;
+} & GitHubProtectionProofContext;
+type GitHubPullRequestChecksInput = GitHubStatusInput & { pullNumber: number };
+type GitHubBranchChecksInput = GitHubStatusInput & { branch: string };
+type GitHubShaChecksInput = GitHubStatusInput & { sha: string; protectedBranch: string };
+type GitHubRequiredContextsInput = GitHubStatusInput & { baseBranch: string };
+
+export class GitHubStatusService {
+  private readonly protectionProofCache: GitHubProtectionProofCache;
+  private readonly endpointIdentity: string;
+
+  constructor(
+    private readonly http: GitHubHttpClient,
+    options: GitHubStatusServiceOptions = {},
+  ) {
+    this.protectionProofCache = options.protectionProofCache ?? new GitHubProtectionProofCache();
+    this.endpointIdentity = options.endpointIdentity ?? http.endpointIdentity ?? DEFAULT_GITHUB_API_ENDPOINT;
+  }
+
+  async fetchPullRequestChecks(input: GitHubPullRequestChecksInput): Promise<GitHubPullRequestChecks> {
     const pull = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
@@ -182,6 +211,8 @@ export class GitHubStatusService {
       token: input.token,
       sha: head.sha,
       protectedBranch: baseBranch,
+      ...(input.authorizationIdentity !== undefined && { authorizationIdentity: input.authorizationIdentity }),
+      ...(input.endpointIdentity !== undefined && { endpointIdentity: input.endpointIdentity }),
       ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
     });
   }
@@ -194,12 +225,7 @@ export class GitHubStatusService {
    * `fetchPullRequestChecks` does, gated by the branch's own protection required
    * contexts. Surfaced host-neutrally via `CodeHost.readBranchChecks` (decomposition §5e).
    */
-  async fetchBranchChecks(input: {
-    repo: GitHubRepository;
-    token: string;
-    branch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<GitHubPullRequestChecks> {
+  async fetchBranchChecks(input: GitHubBranchChecksInput): Promise<GitHubPullRequestChecks> {
     const refResponse = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/git/ref/heads/${encodeURIComponent(input.branch)}`),
@@ -220,6 +246,8 @@ export class GitHubStatusService {
       token: input.token,
       sha,
       protectedBranch: input.branch,
+      ...(input.authorizationIdentity !== undefined && { authorizationIdentity: input.authorizationIdentity }),
+      ...(input.endpointIdentity !== undefined && { endpointIdentity: input.endpointIdentity }),
       ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
     });
   }
@@ -229,13 +257,7 @@ export class GitHubStatusService {
    * PR-keyed and branch-keyed check reads), gated by `protectedBranch`'s required
    * contexts when supplied. Kept private so both callers parse checks identically.
    */
-  private async fetchChecksForSha(input: {
-    repo: GitHubRepository;
-    token: string;
-    sha: string;
-    protectedBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<GitHubPullRequestChecks> {
+  private async fetchChecksForSha(input: GitHubShaChecksInput): Promise<GitHubPullRequestChecks> {
     const [checkRuns, statuses] = await Promise.all([
       this.http.request({
         method: "GET",
@@ -261,6 +283,8 @@ export class GitHubStatusService {
       repo: input.repo,
       token: input.token,
       baseBranch: input.protectedBranch,
+      ...(input.authorizationIdentity !== undefined && { authorizationIdentity: input.authorizationIdentity }),
+      ...(input.endpointIdentity !== undefined && { endpointIdentity: input.endpointIdentity }),
       ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
     });
 
@@ -287,25 +311,28 @@ export class GitHubStatusService {
    * returned as `undefined` would DISABLE required-check gating; a persistent
    * 5xx survived the transient retry).
    */
-  async fetchRequiredContexts(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<string[] | undefined> {
-    const response = await this.readRequiredStatusChecks(input);
-    if (response.status === 200) {
-      return parseRequiredContexts(response.body);
-    }
-    return this.resolveRequiredContextsAfterProtection404(input);
+  async fetchRequiredContexts(input: GitHubRequiredContextsInput): Promise<string[] | undefined> {
+    const proof = await this.fetchRequiredCheckMetadata(input);
+    return proof?.contexts;
   }
 
-  private async fetchRequiredCheckMetadata(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<{ contexts: string[] | undefined; appIds: Record<string, number> } | undefined> {
+  private async fetchRequiredCheckMetadata(
+    input: GitHubRequiredContextsInput,
+  ): Promise<{ contexts: string[] | undefined; appIds: Record<string, number> } | undefined> {
+    const key = githubProtectionProofCacheKey({
+      owner: input.repo.owner,
+      name: input.repo.name,
+      baseBranch: input.baseBranch,
+      token: input.token,
+      authorizationIdentity: input.authorizationIdentity,
+      endpointIdentity: input.endpointIdentity ?? this.endpointIdentity,
+    });
+    return this.protectionProofCache.read(key, () => this.fetchRequiredCheckMetadataUncached(input));
+  }
+
+  private async fetchRequiredCheckMetadataUncached(
+    input: GitHubRequiredContextsInput,
+  ): Promise<{ contexts: string[] | undefined; appIds: Record<string, number> } | undefined> {
     const response = await this.readRequiredStatusChecks(input);
     if (response.status === 200) {
       return { contexts: parseRequiredContexts(response.body), appIds: parseRequiredCheckAppIds(response.body) };
@@ -316,12 +343,7 @@ export class GitHubStatusService {
   }
 
   /** Read the abbreviated required-status-checks endpoint; only 200 or 404 are non-errors. */
-  private async readRequiredStatusChecks(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<GitHubHttpResponse> {
+  private async readRequiredStatusChecks(input: GitHubRequiredContextsInput): Promise<GitHubHttpResponse> {
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
@@ -347,12 +369,9 @@ export class GitHubStatusService {
    * `protected: true` result is only accepted as an empty requirement after the
    * full protection and branch-rules documents prove no unrepresented rule.
    */
-  private async resolveRequiredContextsAfterProtection404(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<string[] | undefined> {
+  private async resolveRequiredContextsAfterProtection404(
+    input: GitHubRequiredContextsInput,
+  ): Promise<string[] | undefined> {
     const branch = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}`),
@@ -379,12 +398,7 @@ export class GitHubStatusService {
    * authoritative documents and return an explicit empty requirement only when
    * neither carries an unrepresented required-status rule.
    */
-  private async proveNoRequiredStatusChecksAfter404(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<string[]> {
+  private async proveNoRequiredStatusChecksAfter404(input: GitHubRequiredContextsInput): Promise<string[]> {
     const protection = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection`),
@@ -417,12 +431,7 @@ export class GitHubStatusService {
    * is the only proof of exhaustion: stopping after page one could overlook a
    * later required-status or workflow rule and falsely publish an empty gate.
    */
-  private async proveRulesWithoutRequiredStatusChecks(input: {
-    repo: GitHubRepository;
-    token: string;
-    baseBranch: string;
-    refreshToken?: () => Promise<string>;
-  }): Promise<boolean> {
+  private async proveRulesWithoutRequiredStatusChecks(input: GitHubRequiredContextsInput): Promise<boolean> {
     const pageSize = 100;
     let page = 1;
     let hasRulesetProof = false;

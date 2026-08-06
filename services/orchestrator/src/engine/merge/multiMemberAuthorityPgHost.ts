@@ -40,7 +40,11 @@ export async function buildMultiMemberCodeHost(
   });
   const host = new GitHubCodeHost(
     deps.githubHttp,
-    async () => ({ token: token.token, ...(token.refresh !== undefined && { refresh: token.refresh }) }),
+    async () => ({
+      token: token.token,
+      ...(token.authorizationIdentity === undefined ? {} : { authorizationIdentity: token.authorizationIdentity }),
+      ...(token.refresh !== undefined && { refresh: token.refresh }),
+    }),
     // A fresh cache ensures the revalidator's sole main read is not a stale process hit.
     new MainHeadCache(),
   );

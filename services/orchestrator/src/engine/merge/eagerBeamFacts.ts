@@ -58,6 +58,7 @@ export class EagerBeamFactsResolver {
     });
     const host = new GitHubCodeHost(this.deps.githubHttp, async () => ({
       token: token.token,
+      ...(token.authorizationIdentity === undefined ? {} : { authorizationIdentity: token.authorizationIdentity }),
       ...(token.refresh === undefined ? {} : { refresh: token.refresh }),
     }));
     const repo = parseGitHubRepository(repoUrl);

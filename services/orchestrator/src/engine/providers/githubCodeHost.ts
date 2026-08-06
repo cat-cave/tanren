@@ -57,6 +57,8 @@ import type {
 /** The plaintext push/read token + an optional one-shot 401 re-mint (mirrors `ResolvedVcsToken`). */
 export interface CodeHostToken {
   token: string;
+  /** Non-secret org/credential scope for branch-protection proof caching. */
+  authorizationIdentity?: string;
   /** Re-mint on a 401 (an installation token expired between mint and use). */
   refresh?: () => Promise<string>;
 }
@@ -392,6 +394,7 @@ export class GitHubCodeHost implements CodeHost {
       repo: input.repo,
       branch: input.branch,
       token: token.token,
+      ...(token.authorizationIdentity !== undefined && { authorizationIdentity: token.authorizationIdentity }),
       ...(token.refresh !== undefined && { refreshToken: token.refresh }),
     });
   }

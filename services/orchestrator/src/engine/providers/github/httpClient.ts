@@ -14,6 +14,8 @@ import {
 
 export interface FetchGitHubHttpClientOptions {
   apiBaseUrl?: string;
+  /** Stable identity for caches; defaults to the configured API base URL. */
+  endpointIdentity?: string;
   fetchImpl?: typeof fetch;
   /** Test seam: sleep used between rate-limit AND transient-5xx retries. */
   sleep?: (ms: number) => Promise<void>;
@@ -26,9 +28,11 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  readonly endpointIdentity: string;
 
   constructor(opts: FetchGitHubHttpClientOptions = {}) {
     this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
+    this.endpointIdentity = opts.endpointIdentity ?? this.apiBaseUrl;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));
     this.now = opts.now ?? (() => Date.now());
