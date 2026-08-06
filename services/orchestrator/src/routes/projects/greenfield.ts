@@ -224,6 +224,15 @@ export async function handleGreenfieldCreate(
         502,
       );
     }
+    if (result.kind === "notify_failed") {
+      return c.json(
+        {
+          error: "notify_provision_failed",
+          message: result.error instanceof Error ? result.error.message : String(result.error),
+        },
+        502,
+      );
+    }
     if (result.kind === "bootstrap_failed") {
       return c.json({ error: "project_bootstrap_incomplete", bootstrap: result.bootstrap }, 503);
     }
