@@ -390,26 +390,24 @@ jobs:
             --base "$BASE_SHA" --head "$HEAD_SHA" \
             > "$RUNNER_TEMP/grounded.json"
 
-      # --- Human signal: resolved threads + 👎 reactions ⇒ dismissed -----------
-      # A maintainer RESOLVING a finding's review thread OR reacting 👎 on its
-      # comment means "false positive — never resurface". Runs BEFORE dedup, on the
-      # read-only token (LISTs comments/reactions/reviewThreads; the GraphQL query
-      # works with `pull-requests: read`). Its `dismissed` output threads into BOTH
-      # dedup (drop this round) and reconcile (UNION into the persisted marker).
+      # --- Human signal: trusted base preferred; rule-change fallback is fail-closed.
       - name: Gather human signal
         id: signal
         working-directory: repo
         env:
           PR_NUMBER: ${{ env.PR_NUMBER }}
           GITHUB_TOKEN: ${{ github.token }} # read-only: comments + reactions + reviewThreads
-          # The reviewer's login (public var, not a secret — safe in the untrusted
-          # lane) so gather-signal scopes ocr-finding comments + their reactions/
-          # resolution to the reviewer's OWN identity. Defaults to github-actions[bot]
-          # when the reviewer App is not configured (matches the trusted post lane).
+          # Public reviewer identity; gather-signal scopes human signal to this bot.
           REVIEW_BOT_LOGIN: ${{ vars.REVIEW_BOT_LOGIN || 'github-actions[bot]' }}
         run: |
           set -euo pipefail
-          node "${{ steps.base.outputs.scripts }}/gather-signal.mjs" \
+          SCRIPT="${{ steps.base.outputs.scripts }}/gather-signal.mjs"
+          if [ ! -f "$SCRIPT" ] && [ "${{ steps.guard.outputs.rule_change }}" = "true" ]; then
+            echo "::warning::trusted base lacks gather-signal.mjs; using checked-out copy after rule-change guard"
+            SCRIPT="ops/review/scripts/gather-signal.mjs"
+          fi
+          test -f "$SCRIPT" || { echo "::error::gather-signal.mjs unavailable; refusing to authorize review"; exit 1; }
+          node "$SCRIPT" \
             --pr "$PR_NUMBER" \
             > "$RUNNER_TEMP/signal.json"
 
