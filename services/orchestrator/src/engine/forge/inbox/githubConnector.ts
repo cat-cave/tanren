@@ -91,7 +91,9 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         });
         assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
         if (!Array.isArray(response.body)) paginationError("200 body was not an issues array");
-        issues.push(...z.array(GithubIssuePayload).parse(response.body));
+        const decoded = z.array(GithubIssuePayload).safeParse(response.body);
+        if (!decoded.success) paginationError("issues page failed strict decode");
+        issues.push(...decoded.data);
         if (response.nextPagePath !== undefined) {
           const nextPage = configuredIssuesPage(response.nextPagePath, issuesPath);
           if (nextPage === undefined) paginationError("next page changed the configured issues resource scope");
