@@ -8,6 +8,12 @@
     "fromStatus": {
       "type": "string"
     },
+    "jobsCancelled": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "runId": {
       "type": "string"
     },

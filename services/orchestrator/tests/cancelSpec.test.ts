@@ -5,6 +5,10 @@
 //     `cancelled` as terminal_blocked, like merged);
 //   - cancel an IN-FLIGHT run → the run goes terminal `cancelled` + its claimed runner
 //     is RELEASED (the `runners` row flips `released`) + the DAG slot frees;
+//   - cancel an IN-FLIGHT run → its live `job_queue` rows are REAPED terminal, so the
+//     cancel SURVIVES a worker restart (the claim path and the lease reaper both key on
+//     the queue row's own status and never join the owning run — a surviving row is a
+//     resurrected cancelled run);
 //   - cancel an ALREADY-TERMINAL spec → IDEMPOTENT no-op (`cancelled: false`), not an
 //     error, with NO further writes;
 //   - a DEPENDENT of a cancelled spec → parked at `needs_attention` (NOT silently
@@ -17,6 +21,7 @@
 import { describe, expect, it } from "vitest";
 import { cancelSpec } from "../src/engine/workflow/cancelSpec.js";
 import { classifySpecStatus } from "../src/engine/dag/walkerPg.js";
+import { isAllowedJobTransition, JobStatus } from "../src/engine/state/job.js";
 import type { ActorContext } from "../src/auth/schemas.js";
 
 interface QueryRecord {
@@ -31,7 +36,8 @@ interface Row {
 /** A canned response keyed by a substring the SQL must contain. */
 interface Stub {
   match: (sql: string) => boolean;
-  rows: (params: unknown[]) => Row[];
+  /** The rows the matched statement returns. `sql` is the matched statement text. */
+  rows: (params: unknown[], sql: string) => Row[];
 }
 
 /**
@@ -62,7 +68,7 @@ class FakePool {
         this.writes.push({ sql: trimmed, params });
       }
       const stub = this.stubs.find((s) => s.match(trimmed));
-      const rows = stub === undefined ? [] : stub.rows(params);
+      const rows = stub === undefined ? [] : stub.rows(params, trimmed);
       return { rows, rowCount: rows.length };
     };
     return Promise.resolve({ query: run, release: () => {} });
@@ -105,6 +111,38 @@ function specLoad(status: string): Stub {
   return {
     match: (sql) => sql.startsWith("SELECT project_id, status FROM specs"),
     rows: () => [{ project_id: "project_1", status }],
+  };
+}
+
+/** A row of the in-memory `job_queue` the reap stub mutates. */
+interface FakeJobRow {
+  id: string;
+  runId: string;
+  status: string;
+}
+
+/**
+ * Stub: an in-memory `job_queue` the cancel's reap statement actually MUTATES.
+ *
+ * The stub does NOT hard-code which statuses are reaped — it parses the WHERE
+ * clause's `status IN (...)` list out of the PRODUCTION statement and applies
+ * exactly that. So if the reap is removed or narrowed, the surviving rows stay
+ * claimable and the assertions below fail; the fake can never be more correct
+ * than the SQL under test.
+ */
+function jobQueueReap(rows: FakeJobRow[]): Stub {
+  return {
+    match: (sql) => sql.startsWith("UPDATE job_queue"),
+    rows: (params, sql) => {
+      const runId = String(params[0]);
+      const targeted = /status IN \(([^)]*)\)/u.exec(sql);
+      const statuses = new Set((targeted?.[1] ?? "").split(",").map((part) => part.trim().replaceAll("'", "")));
+      const hit = rows.filter((row) => row.runId === runId && statuses.has(row.status));
+      for (const row of hit) {
+        row.status = "cancelled";
+      }
+      return hit.map((row) => ({ id: row.id }));
+    },
   };
 }
 
@@ -156,6 +194,7 @@ describe("cancelSpec — operator cancel-spec/cancel-run", () => {
       fromStatus: "running",
       runnerId: "runner_1",
       runnerReleased: true,
+      jobsCancelled: [],
     });
     // The run was transitioned terminal...
     expect(pool.runUpdates()[0]?.sql).toContain("status = 'cancelled'");
@@ -235,6 +274,92 @@ describe("cancelSpec — operator cancel-spec/cancel-run", () => {
     expect(na?.payload.cancelledAncestorSpecId).toBe("spec_1");
     // The spec.cancelled audit records the parked dependents.
     expect(pool.event("spec.cancelled")?.dependentsParked).toEqual(["spec_dependent"]);
+  });
+
+  // NEGATIVE CONTROL — the cancel must be DURABLE across a worker restart.
+  //
+  // The fail-open this blocks: `JobQueue.claim` selects on `task_kind` + `status =
+  // 'queued'` and `reapExpiredLeases` requeues any `running` row whose lease lapsed.
+  // NEITHER joins the owning run, and the DagWalker's terminal-status guard gates
+  // ENQUEUE, not CLAIM — so a queue row that outlives the cancel is a cancelled run
+  // that a worker restart re-claims and resurrects. Before the reap, the rows below
+  // stay `queued`/`running` after a successful cancel and both statements can pick
+  // them up again.
+  it("REAPS the cancelled run's live job_queue rows so a worker restart cannot resurrect it", async () => {
+    const jobs: FakeJobRow[] = [
+      // Deliberately NOT in id order: the reap's RETURNING order is undefined, so the
+      // canonical ordering must come from the sort, not from the row order.
+      { id: "72", runId: "run_1", status: "claimed" },
+      { id: "70", runId: "run_1", status: "running" },
+      { id: "71", runId: "run_1", status: "queued" },
+      // Already settled — the reap must not touch it.
+      { id: "73", runId: "run_1", status: "done" },
+      // Another run's live row — the reap is scoped to the cancelled run only.
+      { id: "74", runId: "run_other", status: "queued" },
+    ];
+    const pool = new FakePool([
+      specLoad("in_flight"),
+      { match: (s) => s.startsWith("UPDATE specs SET status = 'cancelled'"), rows: () => [{ spec_id: "spec_1" }] },
+      {
+        match: (s) => s.includes("FROM runs") && s.includes("FOR UPDATE"),
+        rows: () => [{ run_id: "run_1", status: "running" }],
+      },
+      jobQueueReap(jobs),
+      { match: (s) => s.includes("FROM runners"), rows: () => [{ runner_id: "runner_1" }] },
+      { match: (s) => s.startsWith("UPDATE specs SET status = 'needs_attention'"), rows: () => [] },
+    ]);
+
+    const result = await cancelSpec(pool.asPool(), { specId: "spec_1" }, ADMIN);
+
+    expect(result.cancelled).toBe(true);
+    // Every live row of the cancelled run went terminal...
+    expect(result.run?.jobsCancelled).toEqual(["70", "71", "72"]);
+    // ...so NOTHING the claim (`queued`) or the lease reaper (`running`) keys on is
+    // left behind for this run. This is the property the restart broke.
+    const survivors = jobs.filter(
+      (row) => row.runId === "run_1" && (row.status === "queued" || row.status === "running"),
+    );
+    expect(survivors).toEqual([]);
+    // The settled row and the other run's row are untouched.
+    expect(jobs.find((row) => row.id === "73")?.status).toBe("done");
+    expect(jobs.find((row) => row.id === "74")?.status).toBe("queued");
+    // The reap also drops the lease, so the row leaves the reaper's partial index
+    // even if a future status is added to the live set.
+    const reapWrite = pool.writes.find((w) => w.sql.startsWith("UPDATE job_queue"));
+    expect(reapWrite?.sql).toContain("leased_until = NULL");
+    expect(reapWrite?.params).toEqual(["run_1"]);
+    // ...and the audit event records the reap rather than assuming it.
+    expect(pool.event("run.cancelled")?.jobsCancelled).toEqual(["70", "71", "72"]);
+  });
+
+  // Drift guard: the reap must cover EVERY job status a live row can hold. Derived
+  // from the job state machine (the statuses from which `cancelled` is reachable), so
+  // adding a new live status without extending the reap fails here instead of silently
+  // reopening the resurrection path.
+  it("reaps every job status from which `cancelled` is reachable (no live status left claimable)", async () => {
+    const liveJobStatuses = JobStatus.options.filter(
+      (status) => status !== "cancelled" && isAllowedJobTransition(status, "cancelled"),
+    );
+    expect(liveJobStatuses).toEqual(["queued", "claimed", "running"]);
+
+    const pool = new FakePool([
+      specLoad("in_flight"),
+      { match: (s) => s.startsWith("UPDATE specs SET status = 'cancelled'"), rows: () => [{ spec_id: "spec_1" }] },
+      {
+        match: (s) => s.includes("FROM runs") && s.includes("FOR UPDATE"),
+        rows: () => [{ run_id: "run_1", status: "running" }],
+      },
+      { match: (s) => s.includes("FROM runners"), rows: () => [] },
+      { match: (s) => s.startsWith("UPDATE specs SET status = 'needs_attention'"), rows: () => [] },
+    ]);
+    await cancelSpec(pool.asPool(), { specId: "spec_1" }, ADMIN);
+
+    const reapWrite = pool.writes.find((w) => w.sql.startsWith("UPDATE job_queue"));
+    expect(reapWrite).toBeDefined();
+    const targeted = /status IN \(([^)]*)\)/u.exec(reapWrite?.sql ?? "");
+    const reaped = (targeted?.[1] ?? "").split(",").map((part) => part.trim().replaceAll("'", ""));
+    expect(reaped).toEqual(liveJobStatuses);
+    expect(reapWrite?.sql).toContain("SET status = 'cancelled'");
   });
 
   it("throws SpecNotFoundError for a spec invisible under the org scope (fail-closed)", async () => {
