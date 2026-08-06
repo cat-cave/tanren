@@ -119,6 +119,40 @@ describe("the `regression` step field", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("REFUSES a regression tier mapped to per_iteration AND pre_audit", () => {
+    // "Also per_iteration" was treated as good enough, and it is not. `tiersFor` selects a
+    // tier at EVERY point it maps to, and `runGateForWhen` forwards the run's ONE baseline to
+    // all of them — so this config runs the regression step a second time at pre_audit and
+    // judges it on transitions against a baseline captured for the per_iteration run. A suite
+    // that is RED at pre_audit passes the evidence-gated check. The config read as correct
+    // (it does declare per_iteration) while meaning the thing the rule above forbids.
+    const parsed = CiConfigV1.safeParse({
+      version: 1,
+      tiers: {
+        fast: [{ name: "lint", run: "just lint" }],
+        slow: [{ name: "t", run: "just test", junitReport: "r.xml", regression: { reportPath: "r.xml" } }],
+        merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
+      },
+      when: { fast: ["per_iteration"], slow: ["per_iteration", "pre_audit"], merge: ["pre_merge"] },
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain('in ADDITION to \\"per_iteration\\"');
+  });
+
+  it("ACCEPTS the one shape the contract supports: per_iteration and nothing else", () => {
+    // The positive control, so the rule above cannot be satisfied by refusing everything.
+    const parsed = CiConfigV1.safeParse({
+      version: 1,
+      tiers: {
+        fast: [{ name: "lint", run: "just lint" }],
+        slow: [{ name: "t", run: "just test", junitReport: "r.xml", regression: { reportPath: "r.xml" } }],
+        merge: [{ name: "m", run: "just test", junitReport: "r.xml" }],
+      },
+      when: { fast: ["per_iteration"], slow: ["per_iteration"], merge: ["pre_merge"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it("REFUSES a regression step on a tier mapped only to pre_audit", () => {
     // The single baseline is captured from the `per_iteration` declaration. A pre_audit
     // declaration would be judged against another command's baseline, or none at all —

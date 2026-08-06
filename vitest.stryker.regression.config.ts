@@ -8,8 +8,9 @@ import strykerConfig from "./vitest.stryker.config.ts";
 // making per-test attribution silently report 0% coverage. That is affordable for them and
 // not here: the full suite is ~180s, so a cluster of a few hundred mutants would take days.
 //
-// This config narrows the RUN to the four test files that exercise the regression contract
-// and nothing else, which keeps `coverageAnalysis: "all"` honest (every mutant still runs
+// This config narrows the RUN to the test files listed in `test.include` below — the ones
+// that exercise the regression contract and nothing else, which keeps
+// `coverageAnalysis: "all"` honest (every mutant still runs
 // every test in this set) while bringing a mutant's cost to a couple of seconds. The
 // trade-off is explicit: a mutant killed only by some unrelated test elsewhere in the
 // repo will show as SURVIVED here. That is the conservative direction — it understates
