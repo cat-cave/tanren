@@ -1,0 +1,7 @@
+{
+  // The ROOT test tree: `scripts/**/*.test.ts` and `tests/e2e/**`. Neither sits under any
+  // package `tsconfig.json`, so neither was typechecked before this file existed.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "rootDir": ".", "types": ["node"] },
+  "include": ["scripts/**/*.ts", "tests/**/*.ts"]
+}
