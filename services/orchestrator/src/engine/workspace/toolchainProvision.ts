@@ -177,9 +177,9 @@ export function toolchainProvisionCommand(detection: ToolchainDetection, workspa
       `: > "${scope.configFile}" && mise trust "${scope.configFile}" && mise use --global ${specs}`,
     ),
   );
-  // `eval "$(…)"` reports the status of `eval`, NEVER of the command substitution: a
-  // `mise env` that died leaves an EMPTY eval that "succeeds", and the verification below
-  // would then be probing the un-updated PATH. Capture, check, then evaluate.
+  // `eval "$(…)"` reports the status of `eval`, NEVER of the command substitution: a dead
+  // `mise env` leaves an EMPTY eval that "succeeds", and the verification below would probe
+  // an un-updated PATH. Capture, CHECK, then evaluate — and check the evaluation too.
   parts.push(
     `__tanren_mise_env="$(mise env -s bash)" || { ${echoErr(MISE_ENV_FAILED_MESSAGE)}; exit 1; }`,
     // The capture is guarded, but the eval must be too. Under the per-gate caller

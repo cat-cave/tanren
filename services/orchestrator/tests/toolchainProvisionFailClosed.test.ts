@@ -56,8 +56,11 @@ describe("toolchainProvisionCommand · fails closed WITHOUT leaning on the calle
     // then probes an un-updated PATH.
     expect(a()).not.toContain('eval "$(mise env -s bash)"');
     expect(a()).toContain('__tanren_mise_env="$(mise env -s bash)" ||');
-    // The eval is guarded too: under the per-gate caller (no `set -e`) a bare `eval` that
-    // returned nonzero would be swallowed and the bootstrap would run on an un-updated PATH.
+    // …AND the eval that APPLIES the captured env carries the same guard as its capture.
+    // Asserting only that the `eval` is present passes whether or not it is checked, which
+    // is how the bare form reached main: under the per-gate caller (deliberately no
+    // `set -e`) a nonzero eval is swallowed by the `;`-joined group, so an env export that
+    // failed to apply still let the project bootstrap run against an un-updated PATH.
     expect(a()).toContain('eval "$__tanren_mise_env" ||');
   });
 
