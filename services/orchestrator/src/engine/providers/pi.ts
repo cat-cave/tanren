@@ -69,6 +69,8 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
     kind: "writer",
     cli: "pi",
     authRef: dependencies.credentialRef,
+    // See createAiderWriter: the recorded id must be the id the command pins.
+    model: dependencies.model ?? DEFAULT_PI_MODEL,
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_PI_MODEL;
       const apiKey = await resolvePiApiKey(dependencies.secrets, dependencies.credentialRef);
@@ -80,6 +82,7 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
       const pi = await dependencies.ssh.run(dependencies.target, {
         command: buildPiWriterCommand({
           apiKeyEnvVar,
+          model,
           prompt: opts.prompt,
           runId: dependencies.runId,
           endpointBaseUrl: dependencies.endpointBaseUrl,
@@ -158,6 +161,11 @@ export function piKeyEnvPath(runId: string): string {
 // (RunnerCommand.cwd cd's into it), so pi operates on the run's git repo.
 export function buildPiWriterCommand(input: {
   apiKeyEnvVar: string;
+  // The pi model id this run pins (`provider/id`, e.g. "anthropic/claude-opus-4-8").
+  // It is emitted as `--model` (pi's documented model-selection flag) so pi runs the
+  // SAME model the adapter records for cost/notional attribution — otherwise pi would
+  // fall back to its own configured/default model while the row is priced as this one.
+  model: string;
   prompt: string;
   runId: string;
   // SaaS Tier-B #5: when set (managed mode), pi is pointed at this
@@ -169,6 +177,8 @@ export function buildPiWriterCommand(input: {
   const pi = [
     ...(input.endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(input.endpointBaseUrl)}`]),
     "pi",
+    "--model",
+    quoteSshShellArg(input.model),
     "-p",
     quoteSshShellArg(input.prompt),
   ].join(" ");

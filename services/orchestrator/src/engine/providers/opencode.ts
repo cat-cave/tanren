@@ -56,6 +56,11 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
     kind: "writer",
     cli: "opencode",
     authRef: dependencies.credentialRef,
+    // The same resolution `runWriter` applies to the `--model` flag, including the
+    // managed `openrouter/` namespacing — `auth.managed` is `endpointBaseUrl !==
+    // undefined`, which is known at construction. The recorded id must be the id
+    // the marketplace is actually asked for, or the notional lookup misses.
+    model: resolveOpencodeModel(dependencies.model, dependencies.endpointBaseUrl !== undefined),
     async runWriter(opts): Promise<WriterResult> {
       const auth = await materializeOpencodeAuthBundle({
         secrets: dependencies.secrets,

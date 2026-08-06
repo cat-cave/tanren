@@ -9,25 +9,22 @@
 //
 // LIVE, NOT FROZEN (self-healing). The maintained source is fetched LIVE from
 // LiteLLM upstream on a short TTL (default 1h, `TANREN_MODEL_PRICE_TTL_SECONDS`),
-// so a NEWLY-RELEASED model is priced AUTOMATICALLY — no human refresh, no dead
+// so a NEWLY-RELEASED model is priced automatically — no human refresh, no dead
 // window where a real model resolves to `null`. See `LiveModelPriceSource`. The
-// vendored `./model_prices.json` is DEMOTED from "the source" to an OFFLINE SEED /
-// resilience fallback: it seeds the in-memory table at startup (so pricing works
-// before the first fetch AND when upstream is unreachable) and is refreshed as a
-// committed baseline by `scripts/refresh-model-prices.mjs`. The plain
-// `ModelPriceSource` (below) is the deterministic, offline, frozen lookup over
-// whatever map it is handed — the seed, or an injected fixture in tests.
+// vendored `./model_prices.json` is DEMOTED to an OFFLINE SEED: it seeds the table
+// at startup (pricing works before the first fetch and when upstream is down) and
+// is refreshed as a committed baseline by `scripts/refresh-model-prices.mjs`. The
+// plain `ModelPriceSource` below is the frozen, offline lookup over whatever map it
+// is handed — the seed, or an injected fixture in tests.
 //
 // FALLBACK CHAIN (never a guess). live fetch → (on fetch/parse failure OR offline)
-// the vendored seed / prior-live table → only then `null`. A stale-but-real
-// vendored price is ALWAYS preferred over `null`; a live price over stale.
+// the vendored seed / prior-live table → only then `null`. A stale-but-real vendored
+// price is ALWAYS preferred over `null`; a live price over stale.
 //
-// LOUD-UNKNOWN. A model that is in NEITHER the live table NOR the vendored seed
-// resolves to `null` — never a fallback guess, never a default rate. The caller
-// MUST treat null as "unpriceable → record cost_usd NULL / cost_basis unknown",
-// exactly as the cost model already does for subscription/self-hosted calls. With
-// the live fetch, this is now RARE (only a genuinely unlisted model). There is NO
-// hardcoded fallback here.
+// LOUD-UNKNOWN. A model in NEITHER the live table NOR the vendored seed resolves to
+// `null` — never a fallback guess, never a default rate. The caller MUST treat null
+// as "unpriceable → cost_usd NULL / cost_basis unknown", exactly as the cost model
+// already does for subscription/self-hosted calls. No hardcoded fallback here.
 //
 // UNITS. LiteLLM stores costs PER TOKEN (e.g. 2.5e-6 = $2.50 / 1M input tokens).
 // We expose BOTH the raw per-token figure and the per-million figure so callers
@@ -45,6 +42,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 
 import { createLogger } from "../../observability/logger.js";
+import { PRICE_TIERS_KEY, parseTiers, type PriceTier } from "./priceTiers.js";
 
 // The vendored SEED lives beside this module. Loaded once at import; a parse
 // failure here is a LOUD build/asset error (the file is committed), never silent.
@@ -59,6 +57,9 @@ export const LITELLM_PRICE_URL =
 // Default live-refresh TTL: 1 hour. A new model shows up within this window with
 // no human refresh. Overridable via `TANREN_MODEL_PRICE_TTL_SECONDS`.
 const DEFAULT_TTL_SECONDS = 3600;
+
+// Re-exported so importers keep one site for the price vocabulary (see priceTiers.ts).
+export { PRICE_TIERS_KEY, type PriceTier } from "./priceTiers.js";
 
 // A single rate axis: the upstream per-token cost plus the per-million convenience
 // figure (per-million = per-token × 1e6). Both are present iff upstream supplied a
@@ -93,12 +94,17 @@ export interface ModelPrice {
   batchInput: RateAxis | null;
   // output_cost_per_token_batches — the discounted Batch-API output rate, when listed.
   batchOutput: RateAxis | null;
+  // LONG-CONTEXT TIERS, ascending by `minPromptTokens`: a marketplace price is not
+  // always a single rate (`openai/gpt-5.6-luna` doubles its prompt rate above
+  // 272 000 prompt tokens). The arithmetic selects the highest tier the call's
+  // prompt tokens reach; empty means the flat rates always apply. LiteLLM has no
+  // equivalent, so it is always empty for that source.
+  tiers: readonly PriceTier[];
 }
 
-// The shape we read off each upstream entry. Everything is optional + loosely
-// typed: the file mixes chat models, image models, doc/meta entries, and the
-// `sample_spec` documentation key, so we validate per-field rather than assume a
-// model shape. Unknown keys are ignored.
+// The shape we read off each upstream entry. Everything optional + loosely typed:
+// the file mixes chat models, image models, doc/meta entries and the `sample_spec`
+// key, so we validate per-field. Unknown keys pass through.
 const UpstreamEntry = z
   .object({
     litellm_provider: z.string().optional(),
@@ -117,10 +123,9 @@ const UpstreamEntry = z
 // without the 1.3 MB file.
 export type ModelPriceMap = Record<string, unknown>;
 
-// Coerce parsed JSON into a model map, or throw LOUD when it is not an object map
-// (an array / scalar / null). Shared by the vendored-seed load and the live fetch
-// so both reject a malformed document the same way rather than degrade to an empty
-// map (which would make every model resolve to null and hide the breakage).
+// Coerce parsed JSON into a model map, or throw LOUD when it is not an object map.
+// Shared by the vendored-seed load and the live fetch so both reject a malformed
+// document rather than degrade to an empty map (which nulls every model silently).
 function coerceModelMap(parsed: unknown, whence: string): ModelPriceMap {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`modelPriceSource: ${whence} is not a JSON object map`);
@@ -175,6 +180,9 @@ function parseEntry(model: string, raw: unknown): ModelPrice | null {
     cacheCreation: toRateAxis(entry.cache_creation_input_token_cost),
     batchInput: toRateAxis(entry.input_cost_per_token_batches),
     batchOutput: toRateAxis(entry.output_cost_per_token_batches),
+    // `UpstreamEntry` is `.passthrough()`, so the tier key survives the parse and
+    // there is no need to re-read (and re-cast) the raw input.
+    tiers: parseTiers(entry[PRICE_TIERS_KEY]),
   };
 }
 
@@ -222,8 +230,35 @@ export class ModelPriceSource {
     return price;
   }
 
+  // Can this source answer a lookup at all right now?
+  //
+  // This separates "OpenRouter does not list this model" from "we have not been able
+  // to ASK OpenRouter". Both produce a null price; only one is a fact about the
+  // model, and collapsing them makes an outage indistinguishable from a verdict.
+  //
+  // The base (frozen) source is `ready` whenever it has a priced row (it never
+  // fetches, so it is never "warming").
+  //
+  // A single-table source has no routes to distinguish, so it ignores the
+  // `provider` hint `ModelPriceLookup` carries for the composite.
+  health(_provider?: string): ModelPriceSourceHealth {
+    return this.tableIsPopulated() ? "ready" : "unavailable";
+  }
+
+  // A frozen source never fetches, so warming it is a no-op. Declared here so every
+  // `ModelPriceSource` satisfies the `ModelPriceLookup` warm contract uniformly.
+  warm(): void {}
+
+  // Can the backing table RESOLVE a lookup? Not merely "has a key": a table whose
+  // rows all fail `parseEntry` (upstream schema change, truncated fixture) answers
+  // nothing, yet a key-existence check reported `ready` and blamed every null on
+  // the model. Short-circuits, so the normal case costs one parse.
+  protected tableIsPopulated(): boolean {
+    return Object.keys(this.#map).some((key) => !isNonModelKey(key) && parseEntry(key, this.#map[key]) !== null);
+  }
+
   // The set of resolvable model ids (priced models only; non-model keys excluded).
-  // Useful for diagnostics / tests; not a hot path.
+  // Diagnostics / tests; `tableIsPopulated`'s predicate without the short circuit.
   models(): string[] {
     return Object.keys(this.#map).filter((key) => !isNonModelKey(key) && parseEntry(key, this.#map[key]) !== null);
   }
@@ -241,6 +276,13 @@ export function defaultModelPriceSource(): ModelPriceSource {
   cachedDefault ??= new ModelPriceSource();
   return cachedDefault;
 }
+
+// Whether a price source can currently answer lookups.
+//   ready       — it has a populated table (live, or a real offline seed).
+//   unavailable — it has NO table: never fetched successfully and has no seed. A
+//                 null lookup from an `unavailable` source says nothing about the
+//                 model, only about the source.
+export type ModelPriceSourceHealth = "ready" | "unavailable";
 
 // A function that fetches + parses the maintained price map from upstream. Injected
 // so tests drive a deterministic (network-free) fake; prod uses `fetchLiteLlmPriceMap`.
@@ -284,6 +326,18 @@ export class LiveModelPriceSource extends ModelPriceSource {
   // The in-flight refresh, or null. One at a time — a second stale read while a
   // fetch is running does NOT stack a second fetch.
   #inFlight: Promise<void> | null = null;
+  // When the in-flight refresh STARTED. The latch above is right for a fetch that
+  // FINISHES and a permanent kill for one that never does: a hung socket leaves
+  // `#inFlight` non-null forever, every later stale read returns early, and the
+  // table freezes for the process lifetime — on the seedless OpenRouter leg that is
+  // `price_source_unavailable` on every row, permanently, with nothing failing.
+  // NOT fixed with a wall-clock abort (`no-arbitrary-timeouts`, and killing the
+  // socket is not the need). The LATCH expires on the ordinary refresh cadence: one
+  // full TTL with no result and the next stale read supersedes the stuck attempt.
+  #inFlightStartedAt = Number.NEGATIVE_INFINITY;
+  // Monotonic attempt id: only the CURRENT attempt may install a table or clear the
+  // latch, so a superseded fetch that finally returns cannot overwrite newer data.
+  #attempt = 0;
 
   constructor(options: LiveModelPriceSourceOptions) {
     super(options.seed ?? loadVendoredMap());
@@ -309,21 +363,42 @@ export class LiveModelPriceSource extends ModelPriceSource {
     return this.#now() - this.#lastRefreshAt >= this.#ttlMs;
   }
 
-  #scheduleRefreshIfStale(): void {
-    if (this.#inFlight !== null || !this.#isStale()) {
-      return;
+  // May a new attempt start? Nothing running, or one running a full interval.
+  #mayStartRefresh(): boolean {
+    if (this.#inFlight === null) {
+      return true;
     }
-    this.#inFlight = this.#refresh().finally(() => {
-      this.#inFlight = null;
-    });
-    // Fire-and-forget: `#refresh` already swallows its own errors, but guard the
-    // promise chain so a stray rejection can never surface as an unhandled one.
-    this.#inFlight.catch(() => {});
+    return this.#now() - this.#inFlightStartedAt >= this.#ttlMs;
   }
 
-  async #refresh(): Promise<void> {
+  #scheduleRefreshIfStale(): void {
+    if (!this.#isStale() || !this.#mayStartRefresh()) {
+      return;
+    }
+    this.#attempt += 1;
+    const attempt = this.#attempt;
+    this.#inFlightStartedAt = this.#now();
+    const running = this.#refresh(attempt).finally(() => {
+      // Only the CURRENT attempt clears the latch.
+      if (this.#attempt === attempt) {
+        this.#inFlight = null;
+      }
+    });
+    this.#inFlight = running;
+    // Fire-and-forget: `#refresh` already swallows its own errors, but guard the
+    // promise chain so a stray rejection can never surface as an unhandled one.
+    running.catch(() => {});
+  }
+
+  async #refresh(attempt: number): Promise<void> {
     try {
       const map = await this.#fetcher();
+      // A SUPERSEDED attempt (hung past a full interval, then replaced) must not
+      // install its now-older table, nor re-stamp the clock below. It returned; it
+      // just no longer speaks for this source.
+      if (this.#attempt !== attempt) {
+        return;
+      }
       // Only a well-formed object map replaces the table; a malformed one throws
       // here and is caught below → the fallback table is kept.
       this.replaceMap(map);
@@ -332,10 +407,20 @@ export class LiveModelPriceSource extends ModelPriceSource {
       // fallback). NEVER null it out, NEVER throw into the caller. Loud, not fatal.
       this.#onRefreshError?.(error);
     } finally {
-      // Stamp the completion (success OR failure) so a persistent upstream outage
-      // backs off one full TTL between attempts instead of hammering on every read.
-      this.#lastRefreshAt = this.#now();
+      // Stamp the completion (success OR failure) so a persistent outage backs off a
+      // full TTL between attempts. A superseded attempt does not move the clock.
+      if (this.#attempt === attempt) {
+        this.#lastRefreshAt = this.#now();
+      }
     }
+  }
+
+  // Trigger a background refresh when the table is stale, WITHOUT waiting for it.
+  // The lazy path already does this on the first lookup; calling it at run setup
+  // just starts the fetch earlier, so fewer opening calls land on a cold table.
+  // Returns immediately and never throws — `#refresh` owns its own errors.
+  override warm(): void {
+    this.#scheduleRefreshIfStale();
   }
 
   // Await any needed refresh, for a deterministic test assertion or an optional
@@ -379,7 +464,8 @@ export function liveFetchEnabled(): boolean {
 
 // The refresh TTL in ms from `TANREN_MODEL_PRICE_TTL_SECONDS` (default 1h). A
 // missing/blank/non-positive value falls back to the default rather than freezing.
-function ttlMsFromEnv(): number {
+// Exported so every live price source (LiteLLM, OpenRouter) shares one TTL policy.
+export function ttlMsFromEnv(): number {
   const raw = process.env["TANREN_MODEL_PRICE_TTL_SECONDS"];
   if (raw === undefined || raw.trim() === "") {
     return DEFAULT_TTL_SECONDS * 1000;

@@ -13,17 +13,28 @@ import type { TokenUsage } from "../providers/types.js";
 import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
-import {
-  type AttributionInput,
-  type CostSource,
-  computeCostUsd,
-  computeNotionalUsd,
-  resolveCostSource,
-} from "./sources.js";
-import { liveModelPriceSource, type ModelPriceSource } from "./pricing/modelPriceSource.js";
+import { type AttributionInput, type CostSource, computeCostUsd, resolveCostSource } from "./sources.js";
+import { computeNotionalUsd, type LoudNotionalReason, notionalReasonIsLoud } from "./notional.js";
+import type { ModelPriceLookup } from "./pricing/compositePriceSource.js";
+import { costPriceSource } from "./pricing/costPriceSource.js";
+
 import { CostReconciler, type CostReconcile } from "./reconciler.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("cost-recorder");
+
+// Operator-facing prose per loud reason. Keyed on the LOUD subset only — a reason
+// that never fires this event has no message to write, and typing it that way makes
+// that structural rather than a convention (no empty-string placeholders to drift).
+// Kept beside the emission so the message always matches the code, and so each gap
+// names ITS OWN remedy rather than one generic sentence that fits none of them well.
+const NOTIONAL_UNPRICED_DETAIL: Record<LoudNotionalReason, string> = {
+  model_id_absent:
+    "a real, token-bearing call reached the cost recorder with NO model id, so no price source could be consulted and notional_cost_usd is NULL. This is a TANREN DEFECT, not a property of the model: the adapter that served this call does not declare `model`, or a decorator between the adapter and the cost path dropped it.",
+  model_not_listed:
+    "the price source AUTHORITATIVE FOR THIS ROUTE was reachable and does not list this model id, so notional_cost_usd is NULL. Verify the recorded model id against that route's source — OpenRouter's /api/v1/models for an OpenRouter route, the LiteLLM model-price table for a direct-vendor one, whose key spaces differ. Either the id is genuinely unlisted there, or it is not a model id at all — a routing placeholder recorded verbatim.",
+  price_source_unavailable:
+    "the price source authoritative for this route could not be consulted (its live fetch has not yet succeeded — OpenRouter's /api/v1/models on an OpenRouter route), so notional_cost_usd is NULL. This is an INFRASTRUCTURE fault and says nothing about the model — the row stays repriceable once the fetch recovers.",
+};
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -36,7 +47,28 @@ export interface CostRecordContext {
   projectId: string;
   orgId: string;
   cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
+  /**
+   * The REAL model id this call was sent to — `cost_records.model` and the NOTIONAL
+   * price-source lookup key. NOT a role name: the eight answerer/writer sites used to
+   * write pseudo ids (`"tanren-planner"`, `"tanren-writer"`, …) here because `role`
+   * had no other channel, which made `notional_cost_usd` structurally NULL in every
+   * deployment (no such id exists in the LiteLLM price source). `role` below is that
+   * channel; `""` remains the honest "no model id" value.
+   */
   model: string;
+  /**
+   * The AGENT ROLE this call served (`planner`, `writer`, `checker`, …), recorded in
+   * `cost_source_raw.role`.
+   *
+   * DELIBERATELY NOT A COLUMN. `cost_source_raw` is already a `jsonb NOT NULL` this
+   * recorder writes, and already carries provenance (authRef / billingMode /
+   * costBasis / provider / rawUsage) — role is provenance and belongs with it. A
+   * dedicated `role` column would consume a one-owner-one-slot migration for a field
+   * with a zero-migration home; if indexed group-by reporting later wants one it is a
+   * clean backfill from `cost_source_raw->>'role'`. See
+   * docs/_design/openrouter-cost-attribution.md §5.
+   */
+  role?: string;
   authRef: string;
   // Wall-clock runtime of the underlying call — recorded in cost_source_raw
   // for audit; no longer used to fabricate a dollar figure.
@@ -111,9 +143,15 @@ export class CostRecorder {
     // in-process, unchanged.
     reconcile?: CostReconcile,
     // The per-model price source the NOTIONAL estimate is computed from. Defaults to
-    // the LIVE, self-healing source (LiteLLM upstream on a short TTL; vendored file =
-    // offline seed; frozen to the seed under tests). A test injects a fixture instead.
-    private readonly priceSource: ModelPriceSource = liveModelPriceSource(),
+    // the LIVE composite: OpenRouter's own `/api/v1/models` quote (authoritative for
+    // a marketplace route, and the ONLY source that lists the ids tanren sends it),
+    // with the LiveModelPriceSource / LiteLLM table behind it for direct-vendor
+    // routes. Both are TTL-cached and refresh in the background; neither blocks a
+    // lookup. Frozen and network-free under tests. A test injects a fixture instead.
+    //
+    // Typed on the CAPABILITY (`ModelPriceLookup`) rather than a concrete class, so
+    // the composite, either live source, and a test fake are all accepted.
+    private readonly priceSource: ModelPriceLookup = costPriceSource(),
   ) {
     this.reconciler = new CostReconciler(pool, eventStore, reconcile);
   }
@@ -154,15 +192,22 @@ export class CostRecorder {
     // subscription/self_hosted, where `costUsd` real spend is NULL) — the
     // comparable, forecastable figure. NULL when the model is unpriced. NEVER
     // summed by the budget gate; NEVER written to cost_usd.
-    const notionalCostUsd = computeNotionalUsd(source, tokens, this.priceSource);
+    const notional = computeNotionalUsd(source, tokens, this.priceSource);
+    const notionalCostUsd = notional.usd;
     // Route through the ambient org-scoped client when a pool is scoped.
     const issueLoopId = context.issueLoopId;
     const rawCostSource = JSON.stringify({
       authRef: context.authRef,
+      // The agent role, on its OWN provenance field rather than smuggled through
+      // `model` (see CostRecordContext.role). Null for a call site with no role.
+      role: context.role ?? null,
       runtimeSeconds: context.runtimeSeconds ?? null,
       billingMode: source.billingMode,
       costBasis: source.costBasis,
       provider: source.provider,
+      // WHY notional_cost_usd is (or is not) a number, on every row. Makes the
+      // question queryable: `cost_source_raw->>'notionalReason'`.
+      notionalReason: notional.reason,
       rawUsage,
     });
     const commonParams = [
@@ -215,6 +260,9 @@ export class CostRecorder {
         notionalCostUsd,
         billingMode: source.billingMode,
         costBasis: source.costBasis,
+        // Present on EVERY resolved event, priced or not, so a timeline reader
+        // never sees a bare null it cannot explain.
+        notionalReason: notional.reason,
       },
     });
     // BUDGET-SAFETY (C1): an UNRECOGNIZED credential ref priced this real call as
@@ -241,12 +289,19 @@ export class CostRecorder {
     // the comparable, forecastable figure for EVERY billing mode; a model-id drift
     // silently dropping it must be LOUD (not conflated with a legitimately-empty
     // zero-token answerer row, nor an unattributed misconfig already covered above).
-    if (
-      notionalCostUsd === null &&
-      tokens.totalTokens > 0 &&
-      context.model !== "" &&
-      source.billingMode !== "unattributed"
-    ) {
+    //
+    // THE GUARD THAT HID THE BUG (XHE-931). This condition used to require
+    // `context.model !== ""`, so a real, token-bearing call that arrived with NO
+    // model id — which, because the observability decorators dropped `model`, was
+    // 100% of production calls — recorded a NULL notional and emitted NOTHING. The
+    // escape hatch added for fake fixtures was silencing the one case that most
+    // needed to be loud.
+    //
+    // It is now driven by the REASON, not by re-deriving the condition: any reason
+    // in `LOUD_NOTIONAL_REASONS` fires. `no_tokens` (legitimately empty) and
+    // `unattributed_credential` (already narrated by `cost.unattributed`) do not,
+    // so the alarm keeps its precision.
+    if (notionalReasonIsLoud(notional.reason)) {
       // Same atomicity rule: post-committed-row, loud-but-non-fatal.
       await this.appendCostEventNonFatal(context, {
         eventType: "cost.notional_unpriced",
@@ -255,8 +310,8 @@ export class CostRecorder {
           model: context.model,
           cli: context.cli,
           taskId: context.taskId,
-          reason:
-            "the call's model is not in the maintained notional price source; notional list-value recorded as NULL — surfaced loudly so the price-source gap is visible",
+          reasonCode: notional.reason,
+          reason: NOTIONAL_UNPRICED_DETAIL[notional.reason],
         },
       });
     }

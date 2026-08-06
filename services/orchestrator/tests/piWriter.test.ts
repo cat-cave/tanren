@@ -121,8 +121,15 @@ describe("pi writer adapter", () => {
   });
 
   it("builds a non-interactive -p command that sources a chmod-600 key file rather than argv-injecting the key", () => {
-    const command = buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", prompt: "do it", runId: "run_build_1" });
-    expect(command).toContain("pi -p 'do it'");
+    const command = buildPiWriterCommand({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      model: "anthropic/claude-opus-4-8",
+      prompt: "do it",
+      runId: "run_build_1",
+    });
+    // The recorded model is pinned in the invocation (--model) so pi cannot silently
+    // run a different model than the one the cost row is priced against.
+    expect(command).toContain("pi --model 'anthropic/claude-opus-4-8' -p 'do it'");
     expect(command).toContain("chmod 600");
     expect(command).toContain(". '/tmp/tanren-pi-run_build_1.env'");
     // The key env-var ASSIGNMENT never appears in argv (only the file source).
@@ -156,7 +163,12 @@ describe("pi writer adapter", () => {
   });
 
   it("omits OPENAI_BASE_URL for a BYOK run (no override)", () => {
-    const command = buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", prompt: "do it", runId: "run_byok_1" });
+    const command = buildPiWriterCommand({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      model: "anthropic/claude-opus-4-8",
+      prompt: "do it",
+      runId: "run_byok_1",
+    });
     expect(command).not.toContain("OPENAI_BASE_URL");
   });
 
