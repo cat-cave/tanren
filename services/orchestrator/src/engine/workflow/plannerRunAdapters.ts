@@ -419,8 +419,7 @@ function buildResolver(
  * the BUDGET-SAFETY ceiling preflight: a configured dollar ceiling that can never
  * FIRE (subscription/self-hosted, no probe) or can never be CLEARED (a per_token
  * route with no real-spend capture) fails the run closed at setup with a loud event.
- * The budget gate is the injectable `input.budgetGate` seam, defaulting to the
- * pg-backed PgBudgetGate over `input.pool` (tests inject a gate seam).
+ * The budget gate is the injectable `input.budgetGate` seam, defaulting to the pg-backed PgBudgetGate over `input.pool` (tests inject a gate seam).
  */
 export async function resolveRunAdaptersWithBudgetPreflight(
   input: RunPlannerLoopInput,
