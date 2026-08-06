@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit DEACTIVATED (2026-08).
+# The tanren OCR reviewer (openai/gpt-5.6-luna at max reasoning) + the `review/verdict`
+# commit-status gate are the sole review authority for this repo. CodeRabbit served its
+# purpose (calibrating our OCR rules against a SOTA reviewer); now its stale
+# CHANGES_REQUESTED reviews were blocking already-green fork PRs, so we turn it off.
+# (The App may also be uninstalled from GitHub org settings for full removal.)
+reviews:
+  auto_review:
+    enabled: false
+  review_status: false
+  request_changes_workflow: false
+  high_level_summary: false
+  poem: false
+chat:
+  auto_reply: false
