@@ -150,6 +150,31 @@ describe("a failed bootstrap cannot print an injected app-env SECRET into the er
     expect(typed.outputTail).toContain("401 Unauthorized");
   });
 
+  it("redacts OVERLAPPING values with no fragment of either left behind", async () => {
+    // The ordering defect this catches: two injected values whose occurrences OVERLAP in the
+    // output. With `A="sk-live-00000000"` and `B="00000000-abcdefgh"` echoed as
+    // `"sk-live-00000000-abcdefgh"` they share the `00000000`. A per-value pass consumes that
+    // shared run when it replaces one value, so the OTHER no longer matches in full and a
+    // fragment survives in the tail — a redaction marker with live secret bytes stuck to it.
+    // Matching on the untouched original and masking the coalesced span removes both in full.
+    const a = "sk-live-00000000";
+    const b = "00000000-abcdefgh";
+    const ssh = new EchoingSsh("sk-live-00000000-abcdefgh\nbuild failed");
+    const typed = await failedBootstrap(ssh, { VAL_A: a, VAL_B: b });
+
+    // Neither full value survives, nor the `"-abcdefgh"` tail of B a per-value pass that
+    // replaced A first would have left behind, nor the shared `00000000` run.
+    expect(typed.outputTail).not.toContain(a);
+    expect(typed.outputTail).not.toContain(b);
+    expect(typed.outputTail).not.toContain("abcdefgh");
+    expect(typed.outputTail).not.toContain("00000000");
+    expect(typed.outputTail).toContain("[redacted:");
+    expect(typed.outputTail).toContain("build failed");
+    // Proof both values really were in scope for the failing step (not a vacuous pass).
+    expect(ssh.commands[0]?.command).toContain(a);
+    expect(ssh.commands[0]?.command).toContain(b);
+  });
+
   it("redacts the FULL output BEFORE bounding — a value straddling the tail cutoff leaves no fragment", async () => {
     // The ordering defect this catches: redacting the ALREADY-TRUNCATED tail. A value that
     // starts before the last-4,000-char window and runs PAST the cutoff into the retained

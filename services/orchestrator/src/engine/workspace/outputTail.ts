@@ -61,17 +61,60 @@ const MIN_REDACTABLE_VALUE = 8;
  *
  * NOT a claim that output is now secret-free. It removes the values TANREN INJECTED, which
  * are the ones Tanren knows; a project that prints a credential it read from its own file
- * is beyond this seam's knowledge. Longest-first so a value that contains another is not
- * left half-exposed by the shorter one's replacement.
+ * is beyond this seam's knowledge.
+ *
+ * EVERY value is located against the ORIGINAL output and the resulting spans are coalesced
+ * before a single rebuild, rather than mutating the string once per value. A per-value
+ * `split/join` pass sees only the output as the PRIOR passes left it, so two values whose
+ * occurrences overlap — `A="sk-live-00000000"`, `B="00000000-abcdefgh"` echoed as
+ * `"sk-live-00000000-abcdefgh"`, sharing the `00000000` — leak: replacing one first consumes
+ * the shared run, the other no longer matches in full, and a fragment survives. Matching on
+ * the untouched original and masking the union of the spans closes that. A coalesced span is
+ * labelled with its LONGEST contributing value's key,
+ * which keeps the "a value that merely CONTAINS another names the whole span" behaviour
+ * (the merged span is masked in full regardless of the label — the marker is diagnostic only).
  */
 export function redactAppEnv(output: string, appEnv?: Record<string, string>): string {
   if (appEnv === undefined || output === "") return output;
-  const secrets = Object.entries(appEnv)
-    .filter(([, value]) => value.length >= MIN_REDACTABLE_VALUE)
-    .sort(([, a], [, b]) => b.length - a.length);
-  let redacted = output;
+  const secrets = Object.entries(appEnv).filter(([, value]) => value.length >= MIN_REDACTABLE_VALUE);
+  if (secrets.length === 0) return output;
+
+  // Every occurrence of every injected value, located against the ORIGINAL output — never a
+  // partially-redacted copy — so overlapping values cannot leave a fragment of one behind
+  // when another is masked over their shared bytes.
+  type Match = { start: number; end: number; key: string; length: number };
+  const matches: Match[] = [];
   for (const [key, value] of secrets) {
-    redacted = redacted.split(value).join(`[redacted:${key}]`);
+    for (let at = output.indexOf(value); at !== -1; at = output.indexOf(value, at + 1)) {
+      matches.push({ start: at, end: at + value.length, key, length: value.length });
+    }
   }
-  return redacted;
+  if (matches.length === 0) return output;
+
+  // Coalesce overlapping spans with a single left-to-right sweep (sorted by start, then by
+  // length descending so the longest value at a shared start wins the label). The merged
+  // span keeps the key of the longest value that falls in it.
+  matches.sort((a, b) => a.start - b.start || b.length - a.length || (a.key < b.key ? -1 : 1));
+  const merged: Match[] = [];
+  for (const match of matches) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && match.start < last.end) {
+      last.end = Math.max(last.end, match.end);
+      if (match.length > last.length || (match.length === last.length && match.key < last.key)) {
+        last.key = match.key;
+        last.length = match.length;
+      }
+    } else {
+      merged.push({ ...match });
+    }
+  }
+
+  // Rebuild once, masking each coalesced secret span with its marker.
+  let result = "";
+  let cursor = 0;
+  for (const span of merged) {
+    result += output.slice(cursor, span.start) + `[redacted:${span.key}]`;
+    cursor = span.end;
+  }
+  return result + output.slice(cursor);
 }
