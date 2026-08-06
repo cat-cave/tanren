@@ -336,17 +336,31 @@ export const CiConfigV1 = z
         if (step.regression === undefined) continue;
         regressionSteps.push(`${tierName}.${step.name}`);
         const misplaced = points.filter((p) => p !== "per_iteration");
-        if (points.includes("per_iteration") || misplaced.length === 0) continue;
+        // ALSO mapped elsewhere is not a lesser case than ONLY mapped elsewhere. `tiersFor`
+        // selects a tier at EVERY point it maps to, so `["per_iteration", "pre_audit"]` runs
+        // the same regression step twice, and `runGateForWhen` forwards the one baseline to
+        // both — the pre_audit execution is judged on transitions against the per_iteration
+        // run's baseline, so a suite that is RED at pre_audit passes. A short-circuit on
+        // `points.includes("per_iteration")` let precisely that config through, which is the
+        // first bullet of the comment above written as an allowed configuration.
+        if (misplaced.length === 0) continue;
         // `pre_merge` gets its own, sharper message from the merge-authority rule below.
         if (misplaced.includes("pre_merge")) continue;
+        const alsoPerIteration = points.includes("per_iteration");
         ctx.addIssue({
           code: "custom",
           path: ["tiers", tierName],
           message:
             `step "${step.name}" declares a \`regression\` contract but tier "${tierName}" maps to ` +
-            `${misplaced.map((p) => `"${p}"`).join(", ")} rather than "per_iteration". The run captures its ` +
-            "baseline from the per_iteration declaration only, so this contract would be judged against " +
-            "another command's baseline or against none at all. Move the step to a per_iteration tier.",
+            `${misplaced.map((p) => `"${p}"`).join(", ")} ` +
+            (alsoPerIteration ? 'in ADDITION to "per_iteration"' : 'rather than "per_iteration"') +
+            ". The run captures ONE baseline, from the per_iteration declaration, so " +
+            (alsoPerIteration
+              ? "the extra execution would re-judge the same step against that baseline at a point the " +
+                "baseline does not describe — a red suite passing an evidence-gated check. Map the tier to " +
+                '"per_iteration" alone.'
+              : "this contract would be judged against another command's baseline or against none at all. " +
+                "Move the step to a per_iteration tier."),
         });
       }
     }
