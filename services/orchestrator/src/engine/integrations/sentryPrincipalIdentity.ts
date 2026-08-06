@@ -18,7 +18,7 @@ export const SentryPrincipalIdentity = z
       }
     }),
   })
-  .catchall(z.string());
+  .strict();
 export type SentryPrincipalIdentity = z.infer<typeof SentryPrincipalIdentity>;
 export class SentryPrincipalRelinkRequiredError extends Error {}
 export function requireSentryPrincipalIdentity(value: unknown): SentryPrincipalIdentity {

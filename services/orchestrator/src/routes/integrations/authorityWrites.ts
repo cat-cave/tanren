@@ -146,9 +146,11 @@ export function mountIntegrationAuthorityWrites(
         actorId: actor.userId,
         credential: parsed.data.token,
       } as const;
-      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const requestFingerprint = legacyRetryOnly
+        ? legacyIntegrationRequestFingerprint(fingerprintInput)
+        : integrationRequestFingerprint(fingerprintInput);
       const legacyRequestFingerprint =
-        providerKind === "sentry" && providerEndpoint !== undefined
+        !legacyRetryOnly && providerKind === "sentry" && providerEndpoint === PRE_ENDPOINT_SENTRY_ENDPOINT
           ? legacyIntegrationRequestFingerprint(fingerprintInput)
           : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
@@ -297,12 +299,21 @@ export function mountIntegrationAuthorityWrites(
     const parsed = RotateBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_rotate", issues: parsed.error.issues }, 400);
     let providerEndpoint: string | undefined;
+    let legacyRetryOnly = false;
     try {
       providerEndpoint = await rotationVerifierEndpoint(database, orgId, providerKind, connectionId);
     } catch (error) {
-      if (error instanceof sentry.SentryPrincipalRelinkRequiredError)
+      if (error instanceof sentry.SentryPrincipalRelinkRequiredError && providerKind === "sentry") {
+        // Before endpoint binding, Sentry rotations used the hosted SaaS endpoint
+        // implicitly. This fallback is strictly retry-only; the authority will
+        // refuse to create an operation when no matching legacy row exists.
+        providerEndpoint = PRE_ENDPOINT_SENTRY_ENDPOINT;
+        legacyRetryOnly = true;
+      } else if (error instanceof sentry.SentryPrincipalRelinkRequiredError) {
         return c.json({ error: "verified_provider_identity_required" }, 409);
-      throw error;
+      } else {
+        throw error;
+      }
     }
 
     try {
@@ -315,9 +326,11 @@ export function mountIntegrationAuthorityWrites(
         actorId: actor.userId,
         credential: parsed.data.token,
       } as const;
-      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const requestFingerprint = legacyRetryOnly
+        ? legacyIntegrationRequestFingerprint(fingerprintInput)
+        : integrationRequestFingerprint(fingerprintInput);
       const legacyRequestFingerprint =
-        providerKind === "sentry" && providerEndpoint !== undefined
+        !legacyRetryOnly && providerKind === "sentry" && providerEndpoint === PRE_ENDPOINT_SENTRY_ENDPOINT
           ? legacyIntegrationRequestFingerprint(fingerprintInput)
           : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
@@ -329,6 +342,7 @@ export function mountIntegrationAuthorityWrites(
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
           ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
+          ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
         }),
       );
@@ -402,6 +416,9 @@ export function mountIntegrationAuthorityWrites(
       }
       return c.json(rotationCompletedPayload(orgId, permit.operationId, outcome.result), 202);
     } catch (error) {
+      if (error instanceof IntegrationLegacyOperationNotFoundError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      }
       if (error instanceof IntegrationIdempotencyConflictError) return c.json({ error: "idempotency_conflict" }, 409);
       if (messageOf(error).includes("principal_reservation_in_progress")) {
         return c.json({ error: "connection_rotation_in_progress" }, 409);

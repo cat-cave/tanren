@@ -160,11 +160,27 @@ describe("legacy integration operation authorization", () => {
     const hashes = fingerprints({ providerKind: "sentry", operationKind: "link", credential: "token" });
 
     await expect(
-      new PgIntegrationAuthority().authorizePrincipalVerification(
-        db.clientForOrg(ORG_ID),
-        authorizationInput({ providerKind: "sentry", operationKind: "link" }, hashes, { legacyRetryOnly: true }),
-      ),
+      new PgIntegrationAuthority().authorizePrincipalVerification(db.clientForOrg(ORG_ID), {
+        ...authorizationInput({ providerKind: "sentry", operationKind: "link" }, hashes),
+        requestFingerprint: hashes.legacy,
+        legacyRequestFingerprint: undefined,
+        legacyRetryOnly: true,
+      }),
     ).rejects.toBeInstanceOf(IntegrationLegacyOperationNotFoundError);
     expect(db.operations).toHaveLength(0);
+  });
+
+  it("authorizes an endpoint-less legacy retry without upgrading its v1 row", async () => {
+    const db = new IntegrationMemoryDb();
+    const hashes = fingerprints({ providerKind: "sentry", operationKind: "link", credential: "token" });
+    db.operations.push(operation({ request_fingerprint: hashes.legacy }));
+    const permit = await new PgIntegrationAuthority().authorizePrincipalVerification(db.clientForOrg(ORG_ID), {
+      ...authorizationInput({ providerKind: "sentry", operationKind: "link" }, hashes),
+      requestFingerprint: hashes.legacy,
+      legacyRequestFingerprint: undefined,
+      legacyRetryOnly: true,
+    });
+    expect(permit.operationId).toBe("op-legacy");
+    expect(db.operations[0]?.request_fingerprint).toBe(hashes.legacy);
   });
 });

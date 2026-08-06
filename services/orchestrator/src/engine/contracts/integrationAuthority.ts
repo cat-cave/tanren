@@ -127,7 +127,10 @@ export type AuthorizePrincipalVerificationInput = {
   operationKind: "link" | "rotate";
   idempotencyKey: string;
   connectionId?: string;
-  /** Digest binding the idempotency key to actor, target, and credential bytes. */
+  /**
+   * Digest binding the idempotency key to actor, target, and credential bytes.
+   * Endpoint-less historical retries pass the exact pre-endpoint v1 digest here.
+   */
   requestFingerprint: string;
   /**
    * Exact pre-endpoint v1 digest. Only the Sentry link/rotate route may use it

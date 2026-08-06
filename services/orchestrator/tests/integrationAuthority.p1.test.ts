@@ -36,6 +36,16 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       requireSentryPrincipalIdentity({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" }),
     ).toEqual({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" });
   });
+  it("rejects unknown Sentry identity metadata instead of carrying it forward", () => {
+    expect(() =>
+      requireSentryPrincipalIdentity({
+        sentryIdentityVersion: "1",
+        orgSlug: "o",
+        baseUrl: "https://sentry.example",
+        unverifiedExtension: "x",
+      }),
+    ).toThrow(/sentry_principal_relink_required/u);
+  });
   it("parses commas and semicolons inside quoted Link parameters", () => {
     const [link, next] = parseLinkHeader(
       '<https://example.test/a>; title="a, b; c", <https://example.test/b>; rel="next"',
@@ -87,7 +97,7 @@ describe("IN-1 P1 authority former-bug proofs", () => {
     const staged = await secrets.stage("op-multi", "token");
     const permit = await testPrincipalVerificationPermit({ providerKind: "sentry", operationId: "op-multi" });
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("/organizations/") && !url.includes("?") && url.endsWith("/")) {
         return Response.json({ access: ["project:read", "project:write"] });
       }
@@ -112,7 +122,14 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       orgSlug: "a",
       baseUrl: "https://sentry.example/root",
     });
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toMatch(/^https:\/\/sentry\.example\/root\/api\//u);
+    const firstRequest = fetchImpl.mock.calls[0]?.[0];
+    const firstUrl =
+      typeof firstRequest === "string"
+        ? firstRequest
+        : firstRequest instanceof URL
+          ? firstRequest.href
+          : firstRequest?.url;
+    expect(firstUrl).toMatch(/^https:\/\/sentry\.example\/root\/api\//u);
   });
   it.each([
     ["missing Link", undefined, false, "sentry_malformed_pagination"],
