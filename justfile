@@ -1181,7 +1181,7 @@ smoke-rls-proof-bundle:
 # cherry-pick conflict on every branch that added a smoke recipe. Keep it
 # one-per-line: `just` continues a dependency list across lines with a trailing
 # backslash, and a comment can never swallow more than its own line.
-smoke: \
+smoke-aggregate: \
   compose-build \
   compose-up \
   wait-for-stack \
@@ -1264,6 +1264,13 @@ smoke: \
   smoke-rls-verification-reads \
   smoke-rls-proof-dashboard
 
+smoke: aggregate-database-url-config-test
+  # Resolve the owner URL and normalize/export the offset before the nested
+  # invocation so every leaf inherits the same URL and decimal arithmetic value.
+  normalized_offset="$(scripts/smoke/aggregate-database-url.sh --normalized-offset)"; DATABASE_URL="$(TANREN_PORT_OFFSET="$normalized_offset" scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL TANREN_PORT_OFFSET="$normalized_offset"; exec just smoke-aggregate
+
+aggregate-database-url-config-test:
+  scripts/smoke/aggregate-database-url.test.sh
 # rv-22: runtime-verification HTTP read surface — real Hono route → real DB → real
 # response, a failed verdict stays failed, cross-org reads see zero rows.
 smoke-rls-verification-reads:
