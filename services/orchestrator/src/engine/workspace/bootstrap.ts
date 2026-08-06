@@ -11,7 +11,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { withAppEnv } from "../ssh/appEnvPrelude.js";
 import { withMiseActivation } from "../ssh/miseActivate.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import { combinedOutput, failureReason, tailOf } from "./outputTail.js";
+import { combinedOutput, failureReason, redactAppEnv, tailOf } from "./outputTail.js";
 import { classifyToolchainFault, resolveWorkspaceToolchain, toolchainProvisionCommand } from "./toolchainProvision.js";
 import { parseToolchainResolutions, type ToolchainResolution } from "./toolchainEnforcement.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
@@ -62,10 +62,11 @@ export interface BootstrapWorkspaceInput {
   // EXECUTED command's environment ONLY (an `export K='v'; …` prelude built at
   // THIS substrate boundary). It is DELIBERATELY kept off the `command` field —
   // the original command (never the prelude) is what flows into
-  // WorkspaceBootstrapError / bootstrapFailureMessage / any log, so a bootstrap
-  // failure can never leak an app-secret VALUE into the error message or the
-  // `workspace.failed` / `run.failed` event payloads. Distinct from Tanren's own
-  // provider creds. Undefined ⇒ no app env (command unchanged).
+  // WorkspaceBootstrapError / bootstrapFailureMessage / any log, so the COMMAND carried
+  // into the error message and the `workspace.failed` / `run.failed` payloads holds no
+  // app-secret VALUE. That covers the command and ONLY the command: the error's
+  // `outputTail` is the project's own output and is redacted separately (`redactAppEnv`).
+  // Distinct from Tanren's own provider creds. Undefined ⇒ no app env (command unchanged).
   appEnv?: Record<string, string>;
 }
 
@@ -96,9 +97,11 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended ONLY to the string handed
   // to `ssh.run` — never to `command`, which is the value that flows into the
   // error message / log below. So a bootstrap failure surfaces the ORIGINAL
-  // command (prelude-free), and no app-secret value can reach the emitted
-  // `workspace.failed` / `run.failed` events. Mirrors the gate path, which keeps
-  // the original `step.run` in `gate.*` events.
+  // command (prelude-free), and no app-secret value reaches the emitted
+  // `workspace.failed` / `run.failed` events VIA THE COMMAND. Mirrors the gate path,
+  // which keeps the original `step.run` in `gate.*` events. The captured output tail is
+  // the OTHER route into those payloads, which this boundary never covered; it is closed
+  // by `redactAppEnv` at the throw below.
   const result = await input.ssh.run(input.target, {
     // PROJECT-COMMAND path: mise-activate so the project's `just bootstrap` (a bare
     // `pnpm install`/`node`/etc) resolves to its `mise.toml`-declared toolchain (a
@@ -123,7 +126,11 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
       input.workspacePath,
       command,
       result.exitCode,
-      tailOf(combinedOutput(result)),
+      // The tail is the PROJECT's own stdout+stderr, captured under the app env — the one
+      // part of this error the prelude discipline never covered. Redact the WHOLE combined
+      // output BEFORE bounding it, so a value straddling the tail cutoff is matched and
+      // removed in full rather than surviving as a partial suffix. See `redactAppEnv`.
+      tailOf(redactAppEnv(combinedOutput(result), input.appEnv)),
       result.stalled === true,
     );
   }
@@ -188,7 +195,8 @@ export interface EnsureWorkspaceDepsResult {
 // A typed, observable deps-install failure, mirroring WorkspaceBootstrapError.
 // Carries the exit code and a bounded output tail so a halting run outcome has a
 // concrete diagnostic. The ORIGINAL command (never the app-env prelude) is what
-// flows into the message, so no app-secret value can leak into an event payload.
+// flows into the message, so the COMMAND leaks no app-secret value into an event payload;
+// the `outputTail` is the project's own output and reaches here already app-env-redacted.
 export class WorkspaceDepsInstallError extends Error {
   override readonly name = "WorkspaceDepsInstallError";
 
@@ -273,7 +281,8 @@ export async function ensureWorkspaceDepsInstalled(
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard
   // ONLY, never to `command` (the value carried into the error below), so a
   // failed install surfaces the ORIGINAL install command and no app-secret value
-  // reaches WorkspaceDepsInstallError or the run's event payloads.
+  // reaches WorkspaceDepsInstallError or the run's event payloads THROUGH THE COMMAND.
+  // The captured tail takes the other route; `redactAppEnv` at the throw below closes it.
   const result = await input.ssh.run(input.target, {
     // PROJECT-COMMAND path: mise-activate the guarded install (so a writer-added dep
     // installs under the project's declared toolchain — a no-op when none declared),
@@ -293,7 +302,10 @@ export async function ensureWorkspaceDepsInstalled(
 
   const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
-    const outputTail = tailOf(combinedOutput(result));
+    // Redacted at the source BEFORE bounding, so the infrastructure triage below and the
+    // typed error both see the same tail: the project's own output, minus the values Tanren
+    // injected — including any value that straddles the tail cutoff, matched in full.
+    const outputTail = tailOf(redactAppEnv(combinedOutput(result), input.appEnv));
     // INFRASTRUCTURE-FAULT TRIAGE (the second half of the fix). A deps-install that died
     // because a TOOLCHAIN BINARY is missing is not a scaffold defect: no source edit
     // installs a program. Routing it to the writer — which is what a
