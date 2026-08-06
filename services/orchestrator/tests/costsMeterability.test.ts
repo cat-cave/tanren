@@ -151,6 +151,54 @@ describe("assertBudgetCeilingEnforceable", () => {
     expect(sink.events.map((e) => e.eventType)).toEqual(["cost.ceiling_unreachable"]);
   });
 
+  it("REFUSES a ceiling over an UNRECOGNIZED ref — the same deadlock by a different road", async () => {
+    // An unrecognized ref records billing_mode='unattributed' / cost_usd NULL, which
+    // `dag/budgetGate.ts` counts as unpriced on exactly the same footing as a NULL
+    // per_token row. The run would spend real money and then latch permanently on its
+    // OWN rows, at any ceiling. A usage probe does NOT rescue it (the reconciler
+    // back-fills per_token rows only), so the refusal must hold WITH a probe too.
+    for (const hasUsageProbe of [false, true]) {
+      const sink = recorder();
+      const thrown = await assertBudgetCeilingEnforceable(
+        { ceilingUsd: 50, cli: "codex", authRef: "credential/mystery/prod-key", hasUsageProbe },
+        sink.append,
+      ).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(thrown).toBeInstanceOf(UnenforceableBudgetCeilingError);
+      expect((thrown as UnenforceableBudgetCeilingError).kind).toBe("unenforceable");
+      expect((thrown as UnenforceableBudgetCeilingError).billingMode).toBe("unattributed");
+      expect(sink.events.map((e) => e.eventType)).toEqual(["cost.ceiling_unenforceable"]);
+      expect(sink.events[0]?.payload).toMatchObject({
+        // NOT one of the two metering limitations: an operator misconfiguration is
+        // never laundered into "tanren cannot do this".
+        reason: "unrecognized_credential_ref",
+        billingMode: "unattributed",
+        // The secret NAME segment is stripped; only the KIND reaches the timeline.
+        refKind: "credential/mystery",
+      });
+      // ...and unlike the metering limitations, this remedy is one the operator can
+      // actually apply.
+      expect(sink.events[0]?.payload).toMatchObject({
+        remedy: expect.stringContaining("recognized credential ref") as unknown as string,
+      });
+    }
+  });
+
+  it("still leaves an unrecognized ref alone when NO ceiling is configured", async () => {
+    // Without a ceiling there is no deadlock to prevent: C1 (`cost.unattributed` +
+    // the fail-closed gate) remains the whole story, and the run proceeds.
+    const sink = recorder();
+    await expect(
+      assertBudgetCeilingEnforceable(
+        { ceilingUsd: undefined, cli: "codex", authRef: "credential/mystery/prod-key", hasUsageProbe: false },
+        sink.append,
+      ),
+    ).resolves.toBeUndefined();
+    expect(sink.events).toHaveLength(0);
+  });
+
   it("passes a subscription route WITH a probe, and any route with NO ceiling", async () => {
     const sink = recorder();
     await expect(

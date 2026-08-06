@@ -16,6 +16,13 @@
 //        RUN'S OWN, the pause is UNCLEARABLE — raising the ceiling changes nothing.
 //        The run spends real, uncounted money and THEN parks forever.
 //
+//        Two roads reach it. A `per_token` credential on a harness with no capture
+//        path, and an UNRECOGNIZED credential ref (billing_mode 'unattributed',
+//        which `budgetGate.ts` counts as unpriced on exactly the same footing).
+//        The second is an operator misconfiguration rather than a platform
+//        limitation — a different `reason`, and a remedy that actually works — but
+//        the deadlock it produces is identical, so it is refused identically.
+//
 // The prior version of this file handled only the first, and its comment asserted
 // that "a per_token credential prices every call from the provider table
 // (reachable)". That is STALE: the static rate table is gone (REAL SPEND IS A FACT,
@@ -37,7 +44,9 @@ import type { AppendEvent } from "./subtaskLoop.js";
  *   - `unreachable`   — the ceiling can never FIRE (subscription/self-hosted, no
  *                       probe): silent under-enforcement.
  *   - `unenforceable` — the ceiling fires PERMANENTLY and unclearably (a per_token
- *                       route with no real-spend capture): a self-inflicted deadlock.
+ *                       route with no real-spend capture, or an unrecognized ref
+ *                       whose rows land 'unattributed'): a self-inflicted deadlock.
+ *                       `billingMode` says which road got there.
  *
  * Carries the secret-free ref KIND only, never the credential value.
  */
@@ -109,9 +118,10 @@ export async function narrateRouteMetering(
 
 /**
  * Run the ceiling preflight. Emits a loud, secret-free event (naming the ref KIND
- * only) and throws so the run fails CLOSED at setup when either failure mode
- * applies. Every other combination (no ceiling, or a route that can both accrue and
- * be judged in dollars) is a no-op — the run proceeds normally.
+ * only) and throws so the run fails CLOSED at setup when a failure mode applies:
+ * an unmeterable per_token route, an unrecognized (unattributed) ref, or the
+ * original M6 unreachable ceiling. Every other combination (no ceiling, or a route
+ * that can both accrue and be judged in dollars) is a no-op — the run proceeds.
  */
 export async function assertBudgetCeilingEnforceable(
   input: BudgetPreflightInput,
@@ -156,15 +166,57 @@ export async function assertBudgetCeilingEnforceable(
         `and then deadlocking. Remedy: ${remedy}`,
     });
   }
+  const classification = classifyAuthRef(input.authRef);
+  // The SAME DEADLOCK, reached by a different road. An UNRECOGNIZED ref records
+  // billing_mode='unattributed' with cost_usd = NULL (BUDGET-SAFETY C1), and
+  // `dag/budgetGate.ts` counts 'unattributed' NULLs as unpriced exactly as it counts
+  // 'per_token' NULLs — so a run under a ceiling spends real money and then latches
+  // permanently on its OWN rows, unclearable at any ceiling.
+  //
+  // A usage probe does NOT rescue it: `costs/reconciler.ts` back-fills cost_usd for
+  // `billing_mode='per_token'` rows ONLY, so the run-end reconcile never touches an
+  // unattributed row. That is why this check sits BEFORE the probe early-return.
+  //
+  // It is refused here, but it is NOT called `unmeterable` — `costs/meterability.ts`
+  // deliberately declines to relabel an operator misconfiguration as a platform
+  // limitation. Same refusal, honestly different reason, and unlike the other two
+  // this one has a remedy the operator can actually apply.
+  if (classification.billingMode === "unrecognized") {
+    const detail =
+      `credential ref kind '${refKind}' matches no known credential/<kind>/ prefix, so every call records ` +
+      `billing_mode='unattributed' with cost_usd = NULL — a run-end usage probe reconciles per_token rows only ` +
+      `and never back-fills these`;
+    const remedy =
+      "point the run at a recognized credential ref (credential/codex, credential/claude, credential/anthropic, " +
+      "credential/openai-api, credential/openrouter, credential/self-hosted), or remove the tanren dollar ceiling " +
+      "for this project";
+    await appendEvent("cost.ceiling_unenforceable", {
+      refKind,
+      cli: input.cli,
+      billingMode: "unattributed",
+      ceilingUsd: input.ceilingUsd,
+      reason: "unrecognized_credential_ref",
+      detail,
+      remedy,
+    });
+    throw new UnenforceableBudgetCeilingError({
+      refKind,
+      billingMode: "unattributed",
+      kind: "unenforceable",
+      message:
+        `configured dollar ceiling ($${input.ceilingUsd}) cannot be ENFORCED over the ${input.cli} × '${refKind}' ` +
+        `route: ${detail}. The budget gate counts them as unpriced spend and fails CLOSED on them — and ` +
+        `because they are the run's OWN, RAISING THE CEILING WILL NOT CLEAR THE PAUSE. Refusing at setup rather ` +
+        `than spending uncounted money and then deadlocking. Remedy: ${remedy}`,
+    });
+  }
   // A usage probe reconciles ccusage/credit-drawdown dollars at run end, so a
   // subscription credential CAN accrue cost — the ceiling is reachable.
   if (input.hasUsageProbe) {
     return;
   }
-  const classification = classifyAuthRef(input.authRef);
   // Only subscription / self-hosted credentials have NO per-call dollar basis and
-  // no probe to reconcile one. (An unrecognized ref is handled separately — C1:
-  // cost.unattributed + the fail-closed gate.)
+  // no probe to reconcile one.
   if (classification.billingMode !== "subscription" && classification.billingMode !== "self_hosted") {
     return;
   }
