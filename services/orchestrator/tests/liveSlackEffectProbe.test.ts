@@ -7,9 +7,11 @@ import type { EventName } from "../src/engine/events/index.js";
 import {
   LiveSlackEffectProbe,
   FetchSlackHistoryTransport,
+  type SlackHistoryBinding,
   type LiveSlackEffectBindingCoordinate,
   type SlackHistorySnapshot,
 } from "../src/engine/verification/effectObserver/liveSlackEffectProbe.js";
+import { distinctSlackHistoryMessages } from "../src/engine/verification/effectObserver/slackHistoryTransport.js";
 
 const CORRELATION = `sha256:${"a".repeat(64)}`;
 const COORDINATE: LiveSlackEffectBindingCoordinate = {
@@ -19,6 +21,13 @@ const COORDINATE: LiveSlackEffectBindingCoordinate = {
   authGeneration: 5,
   grantId: "grant-a3",
   grantGeneration: 7,
+  channelId: "channel-a3",
+};
+const BINDING: SlackHistoryBinding = {
+  orgId: "org-a3",
+  projectId: "project-a3",
+  bindingId: "binding-a3",
+  bindingGeneration: 3,
   channelId: "channel-a3",
 };
 
@@ -74,12 +83,16 @@ function probe(snapshot: SlackHistorySnapshot) {
   return { effectProbe, events, observations };
 }
 
+function historySnapshot(
+  messages: SlackHistorySnapshot["messages"],
+  overrides: Partial<SlackHistorySnapshot> = {},
+): SlackHistorySnapshot {
+  return { complete: true, messages, binding: BINDING, ...overrides };
+}
+
 describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   it("records a provider-confirmed effect at the exact sealed binding coordinate", async () => {
-    const { effectProbe, events, observations } = probe({
-      complete: true,
-      messages: [{ ts: "11", text: `sent ${CORRELATION}` }],
-    });
+    const { effectProbe, events, observations } = probe(historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }]));
 
     const result = await effectProbe.effectsForProvider(input());
 
@@ -107,7 +120,9 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
       transport: {
         history: async ({ channelId }) => {
           channels.push(channelId);
-          return { complete: true, messages: [{ ts: "11", text: `sent ${CORRELATION}` }] };
+          return historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
+            binding: { ...BINDING, bindingGeneration: 9, channelId: "sealed-channel-9" },
+          });
         },
       },
       coordinateResolver: { resolve: async () => coordinate },
@@ -122,10 +137,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   });
 
   it("DECISIVE negative control: a complete provider snapshot with no match records observed absence", async () => {
-    const { effectProbe, events, observations } = probe({
-      complete: true,
-      messages: [{ ts: "11", text: "unrelated" }],
-    });
+    const { effectProbe, events, observations } = probe(historySnapshot([{ ts: "11", text: "unrelated" }]));
 
     const result = await effectProbe.effectsForProvider(input());
 
@@ -138,10 +150,22 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
   });
 
   it("FAIL-CLOSED: a paginated or otherwise incomplete provider snapshot cannot prove absence", async () => {
-    const { effectProbe, events, observations } = probe({ complete: false, messages: [] });
+    const { effectProbe, events, observations } = probe(historySnapshot([], { complete: false }));
 
     await expect(effectProbe.effectsForProvider(input())).rejects.toThrow("snapshot is incomplete or malformed");
 
+    expect(observations).toHaveLength(0);
+    expect(events.appended).toHaveLength(0);
+  });
+
+  it("FAIL-CLOSED: limited or cross-tenant history cannot certify an effect", async () => {
+    const { effectProbe, events, observations } = probe(
+      historySnapshot([{ ts: "11", text: `sent ${CORRELATION}` }], {
+        binding: { ...BINDING, orgId: "other-org" },
+      }),
+    );
+
+    await expect(effectProbe.effectsForProvider(input())).rejects.toThrow("snapshot is incomplete or malformed");
     expect(observations).toHaveLength(0);
     expect(events.appended).toHaveLength(0);
   });
@@ -157,7 +181,7 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
     vi.stubGlobal("fetch", fetch);
     try {
       await expect(
-        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3" }),
+        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3", binding: BINDING }),
       ).rejects.toThrow("did not positively confirm snapshot completeness");
       expect(fetch).toHaveBeenCalledOnce();
     } finally {
@@ -184,13 +208,14 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
     vi.stubGlobal("fetch", fetch);
     try {
       await expect(
-        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3" }),
+        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3", binding: BINDING }),
       ).resolves.toEqual({
         complete: true,
         messages: [
           { ts: "12", text: "new" },
           { ts: "11", text: "old" },
         ],
+        binding: BINDING,
       });
       expect(fetch.mock.calls[1]?.[0]).toContain("cursor=next-page");
     } finally {
@@ -198,14 +223,35 @@ describe("LiveSlackEffectProbe — independent A3 effect observation", () => {
     }
   });
 
+  it("rejects is_limited and duplicate message timestamps instead of certifying them", async () => {
+    const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<unknown>>().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, has_more: false, is_limited: true, messages: [] }),
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(
+        new FetchSlackHistoryTransport().history({ token: "xoxb", channelId: "channel-a3", binding: BINDING }),
+      ).rejects.toThrow("is limited");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(() =>
+      distinctSlackHistoryMessages([
+        { ts: "11", text: "same" },
+        { ts: "11", text: "same" },
+      ]),
+    ).toThrow("duplicate message timestamp");
+  });
+
   it("captures the latest complete provider cursor before a live trigger", async () => {
-    const { effectProbe } = probe({
-      complete: true,
-      messages: [
+    const { effectProbe } = probe(
+      historySnapshot([
         { ts: "20", text: "new" },
         { ts: "11", text: "old" },
-      ],
-    });
+      ]),
+    );
 
     await expect(
       effectProbe.captureWatermark({

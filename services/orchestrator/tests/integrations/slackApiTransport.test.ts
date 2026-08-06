@@ -4,10 +4,7 @@
 // header, and cursor mapping.
 
 import { describe, expect, it } from "vitest";
-import {
-  FetchSlackApiTransport,
-  PersistentSlackRateLimitError,
-} from "../../src/engine/integrations/slack/slackApiTransport.js";
+import { FetchSlackApiTransport } from "../../src/engine/integrations/slack/slackApiTransport.js";
 
 interface Recorded {
   url: string;
@@ -156,33 +153,26 @@ describe("FetchSlackApiTransport", () => {
     expect(calls).toBe(rampLength + 1);
   });
 
-  it("surfaces PersistentSlackRateLimitError LOUD at a saturated identical-signal fixed point", async () => {
+  it("remains retryable after more than four identical 429 responses", async () => {
+    const retryResponses = 6;
     let calls = 0;
     const fetchImpl = (async () => {
       calls += 1;
-      return new Response("", { status: 429, statusText: "Too Many Requests", headers: { "Retry-After": "1" } });
+      if (calls <= retryResponses) {
+        return new Response("", { status: 429, statusText: "Too Many Requests", headers: { "Retry-After": "1" } });
+      }
+      return new Response(JSON.stringify({ ok: true, user_id: "U_BOT" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }) as unknown as typeof fetch;
     const transport = new FetchSlackApiTransport(
       async () => "xoxb-token",
       fetchImpl,
       async () => {},
     );
-    let captured: PersistentSlackRateLimitError | undefined;
-    try {
-      await transport.joinConversation("C1");
-    } catch (error) {
-      if (error instanceof PersistentSlackRateLimitError) {
-        captured = error;
-      } else {
-        throw error;
-      }
-    }
-    expect(captured).toBeDefined();
-    expect(captured?.stuckSignature).toBe("slack-429");
-    // The loop ran past the saturation threshold before the convergence detector
-    // surfaced the proven fixed point — strictly more than a single-shot give-up.
-    expect(captured?.retriesObserved).toBeGreaterThan(1);
-    expect(calls).toBe(captured?.retriesObserved);
+    await expect(transport.authTest()).resolves.toEqual({ botUserId: "U_BOT" });
+    expect(calls).toBe(retryResponses + 1);
   });
 
   it("honors a long Retry-After verbatim (NO clamp on the server-supplied wait)", async () => {

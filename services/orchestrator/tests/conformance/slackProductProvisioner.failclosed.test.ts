@@ -34,6 +34,7 @@ const ctx = (projectId: string): ProjectContext => ({
 function directRequirement(): IntegrationRequirementV1 {
   return {
     ...goldenProductMessagingRequirement(),
+    requiredOperations: ["chat.postMessage", "conversations.history"],
     requiredScopes: ["chat:write", "channels:read", "channels:manage", "channels:join", "channels:history"],
     bindingOutputs: [
       {
@@ -89,6 +90,28 @@ describe("SlackProductProvisioner fail-closed", () => {
 
     await expect(direct.provision(await directGrant(projectCtx), plan, projectCtx)).rejects.toThrow(
       /direct_slack_bot_token_unresolved/u,
+    );
+    expect(transportConstructed).toBe(0);
+  });
+
+  it("rejects an extra or duplicated plan permission before constructing Slack transport", async () => {
+    const projectCtx = ctx("inexact_permissions");
+    let transportConstructed = 0;
+    const direct = provisioner(
+      () => {
+        transportConstructed += 1;
+        return new ScriptedSlackProductTransport();
+      },
+      await directSecrets(),
+    );
+    const valid = direct.plan(directRequirement(), projectCtx);
+    const plan = {
+      ...valid,
+      requiredScopes: [...valid.requiredScopes, "chat:write"],
+    };
+
+    await expect(direct.provision(await directGrant(projectCtx), plan, projectCtx)).rejects.toThrow(
+      /inexact required scope multiset/u,
     );
     expect(transportConstructed).toBe(0);
   });
