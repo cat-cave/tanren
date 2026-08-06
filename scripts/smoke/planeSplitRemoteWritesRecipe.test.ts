@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const recipeName = "smoke-plane-split-worker-remote-writes";
 const execFileAsync = promisify(execFile);
+const remoteWritesScript = new URL("./plane-split-worker-remote-writes.sh", import.meta.url).pathname;
 
 async function remoteWritesRecipe(): Promise<string> {
   const justfile = await readFile(new URL("../../justfile", import.meta.url), "utf8");
@@ -15,11 +16,20 @@ async function remoteWritesRecipe(): Promise<string> {
 }
 
 async function runRemoteWritesProbe(env: NodeJS.ProcessEnv): Promise<Record<string, string>> {
-  const { stdout } = await execFileAsync(
-    "bash",
-    [new URL("./plane-split-worker-remote-writes.sh", import.meta.url).pathname],
-    { env: { ...process.env, ...env, TANREN_SMOKE_REMOTE_WRITES_DRY_RUN: "1" } },
-  );
+  const probeEnv = { ...process.env };
+  for (const name of [
+    "TANREN_PORT_OFFSET",
+    "TANREN_INTERNAL_MTLS_HOST_PORT",
+    "TANREN_POSTGRES_HOST_PORT",
+    "DATABASE_URL",
+    "TANREN_APP_DATABASE_URL",
+    "TANREN_DATAPLANE_DATABASE_URL",
+  ]) {
+    delete probeEnv[name];
+  }
+  const { stdout } = await execFileAsync("bash", [remoteWritesScript], {
+    env: { ...probeEnv, ...env, TANREN_SMOKE_REMOTE_WRITES_DRY_RUN: "1" },
+  });
   return Object.fromEntries(
     stdout
       .trim()
@@ -37,10 +47,30 @@ describe("remote-writes smoke recipe", () => {
     const probe = await runRemoteWritesProbe({ TANREN_PORT_OFFSET: "1965" });
 
     expect(recipe).toContain("bash scripts/smoke/plane-split-worker-remote-writes.sh");
+    expect(recipe).toContain("--force-recreate worker");
     expect(probe).toMatchObject({
+      TANREN_CLAIM_ENDPOINT_SMOKE_URL: "https://localhost:5075",
       TANREN_DATAPLANE_DATABASE_URL: "postgres://REDACTED@localhost:7397/tanren",
       TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE: "1",
       TANREN_SMOKE_REMOTE_WRITES_PROBE: "scripts/smoke/plane-split-worker.ts",
+    });
+  });
+
+  it("preserves explicit owner and app database URLs and uses the mapped claim endpoint", async () => {
+    const databaseUrl = "postgres://owner-db.example.test:6543/owner?sslmode=disable";
+    const appDatabaseUrl = "postgres://app-db.example.test:7654/app?sslmode=require";
+    const probe = await runRemoteWritesProbe({
+      DATABASE_URL: databaseUrl,
+      TANREN_APP_DATABASE_URL: appDatabaseUrl,
+      TANREN_INTERNAL_MTLS_HOST_PORT: "3211",
+      TANREN_POSTGRES_HOST_PORT: "6543",
+      TANREN_PORT_OFFSET: "70000",
+    });
+
+    expect(probe).toMatchObject({
+      DATABASE_URL: databaseUrl,
+      TANREN_APP_DATABASE_URL: appDatabaseUrl,
+      TANREN_CLAIM_ENDPOINT_SMOKE_URL: "https://localhost:3211",
     });
   });
 
@@ -71,5 +101,39 @@ describe("remote-writes smoke recipe", () => {
       const probe = await runRemoteWritesProbe({ TANREN_DATAPLANE_DATABASE_URL: url });
       expect(probe.TANREN_DATAPLANE_DATABASE_URL).toBe(url);
     }
+  });
+
+  it("accepts a large offset when valid explicit host-port overrides replace both defaults", async () => {
+    await expect(
+      runRemoteWritesProbe({
+        TANREN_INTERNAL_MTLS_HOST_PORT: "3211",
+        TANREN_POSTGRES_HOST_PORT: "6543",
+        TANREN_PORT_OFFSET: "70000",
+      }),
+    ).resolves.toMatchObject({
+      TANREN_CLAIM_ENDPOINT_SMOKE_URL: "https://localhost:3211",
+      TANREN_DATAPLANE_DATABASE_URL: "postgres://REDACTED@localhost:6543/tanren",
+    });
+  });
+
+  it("rejects an invalid explicit host-port override even with a large offset", async () => {
+    const probeEnv = { ...process.env };
+    for (const name of ["TANREN_INTERNAL_MTLS_HOST_PORT", "TANREN_POSTGRES_HOST_PORT", "TANREN_PORT_OFFSET"]) {
+      delete probeEnv[name];
+    }
+    await expect(
+      execFileAsync("bash", [remoteWritesScript], {
+        env: {
+          ...probeEnv,
+          TANREN_INTERNAL_MTLS_HOST_PORT: "3211",
+          TANREN_POSTGRES_HOST_PORT: "65536",
+          TANREN_PORT_OFFSET: "70000",
+          TANREN_SMOKE_REMOTE_WRITES_DRY_RUN: "1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringMatching(/TANREN_POSTGRES_HOST_PORT.*1\.\.65535/u),
+    });
   });
 });
