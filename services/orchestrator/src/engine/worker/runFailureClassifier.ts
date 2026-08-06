@@ -425,7 +425,13 @@ const DEFAULT_FAILURE: ClassifiedRunFailure = {
  * `run.failed` event — none echo the raw error message.
  */
 export function classifyRunFailure(error: unknown): ClassifiedRunFailure {
-  if (error instanceof Error && error.name !== "") {
+  // `Object.hasOwn`, NOT `!== undefined`: `BY_ERROR_NAME` is an object literal, so a bare
+  // index lookup also resolves `Object.prototype` members. An error named `toString` /
+  // `constructor` / `valueOf` would return an inherited FUNCTION, which is not `undefined`,
+  // so the fail-closed default would be skipped and a classification whose every field is
+  // `undefined` would flow into the strict `run.failed` / `dag.spec.redriven` payloads —
+  // the exact opposite of this module's fail-closed contract.
+  if (error instanceof Error && error.name !== "" && Object.hasOwn(BY_ERROR_NAME, error.name)) {
     const matched = BY_ERROR_NAME[error.name];
     if (matched !== undefined) {
       return matched;

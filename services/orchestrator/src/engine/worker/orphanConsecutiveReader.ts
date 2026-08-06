@@ -7,7 +7,11 @@
 import type pg from "pg";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
-import { isNonStructuralRedriveSource, redriveFailureSignature } from "../workflow/redriveConvergenceSignature.js";
+import {
+  currentFailureSignature,
+  isNonStructuralRedriveSource,
+  redriveFailureSignature,
+} from "../workflow/redriveConvergenceSignature.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("run-finalize-orphan-reader");
@@ -71,7 +75,7 @@ export async function readOrphanConsecutive(
         failureSignature: orphanFailureSignature(redriveFailureSignature(row.payload), row.payload.stage),
         ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
       }));
-    history.push({ failureSignature: orphanFailureSignature(failure.cause ?? failure.code, failure.stage) });
+    history.push({ failureSignature: orphanFailureSignature(currentFailureSignature(failure), failure.stage) });
     const decision = await decideConvergence(history, (h) =>
       fixedPointRuleJudgment(
         h,

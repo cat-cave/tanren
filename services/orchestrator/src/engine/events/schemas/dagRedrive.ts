@@ -105,5 +105,19 @@ export const DagSpecRedrivenPayload = z
     // treat as the default `workflow_redrive`.
     source: z.enum(["workflow_redrive", "prober_resume", "precondition_block"]).optional(),
   })
-  .strict();
+  .strict()
+  // `precondition` and `source: "precondition_block"` are ONE fact written as two fields, so
+  // the schema enforces the coupling rather than merely documenting it above. Each half
+  // without the other is a payload that reads plausibly and means the wrong thing:
+  //   - `precondition` with any OTHER source ⇒ a wait that BOTH convergence readers score as
+  //     structural evidence, so waiting for a credential accumulates toward the fixed point
+  //     that parks the spec — the live defect this whole change exists to remove.
+  //   - `precondition_block` with NO precondition ⇒ an indefinite probe cadence whose
+  //     blocking condition is unnamed, so the timeline cannot say what is being waited on.
+  // Producers only ever write the pair (`workflow/redriveEventFields.ts` builds both from one
+  // argument); this makes a hand-written or drifted producer fail LOUD at the event boundary.
+  .refine((payload) => (payload.source === "precondition_block") === (payload.precondition !== undefined), {
+    message: '`precondition` must be present exactly when `source` is "precondition_block"',
+    path: ["precondition"],
+  });
 export type DagSpecRedrivenPayload = z.infer<typeof DagSpecRedrivenPayload>;
