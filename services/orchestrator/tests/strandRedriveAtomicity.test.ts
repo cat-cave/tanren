@@ -83,7 +83,26 @@ class RecordingClient {
   emittedEventType(eventType: string): boolean {
     return this.queries.some((q) => q.sql.includes("event_type, payload") && q.params.includes(eventType));
   }
+  /** The PAYLOAD of the appended event of the given type — what the operator actually reads. */
+  emittedPayload(eventType: string): Record<string, unknown> | undefined {
+    const q = this.queries.find((x) => x.sql.includes("event_type, payload") && x.params.includes(eventType));
+    // The store binds the SCHEMA-PARSED payload as `$7::jsonb` — a JSON string, and the
+    // last parameter. Reading it back here also proves the event registry accepted the shape.
+    const raw = q?.params.at(-1);
+    return typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
+  }
 }
+
+// A structural misconfiguration: `credential` is the sole GENUINE_TERMINAL_CODE, so the
+// authority decides `reason: "misconfiguration"` on the FIRST occurrence — no convergence
+// history involved, no re-drives to have been identical across.
+const MISCONFIGURATION_FAILURE = {
+  code: "credential",
+  stage: "credentials",
+  summary: "credential resolution lost its org scope",
+  cause: "credential_org_scope_lost",
+  attribution: "tanren",
+} as const;
 
 describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), bounded by the cap", () => {
   it("a spec with a queued/running SUCCESSOR run is SKIPPED entirely (re-drive in flight, not orphaned)", async () => {
@@ -144,5 +163,56 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     // The guarded UPDATE was attempted (the idempotency boundary) but matched nothing ⇒ no event.
     expect(client.attemptedSpecUpdate()).toBe(true);
     expect(client.emittedEvent()).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// THE HALT DIAGNOSIS IS THE AUTHORITY'S — the orphan path must not re-derive it.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+describe("orphan genuine-halt — the operator reads the AUTHORITY's diagnosis, not a re-derived one", () => {
+  it("a MISCONFIGURATION halt is published as `misconfiguration`, not laundered into `persistent_failure`", async () => {
+    // `UnscopedOrgError` is terminal on its FIRST occurrence — no priors, no cycle. The
+    // orphan path used to narrow the authority's halt to its bucket and then rebuild the
+    // payload from a fixed template, so this arrived at the operator as
+    // `reason: "persistent_failure"` with "reached a FIXED POINT … crashed the identical way
+    // across re-drives" and `attempts: 1`. Every word of that was checkable and wrong: it
+    // named a convergence history that does not exist, for a cause that never repeats.
+    const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 0 });
+
+    await parkStrandedSpecInProcess(
+      client.asClient(),
+      "spec_1",
+      "project_1",
+      "run_dead",
+      "org_test",
+      MISCONFIGURATION_FAILURE,
+    );
+
+    expect(client.specUpdateTarget()).toBe("needs_attention");
+    const payload = client.emittedPayload("dag.spec.needs_attention");
+    expect(payload).toMatchObject({
+      reason: "misconfiguration",
+      cause: "credential_org_scope_lost",
+      attribution: "tanren",
+      attempts: 1,
+    });
+    // The authority's own sentence, not the fixed-point template.
+    expect(payload?.["message"]).toContain("a structural cause a human must fix");
+    expect(payload?.["message"]).not.toContain("FIXED POINT");
+    expect(payload?.["message"]).not.toContain("identical");
+  });
+
+  it("a genuine FIXED POINT still reads as one — the authority's own fixed-point sentence carries through", async () => {
+    // The mirror case, so the fix cannot be "always say misconfiguration": two prior
+    // identical `internal@run` crashes plus this one IS a proven cycle, and the authority's
+    // persistent-failure diagnosis is what must reach the operator.
+    const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 2 });
+
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", "org_test", INTERNAL_FAILURE);
+
+    const payload = client.emittedPayload("dag.spec.needs_attention");
+    expect(payload).toMatchObject({ reason: "persistent_failure", attempts: 2 });
+    expect(payload?.["message"]).toContain("FIXED POINT");
   });
 });

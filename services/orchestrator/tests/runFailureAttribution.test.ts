@@ -49,7 +49,13 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
     // The single largest live failure class. Every occurrence landed on the opaque
     // `internal` default, so an SSH outage was indistinguishable from any other unknown
     // throw and three of them in a row read as one repeating state.
-    const classified = classifyRunFailure(new PersistentSshOutageError("econnreset recurred", 9));
+    const outage = new PersistentSshOutageError({ stuckSignature: "econnreset recurred", retriesObserved: 9 });
+    // The fixture must be a REAL outage, not a husk: the constructor takes ONE object, and
+    // the positional form silently produced an error whose every field was `undefined`
+    // while still passing every assertion below (the classifier keys on `name` alone).
+    expect(outage.stuckSignature).toBe("econnreset recurred");
+    expect(outage.retriesObserved).toBe(9);
+    const classified = classifyRunFailure(outage);
     expect(classified.code).not.toBe("internal");
     expect(classified).toMatchObject({
       cause: "runner_ssh_outage",
@@ -92,7 +98,10 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
     // Attribution and precondition are INDEPENDENT axes. Attribution answers "who fixes the
     // bug" (tanren's own control plane is misbehaving); precondition answers "may this
     // park" (no — the endpoint accepting writes again is an external condition that clears).
-    const error = new RunStateWriteTransportError("/internal/append-event", 500, "internal server error");
+    const error = new RunStateWriteTransportError(500, "/internal/append-event", "internal server error");
+    // Same husk hazard, reversed: the signature is (status, endpoint, body).
+    expect(error.status).toBe(500);
+    expect(error.endpoint).toBe("/internal/append-event");
     expect(classifyRunFailure(error)).toMatchObject({
       cause: "control_plane_write_failed",
       attribution: "tanren",
@@ -122,6 +131,23 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
       attribution: "target_repo",
     });
   });
+
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"])(
+    "an error named `%s` falls CLOSED — an Object.prototype member is NOT a classification",
+    (inheritedName) => {
+      // The lookup table is an object literal, so `BY_ERROR_NAME[error.name]` also resolves
+      // members inherited from `Object.prototype`. Those are functions, so they are not
+      // `undefined`, so a plain `!== undefined` guard would return one AS the classification —
+      // and every field an event payload needs (`code`, `stage`, `summary`, `cause`,
+      // `attribution`) would be `undefined` inside a strict payload schema. The module's whole
+      // contract is that an unrecognized error falls closed to `internal`.
+      const error = new Error("something broke");
+      error.name = inheritedName;
+      const classified = classifyRunFailure(error);
+      expect(classified).toMatchObject({ code: "internal", cause: "unclassified", attribution: "unknown" });
+      expect(typeof classified.summary).toBe("string");
+    },
+  );
 
   it("an unrecognized throw still falls CLOSED — `unclassified` / `unknown`, never message-derived", () => {
     const leaky = new Error("clone https://x-access-token:ghp_SECRET@github.com/acme/p.git failed");
@@ -337,5 +363,56 @@ describe("back-compat: legacy dag.spec.redriven rows (no cause/attribution) keep
       legacyInternalAtRun,
     );
     expect(settled.kind === "ok" ? settled.consecutive : -1).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// (5) THE SCHEMA ENFORCES THE COUPLING — `precondition` and its `source` are ONE fact.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+describe("dag.spec.redriven — `precondition` is present exactly when the source is `precondition_block`", () => {
+  const base = {
+    specId: "spec_1",
+    runId: "run_1",
+    failureCode: "credential",
+    stage: "credentials",
+    consecutiveSameFailure: 0,
+    backoffSeconds: 60,
+  } as const;
+
+  it("accepts the PAIR the producer actually writes", () => {
+    const parsed = DagSpecRedrivenPayload.safeParse({
+      ...base,
+      source: "precondition_block",
+      precondition: "github_credential",
+      cause: "github_credential_missing",
+      attribution: "environment",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a `precondition` carried on a STRUCTURAL re-drive", () => {
+    // This is the dangerous half. A structural row is convergence EVIDENCE, so a
+    // precondition smuggled onto one is a wait being counted as a strike — exactly the
+    // accounting error that parked live specs for waiting on a credential.
+    for (const source of [undefined, "workflow_redrive", "prober_resume"]) {
+      const parsed = DagSpecRedrivenPayload.safeParse({
+        ...base,
+        ...(source === undefined ? {} : { source }),
+        precondition: "github_credential",
+      });
+      expect(parsed.success, `source=${String(source)} must not carry a precondition`).toBe(false);
+    }
+  });
+
+  it("rejects a `precondition_block` with NO named condition", () => {
+    // The other half: an indefinite probe cadence whose blocking condition is anonymous.
+    // The spec would re-drive forever and the timeline could never say what for.
+    const parsed = DagSpecRedrivenPayload.safeParse({ ...base, source: "precondition_block" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("still accepts a LEGACY row (no source, no precondition, no cause)", () => {
+    expect(DagSpecRedrivenPayload.safeParse({ ...base, failureCode: "internal", stage: "run" }).success).toBe(true);
   });
 });

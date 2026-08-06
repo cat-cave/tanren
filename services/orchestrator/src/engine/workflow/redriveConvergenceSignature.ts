@@ -53,3 +53,20 @@ export function isNonStructuralRedriveSource(source: string | undefined): boolea
 export function redriveFailureSignature(payload: { cause?: string; failureCode?: string }): string {
   return payload.cause ?? payload.failureCode ?? "";
 }
+
+/**
+ * The fixed-point signature for the CURRENT attempt — the half of every history that comes
+ * from a freshly {@link ClassifiedRunFailure} rather than a persisted row.
+ *
+ * It lives HERE, beside {@link redriveFailureSignature}, because the two halves of one
+ * history must agree by construction. Inlining `cause ?? code` at each reader put the
+ * precedence rule in three places, and adding a third fallback or a stage qualifier to only
+ * two of them would make a spec's own history incomparable with itself — the same drift
+ * class (one reader updated, the other missed) that this module was created to end.
+ *
+ * `code` is REQUIRED here, unlike the historical-row form: a live classification always has
+ * one, so there is no empty-string case to fall through to.
+ */
+export function currentFailureSignature(failure: { cause?: string; code: string }): string {
+  return failure.cause ?? failure.code;
+}

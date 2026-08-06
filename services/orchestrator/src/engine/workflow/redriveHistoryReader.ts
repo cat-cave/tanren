@@ -20,7 +20,11 @@ import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import { createLogger } from "../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
-import { isNonStructuralRedriveSource, redriveFailureSignature } from "./redriveConvergenceSignature.js";
+import {
+  currentFailureSignature,
+  isNonStructuralRedriveSource,
+  redriveFailureSignature,
+} from "./redriveConvergenceSignature.js";
 import { assessWanderingHalt } from "./wanderingHaltDetector.js";
 import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
 
@@ -92,7 +96,7 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
         }));
         history.push({
-          failureSignature: facts.cause ?? facts.code,
+          failureSignature: currentFailureSignature(facts),
           ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
         });
         // Route the escalation decision through the SHARED `decideConvergence` judge — NOT a raw

@@ -264,27 +264,32 @@ function orphanRedrivenPayload(
   };
 }
 
-/** The `dag.spec.needs_attention` payload a worker-level persistent-failure escalation emits. */
+/** The `dag.spec.needs_attention` payload a worker-level genuine halt emits.
+ *
+ * The `reason`, the `message` and the attempt count are the AUTHORITY's — never re-derived
+ * here. Re-deriving them was a lossy hop with no symptom: a `misconfiguration` halt (an
+ * `UnscopedOrgError`, decided terminal on its FIRST occurrence) was published to the
+ * operator as `reason: "persistent_failure"` with "reached a FIXED POINT … crashed the
+ * identical way across re-drives" and `attempts: 1` — a fluent, checkable-looking sentence
+ * describing a convergence history that never happened. The planner-path sibling
+ * (`plannerRunRedrive.ts` `applyGenuineHalt`) has always passed the authority's own values
+ * through; this brings the orphan path to parity. */
 function orphanPersistentPayload(
   runId: string,
   specId: string,
   failure: ClassifiedRunFailure,
-  priorSameFixedPoint: number,
+  halt: Extract<RunDisposition, { bucket: "genuine_halt" }>,
 ) {
   return {
     source: "strand" as const,
     specId,
-    reason: "persistent_failure" as const,
+    reason: halt.reason,
     terminalRuns: [{ runId, status: "halted" }],
-    attempts: priorSameFixedPoint + 1,
+    attempts: halt.consecutiveSameFailure,
     // A halt is a BUG REPORT: name WHAT broke and WHOSE bug it is, both as structured
     // fields and inline in the ask, so the operator knows which repository to open.
     ...causeFields(failure),
-    message:
-      `the run reached a FIXED POINT (${failure.cause} / ${failure.code} @ ${failure.stage}: ${failure.summary}) — ` +
-      `it crashed the identical way with no new information across re-drives; the spec is genuinely stuck (a bug or ` +
-      `mis-spec, not a flake), so a human must intervene. ${attributionAsk(failure.attribution)} ` +
-      `Requeue after addressing the cause`,
+    message: `${halt.message} ${attributionAsk(failure.attribution)}`,
   };
 }
 
@@ -301,10 +306,12 @@ function orphanPersistentPayload(
 function decideOrphan(
   failure: ClassifiedRunFailure,
   priorSameFixedPoint: number,
-): Extract<RunDisposition, { bucket: "re_drive" }> | { bucket: "genuine_halt" } {
+): Extract<RunDisposition, { bucket: "re_drive" | "genuine_halt" }> {
   const disposition = decideRunDisposition({ kind: "classified_error", failure }, { priorSameFixedPoint });
   if (disposition.bucket === "re_drive") return disposition;
-  if (disposition.bucket === "genuine_halt") return { bucket: "genuine_halt" };
+  // Return the halt WHOLE. Narrowing it to the bucket discarded the authority's `reason`,
+  // its `message` and its attempt count, and the payload builder then invented replacements.
+  if (disposition.bucket === "genuine_halt") return disposition;
   // A `pause_for_capacity` / `converge` bucket is not a park — treat it as the orphan path
   // always has: re-drive the spec (behavior-identical to the prior proxy mapping).
   return {
@@ -377,7 +384,7 @@ async function parkStrandedSpecRemote(
         }
       : {
           eventType: "dag.spec.needs_attention" as const,
-          payload: orphanPersistentPayload(runId, specId, failure, consecutive),
+          payload: orphanPersistentPayload(runId, specId, failure, disposition),
         };
   await writer.updateSpecWithEvent({
     spec: {
@@ -445,7 +452,7 @@ export async function parkStrandedSpecInProcess(
         }
       : {
           eventType: "dag.spec.needs_attention" as const,
-          payload: orphanPersistentPayload(runId, specId, failure, consecutive),
+          payload: orphanPersistentPayload(runId, specId, failure, disposition),
         };
   // Sentinel `orgId` for the applier (caller owns the GUC scope); v68: EVENT carries the real org_id.
   await applyUpdateSpecWithEvent(client, {

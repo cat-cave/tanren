@@ -158,6 +158,18 @@ describe("THE RECOVERY PROOF — a precondition-blocked spec never parks and res
     }
 
     expect(sim.redrivenRows()).toHaveLength(ATTEMPTS);
+    // `run.failed` — NOT `dag.spec.redriven` — is the payload that reaches the PUBLIC
+    // timeline, and `MissingGithubCredentialRefError` carries the credential ref inside its
+    // own message. `runFailureAttribution.test.ts` pins that the CLASSIFIED object holds no
+    // raw text; nothing pinned the EMITTED event until here. This is the path that now
+    // re-emits forever on a probe cadence, so a leak would be republished every cycle
+    // rather than once.
+    const runFailed = sim.events.filter((e) => e.eventType === "run.failed");
+    expect(runFailed).toHaveLength(ATTEMPTS);
+    for (const event of runFailed) {
+      expect(JSON.stringify(event.payload)).not.toContain("credential/github_token/org/org_1/default");
+      expect(event.payload).toMatchObject({ cause: "github_credential_missing", attribution: "environment" });
+    }
     for (const row of sim.redrivenRows()) {
       expect(row).toMatchObject({
         source: "precondition_block",
@@ -189,7 +201,11 @@ describe("THE RECOVERY PROOF — a precondition-blocked spec never parks and res
   it("an unreachable runner behaves identically — 8 SSH outages in a row park nothing", async () => {
     const sim = new SpecSimulator();
     for (let attempt = 1; attempt <= 8; attempt += 1) {
-      expect(await sim.attemptThrowing(new PersistentSshOutageError("handshake-lost recurred", 9))).toBe("re_drive");
+      expect(
+        await sim.attemptThrowing(
+          new PersistentSshOutageError({ stuckSignature: "handshake-lost recurred", retriesObserved: 9 }),
+        ),
+      ).toBe("re_drive");
     }
     expect(sim.parked()).toBeUndefined();
     expect(sim.redrivenRows().every((r) => r["source"] === "precondition_block")).toBe(true);
