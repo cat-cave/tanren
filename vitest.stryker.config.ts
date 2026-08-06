@@ -24,6 +24,15 @@ import baseConfig from "./vitest.config.ts";
 // 15+ runs fail). The whitelist stays Stryker-agnostic and the test is excluded
 // from the mutation run only, matching the gen-dashboard-types doctrine. The
 // real repo tree is still gated by the normal `just`/CI suite.
+// `integrationLifecycleModel.test.ts`'s `keeps all schema exports aligned and
+// under the architecture line cap` case asserts each `db/src/schema*.ts` is
+// `split("\n").length <= 500`. `db/src/schemaCore.ts` sits at EXACTLY 500 in the
+// real tree; Stryker's sandbox copy re-writes the file with a trailing newline,
+// making the split length 501 and failing the initial (un-mutated) dry run before
+// any mutant is tested. Environmental to the sandbox — it mutates no source and
+// the real tree is still gated by `scripts/check-architecture.mjs` plus the normal
+// `just`/CI suite — so it is excluded from the mutation run only, matching the two
+// exclusions above.
 export default mergeConfig(baseConfig, {
   test: {
     exclude: [
@@ -35,6 +44,7 @@ export default mergeConfig(baseConfig, {
       "reports/**",
       "**/scripts/gen-dashboard-types.test.ts",
       "**/scripts/lint/env-read-whitelist.test.ts",
+      "**/tests/integrationLifecycleModel.test.ts",
     ],
   },
 });

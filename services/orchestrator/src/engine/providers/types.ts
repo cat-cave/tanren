@@ -43,6 +43,32 @@ export interface Commit {
   message: string;
 }
 
+/**
+ * The project's own commit gate rejected the writer's work.
+ *
+ * The writer adapters edit the workspace in place and Tanren commits afterwards
+ * (`writerGit`/`codexGit`). That commit deliberately leaves the repository's hook
+ * path LIVE, because it carries the writer's content into the PR — so the
+ * project's `pre-commit` hook (lint / format / spell-check / typecheck) gets a
+ * vote. When it votes NO, that is not an infrastructure fault: it is the target
+ * repository telling us, precisely and reproducibly, what is wrong with the work
+ * the writer just did. It is the SAME class of signal as a failed gate tier, and
+ * it must reach the writer as steering rather than killing the run.
+ *
+ * `output` is the hook's own report — stdout AND stderr, bounded. Both streams
+ * matter: lint/spell-check tooling routinely writes its findings to stdout and
+ * only the "hook failed" epilogue to stderr, so a stderr-only capture would feed
+ * the writer the epilogue and drop the actionable list of files/lines/words.
+ */
+export interface CommitRejection {
+  /** The rejected workspace command's label (e.g. `commit codex workspace changes`). */
+  label: string;
+  /** The commit's exit code; `null` when the substrate reported none. */
+  exitCode: number | null;
+  /** Bounded combined stdout+stderr from the rejected commit — the hook's own report. */
+  output: string;
+}
+
 export interface WriterResult {
   diff: string;
   commits: Commit[];
@@ -54,7 +80,24 @@ export interface WriterResult {
   // genuine absence of all signs of life (a recoverable stall), NOT a wall-clock
   // kill. (The name is the durable workflow/event classification for "did not
   // complete"; the SUBSTRATE-level no-progress flag is `CommandResult.stalled`.)
-  exitReason: "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted";
+  // `commit_rejected`: the writer produced work and the PROJECT's commit hook
+  // refused it. Recoverable and highly actionable — the loop re-drives the writer
+  // with the hook's own output as steering, under the same convergence budget a
+  // failed gate tier uses. Carries `commitRejection`.
+  exitReason: "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted" | "commit_rejected";
+  /**
+   * Set iff `exitReason === "commit_rejected"` — the hook's verdict, for writer steering.
+   *
+   * "Iff" is load-bearing and is NOT free. The adapters capture git state — and therefore
+   * the rejection — BEFORE they branch on stalled / usage-limit / nonzero-exit, so a writer
+   * that stalled mid-edit and left a tree the hook then also refused has BOTH a rejection
+   * and a `timeout`. Each adapter's `failedResult` therefore builds its result from an
+   * EXPLICIT `{ diff, commits }` pick rather than `...gitState`, so a failure arm cannot
+   * carry a rejection that does not describe it. Reintroducing the spread would restore the
+   * leak SILENTLY: the wider captured object is structurally assignable to the narrower
+   * parameter type, so the compiler says nothing. (#1420 review.)
+   */
+  commitRejection?: CommitRejection;
   tokenUsage?: TokenUsage;
   telemetry?: {
     rawEventCount: number;
