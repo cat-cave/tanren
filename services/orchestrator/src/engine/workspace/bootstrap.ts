@@ -11,9 +11,10 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { withAppEnv } from "../ssh/appEnvPrelude.js";
 import { withMiseActivation } from "../ssh/miseActivate.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import { combinedOutput, failureReason, tailOf } from "./outputTail.js";
-import { classifyToolchainFault, resolveWorkspaceToolchain, toolchainProvisionCommand } from "./toolchainProvision.js";
-import { parseToolchainResolutions, type ToolchainResolution } from "./toolchainEnforcement.js";
+import { combinedOutput, failureReason, redactAppEnv, tailOf } from "./outputTail.js";
+import { classifyToolchainFault, provisionMiseToolchain } from "./toolchainProvision.js";
+import type { ToolchainResolution } from "./toolchainEnforcement.js";
+import { ensureWorkspaceSetup } from "./setup.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 // The commit message used for the synthetic post-bootstrap commit. Install
@@ -22,9 +23,9 @@ import { runWorkspaceSshCommand } from "./ssh.js";
 // branch carry only the writer's real changes — never bootstrap-generated files.
 export const BOOTSTRAP_COMMIT_MESSAGE = "tanren: bootstrap";
 
-// The path of the conventional lifecycle file (engine/forge/scaffold/skeleton.ts):
-// a project declares its stack's bootstrap in `just bootstrap`. This LOUD-fallback
-// probes for it before refusing to assume a stack.
+// The conventional lifecycle file (engine/forge/scaffold/skeleton.ts): a project
+// declares its stack's bootstrap in `just bootstrap`. This LOUD-fallback probes for
+// it before refusing to assume a stack.
 const JUSTFILE_PATH = "justfile";
 
 // The bootstrap command used ONLY when the repo declares NO install command — i.e.
@@ -38,14 +39,13 @@ const JUSTFILE_PATH = "justfile";
 // bootstrap`, not in Tanren.
 //
 // NO-OP (not loud) on a missing justfile: the cold bootstrap runs over a FRESHLY
-// CLONED workspace — for a greenfield scaffold that is an EMPTY repo, BEFORE the
-// writer has authored the justfile that declares the lifecycle. There is genuinely
-// nothing to bootstrap yet, so this skips with a note (a legitimate-empty case, not
-// a silent stack assumption — there is NO Node/pnpm/npm probe). Contract ENFORCEMENT
-// lives at the GATE, not here: once the writer authors the justfile, the gate runs
-// `just tier-1`/etc.; a repo that never declares a justfile fails the gate loudly,
-// which surfaces as a P0 finding (worker-resilient, see gateConfigFailure / #443) the
-// loop fixes — rather than bricking an empty repo before it can be scaffolded.
+// CLONED workspace — a greenfield scaffold is an EMPTY repo BEFORE the writer has
+// authored the lifecycle justfile, so there is genuinely nothing to bootstrap yet and
+// this skips with a note (a legitimate-empty case, not a silent stack assumption —
+// NO Node/pnpm/npm probe). Contract ENFORCEMENT lives at the GATE: once the writer
+// authors the justfile the gate runs `just tier-1`/etc., and a repo that never declares
+// one fails the gate loudly as a P0 finding (worker-resilient, gateConfigFailure / #443)
+// the loop fixes — rather than bricking an empty repo before it can be scaffolded.
 // Double-quoted message (no embedded single-quotes/parens) so the shell parses clean.
 export const DEFAULT_BOOTSTRAP_COMMAND =
   `if [ -f ${JUSTFILE_PATH} ]; then just bootstrap; ` +
@@ -67,6 +67,10 @@ export interface BootstrapWorkspaceInput {
   // `workspace.failed` / `run.failed` event payloads. Distinct from Tanren's own
   // provider creds. Undefined ⇒ no app env (command unchanged).
   appEnv?: Record<string, string>;
+  // The repo's ONCE-PER-WORKSPACE `.tanren/ci.yml` `setup.run` (workspace/setup.ts),
+  // ensured (latched) before this install runs. Undefined ⇒ the repo declared no setup
+  // verb and no round-trip is made. See the invariant note on `bootstrapWorkspace`.
+  setupCommand?: string;
 }
 
 // A typed, observable bootstrap failure. Carries the exit code and a bounded
@@ -93,11 +97,24 @@ export class WorkspaceBootstrapError extends Error {
 // nonzero exit, timeout, or substrate failure.
 export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promise<CommandResult> {
   const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
+  // THE INVARIANT: no project install command runs in a workspace whose declared SETUP has
+  // not been ensured — enforced at BOTH install doors (here and `ensureWorkspaceDepsInstalled`)
+  // rather than at one orchestration site, so a caller reaching an install by another route
+  // (the merge gates, benchmark/liveAccept) cannot get a half-prepared workspace. Latched; a
+  // `WorkspaceSetupError` is NOT a `WorkspaceBootstrapError`, so self-healing declines it.
+  await ensureWorkspaceSetup({
+    ssh: input.ssh,
+    target: input.target,
+    workspacePath: input.workspacePath,
+    ...(input.setupCommand === undefined ? {} : { command: input.setupCommand }),
+    ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+  });
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended ONLY to the string handed
   // to `ssh.run` — never to `command`, which is the value that flows into the
   // error message / log below. So a bootstrap failure surfaces the ORIGINAL
-  // command (prelude-free), and no app-secret value can reach the emitted
-  // `workspace.failed` / `run.failed` events. Mirrors the gate path, which keeps
+  // command (prelude-free). The OUTPUT is a second, separate exposure — the project's
+  // own bootstrap can PRINT a value — and it is closed by a second mechanism, the
+  // `redactAppEnv` on the captured tail below. Mirrors the gate path, which keeps
   // the original `step.run` in `gate.*` events.
   const result = await input.ssh.run(input.target, {
     // PROJECT-COMMAND path: mise-activate so the project's `just bootstrap` (a bare
@@ -123,7 +140,9 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
       input.workspacePath,
       command,
       result.exitCode,
-      tailOf(combinedOutput(result)),
+      // REDACTED (./outputTail.ts) — the project's own output is the other half of the
+      // app-env exposure the prelude discipline does not cover.
+      redactAppEnv(tailOf(combinedOutput(result)), input.appEnv),
       result.stalled === true,
     );
   }
@@ -136,14 +155,12 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
 // provisioning through mise, and the post-provision binary verification that turns a
 // silently-skipped toolchain into a loud, attributable halt.
 
-// The sentinel the guarded install prints on the NO-OP path (manifest absent, or
-// deps already installed). It rides on stdout so the caller can distinguish a
-// real install run from a skip without a second round-trip — used to cache the
-// "deps installed" flag so the next gate's ensure call is a pure no-op.
+// The sentinel the guarded install prints on the NO-OP path (contract absent). It rides
+// on stdout so the caller can distinguish a real install run from a skip without a second
+// round-trip — used to cache the "deps installed" flag so the next ensure call is a no-op.
 const DEPS_NOOP_SENTINEL = "tanren: deps-ensure no-op";
-// The sentinel the guarded install prints right before it runs the install
-// command, so the caller can observe (and the diagnostic can reflect) that the
-// install path was actually taken.
+// The sentinel the guarded install prints right before it runs the install command, so
+// the caller can observe (and the diagnostic reflect) that the install path was taken.
 const DEPS_INSTALL_SENTINEL = "tanren: deps-ensure installing";
 
 export interface EnsureWorkspaceDepsInput {
@@ -164,6 +181,13 @@ export interface EnsureWorkspaceDepsInput {
   // to `command`, so a failure surfaces the ORIGINAL command (prelude-free) and no
   // app-secret value can reach the error message / events. Undefined ⇒ no app env.
   appEnv?: Record<string, string>;
+  // The repo's ONCE-PER-WORKSPACE `.tanren/ci.yml` `setup.run` (workspace/setup.ts).
+  // Ensured here, LATCHED, before the per-gate install — so the MERGE-gate paths, which
+  // clone a FRESH workspace and never go through `prepareRunWorkspace`, still get the
+  // repo's environment prepared before their gate (and before any commit whose hooks are
+  // live) instead of only the run-loop path getting it. Undefined ⇒ the repo declared no
+  // setup verb and the step makes no round-trip at all.
+  setupCommand?: string;
 }
 
 // The outcome of an ensure call: whether the guarded install actually RAN the
@@ -185,10 +209,9 @@ export interface EnsureWorkspaceDepsResult {
   toolchain: readonly ToolchainResolution[];
 }
 
-// A typed, observable deps-install failure, mirroring WorkspaceBootstrapError.
-// Carries the exit code and a bounded output tail so a halting run outcome has a
-// concrete diagnostic. The ORIGINAL command (never the app-env prelude) is what
-// flows into the message, so no app-secret value can leak into an event payload.
+// A typed, observable deps-install failure, mirroring WorkspaceBootstrapError. Carries the
+// exit code and a `redactAppEnv`-scrubbed output tail, so neither the command nor the
+// project's own output can leak an app-env VALUE into an event payload.
 export class WorkspaceDepsInstallError extends Error {
   override readonly name = "WorkspaceDepsInstallError";
 
@@ -229,51 +252,49 @@ export async function ensureWorkspaceDepsInstalled(
 ): Promise<EnsureWorkspaceDepsResult> {
   const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
   // The guard runs entirely runner-side in ONE round-trip: if the project CONTRACT
-  // (`justfile` / `.tanren/ci.yml`) is present, print the install sentinel then run
-  // the bootstrap; otherwise print the no-op sentinel and exit 0. It runs whenever
-  // the contract is present (no deps-present gate) so a writer-added dependency
-  // installs even when an earlier iteration already prepared the tree — the
-  // project's `just bootstrap` is the idempotency authority, so a redundant run is a
-  // cheap no-op. `set -e` is intentionally NOT used at the top — the `if`/`else`
-  // already controls flow and the bootstrap command surfaces its own nonzero exit.
-  // TOOLCHAIN PROVISION (environment-management.md §3): inside the contract-present
-  // branch, BEFORE the project's bootstrap, provision the toolchain the repo DECLARES —
-  // its own `mise.toml` if it ships one, otherwise whatever its standard declaration
-  // files say (`package.json#packageManager`, `.nvmrc`, `.python-version`, a lockfile,
-  // …). Detection needs the repo's bytes, so it is resolved here, in its own round-trip,
-  // BEFORE the guard is built; the resulting command verifies each declared binary is on
-  // PATH and exits nonzero naming the file that declared it if not.
-  //
-  // Re-detected every gate on purpose: a writer that ADDS a declaration mid-run (a new
-  // `packageManager` field, a new lockfile) must get that toolchain provisioned before
-  // the next gate, exactly as a writer-added dependency must get installed.
-  //
-  // Chained with `&&` so a failed provision ABORTS the branch — the project's bootstrap
-  // never runs against a tree whose toolchain is not there.
-  //
-  // WHY THERE IS NO `set -e` HERE, AND WHY THE PROVISION STILL FAILS CLOSED. The provision
-  // must run IN THIS SHELL: it leaves behind the `export`s and the `mise env` PATH the
-  // bootstrap chained after it depends on, and a `( set -e; … )` subshell would discard
-  // exactly that. It would not even fail closed — POSIX ignores `-e` for any command of an
-  // AND-OR list other than the last, and that extends into the subshell, so
-  // `( set -e; false; echo x ) && y` runs both in sh, bash and dash. The abort semantics
-  // therefore live INSIDE `toolchainProvisionCommand` (and `underMiseLock`), where every
-  // step carries its own nonzero exit, rather than in a wrapper here that cannot deliver
-  // them. The `&&` below is what turns that nonzero into "the bootstrap does not run".
-  const detection = await resolveWorkspaceToolchain({
+  // (`justfile` / `.tanren/ci.yml`) is present, print the install sentinel then run the
+  // bootstrap; otherwise print the no-op sentinel and exit 0. No deps-present gate, so a
+  // writer-added dependency installs even when an earlier iteration prepared the tree —
+  // the project's `just bootstrap` is the idempotency authority.
+  // TOOLCHAIN PROVISION (environment-management.md §3), re-detected every gate on purpose:
+  // a writer that ADDS a declaration mid-run (a new `packageManager` field, a new lockfile)
+  // must get that toolchain provisioned before the next gate, exactly as a writer-added
+  // dependency must get installed. A failed provision throws, so nothing below runs.
+  // ORDER: TOOLCHAIN, THEN SETUP, THEN BOOTSTRAP — what ./setup.ts documents ("after the
+  // declared toolchain is provisioned (setup may need node/python), before the project's
+  // bootstrap"). This door ran setup FIRST, so the documented order held only on the
+  // run-loop path where `prepareRunWorkspace` had already provisioned. On a MERGE gate — a
+  // fresh clone that never sees workspace-prep — the activation guard found no `mise.toml`
+  // and no marker, and a `setup.run` calling `pnpm`/`node`/`python` failed before the
+  // toolchain existed. Provisioning is its own step so its marker activates the toolchain
+  // for the setup that follows. Unconditional rather than inside the contract-present
+  // branch: a repo declaring a toolchain deserves it before it has authored a `justfile`,
+  // and for one declaring nothing this is a single echoed line. The GUARD below still
+  // gates the project's own BOOTSTRAP on the contract, which is what it protected.
+  const { detection, resolutions } = await provisionMiseToolchain({
     ssh: input.ssh,
     target: input.target,
     workspacePath: input.workspacePath,
   });
+  // The other install door — same invariant as `bootstrapWorkspace` above. It matters here
+  // because the MERGE-gate paths clone their OWN workspace and reach a gate without ever
+  // running workspace-prep; without this they would gate a tree never prepared. A
+  // `WorkspaceSetupError` propagates: the gate's writer-routing boundary does not claim it.
+  await ensureWorkspaceSetup({
+    ssh: input.ssh,
+    target: input.target,
+    workspacePath: input.workspacePath,
+    ...(input.setupCommand === undefined ? {} : { command: input.setupCommand }),
+    ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+  });
   const guarded =
     `if [ -f ${JUSTFILE_PATH} ] || [ -f .tanren/ci.yml ]; then ` +
     `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ` +
-    `{ ${toolchainProvisionCommand(detection, input.workspacePath)}; } && { ${command}; }; ` +
+    `{ ${command}; }; ` +
     `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
-  // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard
-  // ONLY, never to `command` (the value carried into the error below), so a
-  // failed install surfaces the ORIGINAL install command and no app-secret value
-  // reaches WorkspaceDepsInstallError or the run's event payloads.
+  // SUBSTRATE BOUNDARY: the app-env prelude goes on the EXECUTED guard ONLY, never on
+  // `command`. The project's own output is the other half of that exposure and is redacted
+  // separately (`redactAppEnv`), so no app-env VALUE reaches the error or the events.
   const result = await input.ssh.run(input.target, {
     // PROJECT-COMMAND path: mise-activate the guarded install (so a writer-added dep
     // installs under the project's declared toolchain — a no-op when none declared),
@@ -293,7 +314,8 @@ export async function ensureWorkspaceDepsInstalled(
 
   const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
-    const outputTail = tailOf(combinedOutput(result));
+    // REDACTED before anything reads it — the classifier's message quotes it too.
+    const outputTail = redactAppEnv(tailOf(combinedOutput(result)), input.appEnv);
     // INFRASTRUCTURE-FAULT TRIAGE (the second half of the fix). A deps-install that died
     // because a TOOLCHAIN BINARY is missing is not a scaffold defect: no source edit
     // installs a program. Routing it to the writer — which is what a
@@ -309,9 +331,11 @@ export async function ensureWorkspaceDepsInstalled(
       // A stall is not a missing binary — see the `stalled` note on classifyToolchainFault.
       stalled: result.stalled === true,
       detection,
-      // Whatever the provision managed to verify before the bootstrap died, so the halt
-      // reports the toolchain that WAS in effect alongside the binary that was not.
-      resolutions: parseToolchainResolutions(result.stdout),
+      // What the provision VERIFIED, so the halt reports the toolchain that WAS in effect
+      // alongside the binary that was not. Read from the provision's own result rather
+      // than scraped out of the bootstrap's stdout, which never carried the frames once
+      // provisioning became its own step.
+      resolutions,
     });
     if (infraFault !== undefined) {
       throw infraFault;
@@ -329,7 +353,7 @@ export async function ensureWorkspaceDepsInstalled(
   // it can cache "deps installed" and skip the stat round-trip on the next gate.
   return {
     installed: result.stdout.includes(DEPS_INSTALL_SENTINEL),
-    toolchain: parseToolchainResolutions(result.stdout),
+    toolchain: resolutions,
   };
 }
 

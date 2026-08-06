@@ -16,7 +16,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import {
   bootstrapWorkspace,
   commitBootstrapState,
-  materializeContractFilesInWorkspace,
+  materializeContractFilesCommit,
   provisionMiseToolchain,
   runWorkspaceSshCommand,
   seedWorkspaceLocalIgnore,
@@ -27,7 +27,7 @@ import {
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCredentials.js";
-import { resolveBootstrapCommand } from "./gate/index.js";
+import { resolveWorkspaceLifecycleCommands } from "./gate/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import { bootstrapDependentWorkspace, type ClonedWorkspace } from "./plannerRunJjLocalBootstrap.js";
@@ -40,6 +40,9 @@ export interface BootstrapStepInput {
   target: RunnerHandle;
   workspacePath: string;
   command?: string;
+  // The repo's once-per-workspace `setup.run`, ensured by the install step before it
+  // installs (workspace/setup.ts). Undefined ⇒ the repo declared no setup verb.
+  setupCommand?: string;
   // Plane B: the project's dev+test app env, injected at the SSH substrate boundary
   // (never folded into `command`, so a bootstrap failure can't leak it into the
   // error message / events). See bootstrap.ts. Undefined ⇒ no app env.
@@ -158,8 +161,10 @@ export async function prepareRunWorkspace(
   // `just bootstrap`); when the repo ships no .tanren/ci.yml the resolver yields
   // undefined and the bootstrap step falls back to the stack-agnostic
   // DEFAULT_BOOTSTRAP_COMMAND LOUD-fallback (just bootstrap, else a loud failure).
-  const resolvedBootstrapCommand =
-    input.bootstrapCommand ?? (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath }));
+  // ONE read of `.tanren/ci.yml` yields BOTH preparation commands (per-gate `bootstrap.run`,
+  // once-per-workspace `setup.run`), so the two can never come from different bytes.
+  const lifecycle = await resolveWorkspaceLifecycleCommands({ ssh: input.ssh, target, workspacePath });
+  const resolvedBootstrapCommand = input.bootstrapCommand ?? lifecycle.bootstrap;
   // TOOLCHAIN PROVISION (environment-management.md §3 Layer 2): BEFORE the project's
   // `just bootstrap`, provision the toolchain the repo DECLARES. Detection reads the
   // repo's own `mise.toml` when it ships one and otherwise the standard declaration
@@ -198,6 +203,10 @@ export async function prepareRunWorkspace(
       target,
       workspacePath,
       command: resolvedBootstrapCommand,
+      // WORKSPACE SETUP (workspace/setup.ts): the repo's once-per-workspace environment
+      // preparation, ensured by the install step before it installs — so before the first
+      // commit whose hooks are live. A `WorkspaceSetupError` is NOT deferred below; it HALTS.
+      ...(lifecycle.setup === undefined ? {} : { setupCommand: lifecycle.setup }),
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     });
   } catch (error: unknown) {
@@ -227,7 +236,13 @@ export async function prepareRunWorkspace(
   // derive's `materializeTemplate` step) ALREADY landed these files on the repo's
   // default branch as part of the project's initial content, so this materialization
   // is a no-op and NO commit is made (sha "").
-  const contractSha = await materializeContractFilesCommit(input, target, workspacePath);
+  const contractSha = await materializeContractFilesCommit({
+    ssh: input.ssh,
+    target,
+    workspacePath,
+    files: input.context.contractFiles,
+    provisionMise,
+  });
 
   // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the Tanren-owned
   // commits — the contract-files commit when one was made (apex v28 fix), ELSE the
@@ -259,48 +274,6 @@ export async function prepareRunWorkspace(
     // flagged `<unknown>` external). Absent on the unauthenticated clone (never pushes).
     ...(resolved.identity !== undefined && { pushIdentity: resolved.identity }),
   };
-}
-
-// Materialize the deterministic contract files into the workspace + commit them as a
-// dedicated commit above the bootstrap base, so they become part of the writer's PR
-// diff. Returns the new contract-commit sha (the answerer review base anchors ABOVE it,
-// so the Tanren-owned files are kept out of the writer's reviewed diff — apex v28 fix),
-// or "" when no commit was made: the run carries no contract manifest (the project
-// captured no lifecycle), a fake SSH yields no sha, OR the files were already present
-// (a brownfield re-clone — write-iff-absent left nothing newly written). On a "" the
-// caller keeps the bootstrap base, so the answerers diff from the same place as before.
-async function materializeContractFilesCommit(
-  input: RunPlannerLoopInput,
-  target: RunnerHandle,
-  workspacePath: string,
-): Promise<string> {
-  const files = input.context.contractFiles;
-  if (files === undefined || files.length === 0) return "";
-  const result = await materializeContractFilesInWorkspace({
-    ssh: input.ssh,
-    target,
-    files,
-    workspacePath,
-  });
-  // Nothing newly written (every file already present) ⇒ no commit, no base shift.
-  if (result.written.length === 0) return "";
-  const committed = await runWorkspaceSshCommand(input.ssh, target, {
-    label: "commit deterministic contract files",
-    cwd: workspacePath,
-    watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: [
-      "set -eu",
-      // Stage ONLY the contract files (not -A) so this commit carries the contract
-      // and nothing else — the bootstrap commit already absorbed install artifacts.
-      `git add ${result.written.map((p) => quoteSshShellArg(p)).join(" ")}`,
-      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
-        `git commit -q -m ${quoteSshShellArg("tanren: project contract files (.tanren/ci.yml + justfile)")}`,
-      // Echo the contract-commit sha LAST so it is the command's stdout — it becomes
-      // the answerer review base. A fake SSH yields ""; the real runner a 40-hex sha.
-      "git rev-parse HEAD",
-    ].join(" && "),
-  });
-  return committed.stdout.trim();
 }
 
 // Clones the target branch and returns the clone HEAD. `git rev-parse HEAD` runs

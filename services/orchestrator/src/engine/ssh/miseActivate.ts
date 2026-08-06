@@ -18,6 +18,12 @@
 //     does NOT globally activate mise). This module is NEVER applied there: the codex
 //     exec path (engine/providers/codex.ts) builds its command directly and stays on
 //     the harness node, untouched by the project's toolchain.
+//   - PROJECT-HOOK path — a Tanren-issued `git commit` that leaves the repo's hook path
+//     LIVE (`withProjectHookToolchain`). The git binary is the harness's, but the hook
+//     it fires is the PROJECT's code, so the hook needs the PROJECT's toolchain. See
+//     that function for the full rationale; it is the same activation, invoked for a
+//     third reason, and it does NOT put the project's toolchain on the harness path —
+//     the codex exec that produced the changes has already exited by then.
 //
 // SECURITY: like the app-env prelude, the activation is prepended ONLY to the EXECUTED
 // command string handed to the SSH substrate — never to a logged/emitted command (gate
@@ -25,6 +31,8 @@
 // into every event. The prelude contains no secret material.
 
 import { quoteSshShellArg } from "./command.js";
+import { workspaceScopePrefix } from "./workspaceScope.js";
+import { withWorkspaceToolPath } from "./workspaceToolPath.js";
 
 // The conventional path of the project's `mise.toml` (mirrors
 // SKELETON_MISE_CONFIG_PATH; kept local so this ssh helper has no scaffold dep). The
@@ -104,10 +112,6 @@ export function miseSharedDirPrelude(): string {
 // {@link MISE_SHARED_LOCK_FILE} — shared ON PURPOSE, because a per-run lock excludes
 // nothing.
 
-/** The run sandbox shape (`workspace/paths.ts`), mirrored rather than imported so this
- * ssh helper keeps the zero-dependency posture {@link MISE_CONFIG_REL_PATH} has. */
-const RUN_WORKSPACE_PATTERN = /^(\/workspace\/runs\/run_[A-Za-z0-9_-]+)\/repo$/u;
-
 /** The mutual-exclusion point for the SHARED mise data dir. One path for the whole
  * runner: two runs holding two different locks would serialise nothing. */
 export const MISE_SHARED_LOCK_FILE = "$HOME/.tanren-mise.lock";
@@ -155,31 +159,11 @@ export interface MiseRunScope {
  * per-workspace name in the runner user's home rather than throwing.
  */
 export function miseRunScope(workspacePath: string): MiseRunScope {
-  const runDir = RUN_WORKSPACE_PATTERN.exec(workspacePath)?.[1];
-  const prefix = runDir === undefined ? `$HOME/.tanren-mise-${workspaceKey(workspacePath)}` : `${runDir}/tanren-mise`;
+  // The prefix rule ("a path only this run owns, outside the repo tree") lives in
+  // ./workspaceScope.ts — shared with the workspace TOOL DIRECTORY, which needs the
+  // identical rule. The emitted strings are unchanged.
+  const prefix = workspaceScopePrefix(workspacePath, "mise");
   return { configFile: `${prefix}-config.toml`, markerFile: `${prefix}-provisioned`, lockFile: MISE_SHARED_LOCK_FILE };
-}
-
-// A readable slug plus a hash of the FULL path, so two workspaces that slugify alike
-// still get distinct files. Reduced to `[A-Za-z0-9-]` because these paths are emitted
-// inside double quotes (to let `$HOME` expand) and must carry no other shell metachar.
-function workspaceKey(workspacePath: string): string {
-  const slug = workspacePath
-    .replaceAll(/[^A-Za-z0-9]+/gu, "-")
-    .slice(-40)
-    .replaceAll(/^-+|-+$/gu, "");
-  return `${slug === "" ? "workspace" : slug}-${stableHash(workspacePath)}`;
-}
-
-// A plain polynomial rolling hash — deterministic across processes, which is all that is
-// asked of it. Not a checksum and not security-bearing: it only keeps two workspaces
-// whose slugs collide from sharing one mise config.
-function stableHash(value: string): string {
-  let hash = 0;
-  for (const character of value) {
-    hash = (hash * 31 + (character.codePointAt(0) ?? 0)) % 0xff_ff_ff_ff;
-  }
-  return hash.toString(16).padStart(8, "0");
 }
 
 /**
@@ -342,11 +326,35 @@ function lockedBodyFailedMessage(scope: MiseRunScope): string {
 // runs on the container is what let run B's toolchain be activated for run A's gate.
 function miseActivationPrelude(workspacePath: string): string {
   const scope = miseRunScope(workspacePath);
+  // `eval "$(…)"` reports the status of EVAL, never of the command substitution inside it:
+  // a `mise activate` / `mise env` that exited nonzero evaluates to an EMPTY string and
+  // "succeeds", so the project's command runs with its declared toolchain absent and the
+  // only evidence is a line on stderr. That is the silent degradation this module exists to
+  // remove, sitting inside the module. Captured, CHECKED, then evaluated.
+  //
+  // A failure here is a HALT, not a skip. Both branches are entered only after the guard
+  // has established that this run HAS a toolchain to activate — the repo's own `mise.toml`,
+  // or a marker written by a provision that verified every declared binary. Running the
+  // project's command anyway would run it against whatever the image happens to carry. The
+  // guard is still a pure skip for a repo that declared nothing: that path enters neither
+  // branch and the `if … fi; ` chains straight into the command, exactly as before.
+  const activate = (source: string): string =>
+    `__tanren_mise_activate="$(${source})" || ` +
+    `{ printf '%s\\n' ${quoteSshShellArg(activationFailedMessage(source))} >&2; exit 1; }; ` +
+    `eval "$__tanren_mise_activate"`;
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `${miseScopeExport(scope)}; eval "$(mise activate bash --shims)"; ` +
+    `${miseScopeExport(scope)}; ${activate("mise activate bash --shims")}; ` +
     `elif [ -f "${scope.markerFile}" ]; then ` +
-    `${miseScopeExport(scope)}; eval "$(mise env -s bash)"; fi; `
+    `${miseScopeExport(scope)}; ${activate("mise env -s bash")}; fi; `
+  );
+}
+
+function activationFailedMessage(source: string): string {
+  return (
+    `tanren: toolchain activation FAILED - '${source}' exited nonzero, so the toolchain this run provisioned is ` +
+    `not on PATH. Tanren halts rather than running the project's own command against whatever toolchain the ` +
+    `runner image happens to carry.`
   );
 }
 
@@ -361,8 +369,87 @@ function miseActivationPrelude(workspacePath: string): string {
  * ({@link miseRunScope}), which is what keeps concurrent runs off each other's toolchain.
  */
 export function withMiseActivation(command: string, workspacePath: string): string {
-  return `${miseActivationPrelude(workspacePath)}${command}`;
+  // THE PROJECT ENVIRONMENT IS TWO HALVES, and this is the single entry point both are
+  // applied at — deliberately, because a project command that got one half and not the
+  // other is precisely the bug class this and #1418 exist to close.
+  //   - The DECLARED language toolchain (mise), below.
+  //   - The workspace TOOL DIRECTORY (`$TANREN_BIN`) — the writable, run-scoped `bin` a
+  //     project's own `setup.run` installs native binaries into (gitleaks, shellcheck,
+  //     terraform, …), which no manifest declares and mise does not provide. See
+  //     ./workspaceToolPath.ts for why a repository otherwise has nowhere to put one.
+  // Tool-path FIRST so the mise prelude's `PATH` prepend lands on top of it: a tool whose
+  // version the repository actually DECLARED always outranks a same-named binary in the
+  // tool directory.
+  return withWorkspaceToolPath(`${miseActivationPrelude(workspacePath)}${command}`, workspacePath);
 }
+
+/**
+ * Prepend the SAME activation to a Tanren-issued git command that runs the PROJECT's
+ * commit hooks. Distinct from {@link withMiseActivation} only in WHY, and named so every
+ * call site states which of the module's paths it is on.
+ *
+ * THE RULE: if Tanren issues a git command that leaves the repo's hook path live, that
+ * command executes the project's code and must therefore carry the project's toolchain.
+ * A `git commit` is not "a git command" from the hook's point of view — it is the
+ * project's `.husky/pre-commit` (or lefthook, or a bare `.git/hooks/pre-commit`) running
+ * `pnpm`/`node`/`bundle`. Those resolve against PATH, and the runner ships NO project
+ * toolchain by design (runner/Dockerfile: mise is a binary on PATH, never globally
+ * activated), so a commit shell without it has exactly the harness node and nothing
+ * else. MEASURED on a live runner, in the exact shell `buildSshExecCommand` produces:
+ *
+ *   PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
+ *   pnpm: NOT-FOUND
+ *   .husky/pre-commit: 2: pnpm: not found   →   husky - pre-commit script failed
+ *
+ * …while the same shell with this prelude resolves the provisioned
+ * `…/mise/installs/pnpm/<version>/pnpm` and the hook RUNS AND PASSES. The toolchain was
+ * never missing — `miseProvisionCommand` installed it at workspace-prep; it simply was
+ * not on PATH for this subprocess, because `runWorkspaceSshCommand` adds no prelude and
+ * the activation was wired at exactly three call sites, none of them a commit.
+ *
+ * WHY ACTIVATE RATHER THAN BYPASS THE HOOKS. A `git commit` CAN be taken off the repo's
+ * hooks with `-c core.hooksPath=/dev/null`, and for a commit that is purely Tanren's own
+ * bookkeeping — one that never reaches the PR — that is the right call. These commits are
+ * NOT that: they carry content into the PR a reviewer will read, so suppressing their
+ * hooks would be a silent policy change (Tanren deciding the project's pre-commit gate
+ * does not apply to Tanren-authored content). The project's hook is also CORRECT: it
+ * legitimately needs the toolchain. A hook that runs and passes is evidence; a hook that
+ * was skipped is not. So we satisfy the hook instead of silencing it.
+ *
+ * SCOPE. Commit-time hooks only (pre-commit / prepare-commit-msg / commit-msg), which is
+ * what the whole activation is guarded and proven for. `pre-push` hooks on the workspace
+ * push paths are the same class of exposure and are deliberately NOT changed here: no
+ * push-hook failure has been observed, and those commands carry auth material on stdin,
+ * so they are left for a change that can prove itself the way this one does.
+ */
+export function withProjectHookToolchain(command: string, workspacePath: string): string {
+  // TANREN'S OWN GIT IS PINNED BEFORE THE PROJECT'S TOOLCHAIN GOES ON PATH.
+  //
+  // Branch 1 of the activation prepends the project's mise SHIMS directory, which carries a
+  // shim for every tool in the runner's mise store — including `git`, if the project
+  // declared one. Only the HOOK needed the project's PATH; Tanren's own `git add` /
+  // `git commit` / `git rev-parse` were swept along with it, so a project-pinned or broken
+  // git could stop Tanren committing at all, and the sha `git rev-parse` prints — the
+  // writer's diff base — would come from a binary the project chose. Resolving it FIRST,
+  // into an exported absolute path the call sites name explicitly, keeps the two apart:
+  // Tanren's git stays the harness's, the hook subprocess still inherits the project's
+  // PATH, and every call site says which of the two it is using.
+  //
+  // Falls back to the bare word when `command -v` finds nothing, so a substrate with no git
+  // fails exactly the way it always did rather than in a new and less legible way.
+  const pinGit =
+    `${TANREN_GIT_ENV}="$(command -v git 2>/dev/null || true)"; ` +
+    `[ -n "$${TANREN_GIT_ENV}" ] || ${TANREN_GIT_ENV}=git; export ${TANREN_GIT_ENV}; `;
+  return `${pinGit}${withMiseActivation(command, workspacePath)}`;
+}
+
+/** The environment variable carrying the HARNESS git, resolved BEFORE any project
+ * activation. See {@link withProjectHookToolchain}. */
+export const TANREN_GIT_ENV = "TANREN_GIT";
+
+/** How a Tanren-issued git command spells `git` when it runs under
+ * {@link withProjectHookToolchain}. */
+export const TANREN_GIT = `"$${TANREN_GIT_ENV}"`;
 
 // The mise PROVISIONING commands run at workspace-prep, BEFORE the project's bootstrap,
 // when a `mise.toml` is present: `mise trust` (mise's config-trust security gate — the

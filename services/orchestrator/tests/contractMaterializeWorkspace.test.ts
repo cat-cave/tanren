@@ -42,10 +42,22 @@ const TS_LIFECYCLE: ProjectLifecycle = {
 // Records every command + stdin; yields the clone HEAD on every call (the trailing
 // `git rev-parse HEAD` must resolve a sha). The `if [ -f ]` guard echoes nothing on
 // stdout, so the file is treated as ABSENT (written) — the greenfield path.
+// The `.tanren/ci.yml` READ specifically — `if [ -f <p> ]; then cat <p>; fi`. Matched on
+// the `then cat` shape rather than the path, because the contract MATERIALIZATION command
+// names the same path and must NOT be answered as a config read.
+function isCiConfigRead(command: RunnerCommand): boolean {
+  return command.command.includes("; then cat ") && command.command.includes(".tanren/ci.yml");
+}
+
 class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ command: RunnerCommand }> = [];
   async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ command });
+    // The `.tanren/ci.yml` read is a `cat`-if-present: no config file ⇒ empty stdout,
+    // exit 0. A catch-all sha here is a shape no runner produces.
+    if (isCiConfigRead(command)) {
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: CLONE_HEAD, stderr: "", timedOut: false };
   }
 }
@@ -56,6 +68,9 @@ class PresentSsh implements CommandSubstrate {
   readonly commands: Array<{ command: RunnerCommand }> = [];
   async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ command });
+    if (isCiConfigRead(command)) {
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: "tanren: contract file present - skipping", stderr: "", timedOut: false };
   }
 }
@@ -160,7 +175,16 @@ describe("prepareRunWorkspace · materializes + commits the contract files when 
     );
     expect(commit).toBeDefined();
     const commitCommand = (commit?.command as { command: string } | undefined)?.command ?? "";
-    expect(commitCommand).toContain("git add '.tanren/ci.yml' 'justfile'");
+    expect(commitCommand).toContain("add '.tanren/ci.yml' 'justfile'");
+    // TANREN'S OWN GIT, resolved before the project's shims go on PATH. Only the HOOK
+    // needed the project's toolchain; a project that declares `git` must not also decide
+    // which binary writes Tanren's commit or prints the sha that becomes the review base.
+    expect(commitCommand).toContain('TANREN_GIT="$(command -v git 2>/dev/null || true)"');
+    expect(commitCommand).toContain(`"$TANREN_GIT" add`);
+    expect(commitCommand).toContain(`"$TANREN_GIT" rev-parse HEAD`);
+    // The commit's own stdout goes to STDERR: `-q` silences git, not the repo's live
+    // pre-commit hook, and hook chatter on stdout would be read as the commit sha.
+    expect(commitCommand).toMatch(/commit -q -m '[^']*' >&2/u);
   });
 
   it("is a clean no-op when the run carries NO contract manifest (brownfield ships its own)", async () => {
@@ -189,6 +213,9 @@ class ShaRoutingSsh implements CommandSubstrate {
   readonly commands: Array<{ command: RunnerCommand }> = [];
   async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ command });
+    if (isCiConfigRead(command)) {
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    }
     const label = (command as { label?: string }).label ?? "";
     const stdout = label === "commit deterministic contract files" ? CONTRACT_SHA : CLONE_HEAD;
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
