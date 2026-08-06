@@ -18,7 +18,8 @@
     "reason": {
       "enum": [
         "harness_discards_generation_id",
-        "byok_upstream_invoice"
+        "byok_upstream_invoice",
+        "unrecognized_credential_ref"
       ],
       "type": "string"
     },
