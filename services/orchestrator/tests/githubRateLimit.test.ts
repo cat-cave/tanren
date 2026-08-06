@@ -18,6 +18,7 @@ import {
   rateLimitBackoffMs,
   TRANSIENT_BACKOFF_MS,
 } from "../src/engine/providers/githubRetry.js";
+import { evaluateCiObservation } from "../src/engine/workflow/ciObservation.js";
 
 function headers(map: Record<string, string>): Headers {
   const h = new Headers();
@@ -241,14 +242,183 @@ describe("github required-context awareness (P3-0028)", () => {
     expect(required).toEqual(["build", "e2e"]);
   });
 
-  it("treats an unprotected branch (404) as no required gating", async () => {
-    const http = new ScriptedHttp([{ status: 404, body: { message: "Branch not protected" } }]);
-    const required = await new GitHubStatusService(http).fetchRequiredContexts({
+  it("omits required gating only with separate authoritative protected=false proof", async () => {
+    const http = new ScriptedHttp([
+      { status: 200, body: { object: { sha: "deadbeef" } } },
+      {
+        status: 200,
+        body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+      },
+      { status: 200, body: { statuses: [] } },
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: { name: "main", protected: false } },
+    ]);
+    const checks = await new GitHubStatusService(http).fetchBranchChecks({
       repo: { owner: "o", name: "r" },
       token: "t",
-      baseBranch: "main",
+      branch: "main",
     });
-    expect(required).toBeUndefined();
+    expect(checks.requiredContexts).toBeUndefined();
+    expect(evaluateCiObservation(checks)).toMatchObject({ status: "passed", reason: "all_checks_passed" });
+  });
+
+  it("accepts review/restriction protection with an explicit proof of no classic status checks", async () => {
+    const http = new ScriptedHttp([
+      { status: 200, body: { object: { sha: "deadbeef" } } },
+      {
+        status: 200,
+        body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+      },
+      { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: { name: "main", protected: true } },
+      {
+        status: 200,
+        body: {
+          required_status_checks: null,
+          required_pull_request_reviews: { required_approving_review_count: 1 },
+          restrictions: { users: [], teams: [], apps: [] },
+        },
+      },
+      { status: 200, body: [{ type: "pull_request" }] },
+    ]);
+    const checks = await new GitHubStatusService(http).fetchBranchChecks({
+      repo: { owner: "o", name: "r" },
+      token: "t",
+      branch: "main",
+    });
+    expect(checks.requiredContexts).toEqual([]);
+    expect(evaluateCiObservation(checks)).toMatchObject({ status: "passed", reason: "all_checks_passed" });
+  });
+
+  it("accepts ruleset-only protection only after the rules document proves no status requirement", async () => {
+    const http = new ScriptedHttp([
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: { name: "main", protected: true } },
+      { status: 404, body: { message: "Not Found" } },
+      { status: 200, body: [{ type: "pull_request" }, { type: "deletion" }] },
+    ]);
+    await expect(
+      new GitHubStatusService(http).fetchRequiredContexts({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        baseBranch: "main",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("fails closed on ambiguous or malformed protection proof and never emits a pass effect", async () => {
+    for (const [protection, rules, message] of [
+      [{ status: 404, body: {} }, { status: 200, body: [] }, /no full protection or ruleset proof/u],
+      [{ status: 200, body: { required_status_checks: {} } }, { status: 200, body: [] }, /did not prove/u],
+      [{ status: 404, body: {} }, { status: 200, body: [{}] }, /missing type/u],
+      [
+        { status: 404, body: {} },
+        { status: 200, body: [{ type: "required_status_checks" }] },
+        /require status checks/u,
+      ],
+    ] as const) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 404, body: { message: "Not Found" } },
+        { status: 200, body: { name: "main", protected: true } },
+        protection,
+        rules,
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(message);
+      expect(passedEffects).toBe(0);
+    }
+  });
+
+  it("fails closed when the unprotected branch proof has no matching branch identity", async () => {
+    for (const proof of [{ protected: false }, { name: "release", protected: false }]) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 404, body: { message: "Not Found" } },
+        { status: 200, body: proof },
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(/branch response name did not match requested branch/u);
+      expect(passedEffects).toBe(0);
+    }
+  });
+
+  it("fails closed when the branch proof is missing, denied, raced away, or malformed", async () => {
+    const input = { repo: { owner: "o", name: "r" }, token: "t", baseBranch: "main" };
+    for (const proof of [
+      { status: 404, body: { message: "Not Found" } },
+      { status: 403, body: { message: "Resource not accessible by integration" } },
+      { status: 200, body: { name: "main" } },
+    ]) {
+      const http = new ScriptedHttp([{ status: 404, body: { message: "Not Found" } }, proof]);
+      await expect(new GitHubStatusService(http).fetchRequiredContexts(input)).rejects.toThrow(
+        /branch-protection|branch response/u,
+      );
+    }
+  });
+
+  it("rejects malformed required-context evidence instead of silently dropping it", async () => {
+    const http = new ScriptedHttp([
+      { status: 200, body: { checks: [{ context: "build" }, { context: 7 }], contexts: ["build"] } },
+    ]);
+    await expect(
+      new GitHubStatusService(http).fetchRequiredContexts({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        baseBranch: "main",
+      }),
+    ).rejects.toThrow(/missing context/u);
+  });
+
+  it("rejects every present malformed required-context sibling before a CI pass can escape", async () => {
+    for (const body of [
+      { checks: [], contexts: "not-an-array" },
+      { checks: "not-an-array", contexts: ["build"] },
+    ]) {
+      const http = new ScriptedHttp([
+        { status: 200, body: { object: { sha: "deadbeef" } } },
+        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        { status: 200, body: { statuses: [] } },
+        { status: 200, body },
+      ]);
+      let passedEffects = 0;
+      await expect(
+        new GitHubStatusService(http)
+          .fetchBranchChecks({ repo: { owner: "o", name: "r" }, token: "t", branch: "main" })
+          .then((checks) => {
+            if (evaluateCiObservation(checks).status === "passed") passedEffects += 1;
+          }),
+      ).rejects.toThrow(/non-array (checks|contexts) field/u);
+      expect(passedEffects).toBe(0);
+    }
+  });
+
+  it("rejects a PR response without a base branch before assembling a check snapshot", async () => {
+    const http = new ScriptedHttp([{ status: 200, body: { head: { sha: "deadbeef", ref: "feat" } } }]);
+    await expect(
+      new GitHubStatusService(http).fetchPullRequestChecks({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        pullNumber: 7,
+      }),
+    ).rejects.toThrow(/PR response missing base branch/u);
   });
 
   it("THROWS loudly on a 403 (token lacks Administration:read) — never a silent 'no gating'", async () => {

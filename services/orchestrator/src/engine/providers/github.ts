@@ -1,9 +1,12 @@
 import {
+  parseBranchProtected,
   parseCheckRuns,
   parseCommitStatuses,
+  parseNoClassicRequiredStatusChecks,
   parseRefObjectSha,
   parseRequiredCheckAppIds,
   parseRequiredContexts,
+  parseRulesWithoutRequiredStatusChecks,
 } from "./githubChecksParse.js";
 import { parseBaseBranch, parsePullRequestHead, repoPath } from "./github/parse.js";
 // Re-export the `/contents` base64 decoder (it lives in the contract module) so the
@@ -63,10 +66,11 @@ export interface GitHubPullRequestChecks {
   statuses: GitHubCommitStatus[];
   /**
    * required-check awareness: the branch-protection required status
-   * check contexts for the PR's base branch, or `undefined` when the base
-   * branch has no protection (or it could not be read). A run only passes when
-   * every required context is green; when this is `undefined` the loop falls
-   * back to "all observed checks green" (prior behavior).
+   * check contexts for the PR's base branch, or `undefined` only when the
+   * documented branch DTO positively reports `protected: false`.
+   * Ambiguous/unreadable protection evidence throws before a snapshot exists.
+   * A run only passes when every required context is green; an authoritative
+   * `undefined` preserves the all-observed fallback.
    */
   requiredContexts?: string[];
   /** Optional exact GitHub App identity for protected contexts. */
@@ -169,12 +173,15 @@ export class GitHubStatusService {
     }
     const head = parsePullRequestHead(pull.body);
     const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.["base"]);
+    if (baseBranch === undefined || baseBranch === "") {
+      throw new TypeError("GitHub PR response missing base branch");
+    }
 
     return this.fetchChecksForSha({
       repo: input.repo,
       token: input.token,
       sha: head.sha,
-      ...(baseBranch !== undefined && { protectedBranch: baseBranch }),
+      protectedBranch: baseBranch,
       ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
     });
   }
@@ -226,7 +233,7 @@ export class GitHubStatusService {
     repo: GitHubRepository;
     token: string;
     sha: string;
-    protectedBranch?: string;
+    protectedBranch: string;
     refreshToken?: () => Promise<string>;
   }): Promise<GitHubPullRequestChecks> {
     const [checkRuns, statuses] = await Promise.all([
@@ -250,15 +257,12 @@ export class GitHubStatusService {
       throw new Error(`GitHub commit status fetch failed: HTTP ${statuses.status}`);
     }
 
-    const requiredCheckMetadata =
-      input.protectedBranch === undefined
-        ? undefined
-        : await this.fetchRequiredCheckMetadata({
-            repo: input.repo,
-            token: input.token,
-            baseBranch: input.protectedBranch,
-            ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
-          });
+    const requiredCheckMetadata = await this.fetchRequiredCheckMetadata({
+      repo: input.repo,
+      token: input.token,
+      baseBranch: input.protectedBranch,
+      ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
+    });
 
     return {
       head: { sha: input.sha },
@@ -271,11 +275,17 @@ export class GitHubStatusService {
 
   /**
    * read the branch-protection required status check contexts for a base
-   * branch. `undefined` ONLY for a 404 — GitHub's signal the branch has NO protection
-   * (legitimately "no required gating"; callers fall back to all-observed-green).
-   * No-silent-fallback: any OTHER non-200 is a genuine ERROR, not "no gating" — a 403
-   * (token lacks `Administration:read`) returned as `undefined` would DISABLE required-
-   * check gating; a persistent 5xx survived the transient retry. So those THROW loudly.
+   * branch. The abbreviated required-status-checks endpoint's documented 404 is
+   * only "Resource not found"; it can also mean missing Administration:read, a
+   * deleted branch, or a race. `undefined` is returned ONLY after separate
+   * authoritative proof that the branch is unprotected (its documented
+   * `protected` boolean is exactly false); callers then fall back to
+   * all-observed-green. A protected branch may legitimately have reviews,
+   * restrictions, or rulesets but no classic status checks — that is accepted
+   * (as `[]`) only after the full protection and branch-rules documents prove
+   * it. Every ambiguous, malformed, or unreadable result THROWS loudly (a 403
+   * returned as `undefined` would DISABLE required-check gating; a persistent
+   * 5xx survived the transient retry).
    */
   async fetchRequiredContexts(input: {
     repo: GitHubRepository;
@@ -283,24 +293,11 @@ export class GitHubStatusService {
     baseBranch: string;
     refreshToken?: () => Promise<string>;
   }): Promise<string[] | undefined> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status === 404) {
-      return undefined;
+    const response = await this.readRequiredStatusChecks(input);
+    if (response.status === 200) {
+      return parseRequiredContexts(response.body);
     }
-    if (response.status !== 200) {
-      throw new Error(
-        withErrorDetail(
-          `GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`,
-          response,
-        ),
-      );
-    }
-    return parseRequiredContexts(response.body);
+    return this.resolveRequiredContextsAfterProtection404(input);
   }
 
   private async fetchRequiredCheckMetadata(input: {
@@ -309,14 +306,29 @@ export class GitHubStatusService {
     baseBranch: string;
     refreshToken?: () => Promise<string>;
   }): Promise<{ contexts: string[] | undefined; appIds: Record<string, number> } | undefined> {
+    const response = await this.readRequiredStatusChecks(input);
+    if (response.status === 200) {
+      return { contexts: parseRequiredContexts(response.body), appIds: parseRequiredCheckAppIds(response.body) };
+    }
+    const contexts = await this.resolveRequiredContextsAfterProtection404(input);
+    if (contexts === undefined) return undefined;
+    return { contexts, appIds: {} };
+  }
+
+  /** Read the abbreviated required-status-checks endpoint; only 200 or 404 are non-errors. */
+  private async readRequiredStatusChecks(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<GitHubHttpResponse> {
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
       token: input.token,
       refreshToken: input.refreshToken,
     });
-    if (response.status === 404) return undefined;
-    if (response.status !== 200) {
+    if (response.status !== 200 && response.status !== 404) {
       throw new Error(
         withErrorDetail(
           `GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`,
@@ -324,6 +336,122 @@ export class GitHubStatusService {
         ),
       );
     }
-    return { contexts: parseRequiredContexts(response.body), appIds: parseRequiredCheckAppIds(response.body) };
+    return response;
+  }
+
+  /**
+   * The abbreviated required-status-checks endpoint 404'd. Separately read the
+   * branch DTO and return `undefined` ONLY when its documented `protected`
+   * boolean is exactly false. A protected branch's status-check subresource can
+   * legitimately 404 when protection is review/restriction/ruleset-only, so a
+   * `protected: true` result is only accepted as an empty requirement after the
+   * full protection and branch-rules documents prove no unrepresented rule.
+   */
+  private async resolveRequiredContextsAfterProtection404(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<string[] | undefined> {
+    const branch = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (branch.status !== 200) {
+      throw new Error(
+        withErrorDetail(
+          `GitHub branch-protection read for ${input.baseBranch} was ambiguous: required-status-checks HTTP 404; branch proof HTTP ${branch.status}`,
+          branch,
+        ),
+      );
+    }
+    if (parseBranchProtected(branch.body, input.baseBranch)) {
+      return this.proveNoRequiredStatusChecksAfter404(input);
+    }
+    return undefined;
+  }
+
+  /**
+   * A protected branch's abbreviated status-check endpoint can be absent simply
+   * because its protection is review/restriction/ruleset-only. Read both
+   * authoritative documents and return an explicit empty requirement only when
+   * neither carries an unrepresented required-status rule.
+   */
+  private async proveNoRequiredStatusChecksAfter404(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<string[]> {
+    const protection = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (protection.status !== 200 && protection.status !== 404) {
+      throw new Error(
+        withErrorDetail(
+          `GitHub full branch-protection read failed for ${input.baseBranch}: HTTP ${protection.status}`,
+          protection,
+        ),
+      );
+    }
+    const hasRulesetProof = await this.proveRulesWithoutRequiredStatusChecks(input);
+    if (protection.status === 200) {
+      parseNoClassicRequiredStatusChecks(protection.body);
+      return [];
+    }
+    if (hasRulesetProof) {
+      return [];
+    }
+    throw new Error(
+      `GitHub branch-protection read for ${input.baseBranch} was ambiguous: required-status-checks HTTP 404; no full protection or ruleset proof`,
+    );
+  }
+
+  /**
+   * GitHub paginates branch rules. An empty first page (or a short final page)
+   * is the only proof of exhaustion: stopping after page one could overlook a
+   * later required-status or workflow rule and falsely publish an empty gate.
+   */
+  private async proveRulesWithoutRequiredStatusChecks(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<boolean> {
+    const pageSize = 100;
+    let page = 1;
+    let hasRulesetProof = false;
+    const seenPages = new Set<string>();
+    for (;;) {
+      const rules = await this.http.request({
+        method: "GET",
+        path: repoPath(
+          input.repo,
+          `/rules/branches/${encodeURIComponent(input.baseBranch)}?per_page=${pageSize}&page=${page}`,
+        ),
+        token: input.token,
+        refreshToken: input.refreshToken,
+      });
+      if (rules.status !== 200) {
+        throw new Error(
+          withErrorDetail(`GitHub branch rules read failed for ${input.baseBranch}: HTTP ${rules.status}`, rules),
+        );
+      }
+      const pageHasRules = parseRulesWithoutRequiredStatusChecks(rules.body);
+      hasRulesetProof ||= pageHasRules;
+      const rows = rules.body as unknown[];
+      const pageFingerprint = JSON.stringify(rows);
+      if (seenPages.has(pageFingerprint)) {
+        throw new Error(`GitHub branch rules pagination made no progress for ${input.baseBranch}`);
+      }
+      seenPages.add(pageFingerprint);
+      if (rows.length < pageSize) return hasRulesetProof;
+      page += 1;
+    }
   }
 }
