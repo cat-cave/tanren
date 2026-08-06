@@ -114,7 +114,7 @@ export async function selectNodesForDependentRun(
   input: { projectId: string; runId: string; branch: string },
 ): Promise<IntegrationNodeRowShape[]> {
   const result = await client.query<IntegrationNodeRowShape>(
-    `SELECT DISTINCT n.node_id, n.base_branch, n.base_sha, n.ref, n.purpose, n.members, n.member_key,
+    `SELECT n.node_id, n.base_branch, n.base_sha, n.ref, n.purpose, n.members, n.member_key,
             n.gate_config_hash, n.policy_version, n.affected_fingerprint, n.head_sha,
             n.tree_hash, n.status
        FROM integration_nodes n
