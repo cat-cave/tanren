@@ -28,6 +28,7 @@ export type DirectGreenfieldResult =
   | { kind: "unavailable"; outcome: Unavailable }
   | { kind: "conflict"; reason: "request_changed" | "repo_bound_without_derivation" | "project_not_deriving" }
   | { kind: "deploy_failed"; error: unknown }
+  | { kind: "notify_failed"; error: unknown }
   | { kind: "bootstrap_failed"; bootstrap: ProvisionAutonomousProjectResult }
   | {
       kind: "complete";
@@ -243,8 +244,11 @@ export async function runDirectGreenfieldDerivation(
             migrateProjectConfig({ ...migrateProjectConfig(raw), greenfield: true, ...prepared.projectConfig }),
           );
         } catch (error) {
+          // A Slack notify failure must be reported as its own effect: deploy has
+          // already recorded its receipt above, so classifying this as deploy_failed
+          // would misdirect an operator to retry the already-successful deployment.
           await ProjectDerivationStore.recordFailure(deps.pool, operation, error);
-          return { kind: "deploy_failed", error };
+          return { kind: "notify_failed", error };
         }
       }
 
