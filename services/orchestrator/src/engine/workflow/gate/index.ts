@@ -9,6 +9,18 @@ export {
   type GateTierResult,
   type RunGateTierInput,
 } from "./runGateTier.js";
+// The gate-side half of the regression contract: the transition judgment, its confirmation
+// re-run, and the writer directive a confirmed regression renders into.
+export { judgeRegression, regressionExecution, testRegressionDirective } from "./regressionJudgment.js";
+export type { GateStepFailReason, RegressionVerdict, StepExecution } from "./gateStepTypes.js";
+// BASELINE CAPTURE: the once-per-run measurement of what was green BEFORE the writer —
+// what makes the per-iteration regression contract meaningful.
+export {
+  captureRegressionBaseline,
+  type BaselineFailure,
+  type CaptureBaselineResult,
+  type CaptureRegressionBaselineInput,
+} from "./captureRegressionBaseline.js";
 export { runGateForWhen, type GateOutcome, type RunGateForWhenInput } from "./runGateForWhen.js";
 export {
   GateConfigReadError,

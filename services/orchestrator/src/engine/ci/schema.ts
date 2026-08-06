@@ -59,6 +59,51 @@ export const CiStepEvidence = z.discriminatedUnion("kind", [
 ]);
 export type CiStepEvidence = z.infer<typeof CiStepEvidence>;
 
+// ---- Regression contract ----------------------------------------------------
+
+// REGRESSION CONTRACT — the declaration that makes a test step safe to run at
+// `per_iteration`. The full argument lives in engine/ci/regression.ts.
+//
+// A step that declares `regression` is judged NOT on whether its suite is green, but on
+// whether it BROKE something that was green: the gate parses the step's JUnit report at
+// `reportPath` and fails ONLY when a test that PASSED on the run's untouched base tree
+// now fails. A test the writer is in the middle of authoring is not in the baseline and
+// therefore cannot fail this step — which is what makes tests survivable in the writer's
+// own loop, where a failure is fed back as steering in the context that produced it.
+//
+// WHY A SEPARATE FIELD AND NOT AN `evidence` KIND. `evidence` is POSITIVE PROOF harvested
+// on an exit-0 — it answers "did the declared work actually run?". This contract answers
+// a different question ("did this change break something?"), and it applies on the
+// NONZERO-exit path that `evidence` deliberately never touches: a step whose suite is red
+// exits nonzero, and that exit is precisely what must stop being an automatic tier
+// failure. The two COMPOSE — a step may declare both, and each keeps its own meaning.
+//
+// SCOPE DISCIPLINE: this changes how THIS step is judged, at the lifecycle points its
+// tier maps to. It is intended for `per_iteration`. It does NOT weaken `pre_audit` /
+// `pre_merge`, which run their own unscoped, absolute test steps under `minTests` floors
+// — the merge authority is untouched, so a regression that somehow escaped the
+// per-iteration judgment still cannot merge.
+export const CiStepRegression = z
+  .object({
+    // CONTAINED WORKSPACE PATH. Unlike every other declared path in this schema, this one
+    // drives a DESTRUCTIVE operation: the gate deletes the report before the confirmation
+    // re-run so a stale report can never be mistaken for fresh results. `.tanren/ci.yml` is
+    // repo-sourced and WRITER-EDITABLE, so an unconstrained path here is an arbitrary
+    // `rm -f` on the runner — `../state.json` would resolve outside the workspace entirely.
+    // Absolute paths, parent-directory segments and backslashes are refused at parse time,
+    // where the blast radius is a loud config error instead of deleted runner state.
+    reportPath: z
+      .string()
+      .min(1)
+      .refine((value) => !value.startsWith("/"), { message: "reportPath must be workspace-relative, not absolute" })
+      .refine((value) => !value.split("/").includes(".."), {
+        message: "reportPath must not contain a `..` segment — it must stay inside the workspace",
+      })
+      .refine((value) => !value.includes("\\"), { message: "reportPath must use `/` separators" }),
+  })
+  .strict();
+export type CiStepRegression = z.infer<typeof CiStepRegression>;
+
 // A single named shell command within a tier. `run` is an opaque shell string
 // executed verbatim by the consumer; this module does not parse or validate
 // shell syntax.
@@ -86,6 +131,9 @@ export const CiStep = z
     run: z.string().min(1),
     junitReport: z.string().min(1).optional(),
     evidence: CiStepEvidence.optional(),
+    // The pass→fail TRANSITION contract (see `CiStepRegression`). Optional; a step that
+    // declares none is judged exactly as before (exit code, then evidence).
+    regression: CiStepRegression.optional(),
   })
   .strict();
 export type CiStep = z.infer<typeof CiStep>;
@@ -266,6 +314,88 @@ export const CiConfigV1 = z
             "(every step is judged on exit code alone — the green-by-accident class). " +
             "Declare an `evidence` block (junit / artifact / stdout-count) on at least one step, " +
             "or set `junitReport` on the test step (back-compat: promotes to junit evidence with minTests: 1).",
+        });
+      }
+    }
+    // THE REGRESSION CONTRACT IS A `per_iteration` CONTRACT, and exactly ONE of them.
+    //
+    // A run captures ONE baseline, by running ONE declared command against the untouched
+    // base tree, and that single baseline is forwarded to every gate call. Two consequences
+    // the config must not be able to express:
+    //   - a declaration at `pre_audit`/`pre_merge` is judged against a baseline built by the
+    //     `per_iteration` command (so its own tests read as never having passed), or against
+    //     no baseline at all (a declaration that silently does nothing);
+    //   - a SECOND declaration at the same point is judged against the FIRST one's baseline,
+    //     with the same effect — a green suite surfacing as a mass regression.
+    // Both are refused here rather than resolved to something arbitrary. (`pre_merge` is
+    // additionally refused below, with its own message: there the contract is not merely
+    // unimplemented, it is wrong in principle.)
+    const regressionSteps: string[] = [];
+    for (const [tierName, points] of Object.entries(cfg.when)) {
+      for (const step of cfg.tiers[tierName] ?? []) {
+        if (step.regression === undefined) continue;
+        regressionSteps.push(`${tierName}.${step.name}`);
+        const misplaced = points.filter((p) => p !== "per_iteration");
+        // ALSO mapped elsewhere is not a lesser case than ONLY mapped elsewhere. `tiersFor`
+        // selects a tier at EVERY point it maps to, so `["per_iteration", "pre_audit"]` runs
+        // the same regression step twice, and `runGateForWhen` forwards the one baseline to
+        // both — the pre_audit execution is judged on transitions against the per_iteration
+        // run's baseline, so a suite that is RED at pre_audit passes. A short-circuit on
+        // `points.includes("per_iteration")` let precisely that config through, which is the
+        // first bullet of the comment above written as an allowed configuration.
+        if (misplaced.length === 0) continue;
+        // `pre_merge` gets its own, sharper message from the merge-authority rule below.
+        if (misplaced.includes("pre_merge")) continue;
+        const alsoPerIteration = points.includes("per_iteration");
+        ctx.addIssue({
+          code: "custom",
+          path: ["tiers", tierName],
+          message:
+            `step "${step.name}" declares a \`regression\` contract but tier "${tierName}" maps to ` +
+            `${misplaced.map((p) => `"${p}"`).join(", ")} ` +
+            (alsoPerIteration ? 'in ADDITION to "per_iteration"' : 'rather than "per_iteration"') +
+            ". The run captures ONE baseline, from the per_iteration declaration, so " +
+            (alsoPerIteration
+              ? "the extra execution would re-judge the same step against that baseline at a point the " +
+                "baseline does not describe — a red suite passing an evidence-gated check. Map the tier to " +
+                '"per_iteration" alone.'
+              : "this contract would be judged against another command's baseline or against none at all. " +
+                "Move the step to a per_iteration tier."),
+        });
+      }
+    }
+    if (regressionSteps.length > 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tiers"],
+        message:
+          `${regressionSteps.length} steps declare a \`regression\` contract (${regressionSteps.join(", ")}). ` +
+          "Exactly one is allowed: the run captures ONE baseline, from that step's command, and judging a " +
+          "second step's report against it would read that step's tests as never having passed. Merge them " +
+          "into one step.",
+      });
+    }
+    // THE MERGE AUTHORITY IS NOT NEGOTIABLE: a `regression` step may never sit in a tier
+    // mapped to `pre_merge`. The regression contract deliberately PASSES a step whose
+    // suite is red — as long as nothing that was green went red — which is exactly right
+    // inside the writer's loop and exactly wrong at the merge gate, where the bar is an
+    // ABSOLUTE green suite. `.tanren/ci.yml` is repo-sourced and WRITER-EDITABLE, so a
+    // writer that could not get the merge gate green has a one-line edit available that
+    // makes red tests mergeable, and it reads like a reasonable config change. Refuse it
+    // at config-resolve time (loud), rather than discovering it in a post-mortem.
+    for (const [tierName, points] of Object.entries(cfg.when)) {
+      if (!points.includes("pre_merge")) continue;
+      const regressionStep = (cfg.tiers[tierName] ?? []).find((step) => step.regression !== undefined);
+      if (regressionStep !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["tiers", tierName],
+          message:
+            `step "${regressionStep.name}" declares a \`regression\` contract but tier "${tierName}" maps to ` +
+            '"pre_merge". The regression contract passes a step whose suite is RED so long as nothing ' +
+            "REGRESSED — that is correct inside the writer loop and unacceptable at the merge authority, " +
+            "which requires an absolute green suite. Move the regression step to a `per_iteration` tier " +
+            "and keep an unscoped, absolute test step at pre_merge.",
         });
       }
     }

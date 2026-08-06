@@ -5,44 +5,25 @@
 // fast tier runs after each writer iteration; the slow tier runs before the
 // audit. A failing tier short-circuits at the first nonzero step (later steps
 // are pointless once the tree is known-broken) and routes the run to rework.
-import type { CiStep, CiWhen } from "../../ci/index.js";
+import type { CiStep, CiWhen, RegressionBaseline } from "../../ci/index.js";
 import { evidenceForStep } from "../../ci/index.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
-import type { CommandResult, CommandSubstrate } from "../../contracts/commandSubstrate.js";
+import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../../events/index.js";
-import { withAppEnv } from "../../ssh/appEnvPrelude.js";
-import { withMiseActivation } from "../../ssh/miseActivate.js";
-import { buildActivityWatchdog } from "../../ssh/activityWatchdog.js";
 import { type EvidenceVerdict, harvestStepEvidence } from "./harvestStepEvidence.js";
+import {
+  type GateStepFailReason,
+  type GateStepOutcome,
+  type RegressionVerdict,
+  type StepExecution,
+  combinedOutput,
+  tailOf,
+} from "./gateStepTypes.js";
+// Re-exported so existing consumers keep importing the step vocabulary from the runner.
+export type { GateStepFailReason, GateStepOutcome, RegressionVerdict, StepExecution };
+export { combinedOutput, tailOf };
+import { clearRegressionReport, judgeRegression, regressionExecution, runStepCommand } from "./regressionJudgment.js";
 import type { JunitReport } from "../../ci/junit.js";
-
-// Captured command output can be large; we keep only the last N characters so
-// the emitted gate.* events and the typed result carry a useful, bounded
-// diagnostic without bloating the events table. Matches the bootstrap step's
-// tail bound for consistency.
-const OUTPUT_TAIL_LIMIT = 4_000;
-
-// One executed step's outcome, mirroring the gate.* event shape. `evidence` is the
-// optional positive-proof verdict the gate harvested when the step declared an
-// evidence contract (apex v57 task #64). Carried on BOTH pass and fail so the
-// timeline records observed-vs-required counts even on a pass (visibility), and so a
-// fail names the diagnosis precisely (the writer's iteration-1 directive).
-export interface GateStepOutcome {
-  name: string;
-  run: string;
-  exitCode: number | null;
-  passed: boolean;
-  timedOut: boolean;
-  outputTail: string;
-  evidence?: EvidenceVerdict;
-}
-
-// Why a step failed (apex v57 task #64). `exit_code` is the historical case (process
-// exited nonzero / timed out / substrate failed) — default for back-compat consumers.
-// `evidence_insufficient` is the v57 green-by-accident class: exit was 0 but the
-// declared evidence was missing/zero-tests/below-threshold. The discriminator lets
-// the writer's rework directive steer precisely instead of guessing "the gate failed".
-export type GateStepFailReason = "exit_code" | "evidence_insufficient";
 
 // A typed pass/fail result for the whole tier. `failedStep` is populated only
 // when `passed` is false (the first step that did not exit 0). `failedReason` +
@@ -69,6 +50,7 @@ export type GateTierResult =
       exitCode: number | null;
       failedReason?: GateStepFailReason;
       evidence?: EvidenceVerdict;
+      regression?: RegressionVerdict;
       steps: GateStepOutcome[];
       parsedJunitReports?: ReadonlyMap<string, JunitReport>;
     };
@@ -111,6 +93,13 @@ export interface RunGateTierInput {
   // gate.* `step.run` stays the ORIGINAL command, so no secret value reaches the
   // events table. Distinct from Tanren's own provider creds. Undefined ⇒ no env.
   appEnv?: Record<string, string>;
+  // THE REGRESSION BASELINE: the set of test ids that PASSED on this run's untouched base
+  // tree, captured once at workspace prep before the writer touched anything. A step that
+  // declares a `regression` contract is judged against this instead of on absolute
+  // redness. ABSENT ⇒ no baseline could be established for this run; a regression step
+  // then SKIPS its judgment (see `judgeRegression`) rather than falling back to absolute
+  // redness — which would re-import the thrash the contract exists to prevent.
+  regressionBaseline?: RegressionBaseline;
 }
 
 // Runs every step of one tier in order, stopping at the first failure. Emits
@@ -132,7 +121,11 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   // the downstream per-test ingest so it never re-reads the same file over SSH.
   const parsedJunitReports = new Map<string, JunitReport>();
   for (const step of input.steps) {
-    const { outcome, exitCode, failReason, evidenceVerdict } = await executeStep(input, step, parsedJunitReports);
+    const { outcome, exitCode, failReason, evidenceVerdict, regressionVerdict } = await executeStep(
+      input,
+      step,
+      parsedJunitReports,
+    );
     outcomes.push(outcome);
     const passed = outcome.passed;
     // LENIENT POSTURE: an advisory step's failure is RECORDED but does NOT block.
@@ -185,6 +178,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
         exitCode,
         failedReason: failReason,
         ...(evidencePayload === undefined ? {} : { evidence: evidencePayload }),
+        ...(regressionVerdict === undefined ? {} : { regression: regressionVerdict }),
         steps: outcomes,
         ...(parsedJunitReports.size === 0 ? {} : { parsedJunitReports }),
       };
@@ -197,6 +191,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
           exitCode,
           steps: outcomes,
           failedReason: failReason,
+          ...(regressionVerdict === undefined ? {} : { regression: regressionVerdict }),
           ...(evidencePayload === undefined
             ? {}
             : {
@@ -228,13 +223,6 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
 // Shared empty advisory set so the strict (default) path allocates nothing.
 const EMPTY_ADVISORY_SET: ReadonlySet<string> = new Set<string>();
 
-interface StepExecution {
-  outcome: GateStepOutcome;
-  exitCode: number | null;
-  failReason: GateStepFailReason;
-  evidenceVerdict: EvidenceVerdict | undefined;
-}
-
 // Execute ONE step end-to-end: run the SSH command, harvest declared evidence on an
 // exit-0, and build the outcome + fail-reason discriminator. Extracted from runGateTier
 // to keep the orchestration loop under the architecture's cyclomatic-complexity cap.
@@ -252,25 +240,34 @@ async function executeStep(
   step: CiStep,
   parsedJunitReports: Map<string, JunitReport>,
 ): Promise<StepExecution> {
-  const result = await input.ssh.run(input.target, {
-    // PROJECT-COMMAND path: mise-activate so a bare `node`/`pnpm`/etc in the project's
-    // gate command resolves to its `mise.toml`-declared toolchain (a no-op when the
-    // project declared none), THEN prepend the app-env prelude. Both are prepended to
-    // the EXECUTED command only; the emitted `step.run` stays the original (no secret,
-    // no prelude in events). PROJECT path — codex/answerers never run through here.
-    command: withMiseActivation(withAppEnv(step.run, input.appEnv), input.workspacePath),
-    cwd: input.workspacePath,
-    // VCS/build op (the project's gate step): output-driven + the workspace as the
-    // silent-stretch liveness probe. NEVER killed for elapsed time — a long test suite
-    // that keeps producing output/touching files runs unbounded.
-    watchdog: buildActivityWatchdog({
-      substrate: input.ssh,
-      target: input.target,
-      cls: "vcs",
-      workspace: input.workspacePath,
-    }),
-  });
+  // REGRESSION FRESHNESS — clear a stale report BEFORE the run, sharing the confirmation
+  // retry's clear-before-run invariant. The baseline capture (and every prior iteration)
+  // wrote a JUnit report to this same reportPath in this persistent workspace, so a first
+  // run that completes without regenerating the report would let judgeRegression read that
+  // stale (all-green) baseline and pass — the identical fail-open the retry path guards
+  // against. A clear that cannot be confirmed forces `unreadable` (fail-closed) below.
+  const reportCleared =
+    step.regression === undefined ? true : await clearRegressionReport(input, step.regression.reportPath);
+  const result = await runStepCommand(input, step);
   const exitOk = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
+  // REGRESSION CONTRACT — evaluated BEFORE the evidence/exit judgment, because it
+  // REPLACES that judgment for this step. A test step whose suite is red exits nonzero,
+  // and the whole point of the contract is that a nonzero exit is no longer automatically
+  // fatal: the step is judged on whether anything GREEN went RED, not on absolute
+  // redness. A substrate failure or a watchdog stall is NOT a test result, so those keep
+  // their ordinary fatal meaning and never reach the comparison.
+  const substrateOk = result.failure === undefined && result.stalled !== true;
+  if (step.regression !== undefined && substrateOk) {
+    // A failed pre-run clear cannot be trusted: the report the judgment would read may be
+    // the stale baseline, so treat it as unreadable rather than judging on a report the
+    // run may not have produced.
+    const judgment = reportCleared
+      ? await judgeRegression(input, step, step.regression.reportPath, parsedJunitReports)
+      : ({ kind: "unreadable" } as const);
+    if (judgment.kind !== "skip") {
+      return regressionExecution(step, result, judgment);
+    }
+  }
   const evidenceContract = evidenceForStep(step);
   let evidenceVerdict: EvidenceVerdict | undefined;
   if (exitOk && evidenceContract !== undefined) {
@@ -301,20 +298,5 @@ async function executeStep(
   // evidence_insufficient = exit was 0 but the declared positive proof was missing
   // (the green-by-accident class). The writer rework directive steers off this.
   const failReason: GateStepFailReason = exitOk && !evidenceOk ? "evidence_insufficient" : "exit_code";
-  return { outcome, exitCode: result.exitCode, failReason, evidenceVerdict };
-}
-
-function combinedOutput(result: CommandResult): string {
-  if (result.failure !== undefined) {
-    const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
-    return [result.stdout, result.stderr, detail].filter((part) => part !== undefined && part !== "").join("\n");
-  }
-  return [result.stdout, result.stderr].filter((part) => part !== "").join("\n");
-}
-
-function tailOf(output: string): string {
-  if (output.length <= OUTPUT_TAIL_LIMIT) {
-    return output;
-  }
-  return output.slice(output.length - OUTPUT_TAIL_LIMIT);
+  return { outcome, exitCode: result.exitCode, failReason, evidenceVerdict, regressionVerdict: undefined };
 }

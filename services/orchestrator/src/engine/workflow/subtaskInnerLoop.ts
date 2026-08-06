@@ -19,6 +19,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import type { GateOutcome } from "./gate/index.js";
+// The regression directive lives with the judgment that produces it (gate/regressionJudgment);
+// re-exported here so every writer-steering renderer is reachable from one module.
+import { testRegressionDirective } from "./gate/index.js";
+export { testRegressionDirective };
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
@@ -362,9 +366,11 @@ export function gateReason(gate: Extract<GateOutcome, { passed: false }>): strin
   const exit = failure.exitCode === null ? "no exit code" : `exit ${failure.exitCode}`;
   const header = `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`;
   const evidenceDirective = evidenceInsufficientDirective(failure);
+  const regressionDirective = testRegressionDirective(failure);
   const outputTail = failedStepOutputTail(failure);
   const parts: string[] = [header];
   if (evidenceDirective !== undefined) parts.push(evidenceDirective);
+  if (regressionDirective !== undefined) parts.push(regressionDirective);
   if (outputTail !== "") parts.push(`Gate output (last lines):\n${outputTail}`);
   return parts.join("\n");
 }

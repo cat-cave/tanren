@@ -31,6 +31,7 @@ import { buildDefaultGate } from "./plannerRunGate.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // adapter/gate builders (the gate callback + JUnit ingest live in plannerRunGate).
 export { buildDefaultGate } from "./plannerRunGate.js";
+export { buildRunGate } from "./plannerRunGateAssembly.js";
 // Re-exported so plannerRun.ts keeps a single import surface for the run's
 // input-shaping seams (the optional-property folders live in plannerRunSeams).
 export {
