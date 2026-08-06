@@ -13,10 +13,6 @@
 //   3. Tanren's own hard-coded commit messages are preflighted under live hooks BEFORE any
 //      writer runs, so a repo that refuses them halts as configuration, not as writer rework.
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { captureGitStateAfterCodex } from "../src/engine/providers/codexGit.js";
@@ -35,8 +31,11 @@ import {
   CSPELL_STDOUT,
   HUSKY_STDERR,
   HookRejectsSsh,
+  RealShellSsh,
   WORKSPACE,
   WRITER_DIFF,
+  cleanupFakeGitDirs,
+  fakeGit,
   isCommit,
   target,
 } from "./helpers/commitGateFixtures.js";
@@ -294,43 +293,9 @@ describe("the staging script runs under a REAL shell — a `git add -A` fault mu
   // fault (index.lock / permission / unreadable path) into a valid staged/no-staged result. The
   // caller then skips the gated commit or proceeds on a partial/stale index and reports the
   // writer as completed. These cases execute the REAL `stageWorkspaceChanges` script through
-  // `/bin/sh` with a fake `git` on PATH, so the shell logic — not a mock — is what is pinned.
-  const tempDirs: string[] = [];
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
-  // A substrate that runs `command.command` through a real `sh`, with a fake `git` — whose per-
-  // subcommand exit codes the test dictates — first on PATH. `git add`/`git diff` are all the
-  // staging script invokes.
-  class RealShellSsh implements CommandSubstrate {
-    private readonly binDir: string;
-    constructor(fakeGitScript: string) {
-      this.binDir = mkdtempSync(join(tmpdir(), "commit-gate-fakegit-"));
-      tempDirs.push(this.binDir);
-      const gitPath = join(this.binDir, "git");
-      writeFileSync(gitPath, fakeGitScript, { mode: 0o755 });
-      chmodSync(gitPath, 0o755);
-    }
-    async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
-      const proc = spawnSync("sh", ["-c", command.command], {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${this.binDir}:${process.env.PATH ?? ""}` },
-      });
-      return { exitCode: proc.status, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" };
-    }
-  }
-
-  const fakeGit = (add: number, diff: number): string =>
-    [
-      "#!/bin/sh",
-      'case "$1" in',
-      `  add) echo "fatal: unable to create index.lock: File exists." 1>&2; exit ${add} ;;`,
-      `  diff) exit ${diff} ;;`,
-      "  *) exit 0 ;;",
-      "esac",
-      "",
-    ].join("\n");
+  // `/bin/sh` with a fake `git` on PATH (`RealShellSsh`/`fakeGit` in commitGateFixtures.ts), so
+  // the shell logic — not a mock — is what is pinned.
+  afterEach(cleanupFakeGitDirs);
 
   it("a failing `git add -A` throws — it is NOT swallowed into a no-staged-changes result", async () => {
     // Staging fails (128). The probe would report "no staged changes" (0) if it ran — pre-fix,

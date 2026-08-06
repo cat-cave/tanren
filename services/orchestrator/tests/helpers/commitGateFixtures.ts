@@ -3,6 +3,10 @@
  * `writerCommitGateBoundaries.test.ts`). Extracted so each suite stays under the 500-line
  * architecture cap while both drive the SAME rejection — the verbatim one from the bench run.
  */
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../../src/engine/contracts/commandSubstrate.js";
 import { type RunnerHandle, sshRunnerHandle } from "../../src/engine/contracts/allocator.js";
 
@@ -58,5 +62,48 @@ export class HookRejectsSsh implements CommandSubstrate {
     if (command.command.includes("git diff --no-color")) return { ...ok, stdout: WRITER_DIFF };
     if (command.command.includes("git rev-parse HEAD")) return { ...ok, stdout: `${BASELINE_SHA}\n` };
     return ok;
+  }
+}
+
+// A `git` shim whose per-subcommand exit codes the test dictates. `git add`/`git diff` are all
+// the staging script invokes; everything else is a no-op success.
+export const fakeGit = (add: number, diff: number): string =>
+  [
+    "#!/bin/sh",
+    'case "$1" in',
+    `  add) echo "fatal: unable to create index.lock: File exists." 1>&2; exit ${add} ;;`,
+    `  diff) exit ${diff} ;;`,
+    "  *) exit 0 ;;",
+    "esac",
+    "",
+  ].join("\n");
+
+const fakeGitDirs: string[] = [];
+
+/** Remove every temp dir a `RealShellSsh` created. Call from the suite's `afterEach`. */
+export function cleanupFakeGitDirs(): void {
+  for (const dir of fakeGitDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * A substrate that runs `command.command` through a real `sh`, with a fake `git` — whose per-
+ * subcommand exit codes the test dictates — first on PATH, so the staging script's SHELL logic
+ * (not a mock) is what is pinned. Pair with `cleanupFakeGitDirs()` in `afterEach`.
+ */
+export class RealShellSsh implements CommandSubstrate {
+  private readonly binDir: string;
+  constructor(fakeGitScript: string) {
+    this.binDir = mkdtempSync(join(tmpdir(), "commit-gate-fake-git-"));
+    fakeGitDirs.push(this.binDir);
+    const gitPath = join(this.binDir, "git");
+    writeFileSync(gitPath, fakeGitScript, { mode: 0o755 });
+    chmodSync(gitPath, 0o755);
+  }
+  async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    const proc = spawnSync("sh", ["-c", command.command], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${this.binDir}:${process.env.PATH ?? ""}` },
+    });
+    return { exitCode: proc.status, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" };
   }
 }

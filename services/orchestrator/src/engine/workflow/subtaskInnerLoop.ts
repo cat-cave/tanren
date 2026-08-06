@@ -163,22 +163,16 @@ async function runOneSubtask(args: {
     crashAttempts.length = 0;
     if (writerOutcome.kind === "failed") {
       // The two remaining hard-failure kinds — a writer TIMEOUT, and a commit REJECTED by the
-      // project's own pre-commit gate — share this arm because they are the same shape: unlike a
-      // crash, each CARRIES progress information (the writer ran and produced a real diff), so
-      // each belongs in the WORK convergence, steered by a reason saying what to do next
-      // (`writerRejectionReason` below; the commit-gate text is in commitGateSteering.ts).
-      //
-      // A rejected commit reaching here AT ALL is the fix for a run-killer: it used to be a
-      // thrown WorkspaceCommandError that no frame on the writer path caught, so it escaped the
-      // loop, was mislabelled `crashed` by the stage finalize guard, and killed the whole run —
-      // discarding every already-passed subtask and all convergence state, while the writer,
-      // already exited, never learned anything was wrong. See providers/writerCommitGate.ts.
-      //
-      // BOUNDED BY CONSTRUCTION — no new retry budget for either kind. Both record into the SAME
-      // work-convergence history the gate and checker rejections use, so progress is "the
-      // rejection changed OR the diff changed", and a writer that cannot satisfy the hook
-      // converges to the usual loud P0 fixed-point finding. Note this re-drives the WRITER, never
-      // the commit: nothing is re-attempted without new work to justify it.
+      // project's own pre-commit gate — share this arm: unlike a crash, each CARRIES progress (the
+      // writer ran and produced a real diff), so each belongs in the WORK convergence, steered by
+      // `writerRejectionReason` below (commit-gate text: commitGateSteering.ts). A rejected commit
+      // reaching here AT ALL is the fix for a run-killer — it used to throw an uncaught
+      // WorkspaceCommandError, be mislabelled `crashed`, and kill the whole run, discarding every
+      // passed subtask and all convergence state (see providers/writerCommitGate.ts). BOUNDED BY
+      // CONSTRUCTION — no new retry budget: both record into the SAME work-convergence history the
+      // gate/checker rejections use (progress is "rejection changed OR diff changed"), so a writer
+      // that cannot satisfy the hook converges to the usual loud P0 fixed-point finding. This
+      // re-drives the WRITER, never the commit — nothing is re-attempted without new work.
       lastReason = writerRejectionReason(writerOutcome);
       // The work signature: a timeout's partial diff (which grows attempt over attempt), or the
       // diff a rejected commit tried to land (still in the tree — only `git commit` was refused).
