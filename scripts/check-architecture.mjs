@@ -18,6 +18,7 @@ import {
 const patterns = [
   "**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}",
   ".github/**/*.{yml,yaml}",
+  "cspell-words.txt",
   "Dockerfile",
   "**/Dockerfile",
   "justfile",
@@ -31,8 +32,13 @@ const roadmapDocs = [
   "docs/operator-guide/apex-run-playbook.md",
   "docs/roadmap/timeout-eradication.md",
 ];
-// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
-const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
+// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price
+// snapshot and cspell vocabulary (both grow with the codebase).
+const vendoredData = [
+  "services/orchestrator/src/engine/costs/pricing/model_prices.json",
+  "cspell.json",
+  "cspell-words.txt",
+];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const requiredDocs = [
