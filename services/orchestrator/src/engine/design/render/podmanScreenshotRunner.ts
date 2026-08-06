@@ -61,6 +61,7 @@ export function buildPodmanScreenshotRunner(config: PodmanScreenshotRunnerConfig
     async screenshot(input: {
       readonly documentHtml: string;
       readonly viewport: PixelViewport;
+      readonly locale: string;
     }): Promise<PixelScreenshotResult | PixelScreenshotFailure> {
       const dir = await mkdtemp(join(tmpdir(), "tanren-ds4-shot-"));
       const outPath = join(dir, OUT_FILE);
@@ -76,6 +77,12 @@ export function buildPodmanScreenshotRunner(config: PodmanScreenshotRunnerConfig
           `PW_WIDTH=${input.viewport.width}`,
           "-e",
           `PW_HEIGHT=${input.viewport.height}`,
+          // The scenario's locale, DECLARED to the browser context rather than inherited
+          // from the host. Without it `navigator.language` comes from the container's
+          // C-family default, which is both host-architecture-dependent and identical
+          // across every locale in the scenario matrix.
+          "-e",
+          `PW_LOCALE=${input.locale}`,
           image,
           "node",
           CONTAINER_SCRIPT_PATH,
