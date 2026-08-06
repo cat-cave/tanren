@@ -267,7 +267,7 @@ describe("the convergence signature keys on CAUSE, so unrelated failures stop al
     // spec. They are three categorically different problems and must read as progress.
     const sim = new SpecSimulator();
     const differentCauses = [
-      new RunnerClaimLiveRowError("runner_1", "run_2"),
+      new RunnerClaimLiveRowError("runner_1"),
       new AnswererStalledError("plan"),
       new Error("some novel unclassified throw"),
     ];
@@ -289,9 +289,9 @@ describe("the convergence signature keys on CAUSE, so unrelated failures stop al
     // The counter-test. Loosening the signature must not make a genuinely stuck spec
     // immortal: an identical cause recurring is still a proven dead-end.
     const sim = new SpecSimulator();
-    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1", "run_2"))).toBe("re_drive");
-    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1", "run_2"))).toBe("re_drive");
-    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1", "run_2"))).toBe("genuine_halt");
+    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1"))).toBe("re_drive");
+    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1"))).toBe("re_drive");
+    expect(await sim.attemptThrowing(new RunnerClaimLiveRowError("runner_1"))).toBe("genuine_halt");
 
     const parked = sim.parked();
     expect(parked?.payload).toMatchObject({

@@ -145,7 +145,7 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
   });
 
   it("RunnerClaimLiveRowError is TANREN's bug with NO precondition (nothing external clears it)", () => {
-    const classified = classifyRunFailure(new RunnerClaimLiveRowError("runner_1", "run_2"));
+    const classified = classifyRunFailure(new RunnerClaimLiveRowError("runner_1"));
     expect(classified).toMatchObject({ cause: "runner_double_claim", attribution: "tanren" });
     expect(classified.precondition).toBeUndefined();
   });
@@ -161,7 +161,14 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
   it("attributes the workspace classes to the owner the class name can actually prove", () => {
     // The target repo's dependency graph failed to install in a clean container — a
     // repo-side reproducibility defect the repo can fix.
-    expect(classifyRunFailure(new WorkspaceDepsInstallError("pnpm install exited 1"))).toMatchObject({
+    const depsFailure = new WorkspaceDepsInstallError("/w/repo", "pnpm install", 1, "ERR_PNPM_NO_LOCKFILE", false);
+    // Five arguments, not one: the single-string form built an error whose `command`,
+    // `exitCode`, `outputTail` and `stalled` were all `undefined`, and whose message was
+    // assembled from those. It classified correctly anyway — `name` is a class property —
+    // so the assertion below passed against a husk.
+    expect(depsFailure.command).toBe("pnpm install");
+    expect(depsFailure.exitCode).toBe(1);
+    expect(classifyRunFailure(depsFailure)).toMatchObject({
       cause: "workspace_deps_install_failed",
       attribution: "target_repo",
     });
