@@ -171,7 +171,24 @@ export async function preflightGreenfieldNotifyEligibility(
       providerKind: input.providerKind,
       capability: capabilityOf(input),
       operation,
-      target: operation === "discover" ? {} : { projectName: "greenfield-preflight", orgSlug: "greenfield-preflight" },
+      // `bind` requires a structurally valid target with a `resourceId` (see
+      // `normalizeIntegrationOperationTarget`); the concrete channel does not
+      // exist until provision runs, so prove structural bind eligibility with a
+      // sentinel resource here. A greenfield notify grant must carry wildcard
+      // `resourceIds: "*"` (it provisions a brand-new channel), so the sentinel
+      // passes the resource-constraint check for a valid grant and correctly
+      // fails a resource-restricted one; the eventual selected channel is still
+      // validated at authorize time.
+      target:
+        operation === "discover"
+          ? {}
+          : operation === "bind"
+            ? {
+                resourceId: "greenfield-preflight",
+                projectName: "greenfield-preflight",
+                orgSlug: "greenfield-preflight",
+              }
+            : { projectName: "greenfield-preflight", orgSlug: "greenfield-preflight" },
       connectionId: candidate.connectionId,
       grantId: candidate.grantId,
     });

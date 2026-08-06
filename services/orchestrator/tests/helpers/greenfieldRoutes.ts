@@ -178,7 +178,7 @@ export function appWithGreenfieldRoutes(
               // The shared `GreenfieldProviderKind` input widened to include
               // `"slack"` for the notify seam, so narrow before bridging to the
               // deploy-only onboarding callback.
-              if (input.providerKind === "slack") return undefined;
+              if (input.providerKind === "slack") return;
               return preflightDeploy({
                 orgId: input.orgId,
                 providerKind: input.providerKind,

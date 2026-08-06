@@ -225,10 +225,14 @@ export async function handleGreenfieldCreate(
       );
     }
     if (result.kind === "notify_failed") {
+      // The underlying error is persisted server-side via
+      // `ProjectDerivationStore.recordFailure` for diagnostics; do not echo the
+      // raw provider/database/persistence message to the HTTP caller, as it can
+      // carry Slack/API, SQL, secret-reference, or infrastructure details.
       return c.json(
         {
           error: "notify_provision_failed",
-          message: result.error instanceof Error ? result.error.message : String(result.error),
+          message: "Slack notify provisioning failed; see server diagnostics for details.",
         },
         502,
       );
