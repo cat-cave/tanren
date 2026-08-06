@@ -92,7 +92,7 @@ export function appWithGreenfieldRoutes(
       | "composeDesignSystem"
     >
   > & {
-    preflightNotify?: OnboardingRoutesOptions["preflightDeploy"];
+    preflightNotify?: GreenfieldCreateDeps["preflightNotify"];
     prepareNotify?: GreenfieldCreateDeps["prepareNotify"];
   } = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
@@ -172,25 +172,22 @@ export function appWithGreenfieldRoutes(
       ...(preflightDeploy === undefined
         ? {}
         : {
-            greenfieldPreflightDeploy: async (input) =>
-              preflightDeploy({
+            greenfieldPreflightDeploy: async (input) => {
+              // The project deploy preflight is only ever invoked with a deploy
+              // provider kind (the state machine forwards `deploy.providerKind`).
+              // The shared `GreenfieldProviderKind` input widened to include
+              // `"slack"` for the notify seam, so narrow before bridging to the
+              // deploy-only onboarding callback.
+              if (input.providerKind === "slack") return undefined;
+              return preflightDeploy({
                 orgId: input.orgId,
                 providerKind: input.providerKind,
                 ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
                 ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
-              }),
+              });
+            },
           }),
-      ...(preflightNotify === undefined
-        ? {}
-        : {
-            greenfieldPreflightNotify: async (input) =>
-              preflightNotify({
-                orgId: input.orgId,
-                providerKind: input.providerKind,
-                ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
-                ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
-              }),
-          }),
+      ...(preflightNotify === undefined ? {} : { greenfieldPreflightNotify: preflightNotify }),
       ...(prepareDeploy === undefined
         ? {}
         : {
