@@ -63,7 +63,13 @@ class TestRunSsh implements CommandSubstrate {
   constructor(
     private readonly reports: (Record<string, JunitOutcome> | undefined)[],
     private readonly exitCode = 1,
-  ) {}
+    /** A report left ON DISK from a prior phase (the prep-time baseline capture, or an
+     *  earlier iteration) BEFORE the tier runs. Models the stale-report fail-open the
+     *  pre-run clear closes. */
+    staleReport?: string,
+  ) {
+    this.reportOnDisk = staleReport;
+  }
   private current(): Record<string, JunitOutcome> | undefined {
     return this.reports[Math.min(this.stepRuns, this.reports.length) - 1];
   }
@@ -215,6 +221,25 @@ describe("the regression contract at the gate", () => {
     expect(result.regression).toBeUndefined();
     // The previous report was explicitly removed before the retry ran.
     expect(ssh.commands.some((c) => c.command.startsWith("rm -f "))).toBe(true);
+  });
+
+  it("does NOT pass a first run off a STALE report when the run writes nothing", async () => {
+    // The prep-time baseline capture wrote an all-green report to the SAME reportPath in this
+    // persistent workspace. If the first gate run completes (non-substrate, non-stall) but
+    // regenerates NOTHING, reading that leftover green report would detect zero regressions
+    // and PASS — a fail-open that lets a crashed/collection-erroring suite sail through. The
+    // gate clears the report BEFORE the run, so the read finds nothing and the step fails on
+    // the exit-code class instead of confirming the stale baseline as a clean tree.
+    const stale = junitXml({ a: "passed" });
+    const ssh = new TestRunSsh([undefined], 1, stale);
+    const { result } = await runTier(ssh, baselineOf({ a: "passed" }));
+    expect(result.passed).toBe(false);
+    if (result.passed) throw new Error("unreachable");
+    expect(result.failedReason).toBe("exit_code");
+    expect(result.regression).toBeUndefined();
+    // The stale report was removed before the (single) run — no confirmation was spent.
+    expect(ssh.commands.some((c) => c.command === "rm -f '/ws/reports/junit.xml'")).toBe(true);
+    expect(ssh.stepRuns).toBe(1);
   });
 
   it("FAILS when the CONFIRMATION run's report is malformed", async () => {

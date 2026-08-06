@@ -55,9 +55,10 @@ export async function runStepCommand(input: RegressionStepDeps, step: CiStep): P
 
 /**
  * Delete a workspace-relative file over SSH, returning whether the removal is known to have
- * succeeded. Used to clear the previous JUnit report before the confirmation re-run so a
- * stale report can never be mistaken for fresh results. A substrate failure returns false
- * (the caller fails the step) rather than proceeding with a report it cannot trust.
+ * succeeded. Used to clear the JUnit report BEFORE the regression step runs (both the first
+ * run and the confirmation re-run) so a stale report can never be mistaken for fresh
+ * results. A substrate failure returns false (the caller fails the step) rather than
+ * proceeding with a report it cannot trust.
  *
  * CONTAINMENT, restated here on purpose. This is the only DESTRUCTIVE operation the gate
  * performs on a path the PROJECT declares, and `.tanren/ci.yml` is writer-editable. The
@@ -70,7 +71,7 @@ function isContainedRelPath(relPath: string): boolean {
   return relPath !== "" && !relPath.startsWith("/") && !relPath.includes("\\") && !relPath.split("/").includes("..");
 }
 
-async function removeWorkspaceFile(input: RegressionStepDeps, relPath: string): Promise<boolean> {
+export async function clearRegressionReport(input: RegressionStepDeps, relPath: string): Promise<boolean> {
   if (!isContainedRelPath(relPath)) return false;
   const path = `${input.workspacePath.replace(/\/+$/u, "")}/${relPath}`;
   const result = await input.ssh.run(input.target, {
@@ -141,7 +142,7 @@ export async function judgeRegression(
   // the first run's failures, "confirm" them against themselves, and report a flake as a real
   // regression. That is precisely the false positive the confirmation run exists to prevent,
   // so the read must be unable to succeed unless the retry actually produced fresh results.
-  if (!(await removeWorkspaceFile(input, reportPath))) return { kind: "unreadable" };
+  if (!(await clearRegressionReport(input, reportPath))) return { kind: "unreadable" };
   // The confirmation run's EXIT CODE is deliberately ignored, exactly as the first run's is:
   // a red suite exits nonzero either way, and the verdict comes from the report.
   await runStepCommand(input, step);

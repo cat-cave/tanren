@@ -22,7 +22,7 @@ import {
 // Re-exported so existing consumers keep importing the step vocabulary from the runner.
 export type { GateStepFailReason, GateStepOutcome, RegressionVerdict, StepExecution };
 export { combinedOutput, tailOf };
-import { judgeRegression, regressionExecution, runStepCommand } from "./regressionJudgment.js";
+import { clearRegressionReport, judgeRegression, regressionExecution, runStepCommand } from "./regressionJudgment.js";
 import type { JunitReport } from "../../ci/junit.js";
 
 // A typed pass/fail result for the whole tier. `failedStep` is populated only
@@ -240,6 +240,14 @@ async function executeStep(
   step: CiStep,
   parsedJunitReports: Map<string, JunitReport>,
 ): Promise<StepExecution> {
+  // REGRESSION FRESHNESS — clear a stale report BEFORE the run, sharing the confirmation
+  // retry's clear-before-run invariant. The baseline capture (and every prior iteration)
+  // wrote a JUnit report to this same reportPath in this persistent workspace, so a first
+  // run that completes without regenerating the report would let judgeRegression read that
+  // stale (all-green) baseline and pass — the identical fail-open the retry path guards
+  // against. A clear that cannot be confirmed forces `unreadable` (fail-closed) below.
+  const reportCleared =
+    step.regression === undefined ? true : await clearRegressionReport(input, step.regression.reportPath);
   const result = await runStepCommand(input, step);
   const exitOk = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   // REGRESSION CONTRACT — evaluated BEFORE the evidence/exit judgment, because it
@@ -250,7 +258,12 @@ async function executeStep(
   // their ordinary fatal meaning and never reach the comparison.
   const substrateOk = result.failure === undefined && result.stalled !== true;
   if (step.regression !== undefined && substrateOk) {
-    const judgment = await judgeRegression(input, step, step.regression.reportPath, parsedJunitReports);
+    // A failed pre-run clear cannot be trusted: the report the judgment would read may be
+    // the stale baseline, so treat it as unreadable rather than judging on a report the
+    // run may not have produced.
+    const judgment = reportCleared
+      ? await judgeRegression(input, step, step.regression.reportPath, parsedJunitReports)
+      : ({ kind: "unreadable" } as const);
     if (judgment.kind !== "skip") {
       return regressionExecution(step, result, judgment);
     }
