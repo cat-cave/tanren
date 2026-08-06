@@ -69,6 +69,8 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
     kind: "writer",
     cli: "pi",
     authRef: dependencies.credentialRef,
+    // See createAiderWriter: the recorded id must be the id the command pins.
+    model: dependencies.model ?? DEFAULT_PI_MODEL,
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_PI_MODEL;
       const apiKey = await resolvePiApiKey(dependencies.secrets, dependencies.credentialRef);
