@@ -97,7 +97,7 @@ export function redactAppEnv(output: string, appEnv?: Record<string, string>): s
   matches.sort((a, b) => a.start - b.start || b.length - a.length || (a.key < b.key ? -1 : 1));
   const merged: Match[] = [];
   for (const match of matches) {
-    const last = merged[merged.length - 1];
+    const last = merged.at(-1);
     if (last !== undefined && match.start < last.end) {
       last.end = Math.max(last.end, match.end);
       if (match.length > last.length || (match.length === last.length && match.key < last.key)) {
