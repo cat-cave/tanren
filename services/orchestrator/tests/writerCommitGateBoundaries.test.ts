@@ -12,12 +12,20 @@
 //   2. A rejection rides only the arm it describes — never a timeout/crash/window_exhausted.
 //   3. Tanren's own hard-coded commit messages are preflighted under live hooks BEFORE any
 //      writer runs, so a repo that refuses them halts as configuration, not as writer rework.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { captureGitStateAfterCodex } from "../src/engine/providers/codexGit.js";
 import { captureGitStateAfterWriter } from "../src/engine/providers/writerGit.js";
-import { classifyCommitRejection, writerExitReasonFor } from "../src/engine/providers/writerCommitGate.js";
+import {
+  classifyCommitRejection,
+  stageWorkspaceChanges,
+  writerExitReasonFor,
+} from "../src/engine/providers/writerCommitGate.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { createPiWriter } from "../src/engine/providers/pi.js";
 import { commitBootstrapState } from "../src/engine/workspace/bootstrap.js";
@@ -273,6 +281,78 @@ describe("a rejection rides ONLY the arm it describes", () => {
     expect(Object.hasOwn(piResult, "commitRejection")).toBe(false);
     // The partial work is still reported — that is the timeout arm's own progress signal.
     expect(piResult.diff).toBe(WRITER_DIFF);
+  });
+});
+
+describe("the staging script runs under a REAL shell — a `git add -A` fault must propagate (#1434 review)", () => {
+  // The mocked-substrate cases above short-circuit "any command containing `git add -A`" to a
+  // fixed nonzero result, so they never execute the actual shell and cannot see how the script
+  // treats `git add`'s own status. The #1434 P1 was exactly there: the script runs under
+  // `set -u` (NOT `set -e`, deliberately, so the probe's expected exit-1 doesn't abort it), so a
+  // failed `git add -A` was NOT propagated — control fell through to the staged-change probe and
+  // the trailing marker `printf` (exit 0) became the command's status, laundering a staging
+  // fault (index.lock / permission / unreadable path) into a valid staged/no-staged result. The
+  // caller then skips the gated commit or proceeds on a partial/stale index and reports the
+  // writer as completed. These cases execute the REAL `stageWorkspaceChanges` script through
+  // `/bin/sh` with a fake `git` on PATH, so the shell logic — not a mock — is what is pinned.
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A substrate that runs `command.command` through a real `sh`, with a fake `git` — whose per-
+  // subcommand exit codes the test dictates — first on PATH. `git add`/`git diff` are all the
+  // staging script invokes.
+  class RealShellSsh implements CommandSubstrate {
+    private readonly binDir: string;
+    constructor(fakeGitScript: string) {
+      this.binDir = mkdtempSync(join(tmpdir(), "commit-gate-fakegit-"));
+      tempDirs.push(this.binDir);
+      const gitPath = join(this.binDir, "git");
+      writeFileSync(gitPath, fakeGitScript, { mode: 0o755 });
+      chmodSync(gitPath, 0o755);
+    }
+    async run(_t: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+      const proc = spawnSync("sh", ["-c", command.command], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${this.binDir}:${process.env.PATH ?? ""}` },
+      });
+      return { exitCode: proc.status, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" };
+    }
+  }
+
+  const fakeGit = (add: number, diff: number): string =>
+    [
+      "#!/bin/sh",
+      'case "$1" in',
+      `  add) echo "fatal: unable to create index.lock: File exists." 1>&2; exit ${add} ;;`,
+      `  diff) exit ${diff} ;;`,
+      "  *) exit 0 ;;",
+      "esac",
+      "",
+    ].join("\n");
+
+  it("a failing `git add -A` throws — it is NOT swallowed into a no-staged-changes result", async () => {
+    // Staging fails (128). The probe would report "no staged changes" (0) if it ran — pre-fix,
+    // that 0 became the command's status and `stageWorkspaceChanges` returned `false` silently.
+    const ssh = new RealShellSsh(fakeGit(128, 0));
+    await expect(stageWorkspaceChanges(ssh, target, WORKSPACE, "stage writer workspace changes")).rejects.toThrow(
+      "stage writer workspace changes failed",
+    );
+  });
+
+  it("a staged delta is reported true, and a clean tree false — the happy paths still work", async () => {
+    // add succeeds (0); diff exits 1 = "there is a staged delta".
+    expect(await stageWorkspaceChanges(new RealShellSsh(fakeGit(0, 1)), target, WORKSPACE, "stage")).toBe(true);
+    // add succeeds (0); diff exits 0 = "no staged delta".
+    expect(await stageWorkspaceChanges(new RealShellSsh(fakeGit(0, 0)), target, WORKSPACE, "stage")).toBe(false);
+  });
+
+  it("a probe fault (diff exit > 1) still throws — the other half of the boundary holds", async () => {
+    // add succeeds (0); the staged-change probe faults (128, e.g. a corrupt/locked index). The
+    // `else exit "$probe"` arm re-exits nonzero so the whole staging command throws as infra.
+    const ssh = new RealShellSsh(fakeGit(0, 128));
+    await expect(stageWorkspaceChanges(ssh, target, WORKSPACE, "stage")).rejects.toThrow("stage failed");
   });
 });
 
