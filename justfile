@@ -1264,12 +1264,12 @@ smoke-aggregate: \
   smoke-rls-verification-reads \
   smoke-rls-proof-dashboard
 
-smoke: smoke-aggregate-config-test
+smoke: aggregate-database-url-config-test
   # Resolve the owner URL and normalize/export the offset before the nested
   # invocation so every leaf inherits the same URL and decimal arithmetic value.
-  normalized_offset="$(scripts/smoke/aggregate-database-url.sh --normalized-offset)"; DATABASE_URL="$(scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL TANREN_PORT_OFFSET="$normalized_offset"; exec just smoke-aggregate
+  normalized_offset="$(scripts/smoke/aggregate-database-url.sh --normalized-offset)"; DATABASE_URL="$(TANREN_PORT_OFFSET="$normalized_offset" scripts/smoke/aggregate-database-url.sh)"; export DATABASE_URL TANREN_PORT_OFFSET="$normalized_offset"; exec just smoke-aggregate
 
-smoke-aggregate-config-test:
+aggregate-database-url-config-test:
   scripts/smoke/aggregate-database-url.test.sh
 # rv-22: runtime-verification HTTP read surface — real Hono route → real DB → real
 # response, a failed verdict stays failed, cross-org reads see zero rows.

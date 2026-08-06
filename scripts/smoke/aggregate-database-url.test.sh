@@ -19,12 +19,12 @@ explicit='postgres://custom:secret@example.invalid:6543/tenant'
 actual="$(DATABASE_URL="$explicit" TANREN_PORT_OFFSET=1965 "$script")"
 test "$actual" = "$explicit"
 
-if TANREN_PORT_OFFSET=-1 DATABASE_URL= "$script" >/dev/null 2>&1; then
+if TANREN_PORT_OFFSET=-1 TANREN_POSTGRES_HOST_PORT= DATABASE_URL= "$script" >/dev/null 2>&1; then
   echo "negative control failed: negative offset was accepted" >&2
   exit 1
 fi
 
-if TANREN_PORT_OFFSET=18446744073709551615 DATABASE_URL= "$script" >/dev/null 2>&1; then
+if TANREN_PORT_OFFSET=18446744073709551615 TANREN_POSTGRES_HOST_PORT= DATABASE_URL= "$script" >/dev/null 2>&1; then
   echo "negative control failed: overflowing offset was accepted" >&2
   exit 1
 fi

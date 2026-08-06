@@ -19,11 +19,15 @@
 // See docs/contracts/architecture-checks.md.
 
 const JUSTFILE = "justfile";
-const SMOKE_AGGREGATE = "smoke";
+// `smoke` is the operator-facing wrapper; its body validates configuration and
+// invokes this dependency-only graph root. Keep the architecture walk rooted at
+// the leaf list so a wrapper mutation cannot mask a dropped aggregate edge.
+const SMOKE_AGGREGATE = "smoke-aggregate";
 const SMOKE_PREFIX = "smoke-";
 
 // `smoke-*` recipes deliberately NOT part of the merge-queue aggregate. EMPTY —
-// every smoke recipe in the tree is reachable from `just smoke` today. Adding an
+// every smoke recipe in the tree is reachable from the `smoke-aggregate` graph
+// root today. The operator-facing `smoke` wrapper invokes that root. Adding an
 // entry requires a matching note in docs/contracts/architecture-checks.md.
 const smokeAggregateExclusions = new Set();
 

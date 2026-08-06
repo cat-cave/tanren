@@ -104,7 +104,12 @@ describe("smoke-recipes-reachable", () => {
 
   it("is GREEN on the real justfile — every smoke-* recipe runs when `just smoke` runs", () => {
     expect(checkSmokeRecipesReachable(files(realJustfile))).toEqual([]);
+    expect(realRecipes.get(smokeRoot)?.dependencies).toContain("aggregate-database-url-config-test");
     expect(realRecipes.get(smokeRoot)?.body).toContain(`just ${smokeAggregate}`);
+    expect(realRecipes.get(smokeRoot)?.body).toContain(
+      `TANREN_PORT_OFFSET="$normalized_offset" scripts/smoke/aggregate-database-url.sh`,
+    );
+    expect(realRecipes.get(smokeRoot)?.body).toContain('export DATABASE_URL TANREN_PORT_OFFSET="$normalized_offset"');
   });
 
   it("goes RED when ANY single leaf is dropped from the real smoke dependency list", () => {
@@ -142,7 +147,7 @@ describe("smoke-recipes-reachable", () => {
 
   it("flags a swallowed leaf in the minimal synthetic case too", () => {
     const text = [
-      "smoke: smoke-kept # a stray note smoke-swallowed",
+      "smoke-aggregate: smoke-kept # a stray note smoke-swallowed",
       "  echo aggregate",
       "",
       "smoke-kept:",
@@ -157,7 +162,15 @@ describe("smoke-recipes-reachable", () => {
   });
 
   it("does NOT flag a leaf reached transitively through another recipe's dependencies", () => {
-    const text = ["smoke: smoke-group", "", "smoke-group: smoke-leaf", "", "smoke-leaf:", "  echo leaf", ""].join("\n");
+    const text = [
+      "smoke-aggregate: smoke-group",
+      "",
+      "smoke-group: smoke-leaf",
+      "",
+      "smoke-leaf:",
+      "  echo leaf",
+      "",
+    ].join("\n");
     expect(checkSmokeRecipesReachable(files(text))).toEqual([]);
   });
 
@@ -165,7 +178,7 @@ describe("smoke-recipes-reachable", () => {
     // `smoke-rls-remediation-attempts` runs `smoke-rls-repair-routing` this way; a
     // dependency-only walk would report a recipe that demonstrably runs.
     const text = [
-      "smoke: smoke-wrapper",
+      "smoke-aggregate: smoke-wrapper",
       "",
       "smoke-wrapper:",
       "  just smoke-inner",
@@ -179,7 +192,7 @@ describe("smoke-recipes-reachable", () => {
 
   it("follows `&&` post-dependencies, which also run", () => {
     const text = [
-      "smoke: smoke-first && smoke-after",
+      "smoke-aggregate: smoke-first && smoke-after",
       "",
       "smoke-first:",
       "  echo a",
@@ -248,7 +261,7 @@ describe("describeSmokeCoverage (name what was verified, not only what failed)",
     const [, covered, total] = /: (\d+)\/(\d+) /u.exec(line ?? "") ?? [];
     expect(Number(total)).toBeGreaterThan(50);
     expect(covered).toBe(total);
-    expect(line).toContain("reachable from `just smoke`");
+    expect(line).toContain("reachable from `just smoke-aggregate`");
   });
 
   it("the number MOVES when a leaf stops being reachable", () => {
@@ -298,7 +311,7 @@ describe("parseJustfileRecipes", () => {
 describe("the justfile gates are CI-GATING (folded into the exit-1 set)", () => {
   const scriptPath = resolve(import.meta.dirname, "check-architecture.mjs");
   const broken = [
-    "smoke: smoke-kept # note smoke-swallowed",
+    "smoke-aggregate: smoke-kept # note smoke-swallowed",
     "  echo aggregate",
     "",
     "smoke-kept:",
