@@ -164,7 +164,13 @@ export function toolchainProvisionCommand(detection: ToolchainDetection, workspa
   // would then be probing the un-updated PATH. Capture, check, then evaluate.
   parts.push(
     `__tanren_mise_env="$(mise env -s bash)" || { ${echoErr(MISE_ENV_FAILED_MESSAGE)}; exit 1; }`,
-    'eval "$__tanren_mise_env"',
+    // The capture is guarded, but the eval must be too. Under the per-gate caller
+    // (`ensureWorkspaceDepsInstalled`), which deliberately omits `set -e`, a bare `eval`
+    // that returns nonzero is swallowed by the `;`-joined group — so an env export that
+    // failed to apply could still let the project bootstrap run against an un-updated
+    // PATH, the exact gate-path fail-open this command exists to remove. Guard it the
+    // same way as the capture: capture, check, then evaluate — and check the evaluate too.
+    `eval "$__tanren_mise_env" || { ${echoErr(MISE_ENV_FAILED_MESSAGE)}; exit 1; }`,
   );
   for (const requirement of detection.requirements) {
     // VERIFICATION (./toolchainEnforcement.ts): the binary must resolve, it must BE the

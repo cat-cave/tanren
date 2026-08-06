@@ -50,7 +50,9 @@ describe("toolchainProvisionCommand · fails closed WITHOUT leaning on the calle
     // then probes an un-updated PATH.
     expect(a()).not.toContain('eval "$(mise env -s bash)"');
     expect(a()).toContain('__tanren_mise_env="$(mise env -s bash)" ||');
-    expect(a()).toContain('eval "$__tanren_mise_env"');
+    // The eval is guarded too: under the per-gate caller (no `set -e`) a bare `eval` that
+    // returned nonzero would be swallowed and the bootstrap would run on an un-updated PATH.
+    expect(a()).toContain('eval "$__tanren_mise_env" ||');
   });
 
   it("checks the marker write, because the marker is what activates the toolchain later", () => {
