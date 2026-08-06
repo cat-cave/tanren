@@ -13,9 +13,11 @@ import type { ActorIdentity } from "../contracts/codeHostTypes.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { MISE_CONFIG_REL_PATH } from "../ssh/miseActivate.js";
 import {
   bootstrapWorkspace,
   commitBootstrapState,
+  buildContractFilesCommitCommand,
   materializeContractFilesInWorkspace,
   provisionMiseToolchain,
   runWorkspaceSshCommand,
@@ -227,7 +229,7 @@ export async function prepareRunWorkspace(
   // derive's `materializeTemplate` step) ALREADY landed these files on the repo's
   // default branch as part of the project's initial content, so this materialization
   // is a no-op and NO commit is made (sha "").
-  const contractSha = await materializeContractFilesCommit(input, target, workspacePath);
+  const contractSha = await materializeContractFilesCommit(input, target, workspacePath, provisionMise);
 
   // ANSWERER REVIEW BASE: anchor the writer's reviewed diff ABOVE the Tanren-owned
   // commits — the contract-files commit when one was made (apex v28 fix), ELSE the
@@ -273,6 +275,7 @@ async function materializeContractFilesCommit(
   input: RunPlannerLoopInput,
   target: RunnerHandle,
   workspacePath: string,
+  provisionMise: (stepInput: ProvisionMiseToolchainInput) => Promise<unknown>,
 ): Promise<string> {
   const files = input.context.contractFiles;
   if (files === undefined || files.length === 0) return "";
@@ -284,23 +287,23 @@ async function materializeContractFilesCommit(
   });
   // Nothing newly written (every file already present) ⇒ no commit, no base shift.
   if (result.written.length === 0) return "";
+  // A contract file can BE the `mise.toml`; the earlier provision skipped it yet the hooks-LIVE commit below may run a pre-commit needing it, so re-provision it (activation only PATHs it).
+  if (result.written.includes(MISE_CONFIG_REL_PATH)) {
+    await provisionMise({ ssh: input.ssh, target, workspacePath });
+  }
   const committed = await runWorkspaceSshCommand(input.ssh, target, {
     label: "commit deterministic contract files",
     cwd: workspacePath,
     watchdog: buildActivityWatchdog({ substrate: input.ssh, target, cls: "vcs", workspace: workspacePath }),
-    command: [
-      "set -eu",
-      // Stage ONLY the contract files (not -A) so this commit carries the contract
-      // and nothing else — the bootstrap commit already absorbed install artifacts.
-      `git add ${result.written.map((p) => quoteSshShellArg(p)).join(" ")}`,
-      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
-        `git commit -q -m ${quoteSshShellArg("tanren: project contract files (.tanren/ci.yml + justfile)")}`,
-      // Echo the contract-commit sha LAST so it is the command's stdout — it becomes
-      // the answerer review base. A fake SSH yields ""; the real runner a 40-hex sha.
-      "git rev-parse HEAD",
-    ].join(" && "),
+    // Built beside its materialization in workspace/contractMaterialize.ts; keeps hooks LIVE.
+    command: buildContractFilesCommitCommand(result.written, workspacePath),
   });
-  return committed.stdout.trim();
+  // VALIDATED like every sha-returning workspace step: this is the answerer's review base, so a stray stdout line must fail LOUD here, not as a bad revision downstream.
+  const contractSha = committed.stdout.trim();
+  if (contractSha !== "" && !/^[0-9a-f]{40}$/u.test(contractSha)) {
+    throw new Error(`contract-files commit returned invalid sha: ${contractSha}`);
+  }
+  return contractSha;
 }
 
 // Clones the target branch and returns the clone HEAD. `git rev-parse HEAD` runs

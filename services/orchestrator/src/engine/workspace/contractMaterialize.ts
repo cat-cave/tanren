@@ -20,6 +20,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { ContractFile } from "../forge/scaffold/index.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { outputOnlyWatchdog } from "../ssh/activityWatchdog.js";
+import { TANREN_GIT, withProjectHookToolchain } from "../ssh/miseActivate.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 export interface MaterializeContractFilesInput {
@@ -83,4 +84,40 @@ async function writeIfAbsent(
     stdin: file.content,
   });
   return !result.stdout.includes(skipMarker);
+}
+
+/**
+ * The shell that COMMITS the freshly-materialized contract files, as a dedicated commit
+ * above the bootstrap base. Lives next to the materialization it commits (the caller,
+ * workflow/plannerRunWorkspace.ts, only sequences the two).
+ *
+ * PROJECT-HOOK path (ssh/miseActivate.ts): unlike Tanren's bootstrap commit — which
+ * disables the hook path because it is bookkeeping that never reaches the PR — this
+ * commit's content DOES ship in the pushed tree, so the repo's hooks stay LIVE and must
+ * therefore be given the project's provisioned toolchain. Same defect as the writer
+ * commit; it only stays latent because a brownfield repo already ships both contract
+ * files, writes nothing, and so never reaches a commit at all.
+ */
+export function buildContractFilesCommitCommand(writtenPaths: readonly string[], workspacePath: string): string {
+  return withProjectHookToolchain(
+    [
+      "set -eu",
+      // Stage ONLY the contract files (not -A) so this commit carries the contract
+      // and nothing else — the bootstrap commit already absorbed install artifacts.
+      `${TANREN_GIT} add ${writtenPaths.map((p) => quoteSshShellArg(p)).join(" ")}`,
+      // `>&2` ON THE COMMIT, and it is not cosmetic. `-q` silences GIT, not the repo's
+      // pre-commit HOOK — and this commit keeps that hook LIVE on purpose. A hook that
+      // prints its progress (husky and lefthook both do) writes to the commit's stdout,
+      // which the caller reads as the contract-commit sha and installs as the answerer's
+      // review base. The output still reaches the operator; it just cannot be mistaken for
+      // a revision. This is why `git rev-parse` below can be trusted as the ONLY stdout.
+      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
+        `${TANREN_GIT} commit -q -m ` +
+        `${quoteSshShellArg("tanren: project contract files (.tanren/ci.yml + justfile)")} >&2`,
+      // Echo the contract-commit sha LAST so it is the command's stdout — it becomes
+      // the answerer review base. A fake SSH yields ""; the real runner a 40-hex sha.
+      `${TANREN_GIT} rev-parse HEAD`,
+    ].join(" && "),
+    workspacePath,
+  );
 }
