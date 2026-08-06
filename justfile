@@ -442,6 +442,12 @@ ports:
   : "${TANREN_PUBLIC_BASE_URL:=http://localhost:${TANREN_ORCHESTRATOR_HOST_PORT}}"; \
   echo "orchestrator=$TANREN_ORCHESTRATOR_HOST_PORT internal-mtls=$TANREN_INTERNAL_MTLS_HOST_PORT allocator=$TANREN_ALLOCATOR_HOST_PORT postgres=$TANREN_POSTGRES_HOST_PORT runner-ssh=$TANREN_RUNNER_SSH_HOST_PORT vault=$TANREN_VAULT_HOST_PORT dashboard=$DASHBOARD_HOST_PORT ntfy=$TANREN_NTFY_HOST_PORT registry=$TANREN_REGISTRY_HOST_PORT public_base_url=$TANREN_PUBLIC_BASE_URL"
 
+# DESTRUCTIVE. `-v` wipes the named volumes, which now includes `vaultdata` — every
+# stored credential goes with it, and re-seeding needs operator-held key material.
+# Vault is persistent as of the file-storage backend, so an ordinary restart
+# (`docker compose restart vault`, a Docker VM reboot, `just up-dev` over a live
+# stack) KEEPS credentials; this recipe is the one that does not. Use `docker compose
+# -f compose.dev.yml down` (no `-v`) to stop the stack without losing secrets.
 down-dev:
   docker compose -f compose.dev.yml down -v
 
@@ -459,11 +465,16 @@ down-dev:
 # down." If only stopped containers remain (rare; usually the prior `down` already
 # cleaned them), the next `up-dev` will recreate over them.
 stack-reset:
-  if [ -n "$(docker compose -f compose.dev.yml ps -q 2>/dev/null)" ]; then \
-    docker compose -f compose.dev.yml down -v --remove-orphans; \
-  else \
-    echo "stack-reset: no containers for this compose project — nothing to remove."; \
-  fi
+  # UNCONDITIONAL. This used to probe `ps -q` first and skip the teardown when it
+  # came back empty — but `ps -q` lists RUNNING containers only, so a stack that had
+  # merely been stopped (`docker compose stop`, a daemon reboot) took the
+  # "nothing to remove" branch and `down -v` never ran. `docker compose down`
+  # WITHOUT `-v` leaves no containers at all and would skip it too. Either way the
+  # named volumes survived a reset that documents itself as destroying them — which
+  # matters now that `vaultdata` is one of them. `down -v` is idempotent and a no-op
+  # on a project that does not exist, so the probe bought nothing and cost the
+  # invariant.
+  docker compose -f compose.dev.yml down -v --remove-orphans
 
 # Hosting/boot seeder for PLATFORM-scoped secret-store refs (deploy-layer config,
 # NOT a tenant/userland credential route). Seeds the managed-LLM router key at

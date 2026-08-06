@@ -18,19 +18,42 @@ services:
       - pgdata:/var/lib/postgresql
 
   vault:
-    image: hashicorp/vault:1.18
-    cap_add:
-      - IPC_LOCK
+    # PERSISTENT dev Vault. This ran `server -dev` — an IN-MEMORY Vault whose entire
+    # credential set (GitHub App key, LLM router key, proof-signing key, per-org BYOK)
+    # was destroyed by any container or Docker VM restart, with re-seeding gated on key
+    # material only a human operator holds. On a stack built for multi-hour autonomous
+    # drives that is silent data loss, so the dev profile now uses file storage on a
+    # named volume. The entrypoint keeps dev-mode's ergonomics — same `dev-root-token`,
+    # same kv-v2 at `secret/`, still unattended — so nothing downstream changes.
+    # `ops/vault/entrypoint.sh` documents the dev-only unseal-key trade.
+    build:
+      context: .
+      dockerfile: ops/vault/Dockerfile
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
-      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    command: ["server", "-dev"]
+      # The token every service in this file authenticates with. Dev mode used to mint
+      # it via VAULT_DEV_ROOT_TOKEN_ID; the entrypoint now creates it once and it
+      # persists in storage. Unchanged value, so no consumer changes.
+      TANREN_VAULT_ROOT_TOKEN_ID: dev-root-token
     ports:
       # Host port is remappable (default 18200) via TANREN_VAULT_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 8200.
-      - "${TANREN_VAULT_HOST_PORT:-18200}:8200"
+      #
+      # LOOPBACK BY DEFAULT, unlike every other service here, and deliberately so.
+      # Vault listens on 0.0.0.0 inside the container behind a FIXED, published root
+      # token (`dev-root-token`) — which was survivable while `server -dev` kept
+      # everything in memory and threw it away on restart. It is not survivable now:
+      # this change is precisely what makes the GitHub App key, the LLM router key,
+      # the proof-signing key and every per-org BYOK credential PERSIST, so a
+      # 0.0.0.0 publish hands all of them to anything that can reach the host.
+      # Containers are unaffected (they use `vault:8200` on the compose network) and
+      # the host-side seeder already targets 127.0.0.1. An operator who genuinely
+      # runs the dev stack on a remote box can widen it explicitly.
+      - "${TANREN_VAULT_BIND_ADDR:-127.0.0.1}:${TANREN_VAULT_HOST_PORT:-18200}:8200"
+    volumes:
+      - vaultdata:/vault/file
     healthcheck:
+      # `vault status` exits 2 while sealed, so the stack waits for a usable Vault.
       test: ["CMD", "vault", "status"]
       interval: 5s
       timeout: 5s
@@ -398,6 +421,10 @@ volumes:
   # Persists the local OCI registry's blobs + the golden-image build cache across
   # `up-dev`/`down-dev` so a refresh is a warm push, not a cold re-upload.
   registrydata:
+  # The Vault file-storage backend. This is what makes the dev stack's credentials
+  # survive a restart; removing it DESTROYS every stored credential, so `down-dev`
+  # must never be run with `-v` unless that is the intent.
+  vaultdata:
 
 secrets:
   # The orchestrator's SSH PRIVATE key, delivered to the orchestrator + worker as a
