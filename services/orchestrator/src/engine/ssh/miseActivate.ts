@@ -28,8 +28,10 @@ import { quoteSshShellArg } from "./command.js";
 
 // The conventional path of the project's `mise.toml` (mirrors
 // SKELETON_MISE_CONFIG_PATH; kept local so this ssh helper has no scaffold dep). The
-// guard tests for THIS file in the command's cwd before activating.
-const MISE_CONFIG_REL_PATH = "mise.toml";
+// guard tests for THIS file in the command's cwd before activating. Exported because
+// Layer-1 detection (workspace/toolchainDeclarations.ts) keys its "defer to the repo's
+// own mise config" short-circuit on the SAME path — one definition, never two that drift.
+export const MISE_CONFIG_REL_PATH = "mise.toml";
 
 // The script the runner image writes to publish its SHARED mise data + cache dirs
 // (runner/Dockerfile: `printf 'export MISE_DATA_DIR=…\nexport MISE_CACHE_DIR=…\n' >
@@ -72,14 +74,219 @@ const MISE_SHARED_DIR_PROFILE_SCRIPT = "/etc/profile.d/tanren-mise-shared-dir.sh
 // `if … fi` rather than `[ -r … ] && .` because the provision command runs under
 // `set -e`, where a false `&&` chain would abort the whole command.
 //
-// Both mise seams below share this prelude ON PURPOSE: `mise install` must write where
+// EVERY mise seam shares this prelude ON PURPOSE: `mise install` must write where
 // `mise activate --shims` will later read. Pinning one without the other would install
-// the toolchain into a dir the activation does not look in.
+// the toolchain into a dir the activation does not look in. There are three seams now
+// (activation, the repo-owns-a-mise.toml provision, and the detected-toolchain
+// provision), so all of them reach it through the ONE preamble {@link miseScopeExport}
+// instead of each remembering to prepend it.
 const MISE_SHARED_DIR_PRELUDE = `if [ -r ${MISE_SHARED_DIR_PROFILE_SCRIPT} ]; then . ${MISE_SHARED_DIR_PROFILE_SCRIPT}; fi; `;
 
 /** The shared-dir prelude, exported for the agreement + guard assertions in the tests. */
 export function miseSharedDirPrelude(): string {
   return MISE_SHARED_DIR_PRELUDE;
+}
+
+// PER-RUN MISE SCOPE — the concurrency fix.
+//
+// Every run on a runner executes as the SAME unix user against ONE long-lived container
+// (StaticRunnerAllocator, `fixed_pool`, worker concurrency 3 by default). A single
+// runner-scoped mise global config + a single runner-scoped "provisioned" marker are
+// therefore SHARED MUTABLE STATE between concurrent runs: run A writes `pnpm@10`, run B
+// writes `pnpm@11` to the same file, and A then VERIFIES against B's config. The config
+// and the marker are made per-run here; only the installs tree stays shared.
+//
+// WHAT STAYS SHARED, DELIBERATELY: `MISE_DATA_DIR`, whatever the runner image published
+// it as above. The image bakes a warm toolchain baseline into it (runner/Dockerfile),
+// which is the whole point of {@link miseSharedDirPrelude}, so a per-run data dir
+// would cold-download node/pnpm/python/go on every run. Concurrent WRITES to that tree
+// (`installs/<tool>/latest` symlinks) are instead serialised with `flock` on
+// {@link MISE_SHARED_LOCK_FILE} — shared ON PURPOSE, because a per-run lock excludes
+// nothing.
+
+/** The run sandbox shape (`workspace/paths.ts`), mirrored rather than imported so this
+ * ssh helper keeps the zero-dependency posture {@link MISE_CONFIG_REL_PATH} has. */
+const RUN_WORKSPACE_PATTERN = /^(\/workspace\/runs\/run_[A-Za-z0-9_-]+)\/repo$/u;
+
+/** The mutual-exclusion point for the SHARED mise data dir. One path for the whole
+ * runner: two runs holding two different locks would serialise nothing. */
+export const MISE_SHARED_LOCK_FILE = "$HOME/.tanren-mise.lock";
+
+/** Bounded TOTAL wait for {@link MISE_SHARED_LOCK_FILE}. Generous — the holder may be doing
+ * a cold toolchain download — but BOUNDED, and a timeout is a loud nonzero exit. */
+export const MISE_LOCK_WAIT_SECONDS = 900;
+
+/**
+ * The slice the wait is taken in, so it stays OBSERVABLE.
+ *
+ * A single `flock -w 900` is a 15-minute silence, and the watchdog every mise seam runs
+ * under (ssh/activityWatchdog.ts, class `vcs`) is output-driven with the WORKSPACE tree as
+ * its liveness probe. The shared lock and the shared mise data dir are both OUTSIDE the
+ * workspace, so a run parked on the lock writes nothing the probe can see and emits nothing:
+ * three identical signatures at the 15s probe cadence (~45s) and the substrate DESTROYS the
+ * connection and surfaces a stall. The 900s budget was therefore unreachable — a contended
+ * lock did not wait, it killed the command, roughly twenty times sooner than the constant
+ * above claims.
+ *
+ * So the wait is taken in slices and says so between them. The heartbeat is sign-of-life the
+ * watchdog resets on (any stdout OR stderr chunk resets it), which makes the declared budget
+ * the budget that is actually enforced. It goes to STDERR so the provision's stdout stays
+ * exactly the frame stream its parsers read.
+ */
+export const MISE_LOCK_SLICE_SECONDS = 10;
+
+/** The mise state a single run owns, plus the lock it shares with every other run. */
+export interface MiseRunScope {
+  /** `MISE_GLOBAL_CONFIG_FILE` for every mise call this run makes. Per-run. */
+  readonly configFile: string;
+  /** Written by a successful, VERIFIED provision; the activation trigger. Per-run. */
+  readonly markerFile: string;
+  /** `flock` target guarding writes to the SHARED data dir. Runner-wide, not per-run. */
+  readonly lockFile: string;
+}
+
+/**
+ * Map a workspace path to the mise state that run owns. Pure.
+ *
+ * For the production shape `/workspace/runs/<runId>/repo` the files land in the RUN dir —
+ * outside the repo, so Tanren still never materializes a file into a repository it did
+ * not author, and end-of-run teardown reclaims them with the sandbox. Any other shape
+ * (the `rawInput.workspacePath` override seam, fixtures) falls back to a deterministic
+ * per-workspace name in the runner user's home rather than throwing.
+ */
+export function miseRunScope(workspacePath: string): MiseRunScope {
+  const runDir = RUN_WORKSPACE_PATTERN.exec(workspacePath)?.[1];
+  const prefix = runDir === undefined ? `$HOME/.tanren-mise-${workspaceKey(workspacePath)}` : `${runDir}/tanren-mise`;
+  return { configFile: `${prefix}-config.toml`, markerFile: `${prefix}-provisioned`, lockFile: MISE_SHARED_LOCK_FILE };
+}
+
+// A readable slug plus a hash of the FULL path, so two workspaces that slugify alike
+// still get distinct files. Reduced to `[A-Za-z0-9-]` because these paths are emitted
+// inside double quotes (to let `$HOME` expand) and must carry no other shell metachar.
+function workspaceKey(workspacePath: string): string {
+  const slug = workspacePath
+    .replaceAll(/[^A-Za-z0-9]+/gu, "-")
+    .slice(-40)
+    .replaceAll(/^-+|-+$/gu, "");
+  return `${slug === "" ? "workspace" : slug}-${stableHash(workspacePath)}`;
+}
+
+// A plain polynomial rolling hash — deterministic across processes, which is all that is
+// asked of it. Not a checksum and not security-bearing: it only keeps two workspaces
+// whose slugs collide from sharing one mise config.
+function stableHash(value: string): string {
+  let hash = 0;
+  for (const character of value) {
+    hash = (hash * 31 + (character.codePointAt(0) ?? 0)) % 0xff_ff_ff_ff;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * The preamble every mise-touching command in a run starts from. It settles the two
+ * things every seam must agree on, and it is ONE function so they cannot drift:
+ *
+ *   - WHERE MISE READS AND WRITES — {@link miseSharedDirPrelude}, the image's own
+ *     published shared data/cache dirs. Provision, verification and activation are
+ *     separate SSH commands; if any of them resolves a different `MISE_DATA_DIR` the
+ *     install lands where the activation does not look, and the failure is silent right
+ *     up until the project's bootstrap reports `pnpm: not found`.
+ *   - WHOSE CONFIG IT USES — this run's, never the runner-wide one two concurrent runs
+ *     would fight over.
+ */
+export function miseScopeExport(scope: MiseRunScope): string {
+  return `${miseSharedDirPrelude()}export MISE_YES=1 MISE_GLOBAL_CONFIG_FILE="${scope.configFile}"`;
+}
+
+/**
+ * Run `body` holding the runner-wide mise lock, in ONE shell (no extra SSH round-trip).
+ * `9>` opens the lock file for the brace group only, so the lock is released the moment
+ * the group ends — including on the `exit` paths inside `body`.
+ *
+ * TWO loud failures, because there are two ways to end up NOT holding the lock:
+ *   - `flock` timed out (or is not on this runner) — the `||` branch exits nonzero;
+ *   - the lock file could not be OPENED — measured: a failed redirection on a compound
+ *     command is NOT caught by `set -e` in bash or dash. The shell prints its own error,
+ *     skips the whole group and carries on with status 0. The `__tanren_mise_lock`
+ *     sentinel is set INSIDE the group, so a skipped group is caught after it.
+ * Either way the shared installs tree is never written unsynchronised — which is the
+ * `ln -sf … File exists` defect itself — and never silently skipped.
+ *
+ * AND A THIRD WAY TO FAIL: `body` ITSELF. The lock sentinel test was the LAST command of
+ * the construct, so ITS status — 0 whenever the lock opened — became the construct's
+ * status and a failed `mise trust`/`mise install`/`mise use` inside the group was
+ * overwritten with success. That stayed invisible because ONE caller
+ * (`provisionMiseToolchain`) wraps the whole provision in `set -e`; the per-gate caller
+ * (`ensureWorkspaceDepsInstalled`) deliberately does NOT, and there the masked failure let
+ * the project's bootstrap run against a toolchain that never installed — the exact silent
+ * degradation this module exists to remove. So `body`'s status is CAPTURED inside the
+ * group and re-raised after the sentinel check: nonzero under EITHER caller. The `||`
+ * around it is also what stops `set -e` from bailing out BEFORE the lock is released.
+ *
+ * NOT `( set -e; … )` AT THE CALL SITE, which is the obvious-looking alternative and does
+ * neither job. POSIX ignores `-e` for any command of an AND-OR list other than the last,
+ * and that extends into a subshell: `( set -e; false; echo x ) && y` runs both — measured
+ * in sh, bash and dash. A subshell would also DISCARD the `export`s and the `mise env`
+ * PATH the provision must leave behind for the bootstrap chained after it.
+ */
+export function underMiseLock(scope: MiseRunScope, body: string): string {
+  const slice = String(MISE_LOCK_SLICE_SECONDS);
+  const budget = String(MISE_LOCK_WAIT_SECONDS);
+  // The sliced, ANNOUNCED wait. `flock` exits 1 on timeout; ANY other nonzero (127 when the
+  // runner has no flock at all) is not a contended lock and must not be retried in a loop.
+  const acquire =
+    `while :; do flock -w ${slice} 9 && { __tanren_mise_lock=1; break; }; __tanren_flock_rc=$?; ` +
+    `[ "$__tanren_flock_rc" = 1 ] || ` +
+    `{ printf '%s\\n' ${quoteSshShellArg(lockUnavailableMessage(scope))} >&2; exit 1; }; ` +
+    `__tanren_mise_waited=$((__tanren_mise_waited + ${slice})); ` +
+    `[ "$__tanren_mise_waited" -lt ${budget} ] || ` +
+    `{ printf '%s\\n' ${quoteSshShellArg(lockTimedOutMessage(scope))} >&2; exit 1; }; ` +
+    `printf '%s %s/%s\\n' ${quoteSshShellArg(lockWaitingMessage(scope))} "$__tanren_mise_waited" ${budget} >&2; ` +
+    `done`;
+  return (
+    `__tanren_mise_lock=0; __tanren_mise_rc=0; __tanren_mise_waited=0; ` +
+    `{ ${acquire}; { ${body}; } || __tanren_mise_rc=$?; } 9>"${scope.lockFile}"; ` +
+    `[ "$__tanren_mise_lock" = 1 ] || { printf '%s\\n' ${quoteSshShellArg(lockUnopenableMessage(scope))} >&2; exit 1; }; ` +
+    `[ "$__tanren_mise_rc" = 0 ] || { printf '%s\\n' ${quoteSshShellArg(lockedBodyFailedMessage(scope))} >&2; ` +
+    `exit "$__tanren_mise_rc"; }`
+  );
+}
+
+function lockTimedOutMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - could not take the shared mise lock (${scope.lockFile}) within ` +
+    `${String(MISE_LOCK_WAIT_SECONDS)}s. Concurrent runs share one mise data dir; Tanren will not write it ` +
+    `unsynchronised.`
+  );
+}
+
+function lockUnavailableMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - flock is unavailable on this runner, so the shared mise lock ` +
+    `(${scope.lockFile}) cannot be taken. Concurrent runs share one mise data dir; Tanren will not write it ` +
+    `unsynchronised.`
+  );
+}
+
+/** The heartbeat that makes the wait visible — to the operator tailing the run, and to the
+ * activity watchdog, which would otherwise read a silent lock wait as a wedged command. */
+function lockWaitingMessage(scope: MiseRunScope): string {
+  return `tanren: waiting for the shared mise lock (${scope.lockFile}) - another run holds it; seconds waited:`;
+}
+
+function lockUnopenableMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - could not OPEN the shared mise lock (${scope.lockFile}), so the ` +
+    `toolchain install was skipped rather than run unsynchronised against the shared mise data dir.`
+  );
+}
+
+function lockedBodyFailedMessage(scope: MiseRunScope): string {
+  return (
+    `tanren: toolchain provision FAILED - the mise work held under the shared lock (${scope.lockFile}) exited ` +
+    `nonzero. The declared toolchain is NOT installed; Tanren halts here rather than running the project's own ` +
+    `commands against whatever the runner image happens to carry.`
+  );
 }
 
 // The mise activation prelude. It uses the `--shims` mode of `mise activate`, which
@@ -100,16 +307,46 @@ export function miseSharedDirPrelude(): string {
 // touches PATH at all. The `--shims` export is POSIX-clean and is inherited by child
 // shells, so the toolchain survives into `just`/`sh -c` sub-invocations too.
 //
-// GUARDED: it only activates when a `mise.toml` exists in the cwd, so a project that
-// declared NO toolchain (no mise.toml materialized) runs exactly as before (the
-// activation is skipped, a pure no-op). `MISE_YES=1` keeps any mise sub-action
+// TWO GUARDED BRANCHES, and the split is deliberate:
+//
+//   1. The repo ships its OWN `mise.toml` — unchanged: `mise activate --shims`, mise's
+//      own dynamic per-directory activation, exactly as before. A repo that states its
+//      toolchain explicitly gets mise's native behaviour, untouched.
+//
+//   2. Tanren DETECTED and provisioned the toolchain from the repo's standard
+//      declarations (`package.json#packageManager`, `.nvmrc`, a lockfile, …) — the
+//      marker is present. Here we use `mise env -s bash`, which emits a plain POSIX
+//      `export PATH=<installs of the RESOLVED tools>:$PATH`, and NOT the shims dir.
+//      WHY THE DIFFERENCE: the shims directory contains a shim for every tool in the
+//      runner's shared mise store, including ones this repo never declared. Putting it
+//      on PATH shadows them — a repo that declared only pnpm but calls the runner's
+//      baseline `go` gets `mise ERROR No version is set for shim: go` instead of the
+//      working binary that was there a moment ago. That is measured behaviour on the
+//      golden image, not a theoretical concern. Branch 1 accepts that exposure because
+//      the repo asked for mise by name; branch 2 must not introduce it for the far
+//      larger population of repos that never mentioned mise at all. `mise env` puts
+//      ONLY the declared tools on PATH, so nothing undeclared is shadowed.
+//
+// Both branches emit a plain `export PATH=…` that takes effect IMMEDIATELY in the
+// non-interactive `bash -c`/`sh -c` we run over SSH and is inherited by child shells,
+// so the toolchain survives into `just`/`sh -c` sub-invocations.
+//
+// GUARDED: with neither trigger present the activation is skipped and the command runs
+// exactly as before — a pure no-op. `MISE_YES=1` keeps any mise sub-action
 // non-interactive. The whole prelude is one `if … fi; ` statement chained before the
-// real command with `;` (NOT `&&`): a project with no mise.toml must still run its
+// real command with `;` (NOT `&&`): a project with no toolchain must still run its
 // command — the guard is a skip, not a gate.
-function miseActivationPrelude(): string {
+//
+// PER-RUN SCOPE: both branches export THIS run's `MISE_GLOBAL_CONFIG_FILE`, and branch 2
+// triggers on THIS run's marker ({@link miseRunScope}). Sharing either with the other
+// runs on the container is what let run B's toolchain be activated for run A's gate.
+function miseActivationPrelude(workspacePath: string): string {
+  const scope = miseRunScope(workspacePath);
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `export MISE_YES=1; ${MISE_SHARED_DIR_PRELUDE}eval "$(mise activate bash --shims)"; fi; `
+    `${miseScopeExport(scope)}; eval "$(mise activate bash --shims)"; ` +
+    `elif [ -f "${scope.markerFile}" ]; then ` +
+    `${miseScopeExport(scope)}; eval "$(mise env -s bash)"; fi; `
   );
 }
 
@@ -119,9 +356,12 @@ function miseActivationPrelude(): string {
  * workspace ships no `mise.toml` (the project declared no toolchain) the activation is
  * skipped and the command runs unchanged. Apply ONLY to the project-command paths
  * (bootstrap + gate tiers + build/deploy-through-gate) — NEVER to the codex/harness path.
+ *
+ * `workspacePath` is REQUIRED: it selects the per-run mise config + marker
+ * ({@link miseRunScope}), which is what keeps concurrent runs off each other's toolchain.
  */
-export function withMiseActivation(command: string): string {
-  return `${miseActivationPrelude()}${command}`;
+export function withMiseActivation(command: string, workspacePath: string): string {
+  return `${miseActivationPrelude(workspacePath)}${command}`;
 }
 
 // The mise PROVISIONING commands run at workspace-prep, BEFORE the project's bootstrap,
@@ -131,11 +371,16 @@ export function withMiseActivation(command: string): string {
 // `set -e` so a failed install HALTS the run (no silent skip), per the no-silent-fallback
 // doctrine. GUARDED on the mise.toml being present so a no-toolchain project is a no-op.
 // `MISE_YES=1` makes trust/install non-interactive.
-export function miseProvisionCommand(): string {
+//
+// UNDER THE SHARED LOCK: the repo's own `mise.toml` outranks Tanren's per-run config in
+// mise's hierarchy, but `mise install` still writes the SHARED data dir, so this path
+// needs the same mutual exclusion the detected-toolchain path does.
+export function miseProvisionCommand(workspacePath: string): string {
+  const scope = miseRunScope(workspacePath);
+  const install = `mise trust ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} && mise install`;
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
-    `export MISE_YES=1; ${MISE_SHARED_DIR_PRELUDE}` +
-    `mise trust ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} && mise install; ` +
+    `${miseScopeExport(scope)}; ${underMiseLock(scope, install)}; ` +
     `else echo ${quoteSshShellArg("tanren: no mise.toml - skipping mise install (project declared no toolchain)")}; fi`
   );
 }

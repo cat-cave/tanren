@@ -68,8 +68,8 @@ describe("runGateTier", () => {
     // mise.toml) so a bare `pnpm`/`node` resolves to the project's declared toolchain;
     // the project's own command still runs verbatim after the activation prelude.
     expect(ssh.commands.map((c) => c.command)).toEqual([
-      withMiseActivation("pnpm lint"),
-      withMiseActivation("pnpm test"),
+      withMiseActivation("pnpm lint", "/ws"),
+      withMiseActivation("pnpm test", "/ws"),
     ]);
     for (const c of ssh.commands) {
       expect(c.command).toContain("mise activate bash");
@@ -104,7 +104,7 @@ describe("runGateTier", () => {
     expect(result.failedStep).toBe("lint");
     expect(result.exitCode).toBe(2);
     // The second step never ran (only the failing first command was issued).
-    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm lint")]);
+    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm lint", "/ws")]);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.failed"]);
     expect((events[1]!.payload as { failedStep: string }).failedStep).toBe("lint");
   });
@@ -171,7 +171,7 @@ describe("runGateTier advisory steps (lenient posture)", () => {
     expect(result.passed).toBe(true);
     // Every step ran (lint did NOT short-circuit the rest).
     expect(ssh.commands.map((c) => c.command)).toEqual(
-      ["pnpm lint", "pnpm typecheck", "pnpm test"].map((c) => withMiseActivation(c)),
+      ["pnpm lint", "pnpm typecheck", "pnpm test"].map((c) => withMiseActivation(c, "/ws")),
     );
     // The failing advisory step is recorded with passed=false, the tier still passes.
     expect(result.steps.find((s) => s.name === "lint")?.passed).toBe(false);
@@ -208,7 +208,7 @@ describe("runGateTier advisory steps (lenient posture)", () => {
     if (result.passed) return;
     expect(result.failedStep).toBe("build");
     // build short-circuits test (blocking failure stops the tier).
-    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm build")]);
+    expect(ssh.commands.map((c) => c.command)).toEqual([withMiseActivation("pnpm build", "/ws")]);
     expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.failed"]);
   });
 });
