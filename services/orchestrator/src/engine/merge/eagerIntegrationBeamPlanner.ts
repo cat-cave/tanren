@@ -9,7 +9,9 @@ import { EagerBeamFactsResolver } from "./eagerBeamFacts.js";
 import { EagerBeamMaterializationPersistence } from "./eagerBeamMaterializationPersistence.js";
 import { EagerBeamPlanStager, type StagedEagerBeamPlan } from "./eagerBeamPlanStager.js";
 import {
+  EagerBeamFrontierUnavailableError,
   EagerBeamReadyCasLostError,
+  EagerBeamStampMissError,
   type EagerBeamCandidate,
   type EagerBeamProject,
   PgEagerBeamStore,
@@ -240,7 +242,9 @@ function creationKey(value: unknown): string {
   throw new Error("eager beam candidate has an invalid creation order");
 }
 
-function stableFailureReason(error: unknown): string {
+export function stableFailureReason(error: unknown): string {
+  if (error instanceof EagerBeamFrontierUnavailableError) return "frontier_unavailable";
+  if (error instanceof EagerBeamStampMissError) return "proof_stamp_target_missing";
   if (error instanceof Error && error.message.includes("ancestor_stack")) return "malformed_ancestor_stack";
   if (error instanceof Error && error.message.includes("unresolved")) return "proof_identity_unresolved";
   return "materialization_held";
