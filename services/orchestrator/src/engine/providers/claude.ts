@@ -25,15 +25,14 @@ export interface ClaudeWriterDependencies {
   target: RunnerHandle;
   credentialRef: string;
   runId: string;
-  // The Claude model id this adapter pins (e.g. the routing chain entry's
-  // `model`). Defaults to the CLI's configured default when omitted.
+  // The Claude model id this adapter pins (the routing chain entry's `model`), also
+  // recorded on the adapter for cost attribution. Omitted ⇒ the CLI's own default.
   model?: string;
   claudeHomeBaseDir?: string;
-  // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
-  // the materializer writes a settings.json OpenRouter env block and the command
-  // exports ANTHROPIC_BASE_URL (the `/api` form) + a blank ANTHROPIC_API_KEY, so
-  // the CLI routes THROUGH OpenRouter (the cookbook path). Absent ⇒ BYOK: no
-  // override, the CLI hits Anthropic directly (unchanged).
+  // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run) the
+  // materializer writes a settings.json OpenRouter env block and the command exports
+  // ANTHROPIC_BASE_URL (the `/api` form) + a blank ANTHROPIC_API_KEY, so the CLI
+  // routes THROUGH OpenRouter. Absent ⇒ BYOK: the CLI hits Anthropic directly.
   endpointBaseUrl?: string;
 }
 
@@ -72,6 +71,8 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
     kind: "writer",
     cli: "claude",
     authRef: dependencies.credentialRef,
+    // Absent stays ABSENT — an unpinned CLI picks a default whose id we do not know.
+    ...(dependencies.model !== undefined && { model: dependencies.model }),
     async runWriter(opts): Promise<WriterResult> {
       const auth = await materializeClaudeAuthBundle({
         secrets: dependencies.secrets,
@@ -132,6 +133,7 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
     kind: "answerer",
     cli: "claude",
     authRef: dependencies.credentialRef,
+    ...(dependencies.model !== undefined && { model: dependencies.model }),
     lastTokenUsage: () => lastTokenUsage,
     async runAnswerer(opts): Promise<TOutput> {
       const auth = await materializeClaudeAuthBundle({
@@ -231,8 +233,7 @@ export function buildClaudeWriterCommand(input: {
 
 // SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED run routes the Claude CLI
 // THROUGH OpenRouter. The cookbook requires THREE env vars:
-//   ANTHROPIC_BASE_URL = https://openrouter.ai/api   (the `/api` form, NOT
-//                                                      `/api/v1`),
+//   ANTHROPIC_BASE_URL = https://openrouter.ai/api   (`/api`, NOT `/api/v1`),
 //   ANTHROPIC_AUTH_TOKEN = <OpenRouter key>,
 //   ANTHROPIC_API_KEY = ""                            (explicitly blanked).
 // The secret AUTH_TOKEN is materialized into CLAUDE_CONFIG_DIR/settings.json (it

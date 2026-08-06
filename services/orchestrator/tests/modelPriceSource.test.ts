@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ModelPriceSource,
+  PRICE_TIERS_KEY,
   defaultModelPriceSource,
   type ModelPriceMap,
 } from "../src/engine/costs/pricing/modelPriceSource.js";
@@ -122,5 +123,74 @@ describe("ModelPriceSource — vendored snapshot (the real maintained source)", 
 
   it("never resolves the upstream `sample_spec` doc key as a model", () => {
     expect(source.lookup("sample_spec")).toBeNull();
+  });
+});
+
+// `parseTiers` reads whatever the backing map carries under `PRICE_TIERS_KEY`. Today
+// the only producer is `openRouterPriceSource.parseTier`, which validates — but the
+// map is INJECTABLE (fixtures, a future source, a live table that happened to carry
+// the key), and the old filter asserted `tier is PriceTier` after checking exactly
+// one field. Every rate was cast into existence without being looked at, and a
+// NEGATIVE floor matches every prompt, so one bad tier would silently reprice every
+// call on the model. A tier is now parsed, not asserted.
+const withTiers = (tiers: unknown): ModelPriceMap => ({
+  "m/x": {
+    litellm_provider: "openai",
+    mode: "chat",
+    input_cost_per_token: 1e-6,
+    output_cost_per_token: 2e-6,
+    [PRICE_TIERS_KEY]: tiers,
+  },
+});
+
+describe("long-context tiers are parsed, not asserted", () => {
+  it("keeps a well-formed tier, ascending by floor", () => {
+    const price = new ModelPriceSource(
+      withTiers([
+        { minPromptTokens: 200_000, inputCostPerToken: 3e-6 },
+        { minPromptTokens: 100_000, outputCostPerToken: 4e-6 },
+      ]),
+    ).lookup("m/x");
+    expect(price?.tiers.map((tier) => tier.minPromptTokens)).toEqual([100_000, 200_000]);
+  });
+
+  it("DROPS a tier with a negative floor — it would match every prompt", () => {
+    expect(
+      new ModelPriceSource(withTiers([{ minPromptTokens: -1, inputCostPerToken: 3e-6 }])).lookup("m/x")?.tiers,
+    ).toEqual([]);
+  });
+
+  it("drops a tier whose floor is not a finite number", () => {
+    for (const floor of [Number.NaN, Number.POSITIVE_INFINITY, "100000", null, undefined]) {
+      expect(
+        new ModelPriceSource(withTiers([{ minPromptTokens: floor, inputCostPerToken: 3e-6 }])).lookup("m/x")?.tiers,
+      ).toEqual([]);
+    }
+  });
+
+  it("drops a NON-NUMERIC or negative rate instead of handing it to the arithmetic", () => {
+    // The axis is simply not restated, so the model's flat rate stands — a garbage
+    // tier degrades to flat pricing, it does not become a garbage price.
+    const price = new ModelPriceSource(
+      withTiers([{ minPromptTokens: 100_000, inputCostPerToken: "3e-6", outputCostPerToken: -1 }]),
+    ).lookup("m/x");
+    expect(price?.tiers).toEqual([]);
+  });
+
+  it("keeps the VALID axes of a tier whose other axis is garbage", () => {
+    const price = new ModelPriceSource(
+      withTiers([{ minPromptTokens: 100_000, inputCostPerToken: 3e-6, outputCostPerToken: Number.NaN }]),
+    ).lookup("m/x");
+    expect(price?.tiers).toEqual([{ minPromptTokens: 100_000, inputCostPerToken: 3e-6 }]);
+  });
+
+  it("accepts a legitimate ZERO rate on a tier (free above the floor)", () => {
+    const price = new ModelPriceSource(withTiers([{ minPromptTokens: 100_000, inputCostPerToken: 0 }])).lookup("m/x");
+    expect(price?.tiers).toEqual([{ minPromptTokens: 100_000, inputCostPerToken: 0 }]);
+  });
+
+  it("ignores a non-array tier payload and a non-object member", () => {
+    expect(new ModelPriceSource(withTiers({ minPromptTokens: 1 })).lookup("m/x")?.tiers).toEqual([]);
+    expect(new ModelPriceSource(withTiers([null, 7, "tier"])).lookup("m/x")?.tiers).toEqual([]);
   });
 });

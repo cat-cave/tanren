@@ -116,7 +116,8 @@ export function computeNotionalUsd(
   }
   // The LIVE list price for this model — OpenRouter's own quote when it sells the
   // model, else the LiteLLM table for a direct-vendor route.
-  const price = priceSource.lookup(source.model, providerForLookup(source.provider));
+  const lookupProvider = providerForLookup(source.provider);
+  const price = priceSource.lookup(source.model, lookupProvider);
   if (price !== null) {
     return { usd: formatUsd(priceTokensAtModelPrice(price, tokens)), reason: "priced" };
   }
@@ -128,9 +129,14 @@ export function computeNotionalUsd(
   //   ready       → we asked, and the model genuinely is not listed. That is a fact
   //                 about the model (or a drifted/bogus id such as the literal
   //                 "default" managed mode records).
+  //
+  // Asked of the SAME route the lookup used. Health is NOT a property of "the price
+  // sources" collectively: over the composite, the always-seeded LiteLLM leg would
+  // otherwise answer on behalf of the marketplace leg and turn a cold-OpenRouter
+  // outage into a verdict about the model. See `CompositeModelPriceSource.health`.
   return {
     usd: null,
-    reason: priceSource.health() === "ready" ? "model_not_listed" : "price_source_unavailable",
+    reason: priceSource.health(lookupProvider) === "ready" ? "model_not_listed" : "price_source_unavailable",
   };
 }
 

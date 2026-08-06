@@ -73,6 +73,10 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
     kind: "writer",
     cli: "aider",
     authRef: dependencies.credentialRef,
+    // The id `runWriter` below pins on the command line — the recorder writes THIS
+    // to `cost_records.model` and the notional source looks it up. Resolved here,
+    // not just inside the closure, because the closure's value never leaves it.
+    model: dependencies.model ?? DEFAULT_AIDER_MODEL,
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_AIDER_MODEL;
       const apiKey = await resolveAiderApiKey(dependencies.secrets, dependencies.credentialRef);

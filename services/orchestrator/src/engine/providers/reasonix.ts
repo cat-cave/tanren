@@ -63,6 +63,11 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
     kind: "writer",
     cli: "reasonix",
     authRef: dependencies.credentialRef,
+    // Forwarded EXACTLY as declared, absent included: with no pinned model reasonix
+    // picks its own DeepSeek default, whose id tanren does not know. An absent model
+    // records the honest `model_id_absent`; inventing an id here would record a
+    // priced notional figure for a call that may not have used that model at all.
+    ...(dependencies.model !== undefined && { model: dependencies.model }),
     async runWriter(opts): Promise<WriterResult> {
       const apiKey = await resolveReasonixApiKey(dependencies.secrets, dependencies.credentialRef);
       const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
