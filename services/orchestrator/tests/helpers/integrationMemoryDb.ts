@@ -59,11 +59,13 @@ export class IntegrationMemoryDb {
     ) {
       const [orgId, providerKind, principalOrConnectionId] = params as [string, string, string];
       const byConnection = sql.includes("provider_principal_id, current_auth_generation");
+      const activeOnly = sql.includes("status = 'active'");
       const conn = this.connections.find(
         (row) =>
           row.org_id === orgId &&
           row.provider_kind === providerKind &&
-          (byConnection ? row.id : row.provider_principal_id) === principalOrConnectionId,
+          (byConnection ? row.id : row.provider_principal_id) === principalOrConnectionId &&
+          (!activeOnly || row.status === "active"),
       );
       return rowsOf(
         conn
@@ -162,13 +164,15 @@ export class IntegrationMemoryDb {
     }
     if (sql.startsWith("SELECT id, current_generation")) {
       const [orgId, providerKind, connectionId] = params as [string, string, string];
+      const activeOnly = sql.includes("status = 'active'");
       const grant = this.grants.find(
         (row) =>
           row.org_id === orgId &&
           row.provider_kind === providerKind &&
           row.connection_id === connectionId &&
           row.plane === "control" &&
-          row.environment === "control",
+          row.environment === "control" &&
+          (!activeOnly || row.status === "active"),
       );
       return rowsOf(
         grant ? [{ id: grant.id, current_generation: grant.current_generation, status: grant.status }] : [],
