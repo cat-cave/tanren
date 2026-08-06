@@ -163,11 +163,17 @@ export async function stageWorkspaceChanges(
     label,
     cwd: workspace,
     // `set -u` (not `-e`): we read the probe's exit explicitly, so `-e` aborting on the
-    // expected nonzero-1 would be wrong. A staging failure and a probe fault (> 1) each
-    // exit with their own code, so the whole command throws — never reaching the gate.
+    // expected nonzero-1 would be wrong. But `-u` does NOT abort on a failed command, so
+    // `git add -A`'s status would be discarded and the trailing marker `printf` (exit 0)
+    // would become the command's status — a staging fault (index.lock, permission,
+    // unreadable path) laundered into a valid staged/no-staged result (#1434 review). So we
+    // CAPTURE `git add`'s status and re-exit with it on failure BEFORE the probe runs: a
+    // staging failure and a probe fault (> 1) each exit with their own code, so the whole
+    // command throws — never reaching the gate.
     command: [
       "set -u",
-      "git add -A",
+      "git add -A; add_status=$?",
+      'if [ "$add_status" -ne 0 ]; then exit "$add_status"; fi',
       "git diff --cached --quiet --exit-code; probe=$?",
       `if [ "$probe" -eq 0 ]; then printf '%s\\n' ${NO_STAGED_CHANGES_MARKER};`,
       `elif [ "$probe" -eq 1 ]; then printf '%s\\n' ${STAGED_CHANGES_MARKER};`,
