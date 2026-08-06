@@ -62,6 +62,9 @@ describe("GitHubCodeHost read DTOs", () => {
     expect(() => decodeCompareFiles({ files: [{ filename: "a.ts", patch: null }] })).toThrow(/patch response/iu);
     expect(() => decodeCompareFiles({ files: [{ patch: "p" }] })).toThrow(/filename/iu);
     expect(() =>
+      decodeCompareFiles({ files: Array.from({ length: 300 }, () => ({ filename: "a", patch: "p" })) }),
+    ).toThrow(/files limit/iu);
+    expect(() =>
       decodeCompareFiles({ files: Array.from({ length: 301 }, () => ({ filename: "a", patch: "p" })) }),
     ).toThrow(/files limit/iu);
     expect(
