@@ -8,6 +8,49 @@
     "intent": {
       "type": "string"
     },
+    "jsonlDecodeFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "failures": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "lineNumber": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "reason": {
+                "enum": [
+                  "invalid_json",
+                  "non_object",
+                  "line_too_large",
+                  "event_limit_exceeded"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "lineNumber",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50001,
+          "minItems": 1,
+          "type": "array"
+        },
+        "kind": {
+          "const": "jsonl_object_decode_failed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "failures"
+      ],
+      "type": "object"
+    },
     "message": {
       "type": "string"
     },

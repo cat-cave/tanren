@@ -4,6 +4,8 @@ import { runWorkspaceSshCommand } from "../workspace/index.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { Commit, WriterResult } from "./types.js";
 
+export { postProcessPreservingJsonlFailure } from "./jsonlWriterPostProcessing.js";
+
 // shared baseline/diff/commit capture for CLI writer adapters that,
 // like Codex, edit the workspace in place and let us derive the result from git
 // state after the CLI exits. Codex keeps its own copy (so the Codex path is not

@@ -130,6 +130,7 @@ export interface DesignOracleStageInput {
   baselineSha: string;
   // The read-only workspace the oracle self-inspects (the built output).
   workspacePath: string;
+  beforeAnswerer?: () => Promise<void>;
   // OPTIONAL spec writer-prompt MODE (audit round-2 H1). Threaded through to the
   // designOracle prompt so a `specialize_seed` spec gets the seeded-mode tail block
   // that scopes the oracle off the pre-existing seed surfaces, mirroring PR #708's
@@ -236,6 +237,7 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
   });
 
   const outputSchema = answererOutputSchemaFor("designOracle", DesignOracleAnswerSchema);
+  await input.beforeAnswerer?.();
   const verdict = await input.adapter.runAnswerer({
     prompt,
     workspace: input.workspacePath,

@@ -231,12 +231,28 @@ describe("Claude writer adapter", () => {
     });
   });
 
-  it("COUNTS a malformed non-empty stream-json line (loud), and reports zero for an all-valid stream", () => {
-    // `stream-json` is one JSON object per line — a non-empty line that fails to
-    // parse is contract drift, surfaced via malformedLineCount (not silently skipped).
-    const malformed = parseClaudeStreamTelemetry('{"type":"x"}\noops not json\n');
-    expect(malformed.malformedLineCount).toBe(1);
-    expect(parseClaudeStreamTelemetry('{"type":"x"}\n{"type":"y"}\n').malformedLineCount).toBe(0);
+  it("fails the writer typed with exact final usage across a malformed line", async () => {
+    const stdout =
+      '{"usage":{"input_tokens":2,"output_tokens":1}}\n \t \n{"usage":{"input_tokens":7,"output_tokens":4}}\n';
+    const malformed = parseClaudeStreamTelemetry(stdout);
+    expect(malformed.jsonlDecodeFailure).toEqual({
+      kind: "jsonl_object_decode_failed",
+      failures: [{ lineNumber: 2, reason: "invalid_json" }],
+    });
+    expect(malformed.tokenUsage).toEqual({
+      inputTokens: 7,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 4,
+      reasoningOutputTokens: 0,
+      totalTokens: 11,
+    });
+    await expect(runWithClaudeResult(ok(stdout))).resolves.toMatchObject({
+      exitReason: "crashed",
+      tokenUsage: { totalTokens: 11 },
+      telemetry: { jsonlDecodeFailure: malformed.jsonlDecodeFailure },
+    });
+    expect(parseClaudeStreamTelemetry('{"type":"x"}\n{"type":"y"}\n').jsonlDecodeFailure).toBeUndefined();
   });
 });
 

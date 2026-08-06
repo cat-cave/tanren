@@ -7,8 +7,18 @@ import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js"
 import { buildActivityWatchdog, outputOnlyWatchdog, quoteSshShellArg } from "../ssh/index.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
+import {
+  decodeJsonlObjectEvents,
+  findTokenUsageBounded,
+  JsonlObjectDecodeError,
+  type JsonlObjectDecodeFailure,
+} from "./findTokenUsage.js";
+import {
+  captureBaselineSha,
+  captureGitStateAfterCodex,
+  postProcessAnswererPreservingJsonlFailure,
+  postProcessPreservingJsonlFailure,
+} from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
@@ -51,10 +61,7 @@ export interface CodexEventTelemetry {
   // The OpenRouter generation id (managed run); folded onto tokenUsage so the cost
   // recorder can query the REAL `usage.cost` (see TokenUsage.openRouterGenerationId).
   openRouterGenerationId?: string;
-  // Count of NON-empty lines that failed to parse as JSON. Codex runs `--json`, so
-  // every non-empty line MUST be a JSON event — a positive count is contract drift
-  // (silent-fallback hardening: a malformed line is no longer silently skipped).
-  malformedLineCount?: number;
+  jsonlDecodeFailure?: JsonlObjectDecodeFailure;
 }
 
 // Raised by the Answerer path when Codex authenticated but the account's
@@ -141,22 +148,19 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // run authenticates with a static key (no token rotation), and its env/config
       // is not a codex bundle, so there is nothing to write back — skip it
       // (storeCodexAuthBundle would reject the non-codex ref anyway).
-      if (auth.bundleAuth) {
-        await persistRefreshedCodexAuth({
-          secrets: dependencies.secrets,
-          ssh: dependencies.ssh,
-          target: dependencies.target,
-          ref: dependencies.credentialRef,
-          codexHome: auth.CODEX_HOME,
-        });
-      }
-
-      const gitState = await captureGitStateAfterCodex(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-      );
+      const gitState = await postProcessPreservingJsonlFailure("codex", telemetry, async () => {
+        if (auth.bundleAuth) {
+          await persistRefreshedCodexAuth({
+            secrets: dependencies.secrets,
+            ssh: dependencies.ssh,
+            target: dependencies.target,
+            ref: dependencies.credentialRef,
+            codexHome: auth.CODEX_HOME,
+          });
+        }
+        return await captureGitStateAfterCodex(dependencies.ssh, dependencies.target, opts.workspace, baselineSha);
+      });
+      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
       if (codex.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
@@ -165,6 +169,9 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // pressure (PROJECT_BRIEF §4.3) instead of retrying a doomed call.
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (codex.failure !== undefined || codex.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
@@ -244,23 +251,30 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         const telemetry = parseCodexJsonlTelemetry(result.stdout);
         // Surface this call's per-call token usage for the cost path (lastTokenUsage).
         lastTokenUsage = telemetry.tokenUsage;
-        // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
-        // auth is a static key, so skip the write-back (mirrors the writer path).
-        if (auth.bundleAuth) {
-          await persistRefreshedCodexAuth({
-            secrets: dependencies.secrets,
-            ssh: dependencies.ssh,
-            target: dependencies.target,
-            ref: dependencies.credentialRef,
-            codexHome: auth.CODEX_HOME,
-          });
-        }
-        // A TRANSIENT stall or SSH-connect failure → the typed transient the loop-stage recovery RE-DRIVES (not terminal).
+        const decodeError =
+          telemetry.jsonlDecodeFailure === undefined
+            ? undefined
+            : new JsonlObjectDecodeError("Codex", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
+        // TRANSIENT stall / SSH-connect / usage-limit take PRECEDENCE over the fail-closed decode
+        // throw below, so a killed run's truncated (malformed) stdout is re-driven, not misreported
+        // as terminal. A completed-but-malformed response still fails closed via the helper.
         if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
         }
+        // Only the BYOK bundle path has a rotating token — refresh it, then fail closed on decode.
+        await postProcessAnswererPreservingJsonlFailure(decodeError, async () => {
+          if (auth.bundleAuth) {
+            await persistRefreshedCodexAuth({
+              secrets: dependencies.secrets,
+              ssh: dependencies.ssh,
+              target: dependencies.target,
+              ref: dependencies.credentialRef,
+              codexHome: auth.CODEX_HOME,
+            });
+          }
+        });
         if (result.failure !== undefined || result.exitCode !== 0) {
           throw new Error(
             `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
@@ -316,11 +330,9 @@ export async function persistRefreshedCodexAuth(input: {
   try {
     await storeCodexAuthBundle(input.secrets, { ref: input.ref, authJson: result.stdout });
   } catch (error) {
-    log.error(
-      "failed to persist rotated auth bundle; the next run would reuse the stale token",
-      { ref: input.ref },
-      error,
-    );
+    log.error("failed to persist rotated auth bundle; the next run would reuse the stale token", {
+      ref: input.ref,
+    });
     throw error;
   }
 }
@@ -332,32 +344,22 @@ function harnessOutputTail(stream: string | undefined): string {
 }
 
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
-  const lines = splitNonEmptyJsonlLines(stdout);
+  const decoded = decodeJsonlObjectEvents(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
-  // Codex runs with `--json`: EVERY non-empty line is a JSON event. A line that
-  // fails to parse is contract drift (a malformed NON-empty line), NOT a benign
-  // blank — count it so a silent skip becomes a VISIBLE signal the adapter surfaces
-  // (`usage.token_accounting_failed` upstream) rather than quietly losing usage.
-  let malformedLineCount = 0;
-  for (const line of lines) {
-    const parsed = parseJsonObject(line);
-    if (parsed === undefined) {
-      malformedLineCount += 1;
-      continue;
-    }
+  for (const parsed of decoded.events) {
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
     openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return {
-    rawEventCount: lines.length,
+  const telemetry = {
+    rawEventCount: decoded.rawEventCount,
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
-    malformedLineCount,
   };
+  return decoded.ok ? telemetry : { ...telemetry, jsonlDecodeFailure: decoded.failure };
 }
 
 // detectUsageLimit recognizes the Codex JSONL events emitted when the account

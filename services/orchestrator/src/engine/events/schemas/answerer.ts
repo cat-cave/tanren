@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JsonlObjectDecodeFailureSchema } from "../../contracts/jsonlDecodeFailure.js";
 
 // Semantic-rich planner/writer/checker/auditor event payloads. These fields are what the Forge narration substrate renders directly. The shapes are intentionally a superset of the single-pass emits so the fixture run replays without re-derivation.
 const SubtaskSummary = z
@@ -132,7 +133,9 @@ export const WriterCompletedPayload = z
         rawEventCount: z.number().int(),
         tokenUsage: TokenUsageSummary.optional(),
         usageLimit: z.object({ message: z.string() }).optional(),
+        jsonlDecodeFailure: JsonlObjectDecodeFailureSchema.optional(),
       })
+      .strict()
       .optional(),
     // narration enrichments
     intent: z.string().optional(),
@@ -171,6 +174,7 @@ export const WriterSubtaskFailedPayload = z
     intent: z.string(),
     failureKind: z.string(),
     message: z.string(),
+    jsonlDecodeFailure: JsonlObjectDecodeFailureSchema.optional(),
   })
   .strict();
 

@@ -21,6 +21,11 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { AnswererSchemaValidationError, AnswererStalledError } from "../providers/answererSchemaError.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import { ClaudeUsageLimitError } from "../providers/claude.js";
+import { JsonlObjectDecodeError } from "../providers/findTokenUsage.js";
+import {
+  projectPublicJsonlObjectDecodeFailure,
+  type JsonlObjectDecodeFailure,
+} from "../contracts/jsonlDecodeFailure.js";
 import { DesignContractCorruptError } from "../repositories/designContracts.js";
 import { DesignOracleActorConfigError, MalformedDesignOracleResultError } from "./designOracle/designOracle.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
@@ -32,6 +37,7 @@ export type StageFailureKind =
   | "window_exhausted"
   | "timeout"
   | "answerer_schema_invalid"
+  | "jsonl_object_decode_failed"
   | "cost_record_failed"
   | "event_append_failed"
   // Data-corruption family: a persisted JSONB payload failed its schema parse
@@ -146,6 +152,9 @@ export function classifyStageFailureKind(error: unknown): StageFailureKind {
   if (error instanceof AnswererSchemaValidationError) {
     return "answerer_schema_invalid";
   }
+  if (error instanceof JsonlObjectDecodeError) {
+    return "jsonl_object_decode_failed";
+  }
   if (error instanceof CostRecordError) {
     return "cost_record_failed";
   }
@@ -180,6 +189,12 @@ export function stageFailureMessage(error: unknown): string {
     return error.message;
   }
   return "stage threw a non-Error / empty-message failure";
+}
+
+export function stageJsonlDecodeFailurePayload(error: unknown): { jsonlDecodeFailure?: JsonlObjectDecodeFailure } {
+  return error instanceof JsonlObjectDecodeError
+    ? { jsonlDecodeFailure: projectPublicJsonlObjectDecodeFailure(error.failure) }
+    : {};
 }
 
 /**
@@ -253,6 +268,7 @@ export async function runStageBodyWithFinalizeGuard<T>(opts: {
       envelope,
       failureKind,
       message: stageFailureMessage(error),
+      ...stageJsonlDecodeFailurePayload(error),
     });
     throw error;
   }

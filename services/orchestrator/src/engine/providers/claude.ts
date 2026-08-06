@@ -9,8 +9,13 @@ import { AnswererSchemaValidationError, AnswererStalledError, throwIfTransientSs
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import {
+  decodeJsonlObjectEvents,
+  findTokenUsageBounded,
+  JsonlObjectDecodeError,
+  type JsonlObjectDecodeFailure,
+} from "./findTokenUsage.js";
+import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
 
 // Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
 // contracts (same WriterAdapter/AnswererAdapter shapes, same SSH-execution +
@@ -48,10 +53,7 @@ export interface ClaudeEventTelemetry {
   // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
   // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
   openRouterGenerationId?: string;
-  // Count of NON-empty `stream-json` lines that failed to parse as JSON. Claude's
-  // `stream-json` is one JSON object per line, so a positive count is contract
-  // drift (silent-fallback hardening: a malformed line is no longer silently skipped).
-  malformedLineCount?: number;
+  jsonlDecodeFailure?: JsonlObjectDecodeFailure;
 }
 
 // Raised by the Answerer path when Claude authenticated but the account's usage
@@ -103,18 +105,20 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
-      const gitState = await captureGitStateAfterWriter(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-        "claude writer",
+      const gitState = await postProcessPreservingJsonlFailure("claude", telemetry, () =>
+        captureGitStateAfterWriter(dependencies.ssh, dependencies.target, opts.workspace, baselineSha, "claude writer"),
       );
+      // A transient stall / usage-limit takes PRECEDENCE over a JSONL decode
+      // failure: a killed run's truncated stdout is malformed, but the failure is
+      // recoverable, not the terminal `crashed` a completed-but-malformed run is.
       if (claude.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (claude.failure !== undefined || claude.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
@@ -178,10 +182,16 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         lastTokenUsage = telemetry.tokenUsage;
         // A TRANSIENT stall or SSH-connect failure → the typed transient (NOT deterministic),
         // so the loop-stage recovery RE-DRIVES this stage instead of discarding the spec loop.
+        // This takes PRECEDENCE over a JSONL decode failure: a killed run's truncated stdout
+        // is malformed, but the stall is recoverable, not the terminal decode failure a
+        // completed-but-malformed response is.
         if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
+        }
+        if (telemetry.jsonlDecodeFailure !== undefined) {
+          throw new JsonlObjectDecodeError("Claude", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
         }
         if (result.failure !== undefined || result.exitCode !== 0) {
           throw new Error(
@@ -296,44 +306,32 @@ export function buildAnswererPrompt(prompt: string, schemaName: string, jsonSche
 // usage-limit error surfaces as an `error`/`result` event carrying the stable
 // "usage limit" phrase (matched on the phrase, not the event type).
 export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry {
-  const lines = splitNonEmptyJsonlLines(stdout);
+  const decoded = decodeJsonlObjectEvents(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
-  // `stream-json` is one JSON object per line — a non-empty line that fails to
-  // parse is contract drift, not a benign blank. Count it (silent-fallback
-  // hardening) so a malformed line surfaces instead of being silently skipped.
-  let malformedLineCount = 0;
-  for (const line of lines) {
-    const parsed = parseJsonObject(line);
-    if (parsed === undefined) {
-      malformedLineCount += 1;
-      continue;
-    }
+  for (const parsed of decoded.events) {
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
     openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return {
-    rawEventCount: lines.length,
+  const telemetry = {
+    rawEventCount: decoded.rawEventCount,
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
-    malformedLineCount,
   };
+  return decoded.ok ? telemetry : { ...telemetry, jsonlDecodeFailure: decoded.failure };
 }
 
 // Pulls the final assistant message text out of the stream-json events. Claude
 // emits a terminal `{"type":"result","result":"<text>"}`; we fall back to the
 // last assistant text block if the result envelope is absent.
 export function extractClaudeFinalText(stdout: string): string {
-  const lines = splitNonEmptyJsonlLines(stdout);
+  const decoded = decodeJsonlObjectEvents(stdout);
+  if (!decoded.ok) throw new JsonlObjectDecodeError("Claude", decoded.failure);
   let lastAssistantText: string | undefined;
-  for (const line of lines) {
-    const parsed = parseJsonObject(line);
-    if (parsed === undefined) {
-      continue;
-    }
+  for (const parsed of decoded.events) {
     if (parsed["type"] === "result" && typeof parsed["result"] === "string") {
       return parsed["result"];
     }

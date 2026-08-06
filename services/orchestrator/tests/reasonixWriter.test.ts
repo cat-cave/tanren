@@ -7,6 +7,7 @@ import {
   createReasonixWriter,
   parseReasonixStreamTelemetry,
 } from "../src/engine/providers/reasonix.js";
+import { MAX_JSONL_OBJECT_EVENTS } from "../src/engine/providers/findTokenUsage.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -148,6 +149,34 @@ describe("reasonix writer adapter", () => {
 
   it("omits token usage when reasonix reports no usage event", () => {
     expect(parseReasonixStreamTelemetry('{"type":"log","message":"hi"}\n').tokenUsage).toBeUndefined();
+  });
+
+  it("returns crashed—not completed—for the exit-0 malformed-middle counterexample", async () => {
+    const result = await runWith({
+      exitCode: 0,
+      stdout:
+        '{"usage":{"prompt_tokens":2,"completion_tokens":1}}\n' +
+        " \t \n" +
+        '{"usage":{"prompt_tokens":7,"completion_tokens":4}}\n',
+      stderr: "",
+    });
+    expect(result).toMatchObject({
+      exitReason: "crashed",
+      tokenUsage: { inputTokens: 7, outputTokens: 4, totalTokens: 11 },
+      telemetry: {
+        jsonlDecodeFailure: {
+          kind: "jsonl_object_decode_failed",
+          failures: [{ lineNumber: 2, reason: "invalid_json" }],
+        },
+      },
+    });
+  });
+  it("propagates the shared event-count boundary as a typed failure", () => {
+    const telemetry = parseReasonixStreamTelemetry("{}\n".repeat(MAX_JSONL_OBJECT_EVENTS + 1));
+    expect(telemetry.rawEventCount).toBe(MAX_JSONL_OBJECT_EVENTS + 1);
+    expect(telemetry.jsonlDecodeFailure?.failures).toEqual([
+      { lineNumber: MAX_JSONL_OBJECT_EVENTS + 1, reason: "event_limit_exceeded" },
+    ]);
   });
 });
 

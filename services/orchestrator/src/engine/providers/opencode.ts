@@ -5,18 +5,15 @@ import { storeOpencodeAuthBundle } from "../credentials/opencodeAuth.js";
 import { materializeOpencodeAuthBundle } from "../credentials/opencodeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import type { JsonlObjectDecodeFailure, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
-import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+import { decodeJsonlObjectEvents, findTokenUsageBounded } from "./findTokenUsage.js";
+import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
 
 // opencode CLI Writer adapter. opencode is a Writer-only provider in
 // this expansion and is pinned to the Zai GLM 5.1 model (`zai/glm-5.1`). It
 // mirrors the Codex/Claude Writer contract (same WriterAdapter shape, same
 // SSH-execution + credential-ref materialization) but invokes the `opencode`
-// CLI in non-interactive `run` mode. opencode streams JSON events on stdout
-// (`--print-logs --json`); token usage and usage-limit signals are parsed from
-// that stream the same way Codex/Claude parse their JSONL.
 //
 // (The previously-considered Wafer provider was discontinued 2026-05-27 and is
 // intentionally NOT offered — opencode here is Zai GLM 5.1 only.)
@@ -51,11 +48,7 @@ export interface OpencodeEventTelemetry {
   // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
   // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
   openRouterGenerationId?: string;
-  // Count of lines that LOOK like JSON (leading `{`) but failed to parse. opencode's
-  // `--print-logs` interleaves human log text with JSON events, so a plain-text line
-  // is BENIGN (not counted); only a JSON-shaped-but-malformed line is contract drift
-  // (silent-fallback hardening: no longer silently skipped).
-  malformedLineCount?: number;
+  jsonlDecodeFailure?: JsonlObjectDecodeFailure;
 }
 
 export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): WriterAdapter {
@@ -97,18 +90,24 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         }),
       });
       const telemetry = parseOpencodeStreamTelemetry(opencode.stdout);
-      const gitState = await captureGitStateAfterWriter(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        baselineSha,
-        "opencode writer",
+      const gitState = await postProcessPreservingJsonlFailure("opencode", telemetry, () =>
+        captureGitStateAfterWriter(
+          dependencies.ssh,
+          dependencies.target,
+          opts.workspace,
+          baselineSha,
+          "opencode writer",
+        ),
       );
+      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
       if (opencode.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (opencode.failure !== undefined || opencode.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
@@ -121,7 +120,6 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
 // opencode reads the prompt on stdin and writes the run to the workspace. We
 // point XDG_DATA_HOME at the per-run data dir (where the materialized auth.json
 // lives), pin the model, and run with the workspace as the project directory.
-// `--print-logs` emits the structured event stream we parse telemetry from.
 export function buildOpencodeWriterCommand(input: {
   dataHome: string;
   workspace: string;
@@ -137,6 +135,8 @@ export function buildOpencodeWriterCommand(input: {
     "opencode",
     "run",
     "--print-logs",
+    "--format",
+    "json",
     "--model",
     quoteSshShellArg(input.model),
     "--cwd",
@@ -164,39 +164,27 @@ export function resolveOpencodeModel(model: string | undefined, managed: boolean
   return slug.startsWith("openrouter/") ? slug : `openrouter/${slug}`;
 }
 
-// Parses opencode's `--print-logs` output: one JSON object per line. Token
 // usage lives under a `usage`/`tokens` object on a completion event; a
 // usage-limit error surfaces as an `error` event carrying the stable "usage
 // limit" phrase (matched on the phrase, not the event type, so a minor CLI
 // wording change still surfaces it).
 export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelemetry {
-  const lines = splitNonEmptyJsonlLines(stdout);
+  const decoded = decodeJsonlObjectEvents(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
-  // `--print-logs` interleaves human log text with JSON events. A plain-text line
-  // is BENIGN; only a JSON-shaped line (leading `{`) that fails to parse is contract
-  // drift — count THOSE so a malformed event line is no longer silently skipped.
-  let malformedLineCount = 0;
-  for (const line of lines) {
-    const parsed = parseJsonObject(line);
-    if (parsed === undefined) {
-      if (line.trimStart().startsWith("{")) {
-        malformedLineCount += 1;
-      }
-      continue;
-    }
+  for (const parsed of decoded.events) {
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
     openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return {
-    rawEventCount: lines.length,
+  const telemetry = {
+    rawEventCount: decoded.rawEventCount,
     tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
     usageLimit,
     openRouterGenerationId,
-    malformedLineCount,
   };
+  return decoded.ok ? telemetry : { ...telemetry, jsonlDecodeFailure: decoded.failure };
 }
 
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {

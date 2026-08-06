@@ -5,7 +5,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  decodeJsonlObjectEvents,
   findTokenUsageBounded,
+  MAX_JSONL_OBJECT_EVENTS,
+  MAX_JSONL_OBJECT_LINE_BYTES,
   MAX_USAGE_PARSE_DEPTH,
   MAX_USAGE_PARSE_NODES,
 } from "../src/engine/providers/findTokenUsage.js";
@@ -96,6 +99,44 @@ describe("findTokenUsageBounded", () => {
     expect(usage?.inputTokens).toBe(3);
     expect(usage?.outputTokens).toBe(2);
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+  it("accepts only physical JSON-object records and retains valid neighbors", () => {
+    expect(decodeJsonlObjectEvents("").ok).toBe(true);
+    expect(decodeJsonlObjectEvents('{"a":1}\r\n').ok).toBe(true);
+    for (const [input, failures, eventCount] of [
+      ["{}\nnot-json\n[]\n42\n{}\n", ["invalid_json", "non_object", "non_object"], 2],
+      [" \t\n", ["invalid_json"], 0],
+      ["{}\n\n{}\n", ["invalid_json"], 2],
+      ['{"a":1}{"b":2}\n', ["invalid_json"], 0],
+    ] as const) {
+      const decoded = decodeJsonlObjectEvents(input);
+      expect(decoded.ok).toBe(false);
+      if (decoded.ok) throw new Error("expected decode failure");
+      expect(decoded.failure.failures.map(({ reason }) => reason)).toEqual(failures);
+      expect(decoded.events).toHaveLength(eventCount);
+    }
+  });
+  it("accepts the exact line-byte boundary and rejects one byte over without dropping neighbors", () => {
+    const prefix = '{"value":"';
+    const suffix = '"}';
+    const payloadBytes = MAX_JSONL_OBJECT_LINE_BYTES - Buffer.byteLength(prefix + suffix);
+    const boundary = `${prefix}${"a".repeat(payloadBytes)}${suffix}`;
+    expect(decodeJsonlObjectEvents(boundary).ok).toBe(true);
+    const decoded = decodeJsonlObjectEvents(`{"before":true}\n${boundary}a\n{"after":true}\n`);
+    expect(decoded.ok).toBe(false);
+    if (decoded.ok) throw new Error("expected decode failure");
+    expect(decoded.failure.failures).toEqual([{ lineNumber: 2, reason: "line_too_large" }]);
+    expect(decoded.events).toEqual([{ before: true }, { after: true }]);
+  });
+  it("accepts the event-count boundary and returns one bounded failure beyond it", () => {
+    expect(decodeJsonlObjectEvents("{}\n".repeat(MAX_JSONL_OBJECT_EVENTS)).ok).toBe(true);
+    const over = decodeJsonlObjectEvents("{}\n".repeat(MAX_JSONL_OBJECT_EVENTS + 2));
+    expect(over.ok).toBe(false);
+    if (over.ok) throw new Error("expected decode failure");
+    expect(over.events).toHaveLength(MAX_JSONL_OBJECT_EVENTS);
+    expect(over.failure.failures).toEqual([
+      { lineNumber: MAX_JSONL_OBJECT_EVENTS + 1, reason: "event_limit_exceeded" },
+    ]);
   });
 
   it("the real codex parser parses a normal nested usage event identically (no signal)", () => {

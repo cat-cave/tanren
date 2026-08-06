@@ -3,6 +3,7 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { checkAnswerSchema, type CheckAnswer } from "../src/engine/providers/answererSchemas.js";
+import type { PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import {
   AnswererSchemaValidationError,
   buildCodexAnswererExecCommand,
@@ -10,6 +11,7 @@ import {
   createCodexAnswerer,
   parseStructuredAnswererOutput,
 } from "../src/engine/providers/codex.js";
+import { expectMalformedPlanner, runMalformedPlanner } from "./helpers/jsonlAnswererStageHarness.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -98,7 +100,26 @@ describe("Codex Answerer adapter", () => {
       reasoningOutputTokens: 50,
     });
   });
-
+  it("keeps malformed JSONL primary across auth write-back and terminalizes its proven cost", async () => {
+    const stdout = [
+      '{"usage":{"promptTokens":2,"completionTokens":1}}',
+      '{"one":1}{"two":2}',
+      '{"usage":{"promptTokens":7,"completionTokens":4}}',
+    ].join("\n");
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok(stdout), ok(authJson)]);
+    const secrets = new FailingWritebackSecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+    secrets.failWrites = true;
+    const answerer = createCodexAnswerer<PlanAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_codex_jsonl_failure",
+    });
+    const observed = await runMalformedPlanner(answerer);
+    expectMalformedPlanner(observed, "SECRET_AUTH_PERSIST");
+  });
   it("fails LOUD when the workspace mkdir is denied (no swallowed os-error-2)", async () => {
     // The per-run scratch base is /home/tanren/.tanren/runs (tanren-writable), NOT /tmp.
     // If that mkdir is ever denied, prep must throw — not let codex --cd into a missing dir.
@@ -277,5 +298,13 @@ class ScriptedSsh implements CommandSubstrate {
       throw new Error(`unexpected SSH command: ${command.command}`);
     }
     return result;
+  }
+}
+
+class FailingWritebackSecretStore extends InMemorySecretStore {
+  failWrites = false;
+  override async put(secret: { ref: string; value: string }): Promise<void> {
+    if (this.failWrites) throw new Error(`SECRET_AUTH_PERSIST ${secret.value}`);
+    await super.put(secret);
   }
 }

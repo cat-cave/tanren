@@ -29,7 +29,7 @@ import {
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
-import { recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
+import { answererJsonlFailureCost, recordAnswererCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -61,6 +61,7 @@ export interface PlannerStageInput {
 }
 
 export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnswer> {
+  const startedAt = Date.now();
   // WIDER FINALIZE GUARD (task #35): wrap the WHOLE post-row body — invokePlanner +
   // the `planner.subtasks.emitted` event + recordAnswererCost — so a throw ANYWHERE
   // (including the cost recorder firing mid-stage) closes the row loud + emits
@@ -84,12 +85,11 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
       projectId: args.costCtx.projectId,
       orgId: args.costCtx.orgId,
     },
-    body: () => runPlannerStageBody(args),
+    body: () => runPlannerStageBody(args, startedAt),
   });
 }
 
-async function runPlannerStageBody(args: PlannerStageInput): Promise<PlanAnswer> {
-  const startedAt = Date.now();
+async function runPlannerStageBody(args: PlannerStageInput, startedAt: number): Promise<PlanAnswer> {
   // STAGE-LOCAL stall recovery (apex v70 fix): a transient plan-Answerer stall re-drives
   // THIS call in place — sibling progress from the enclosing subtask loop (writer diff,
   // checker/auditor verdicts, designOracle) is PRESERVED. A genuinely-wedged planner (a
@@ -97,12 +97,26 @@ async function runPlannerStageBody(args: PlannerStageInput): Promise<PlanAnswer>
   // count. Every other loop stage (checker, auditor, designOracle, triage, convergence,
   // demoRun) already runs through the same wrapper; the plan stage was the only gap.
   // The stage signature `"plan"` matches the `taskKind` convention.
-  const result = await runAnswererStageWithRecovery("plan", () =>
-    invokePlanner(args.adapter, {
-      spec: args.spec,
-      workspace: args.workspacePath,
-      rejectionHistory: args.rejectionHistory,
-    }),
+  const result = await runAnswererStageWithRecovery(
+    "plan",
+    () =>
+      invokePlanner(args.adapter, {
+        spec: args.spec,
+        workspace: args.workspacePath,
+        rejectionHistory: args.rejectionHistory,
+      }),
+    answererJsonlFailureCost(
+      args,
+      "planner",
+      args.plannerTaskId,
+      startedAt,
+      // Mirror the normal-path rawUsage: honor the caller's buildUsage metadata on
+      // the JSONL-failure cost path too, so provider metadata is not lost on failure.
+      args.buildUsage?.({ plannerTaskId: args.plannerTaskId, attempt: args.attempt }) ?? {
+        role: "planner",
+        attempt: args.attempt,
+      },
+    ),
   );
   const runtimeSeconds = secondsSince(startedAt);
   // stage-transition latency as a structured timing log (no schema).
@@ -340,8 +354,13 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS call in place; a
   // wedged checker escalates loudly.
-  const result = await runAnswererStageWithRecovery("checker", () =>
-    invokeChecker(args.adapter, { context: checkerContext, workspace: args.workspacePath }),
+  const result = await runAnswererStageWithRecovery(
+    "checker",
+    () => invokeChecker(args.adapter, { context: checkerContext, workspace: args.workspacePath }),
+    answererJsonlFailureCost(args, "checker", args.checkerTaskId, startedAt, {
+      role: "checker",
+      subtaskIndex: args.subtask.index,
+    }),
   );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("check", Date.now() - startedAt, {

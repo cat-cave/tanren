@@ -4,6 +4,7 @@ import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { checkAnswerSchema, type CheckAnswer } from "../src/engine/providers/answererSchemas.js";
+import type { PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import {
   buildAnswererPrompt,
   buildClaudeAnswererCommand,
@@ -12,6 +13,7 @@ import {
   extractClaudeFinalText,
   parseClaudeAnswererOutput,
 } from "../src/engine/providers/claude.js";
+import { expectMalformedPlanner, runMalformedPlanner } from "./helpers/jsonlAnswererStageHarness.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -79,6 +81,25 @@ describe("Claude Answerer adapter", () => {
     ).rejects.toBeInstanceOf(ClaudeUsageLimitError);
   });
 
+  it("terminalizes malformed JSONL through the real planner stage with its proven cost", async () => {
+    const stdout = [
+      '{"usage":{"input_tokens":2,"output_tokens":1}}',
+      "not-json",
+      JSON.stringify({ type: "result", result: answer, usage: { input_tokens: 7, output_tokens: 4 } }),
+    ].join("\n");
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(stdout, "SECRET_CLAUDE_STDERR")]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/claude/dev", value: authJson });
+    const answerer = createClaudeAnswerer<PlanAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/claude/dev",
+      runId: "run_claude_jsonl_failure",
+    });
+    const observed = await runMalformedPlanner(answerer);
+    expectMalformedPlanner(observed, "SECRET_CLAUDE_STDERR");
+  });
   it("repairs a malformed-then-valid answer in ONE bounded re-call (no stage throw)", async () => {
     // First exec returns invalid JSON; the schema-repair pass re-asks ONCE and the
     // second exec returns a valid CheckAnswer — runAnswerer resolves, no throw.
@@ -170,8 +191,8 @@ describe("Claude Answerer adapter", () => {
   });
 });
 
-function ok(stdout: string): CommandResult {
-  return { exitCode: 0, stdout, stderr: "", timedOut: false };
+function ok(stdout: string, stderr = ""): CommandResult {
+  return { exitCode: 0, stdout, stderr, timedOut: false };
 }
 
 class ScriptedSsh implements CommandSubstrate {
