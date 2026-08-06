@@ -80,6 +80,8 @@ describe("stacked-PR draft base", () => {
       targetBranch: "main",
       ancestorStack: [member("spec_a", "tanren/run_a")],
       runBranch: "tanren/run_123",
+      sourceRef: "a".repeat(40),
+      publishedHeadSha: "a".repeat(40),
       title: "Tanren run run_123",
       githubCredentialRef: "credential/github/org/org_fake/dev",
       timeoutMs: 500,

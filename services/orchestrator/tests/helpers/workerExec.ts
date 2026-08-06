@@ -345,9 +345,14 @@ export class RecordingSsh implements CommandSubstrate {
     if (isJunitHarvestRead(command.command)) {
       return { exitCode: 0, stdout: PASSING_JUNIT_XML, stderr: "", timedOut: false };
     }
+    if (isCleanHeadResolution(command.command)) {
+      return { exitCode: 0, stdout: `${CLEAN_HEAD_SHA}\n`, stderr: "", timedOut: false };
+    }
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }
+
+const CLEAN_HEAD_SHA = "a".repeat(40);
 
 // One-test JUnit XML the harvester parses as `total: 1, failures: 0` — passes the
 // default `minTests: 1` evidence contract.
@@ -360,6 +365,13 @@ const PASSING_JUNIT_XML =
 // marker, so a non-harvest command never matches.
 function isJunitHarvestRead(command: string): boolean {
   return command.includes("__TANREN_FILE_ABSENT__");
+}
+
+function isCleanHeadResolution(command: string): boolean {
+  return (
+    command.includes("git rev-parse HEAD") ||
+    (command.includes("git rev-parse") && command.includes("refs/tanren/pr-clean"))
+  );
 }
 
 export function passingGitHub(): ScriptedGitHubHttp {
@@ -393,6 +405,7 @@ export function passingGitHub(): ScriptedGitHubHttp {
 }
 
 export class ScriptedGitHubHttp implements GitHubHttpClient {
+  private workerBranchAbsenceConsumed = false;
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -401,6 +414,16 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     // ordered PR/CI/merge response queue stays in lockstep.
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
+    // The seeded worker run's initial draft branch is explicitly absent. This
+    // must remain out-of-band so the ordered PR/CI queue stays a strict proof.
+    if (
+      input.method === "GET" &&
+      input.path === "/repos/cat-cave/tanren-fixture-easy/git/ref/heads/tanren%2Fworker-test" &&
+      !this.workerBranchAbsenceConsumed
+    ) {
+      this.workerBranchAbsenceConsumed = true;
+      return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();
     if (response === undefined) {

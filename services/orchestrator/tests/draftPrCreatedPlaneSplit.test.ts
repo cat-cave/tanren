@@ -169,6 +169,8 @@ describe("apex v86 — post-PR-open writes route through RunStateWriter (plane-s
       repoUrl: context.repoUrl,
       targetBranch: context.targetBranch,
       runBranch: context.runBranch,
+      sourceRef: "a".repeat(40),
+      publishedHeadSha: "a".repeat(40),
       title: "Tanren: Scaffold",
       githubCredentialRef: "credential/github/org/org_v86/dev",
       ...seam,

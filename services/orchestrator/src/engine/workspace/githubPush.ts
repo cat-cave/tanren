@@ -11,6 +11,8 @@ export interface DraftPrBranchInput {
   requestedBranch?: string;
 }
 
+export type GitHubPushLease = { expectedSha: string; alreadyPublished?: true } | { expectedAbsent: true };
+
 export interface GitHubWorkspacePushInput {
   ssh: CommandSubstrate;
   target: RunnerHandle;
@@ -31,6 +33,8 @@ export interface GitHubWorkspacePushInput {
    * changes (no lockfile / node_modules).
    */
   sourceRef?: string;
+  /** Exact remote-state proof required before every GitHub branch update. */
+  forceWithLease: GitHubPushLease;
 }
 
 // The local ref the cleaned PR commits are staged onto before the push. Kept
@@ -328,7 +332,12 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
       cls: "vcs",
       workspace: input.workspacePath,
     }),
-    command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
+    command: buildGitHubPushCommand({
+      repoUrl: input.repoUrl,
+      branch: input.branch,
+      sourceRef: input.sourceRef,
+      forceWithLease: input.forceWithLease,
+    }),
     stdin: input.token,
   });
 }
@@ -432,26 +441,28 @@ export function forceWithLeaseArg(branch: string, expectedSha: string): string {
   return `--force-with-lease=refs/heads/${validBranch}:${expectedSha}`;
 }
 
+export function forceWithLeaseAbsentArg(branch: string): string {
+  return `--force-with-lease=refs/heads/${validateGitBranchName(branch)}:`;
+}
+
 export function buildGitHubPushCommand(input: {
   repoUrl: string;
   branch: string;
   sourceRef?: string;
-  /**
-   * When set, the push is guarded by `--force-with-lease=refs/heads/<branch>:<expectedSha>`
-   * (#1059) instead of a blind `--force`: the dependent PR-head publish that a base-shift
-   * rebase/resolution rewrites. Absent ⇒ a blind `--force` — the INITIAL PR-branch push, whose
-   * branch Tanren is the sole writer of (no concurrent-write hazard) so a lease would only add a
-   * spurious first-push rejection.
-   */
-  forceWithLease?: { expectedSha: string };
+  /** Exact remote-state proof required before every GitHub branch update. */
+  forceWithLease: GitHubPushLease;
 }): string {
   const branch = validateGitBranchName(input.branch);
   const sourceRef = validatePushSourceRef(input.sourceRef);
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
-  const forceArg =
-    input.forceWithLease === undefined
-      ? "--force"
-      : quoteSshShellArg(forceWithLeaseArg(branch, input.forceWithLease.expectedSha));
+  if (input.forceWithLease === undefined) {
+    throw new Error("GitHub push requires an explicit remote-state lease");
+  }
+  const forceArg = quoteSshShellArg(
+    "expectedSha" in input.forceWithLease
+      ? forceWithLeaseArg(branch, input.forceWithLease.expectedSha)
+      : forceWithLeaseAbsentArg(branch),
+  );
 
   return [
     "set -eu",
@@ -466,14 +477,18 @@ export function buildGitHubPushCommand(input: {
 }
 
 // The push source ref is operator/code-controlled, never user-derived: only the
-// working HEAD or the cleaned PR ref. Reject anything else so the push refspec
-// can never be smuggled into.
+// working HEAD, cleaned PR ref, or an immutable lowercase object id resolved by
+// the manual publication route. Reject anything else so the push refspec can
+// never be smuggled into.
 function validatePushSourceRef(sourceRef: string | undefined): string {
   if (sourceRef === undefined || sourceRef === "HEAD") {
     return "HEAD";
   }
   if (sourceRef === PR_CLEAN_REF) {
     return PR_CLEAN_REF;
+  }
+  if (/^[0-9a-f]{40}$/u.test(sourceRef)) {
+    return sourceRef;
   }
   throw new Error(`unsafe push source ref: ${sourceRef}`);
 }

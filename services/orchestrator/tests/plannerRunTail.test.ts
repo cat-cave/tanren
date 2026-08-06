@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
-import type { GitHubHttpResponse } from "../src/engine/providers/github.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   accounting,
@@ -49,23 +49,58 @@ import {
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
 
-// One PR-publish round of GitHub responses (the forge PR-list + create). The native
-// merge gate runs over SSH (no forge poll); the verdict-publish forge call is skipped
-// here because the unit SSH fake yields no head sha. The review/merge stages are
-// probe-injected, so only this PR-publish tail hits the scripted client.
-function ghRound(): GitHubHttpResponse[] {
-  return [
-    { status: 200, body: [] },
-    {
-      status: 201,
-      body: {
-        number: 7,
-        html_url: "https://github.com/cat-cave/tanren-fixture-medium/pull/7",
-        draft: true,
-        base: { ref: "main" },
-      },
-    },
-  ];
+const PUBLISHED_HEAD = "a".repeat(40);
+const REF_PATH = "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test";
+const STATUS_PATH = `/repos/cat-cave/tanren-fixture-medium/statuses/${PUBLISHED_HEAD}`;
+
+/** Strict publication protocol: ref proof → PR list → create → status publication. */
+class TailGitHubHttp implements GitHubHttpClient {
+  private phase: "ref" | "list" | "create" | "status" = "ref";
+  private publication = 0;
+  readonly requests: GitHubHttpRequest[] = [];
+
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    this.requests.push(input);
+    if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
+      return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
+    if (this.phase === "ref" && input.method === "GET" && input.path === REF_PATH) {
+      this.publication += 1;
+      this.phase = "list";
+      return this.publication === 1
+        ? { status: 404, body: { message: "Not Found" } }
+        : { status: 200, body: { object: { sha: PUBLISHED_HEAD } } };
+    }
+    if (
+      this.phase === "list" &&
+      input.method === "GET" &&
+      input.path.startsWith("/repos/cat-cave/tanren-fixture-medium/pulls?")
+    ) {
+      this.phase = "create";
+      return { status: 200, body: [] };
+    }
+    if (
+      this.phase === "create" &&
+      input.method === "POST" &&
+      input.path === "/repos/cat-cave/tanren-fixture-medium/pulls"
+    ) {
+      this.phase = "status";
+      return {
+        status: 201,
+        body: {
+          number: 7,
+          html_url: "https://github.com/cat-cave/tanren-fixture-medium/pull/7",
+          draft: true,
+          base: { ref: "main" },
+        },
+      };
+    }
+    if (this.phase === "status" && input.method === "POST" && input.path === STATUS_PATH) {
+      this.phase = "ref";
+      return { status: 201, body: {} };
+    }
+    throw new Error(`unexpected or out-of-order GitHub request: ${input.method} ${input.path}`);
+  }
 }
 
 const baseInput = (over: Record<string, unknown>) => ({
@@ -78,7 +113,7 @@ const baseInput = (over: Record<string, unknown>) => ({
 describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
   it("re-plans against a changes-requested review, then queues on approval", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
-    const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound()]);
+    const github = new TailGitHubHttp();
     // One shared adapter set across both passes; the planner records every call
     // so we can assert the second pass carried the reviewer feedback as steering.
     const planner = makePlanner([
@@ -129,7 +164,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     // first is new feedback (re-work); a single repeat is still re-work (a transient may recur
     // once); only once the identical feedback RECURS as a cycle (the third pass) is it a proven
     // fixed point ⇒ halt. Three PR rounds let the loop reach that cycle.
-    const github = new ScriptedGitHubHttp([...ghRound(), ...ghRound(), ...ghRound()]);
+    const github = new TailGitHubHttp();
 
     const result = await runPlannerLoopScoped(
       baseInput({
@@ -161,7 +196,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
 describe("runPlannerLoopWorkflow — merge-outcome mapping (native_queue)", () => {
   it("queues the first pass and completes the run without marking the spec merged", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
-    const github = new ScriptedGitHubHttp([...ghRound()]);
+    const github = new TailGitHubHttp();
 
     const result = await runPlannerLoopScoped(
       baseInput({
@@ -186,7 +221,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (native_queue)", () =
 
   it("queues a first pass before the coordinator evaluates a potential conflict", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
-    const github = new ScriptedGitHubHttp([...ghRound()]);
+    const github = new TailGitHubHttp();
 
     const result = await runPlannerLoopScoped(
       baseInput({
@@ -278,7 +313,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
 describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
   it("records a clean release.finalized (cleanedUp, no residuals) on a successful teardown", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(nativeQueueConfig());
-    const github = new ScriptedGitHubHttp([...ghRound()]);
+    const github = new TailGitHubHttp();
 
     await runPlannerLoopScoped(
       baseInput({
@@ -308,7 +343,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
   it("records a FAILED release.finalized (residual runner + bounded reason) when teardown throws, without masking the run", async () => {
     const { ctx, pool, events, secrets, ssh } = await setup(nativeQueueConfig());
     const allocator = new FailingReleaseAllocator();
-    const github = new ScriptedGitHubHttp([...ghRound()]);
+    const github = new TailGitHubHttp();
 
     // The run still completes normally — a failed teardown is recorded loudly, never
     // re-thrown into the run's outcome (the release runs in `finally`).

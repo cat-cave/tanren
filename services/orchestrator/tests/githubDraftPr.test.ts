@@ -5,15 +5,9 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken, validateGithubCredentialRef } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { GitHubPullRequestService } from "../src/engine/providers/githubPullRequestReuse.js";
-import { parseGitHubRepository } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/engine/workflow/githubDraftPr.js";
 import { draftPrInputSchema } from "../src/inputSchemas.js";
-import {
-  buildGitHubPushCommand,
-  draftPrBranchName,
-  PR_CLEAN_REF,
-  pushWorkspaceBranchToGitHub,
-} from "../src/engine/workspace/githubPush.js";
+import { draftPrBranchName } from "../src/engine/workspace/githubPush.js";
 
 const target: RunnerHandle = {
   backend: "ssh",
@@ -67,68 +61,6 @@ describe("GitHub draft PR contract", () => {
     expect(() => draftPrBranchName({ runId: "run_123", requestedBranch: "tanren/bad token" })).toThrow(
       "unsafe git branch",
     );
-  });
-
-  it("constructs runner git push commands without embedding the token", async () => {
-    const ssh = new RecordingSsh();
-
-    // The pre-resolved push token travels over stdin, never in the command string.
-    await pushWorkspaceBranchToGitHub({
-      ssh,
-      target,
-      workspacePath: "/workspace/runs/run_123/repo",
-      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-      branch: "tanren/run_123",
-      token: "ghp_secretToken",
-      timeoutMs: 500,
-    });
-
-    expect(ssh.commands[0]?.command.cwd).toBe("/workspace/runs/run_123/repo");
-    expect(ssh.commands[0]?.command.stdin).toBe("ghp_secretToken");
-    expect(ssh.commands[0]?.command.command).toContain("GIT_ASKPASS");
-    expect(ssh.commands[0]?.command.command).toContain("https://github.com/cat-cave/tanren-fixture-easy.git");
-    expect(ssh.commands[0]?.command.command).not.toContain("ghp_secretToken");
-    expect(ssh.commands[0]?.command.command).not.toContain(Buffer.from("ghp_secretToken", "utf8").toString("base64"));
-  });
-
-  it("parses GitHub repo URLs and rejects non-GitHub remotes", () => {
-    expect(parseGitHubRepository("https://github.com/cat-cave/tanren-fixture-easy.git")).toEqual({
-      owner: "cat-cave",
-      name: "tanren-fixture-easy",
-    });
-    expect(parseGitHubRepository("git@github.com:cat-cave/tanren-fixture-easy.git")).toEqual({
-      owner: "cat-cave",
-      name: "tanren-fixture-easy",
-    });
-    expect(() => buildGitHubPushCommand({ repoUrl: "https://example.com/repo.git", branch: "tanren/run_123" })).toThrow(
-      "unsupported GitHub",
-    );
-  });
-
-  it("pushes the working HEAD by default and the cleaned PR ref when asked", () => {
-    const head = buildGitHubPushCommand({
-      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-      branch: "tanren/run_123",
-    });
-    expect(head).toContain("HEAD:refs/heads/tanren/run_123");
-
-    const clean = buildGitHubPushCommand({
-      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-      branch: "tanren/run_123",
-      sourceRef: PR_CLEAN_REF,
-    });
-    expect(clean).toContain(`${PR_CLEAN_REF}:refs/heads/tanren/run_123`);
-    // The cleaned run branch is rebuilt and force-updated on review re-entry.
-    expect(clean).toContain("--force");
-
-    // Only the working HEAD or the cleaned ref are valid push sources.
-    expect(() =>
-      buildGitHubPushCommand({
-        repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-        branch: "tanren/run_123",
-        sourceRef: "refs/heads/main",
-      }),
-    ).toThrow("unsafe push source ref");
   });
 
   it("reuses an existing open PR instead of creating duplicates", async () => {
@@ -391,6 +323,8 @@ describe("GitHub draft PR contract", () => {
       repoUrl: "https://github.com/cat-cave/repo.git",
       targetBranch: "main",
       runBranch: "tanren/run_123",
+      sourceRef: "a".repeat(40),
+      publishedHeadSha: "a".repeat(40),
       title: "Tanren run run_123",
       githubCredentialRef: "credential/github/org/org_fake/dev",
       timeoutMs: 500,

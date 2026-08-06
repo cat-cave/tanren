@@ -337,9 +337,6 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     let outcome: SubtaskLoopOutcome | undefined, pullRequest: PublishedDraftPullRequest | undefined;
     let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
 
-    // UNBOUNDED re-entry: each iteration re-authors then re-gates/re-reviews, continuing while
-    // it CONVERGES (gate error / review feedback keeps changing) and exiting only on a terminal
-    // outcome (merge / fixed-point halt / non-pass re-drive) — never a hardcoded rework count.
     for (;;) {
       outcome = await runSubtaskLoop({
         pool: input.pool,
@@ -396,9 +393,6 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         orgId,
         ...issueLoopProvenanceSeam(context),
       });
-
-      // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate
-      // (`runPublishGateStage`): `rework`/`halt`/`merged`/`converged_empty` (v35).
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
@@ -429,8 +423,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         runId: context.runId,
         // Same token ref as PR-creation + CI-poll (project record → org default).
         resolvedGithubCredentialRef: context.githubCredentialRef,
-        // The review stage awaits its verdict INDEFINITELY (no poll cap); the poll
-        // SPACING reuses the CI poll cadence (an interval, not a budget).
+        // Review polling is unbounded; cadence is an interval, not a budget.
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
         reviewProbe: input.reviewProbe,
@@ -438,8 +431,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
-      // Codex H3 #11: `dispatchReviewVerdict` short-circuits `parked`; the
-      // awaiting-review prober owns the resume. Release lookup keeps complexity ratcheted.
+      // `parked` resumes through the awaiting-review prober.
       const reviewMove = await dispatchReviewVerdict(
         input,
         finalizeRunState,

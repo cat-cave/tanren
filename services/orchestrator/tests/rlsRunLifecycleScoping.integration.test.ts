@@ -53,6 +53,7 @@ import {
   noopMerge,
   completeCheck,
   passingGitHub,
+  ScriptedGitHubHttp,
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
 import {
@@ -63,6 +64,18 @@ import {
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
+
+describe("RLS lifecycle GitHub fixture", () => {
+  it("does not synthesize absence for an undeclared git ref", async () => {
+    await expect(
+      new ScriptedGitHubHttp([]).request({
+        method: "GET",
+        path: "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Funexpected",
+        token: "ghp_fixture",
+      }),
+    ).rejects.toThrow("unexpected GitHub request");
+  });
+});
 
 const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 const APP_ROLE = "tanren_app";

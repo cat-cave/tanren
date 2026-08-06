@@ -1,8 +1,7 @@
 /* eslint-disable import/max-dependencies -- draft PR publication composes the canonical tenant, event, runner, and GitHub seams */
 import type pg from "pg";
 import { z } from "zod";
-import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
-import { bindProjectGithubCredentialRefs, migrateProjectConfig } from "../config/projectConfig.js";
+import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { sshRunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -19,6 +18,13 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
+import { readDraftPrPushLease } from "./githubDraftPrLease.js";
+import { publishDraftPullRequestWithDurableLease, resolveBoundManualDraftPrHead } from "./githubDraftPrDurableLease.js";
+import { requireDraftPrPublishedHead, resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
+import { appendPushedWitnessWithReconciliation } from "./githubDraftPrWitness.js";
+import { messageFromError, readGithubCredentialRef, readGithubInstallation } from "./githubDraftPrHelpers.js";
+
+export { resolveDraftPrBaseBranch } from "./githubDraftPrBase.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -73,29 +79,12 @@ export interface PublishDraftPullRequestInput {
   /** org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
-  /**
-   * The local gitref pushed as the PR branch (default "HEAD"). The planner run
-   * passes the cleaned PR ref (writer commits with the bootstrap commit dropped)
-   * so the PR excludes bootstrap-generated artifacts.
-   */
+  /** The local gitref pushed as the PR branch (default "HEAD"). */
   sourceRef?: string;
-  /**
-   * apex v67/v69 loop-close fix: fired immediately AFTER `github.pr.created` is
-   * appended. The PR's existence is the durable signal it should be tracked by the
-   * native merge queue; deferring the enqueue to the end of the writer chain
-   * (`mergeForRun → enqueueNative`) stranded PRs whenever the intervening
-   * gate/review steps halted (the apex v67 = 4 PRs / 0 queue rows + v69 = 2 PRs /
-   * 0 queue rows blocker). When provided, the caller (`publishCleanedDraftPr`) has
-   * resolved the project's `mergeIntegration === "native_queue"` AND wired the
-   * `nativeQueueEnqueuer`; this hook performs the idempotent `merge_queue` INSERT
-   * + emits `merge.scheduled`. The `MergeAuthority.authorizeLand` truth table still
-   * enforces every land precondition (gate/review/mergeability), so an early-
-   * scheduled entry HOLDS in the queue until those clear — never a premature land.
-   *
-   * MUTUALLY EXCLUSIVE with {@link postPrCreatedAtomicWrites}: the seam picks ONE
-   * (the atomic one when its on-client enqueuer is wired — the production path; this
-   * legacy one otherwise — tests / no-DB runs).
-   */
+  /** The validated commit that was pushed from `sourceRef`, when the caller has one. */
+  publishedHeadSha?: string;
+  expectedPublishedHeadSha?: string;
+  /** Legacy non-atomic post-create enqueue seam; mutually exclusive with the production atomic seam. */
   enqueueAfterCreate?: (input: { prUrl: string; prNumber: number }) => Promise<void>;
   /**
    * ATOMICITY (PR #724 follow-up — apex v67/v69 root cause #2): when wired (the
@@ -157,23 +146,16 @@ export class DraftPrRunnerNotFoundError extends Error {
  * run's delta over its ancestor). An empty stack (a non-speculative run) ⇒ `fallbackBase`
  * (the run's `default_branch`).
  */
-export function resolveDraftPrBaseBranch(fallbackBase: string, ancestorStack: AncestorStack | undefined): string {
-  if (ancestorStack === undefined || ancestorStack.length === 0) {
-    return fallbackBase;
-  }
-  const immediateAncestor = ancestorStack.at(-1);
-  // A stack member with a blank branch cannot be a PR base — fall back rather than open
-  // against "" (the bootstrap write-back fills the branch, so this is defensive).
-  return immediateAncestor !== undefined && immediateAncestor.branch !== "" ? immediateAncestor.branch : fallbackBase;
-}
-
 export async function publishDraftPullRequest(input: PublishDraftPullRequestInput): Promise<PublishedDraftPullRequest> {
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
-  // §3.1 stacked-PR base: the immediate-ancestor PR-head branch when flag-on + stacked,
-  // else today's `targetBranch`. The persisted/event `targetBranch` reflects the BASE the
-  // PR actually opened against.
+  const publishedHeadSha = requireDraftPrPublishedHead({
+    branch,
+    sourceRef: input.sourceRef,
+    publishedHeadSha: input.publishedHeadSha,
+  });
+  // §3.1 stacked-PR base; the persisted target reflects the actual PR base.
   const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);
   // With an App installation the static ref is optional; the ledger label is
   // the App credential ref in that case.
@@ -200,10 +182,8 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         };
   const ledgerRef = installation?.credentialRef ?? staticRef ?? "github_app";
 
-  // §5a/PR-2: token resolution is credential PLUMBING, not a forge op — resolve through
-  // the standalone `resolveVcsToken(http, creds)` over the provider's existing client,
-  // over the shared client. §5c: the runner-workspace branch push stays a
-  // WORKSPACE HELPER (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
+  // §5a/PR-2: token resolution is credential plumbing. The runner-workspace branch push stays a
+  // workspace helper (`pushWorkspaceBranchToGitHub`) — it is an SSH-over-runner concern
   // (needs `ssh`/`target`/`workspacePath`), NOT a host-API op, so it is kept out of the
   // `CodeHost` seam. The draft-PR OPEN moves onto the `VisibilityProjection` (the raw
   // `GitHubVisibilityProjection.openOrUpdateChangeRequest`): the run-path open is the
@@ -231,19 +211,51 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    await pushWorkspaceBranchToGitHub({
-      ssh: input.ssh,
-      target: input.target,
-      workspacePath: input.workspacePath,
-      repoUrl: input.repoUrl,
+    // Every draft-PR publication (including a post-review rework) must bind its
+    // force update to the exact remote state observed immediately before it.
+    // A changed head rejects at git's authoritative CAS; this catch records the
+    // failure and lets the run re-drive rather than report false publication.
+    const forceWithLease = await readDraftPrPushLease(
+      http,
+      repo,
+      branch,
+      resolved.token,
+      input.expectedPublishedHeadSha,
+      publishedHeadSha,
+    );
+    if (!("alreadyPublished" in forceWithLease)) {
+      await pushWorkspaceBranchToGitHub({
+        ssh: input.ssh,
+        target: input.target,
+        workspacePath: input.workspacePath,
+        repoUrl: input.repoUrl,
+        branch,
+        token: resolved.token,
+        sourceRef: input.sourceRef,
+        forceWithLease,
+      });
+    }
+    const pushedEvent = {
+      ...context,
+      eventType: "github.branch.pushed" as const,
+      payload: {
+        repoUrl: input.repoUrl,
+        branch,
+        headSha: publishedHeadSha,
+        sourceRef: publishedHeadSha,
+        credentialRef: ledgerRef,
+        redacted: true as const,
+      },
+    };
+    await appendPushedWitnessWithReconciliation({
+      eventStore,
+      event: pushedEvent,
+      http,
+      repo,
       branch,
       token: resolved.token,
-      sourceRef: input.sourceRef,
-    });
-    await eventStore.append({
-      ...context,
-      eventType: "github.branch.pushed",
-      payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true },
+      publishedHeadSha,
+      idempotencyKey: `${input.runId}:github.branch.pushed:${branch}:${publishedHeadSha}`,
     });
 
     const visibility = new GitHubVisibilityProjection(http, async () => resolved);
@@ -313,51 +325,63 @@ export async function publishDraftPullRequestForRun(
   if (context.runner === undefined) {
     throw new DraftPrRunnerNotFoundError(input.runId);
   }
-
-  return await publishDraftPullRequest({
-    pool: input.pool,
-    eventStore: input.eventStore,
-    // v68 fix: tenant key (runs.org_id NOT NULL); stamped on every appended event.
-    orgId: context.orgId,
-    appendEventOrgId: context.orgId,
-    secrets: input.secrets,
-    githubHttp: input.githubHttp,
-    ssh: input.ssh,
-    target: sshRunnerHandle({
-      host: context.runner.sshHost,
-      port: context.runner.sshPort,
-      username: "tanren",
-      hostKeyFingerprint: context.runner.hostKeyFingerprint,
-      identitySecretRef: input.identitySecretRef,
-    }),
-    runId: context.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    workspacePath: input.workspacePath ?? workspaceRepoPathForRun(context.runId),
-    repoUrl: context.repoUrl,
-    // §3.1: the run's base is `default_branch`; when the run is stacked (a non-empty
-    // ancestor stack), `publishDraftPullRequest` re-resolves the base to the immediate
-    // ancestor's PR-head branch (a true stacked PR) — so the operator
-    // `POST /runs/:id/github/draft-pr` route opens the same base the autonomous loop does.
-    targetBranch: context.defaultBranch,
-    ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
-    runBranch: context.branch,
-    // GitHub rejects an EMPTY PR title with 422 (`missing_field: title`) — proven live
-    // on apex v31. `??` does NOT catch an empty string, so an empty `input.title` (a
-    // deploy spec resolved one) flowed straight through. Coalesce on BLANK (trim), and
-    // end on a spec-id fallback that is structurally never empty.
-    title:
-      (input.title?.trim() ? input.title.trim() : undefined) ??
-      (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
-    body: input.body ?? context.specDescription,
-    // The credential coordinate is derived only from stored project/org authority;
-    // the operator body cannot override it.
-    githubCredentialRef: context.configuredGithubCredentialRef,
-    installation: context.installation,
-    githubAppMinter: input.githubAppMinter,
+  const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
+  const target = sshRunnerHandle({
+    host: context.runner.sshHost,
+    port: context.runner.sshPort,
+    username: "tanren",
+    hostKeyFingerprint: context.runner.hostKeyFingerprint,
+    identitySecretRef: input.identitySecretRef,
   });
-}
+  const { predecessorSha: durablePredecessor, headSha: publishedHeadSha } = await resolveBoundManualDraftPrHead({
+    pool: input.pool,
+    orgId: context.orgId,
+    specId: context.specId,
+    branch: context.branch,
+    repoUrl: context.repoUrl,
+    ssh: input.ssh,
+    target,
+    workspacePath,
+  });
 
+  return await publishDraftPullRequestWithDurableLease(
+    {
+      pool: input.pool,
+      eventStore: input.eventStore,
+      orgId: context.orgId,
+      appendEventOrgId: context.orgId,
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      ssh: input.ssh,
+      target,
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      workspacePath,
+      repoUrl: context.repoUrl,
+      targetBranch: context.defaultBranch,
+      ...(context.ancestorStack !== undefined && { ancestorStack: context.ancestorStack }),
+      runBranch: context.branch,
+      sourceRef: publishedHeadSha,
+      publishedHeadSha,
+      title:
+        (input.title?.trim() ? input.title.trim() : undefined) ??
+        (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
+      body: input.body ?? context.specDescription,
+      githubCredentialRef: context.configuredGithubCredentialRef,
+      installation: context.installation,
+      githubAppMinter: input.githubAppMinter,
+    },
+    {
+      orgId: context.orgId,
+      specId: context.specId,
+      branch: context.branch,
+      expectedPublishedHeadSha: durablePredecessor,
+      predecessorEstablished: true,
+    },
+    publishDraftPullRequest,
+  );
+}
 async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {
   const result = await pool.query(
     // v68 fix: select runs.org_id (NOT NULL) so the operator PR-open route stamps
@@ -426,10 +450,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
 }
 
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
-  // Callers MUST pass `githubCredentialRef` directly — the previous
-  // `input.projectConfig?.["githubCredentialRef"]` fallback branch was removed to keep the
-  // credential resolution on a single seam (the caller resolves credentials before
-  // calling; passing through projectConfig invited drift with `resolveCredentials`).
+  // Callers MUST pass githubCredentialRef directly; projectConfig fallback was removed.
   if (typeof input.githubCredentialRef !== "string") {
     throw new TypeError("GitHub credential ref is required");
   }
@@ -437,10 +458,7 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
 }
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
-  // App-installed run: the static ref is OPTIONAL. The App sentinel is an
-  // EMPTY-STRING ref (a present-but-empty string, not `undefined`) — collapse it
-  // (and any whitespace-only value) to "no static ref" so the run mints the App
-  // token, NEVER pushing `""` through the grammar validator (apex v30 crash).
+  // Collapse the App's empty sentinel so it mints a token instead of reaching ref validation.
   return normalizeStaticGithubRef(input.githubCredentialRef);
 }
 
@@ -475,17 +493,4 @@ interface DraftPrRunContext {
     sshPort: number;
     hostKeyFingerprint: string;
   };
-}
-
-function readGithubCredentialRef(config: unknown, orgId: string): string | undefined {
-  return bindProjectGithubCredentialRefs(migrateProjectConfig(config), orgId).credentials?.githubCredentialRef;
-}
-
-function readGithubInstallation(config: unknown, orgId: string): OrgGithubAppInstallation | undefined {
-  if (config === null || config === undefined) return undefined;
-  return bindOrgGithubCredentialRefs(migrateOrgConfig(config), orgId).github_app;
-}
-
-function messageFromError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

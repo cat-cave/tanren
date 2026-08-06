@@ -366,13 +366,21 @@ export class RecordingSsh implements CommandSubstrate {
     this.commands.push({ target: sshTarget, command });
     const stdout = command.command.includes("__TANREN_FILE_ABSENT__")
       ? '<?xml version="1.0"?><testsuites><testsuite name="t"><testcase name="ok"/></testsuite></testsuites>'
-      : "";
+      : cleanHeadStdout(command.command);
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
 
+export function cleanHeadStdout(command: string, sha = "a".repeat(40)): string {
+  return command.includes("git rev-parse HEAD") ||
+    (command.includes("git rev-parse") && command.includes("refs/tanren/pr-clean"))
+    ? `${sha}\n`
+    : "";
+}
+
 export class ScriptedGitHubHttp implements GitHubHttpClient {
   readonly requests: GitHubHttpRequest[] = [];
+  private initialBranchAbsenceConsumed = new Set<string>();
 
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
@@ -381,6 +389,19 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
     // MERGE-SAFETY (self-identity): the clone's `GET /user` identity read, answered out-of-band.
     if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
       return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
+    // Draft publication now proves first-write absence before pushing. Keep each
+    // lifecycle branch explicit and out of this fixture's ordered PR/gate queue.
+    // Do not widen this to a prefix: an unanticipated ref must still consume the
+    // strict queue (or fail when it is empty).
+    if (
+      input.method === "GET" &&
+      (input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Fplanner-test" ||
+        input.path === "/repos/cat-cave/tanren-fixture-medium/git/ref/heads/tanren%2Flifecycle") &&
+      !this.initialBranchAbsenceConsumed.has(input.path)
+    ) {
+      this.initialBranchAbsenceConsumed.add(input.path);
+      return { status: 404, body: { message: "Not Found" } };
     }
     const response = this.responses.shift();
     if (response === undefined) {

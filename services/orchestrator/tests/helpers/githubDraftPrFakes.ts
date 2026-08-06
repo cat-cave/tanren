@@ -11,17 +11,42 @@ export class RecordingSsh implements CommandSubstrate {
 
   async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    return {
+      exitCode: 0,
+      stdout: command.command === "git rev-parse HEAD" ? `${"a".repeat(40)}\n` : "",
+      stderr: "",
+      timedOut: false,
+    };
   }
 }
 
+const DEFAULT_FIRST_PUBLICATION_ABSENT_REFS = [
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_123",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Fscaffold-8973ab2b",
+  "/repos/cat-cave/linky86/git/ref/heads/tanren%2Fscaffold-8973ab2b",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_legacy",
+  "/repos/cat-cave/repo/git/ref/heads/tanren%2Frun_42",
+] as const;
+
 export class ScriptedGitHubHttp implements GitHubHttpClient {
   readonly requests: GitHubHttpRequest[] = [];
+  private readonly firstPublicationAbsentRefs: Set<string>;
 
-  constructor(private readonly responses: GitHubHttpResponse[]) {}
+  constructor(
+    private readonly responses: GitHubHttpResponse[],
+    firstPublicationAbsentRefs: readonly string[] = DEFAULT_FIRST_PUBLICATION_ABSENT_REFS,
+  ) {
+    this.firstPublicationAbsentRefs = new Set(firstPublicationAbsentRefs);
+  }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.requests.push({ ...input, token: "<redacted>" });
+    // Only explicitly declared first-publication refs are absent. Any other
+    // branch read remains in the strict response queue, so wrong refs, rework
+    // heads, malformed bodies, and non-404 responses cannot be hidden here.
+    if (input.method === "GET" && this.firstPublicationAbsentRefs.delete(input.path)) {
+      return { status: 404, body: { message: "Not Found" } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
