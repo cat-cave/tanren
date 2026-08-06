@@ -58,6 +58,26 @@ export class EagerBeamReadyCasLostError extends Error {
   }
 }
 
+/** The frontier run row is gone, so the coordinate cannot be locked. No competing
+ * ready winner is established; the stranded building beam must still be held. */
+export class EagerBeamFrontierUnavailableError extends Error {
+  public override readonly name = "EagerBeamFrontierUnavailableError";
+
+  public constructor() {
+    super("eager beam frontier run is unavailable for exact-coordinate locking");
+  }
+}
+
+/** The ready CAS won but the node it names could not be stamped (row missing). This
+ * is a materialization failure, not a competing-winner race, so it must be held. */
+export class EagerBeamStampMissError extends Error {
+  public override readonly name = "EagerBeamStampMissError";
+
+  public constructor() {
+    super("eager beam ready node stamp affected no row");
+  }
+}
+
 /** PG reader/writer used exclusively by the production EAGER planner. */
 export class PgEagerBeamStore {
   public constructor(private readonly pool: pg.Pool) {}
@@ -164,7 +184,7 @@ export class PgEagerBeamStore {
          WHERE merge_eager_beams.project_id = EXCLUDED.project_id
            AND merge_eager_beams.frontier_run_id = EXCLUDED.frontier_run_id
            AND merge_eager_beams.frontier_spec_id = EXCLUDED.frontier_spec_id
-           AND merge_eager_beams.state = 'building'
+           AND merge_eager_beams.state <> 'ready'
          RETURNING id, generation`,
         [
           input.record.orgId,
@@ -344,7 +364,7 @@ export class PgEagerBeamStore {
           proof.behaviorManifestHash,
         ],
       );
-      if (stamped.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+      if (stamped.rowCount !== 1) throw new EagerBeamStampMissError();
       await new PgEventStore(client).append({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -393,7 +413,7 @@ async function lockFrontier(client: pg.PoolClient, projectId: string, frontierRu
     projectId,
     frontierRunId,
   ]);
-  if (locked.rowCount !== 1) throw new EagerBeamReadyCasLostError();
+  if (locked.rowCount !== 1) throw new EagerBeamFrontierUnavailableError();
 }
 
 async function appendStale(
