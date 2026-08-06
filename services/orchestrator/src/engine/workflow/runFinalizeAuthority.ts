@@ -55,16 +55,17 @@ export function redriveBackoffSeconds(consecutiveSameFailure: number): number {
 // WHAT REMAINS REACHABLE HERE, AND WHY THE SET STAYS. The PRECONDITION check below now runs
 // BEFORE this one, and every `credential`-coded class that is merely WAITING on something
 // external carries a precondition: `MissingCredentialError`,
-// `MissingGithubCredentialRefError`, `MissingGithubAppCredentialRefError` and
-// `OrgProviderModeUnresolved` all short-circuit into an indefinite re-drive and never reach
-// this line. What is LEFT is `UnscopedOrgError` — credential resolution reached without its
-// org scope. That is `attribution: "tanren"`: a defect in the orchestrator, with NO external
-// condition that could become true to fix it. Retrying it forever would be a hot loop with
-// no probe, which is exactly what the precondition mechanism is designed to avoid, so it
-// SHOULD halt loudly and immediately. The set is therefore live code with exactly one live
-// member — not a vestige. (It is spelled by CODE rather than by cause because `code` is the
-// stable public contract; a future genuinely-terminal class simply must not carry a
-// precondition.)
+// `MissingGithubCredentialRefError` and `MissingGithubAppCredentialRefError` all
+// short-circuit into an indefinite re-drive and never reach this line. What is LEFT is the
+// scoping-defect pair `UnscopedOrgError` (credential resolution reached without its org
+// scope) and `OrgProviderModeUnresolved` (the org row read back empty for a non-empty org id
+// — an off-scope / RLS-denied read). Both are `attribution: "tanren"`: defects in the
+// orchestrator, with NO external condition that could become true to fix them, so neither
+// carries a precondition. Retrying them forever would be a hot loop with no probe — exactly
+// what the precondition mechanism is designed to avoid — so they SHOULD halt loudly and
+// immediately. The set is therefore live code with two live members — not a vestige. (It is
+// spelled by CODE rather than by cause because `code` is the stable public contract; a
+// future genuinely-terminal class simply must not carry a precondition.)
 const GENUINE_TERMINAL_CODES: ReadonlySet<RunFailureCode> = new Set<RunFailureCode>(["credential"]);
 
 // The authority's TYPE surface (TerminalOutcome / NonPassDetail / MergeOutcomeForDisposition

@@ -152,8 +152,17 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     stage: "credentials",
     summary: "the org's provider mode could not be resolved",
     cause: "provider_mode_unresolved",
-    attribution: "environment",
-    precondition: "provider_config",
+    // A tanren-side scoping defect, NOT a waitable external condition. The class is raised
+    // when a `{ kind: "org" }` scope's `organizations` row reads back EMPTY for a NON-EMPTY
+    // org id — a scoping/RLS-denial bug (the read ran off-scope and deny-by-default returned
+    // zero rows), never a legitimate "org has no config" signal (that path is the explicit
+    // `{ kind: "unscopedPlatform" }` scope). Nothing external becomes true to fix it, so it
+    // carries NO precondition and stays a GENUINE terminal (code `credential` ∈
+    // `GENUINE_TERMINAL_CODES`), mirroring the sibling `UnscopedOrgError`. Tagging it
+    // `precondition: "provider_config"` short-circuited it into an INDEFINITE re-drive (the
+    // precondition check in `runFinalizeAuthority` runs BEFORE the genuine-terminal check),
+    // silently hot-looping a scoping/RLS bug instead of halting loudly for a human to fix.
+    attribution: "tanren",
   },
   CodexUsageLimitError: {
     code: "usage_limit",

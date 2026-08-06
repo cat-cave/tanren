@@ -36,7 +36,7 @@ import { DagSpecRedrivenPayload } from "../src/engine/events/schemas/dagRedrive.
 import { PersistentSshOutageError } from "../src/engine/ssh/transientRetry.js";
 import { MissingGithubCredentialRefError } from "../src/engine/credentials/githubTokenResolver.js";
 import { MissingGithubAppCredentialRefError } from "../src/engine/credentials/githubApp.js";
-import { UnscopedOrgError } from "../src/engine/credentials/resolveCredentials.js";
+import { OrgProviderModeUnresolved, UnscopedOrgError } from "../src/engine/credentials/resolveCredentials.js";
 import { RunStateWriteTransportError } from "../src/engine/worker/httpRunStateWriter.js";
 import { RunnerClaimLiveRowError } from "../src/engine/allocators/runnerStore.js";
 import { WorkspaceDepsInstallError } from "../src/engine/workspace/index.js";
@@ -155,6 +155,17 @@ describe("classifyRunFailure — the error classes that produced the live 93%-`i
     // moved ahead of it — see the sibling assertion in runFinalizeAuthority.test.ts.
     const classified = classifyRunFailure(new UnscopedOrgError());
     expect(classified).toMatchObject({ cause: "credential_org_scope_lost", attribution: "tanren" });
+    expect(classified.precondition).toBeUndefined();
+  });
+
+  it("OrgProviderModeUnresolved stays a GENUINE terminal: a scoping/RLS bug, NOT a waitable precondition", () => {
+    // The org row read back EMPTY for a NON-EMPTY org id — an off-scope / RLS-denied read,
+    // i.e. a tanren-side defect, not an external condition that clears without a code fix.
+    // Tagging it `precondition: "provider_config"` short-circuited it into an INDEFINITE
+    // re-drive (the precondition check runs before `GENUINE_TERMINAL_CODES`), hot-looping a
+    // scoping bug. It must classify exactly like its sibling `UnscopedOrgError`: no precondition.
+    const classified = classifyRunFailure(new OrgProviderModeUnresolved("ghost"));
+    expect(classified).toMatchObject({ code: "credential", cause: "provider_mode_unresolved", attribution: "tanren" });
     expect(classified.precondition).toBeUndefined();
   });
 
