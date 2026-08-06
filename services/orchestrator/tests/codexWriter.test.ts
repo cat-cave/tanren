@@ -29,6 +29,7 @@ describe("Codex writer adapter", () => {
       ok('{"type":"usage","usage":{"input_tokens":12,"output_tokens":5,"cached_input_tokens":3}}\n'),
       ok(refreshedAuthJson()),
       ok(""),
+      ok(""),
       ok("diff --git a/LIVE.md b/LIVE.md\n+done\n"),
       ok(""),
     ]);
@@ -53,7 +54,7 @@ describe("Codex writer adapter", () => {
       `CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json -m 'gpt-5.6-luna' -c 'model_reasoning_effort="high"' --ignore-user-config --cd '/workspace/repo' -`,
     );
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
-    expect(ssh.commands[4]?.command.command).toContain("git commit -m 'codex writer'");
+    expect(ssh.commands[5]?.command.command).toContain("git commit -m 'codex writer'");
     expect(result).toMatchObject({
       diff: "diff --git a/LIVE.md b/LIVE.md\n+done\n",
       commits: [],
@@ -120,20 +121,19 @@ describe("Codex writer adapter", () => {
     expect(result.exitReason).toBe("completed");
   });
 
-  // SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED codex writer
-  // (endpointBaseUrl set) materializes the OpenRouter config.toml provider block
-  // + an OPENROUTER_API_KEY env file from the PLAIN OpenRouter key — it must NOT
-  // run the codex-bundle validators, the exec must source the env file + drop
-  // --ignore-user-config, and the key VALUE must never enter the command string.
-  // It also skips the ChatGPT-bundle auth write-back (no token to rotate).
+  // SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED codex writer (endpointBaseUrl set)
+  // materializes the OpenRouter config.toml provider block + an OPENROUTER_API_KEY env file
+  // from the PLAIN key — no codex-bundle validators, exec sources the env file and drops
+  // --ignore-user-config, the key VALUE never enters the command string, and the ChatGPT
+  // auth write-back is skipped (no token to rotate).
   it("MANAGED writer materializes the OpenRouter config.toml + key env file, skipping the bundle path and write-back", async () => {
     const baseSha = "a".repeat(40);
-    // Managed script order: no baseline capture (baseSha threaded) AND no
-    // auth write-back cat (managed) ⇒ 0 materialize-config, 1 codex exec,
-    // 2 commit, 3 diff, 4 log.
+    // Managed script order: no baseline capture (baseSha threaded) AND no auth write-back cat
+    // (managed) ⇒ 0 materialize-config, 1 codex exec, 2 stage, 3 commit, 4 diff, 5 log.
     const ssh = new ScriptedSsh([
       ok(""),
       ok("{}\n"),
+      ok(""),
       ok(""),
       ok("diff --git a/MANAGED.md b/MANAGED.md\n+managed\n"),
       ok(`${commitSha("f")}\tcodex writer\n`),
@@ -168,8 +168,8 @@ describe("Codex writer adapter", () => {
     expect(ssh.commands[1]?.command.command).toContain("openrouter.env' && CODEX_HOME=");
     expect(ssh.commands[1]?.command.command).not.toContain("--ignore-user-config");
     expect(ssh.commands[1]?.command.stdin).toBe("make a managed edit");
-    // No auth write-back: a managed run must NOT cat auth.json back into the
-    // secret store. With the script above, command[2] is the commit, not a cat.
+    // No auth write-back: a managed run must NOT cat auth.json back into the secret
+    // store. With the script above, command[2] is the stage and command[3] the commit.
     const commandText = ssh.commands.map((item) => item.command.command);
     expect(commandText.some((c) => c.includes("/codex-home/auth.json'") && c.startsWith("cat "))).toBe(false);
     expect(result.exitReason).toBe("completed");
@@ -178,9 +178,8 @@ describe("Codex writer adapter", () => {
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-managed");
   });
 
-  // SaaS Tier-B #5: a managed codex exec sources the OPENROUTER_API_KEY env file
-  // and drops --ignore-user-config so CODEX_HOME/config.toml is honored. A BYOK
-  // run keeps --ignore-user-config and sources nothing.
+  // SaaS Tier-B #5: a managed codex exec sources the OPENROUTER_API_KEY env file and drops
+  // --ignore-user-config so CODEX_HOME/config.toml is honored. BYOK keeps it and sources nothing.
   it("sources the OpenRouter env file + drops --ignore-user-config for a managed run", () => {
     const command = buildCodexExecCommand({
       codexHome: "/home/tanren/.codex",
@@ -218,6 +217,7 @@ describe("Codex writer adapter", () => {
       ok("{}\n"),
       ok(authJson),
       ok(""),
+      ok(""),
       ok("diff\n"),
       ok(""),
     ]);
@@ -252,6 +252,7 @@ describe("Codex writer adapter", () => {
       ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
       ok("{}\n"),
       ok(rotatedAuthJson),
+      ok(""),
       ok(""),
       ok("diff --git a/CODEX.md b/CODEX.md\n+codex\n"),
       ok(`${commitSha("e")}\tcodex writer\n`),
@@ -353,19 +354,19 @@ describe("Codex writer adapter", () => {
     expect(result.telemetry?.usageLimit).toBeDefined();
   });
 
-  // The cumulative-diff fix: when a run base sha is threaded, the writer diffs
-  // the workspace against the RUN BASE — not a freshly-captured per-subtask
-  // HEAD. It must NOT issue a `git rev-parse HEAD` baseline capture, and the
-  // diff/log commands must target the provided base sha.
+  // The cumulative-diff fix: with a run base sha threaded, the writer diffs the workspace
+  // against the RUN BASE, not a freshly-captured per-subtask HEAD — so it must NOT issue a
+  // `git rev-parse HEAD` baseline capture, and the diff/log commands must target the base sha.
   it("diffs against the threaded run-base sha and skips the per-subtask HEAD capture", async () => {
     const baseSha = "a".repeat(40);
     // Script order when baseSha is provided (no baseline capture step):
-    //   0 materialize-auth, 1 codex exec, 2 persist-auth cat, 3 commit,
-    //   4 diff, 5 log.
+    //   0 materialize-auth, 1 codex exec, 2 persist-auth cat, 3 stage,
+    //   4 commit, 5 diff, 6 log.
     const ssh = new ScriptedSsh([
       ok(""),
       ok("{}\n"),
       ok(refreshedAuthJson()),
+      ok(""),
       ok(""),
       ok("diff --git a/GREETING.md b/GREETING.md\n+hello\n"),
       ok(`${commitSha("c")}\tcodex writer\n`),
@@ -397,11 +398,10 @@ describe("Codex writer adapter", () => {
     expect(result.exitReason).toBe("completed");
   });
 
-  // The bug this fix closes: a REPLANNED subtask whose work a prior subtask
-  // already committed. Codex no-ops (the file already exists) so there is no NEW
-  // delta this iteration — but because the diff is taken vs the RUN BASE, the
-  // already-created file still appears, so the checker would pass instead of
-  // false-rejecting an empty per-iteration diff.
+  // The bug this fix closes: a REPLANNED subtask whose work a prior subtask already
+  // committed. Codex no-ops (the file exists), so there is no NEW delta — but the diff is
+  // taken vs the RUN BASE, so the already-created file still appears and the checker passes
+  // instead of false-rejecting an empty per-iteration diff.
   it("still shows a prior-iteration-created file in the diff when this iteration no-ops (cumulative vs base)", async () => {
     const baseSha = "b".repeat(40);
     // codex no-ops (empty stdout event), `git add -A` finds nothing new so no
@@ -412,6 +412,7 @@ describe("Codex writer adapter", () => {
       ok(""),
       ok("{}\n"),
       ok(refreshedAuthJson()),
+      ok(""),
       ok(""),
       ok(cumulativeDiff),
       ok(`${commitSha("d")}\tcreate GREETING.md\n`),
@@ -464,6 +465,7 @@ async function runWithCodexResult(
     codexResult,
     ok(refreshedAuthJson()),
     ok(""),
+    ok(""),
     ok(gitState.diff),
     ok(gitState.log),
   ]);
@@ -490,6 +492,9 @@ class ScriptedSsh implements CommandSubstrate {
     if (result === undefined) {
       throw new Error(`unexpected SSH command: ${command.command}`);
     }
+    // Staging's probe (stageWorkspaceChanges) reads a marker; empty scripted stdout ⇒ "staged".
+    if (command.command.includes("git add -A") && result.stdout === "")
+      return { ...result, stdout: "STAGED_CHANGES\n" };
     return result;
   }
 }

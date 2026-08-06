@@ -80,7 +80,7 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
   });
 
   it("threads a chain-selected Codex OpenRouter model into its per-run config", async () => {
-    const ssh = new ScriptedSsh([ok(""), ok("{}\n"), ok(""), ok(""), ok("")]);
+    const ssh = new ScriptedSsh([ok(""), ok("{}\n"), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/openrouter/org/o1/default", value: "sk-or-test" });
     const writer = buildWriterAdapter(
@@ -224,6 +224,9 @@ class ScriptedSsh implements CommandSubstrate {
     this.commands.push({ target: sshTarget, command });
     const result = this.results.shift();
     if (result === undefined) throw new Error(`unexpected SSH command: ${command.command}`);
+    // Staging's probe (stageWorkspaceChanges) reads a marker; empty scripted stdout ⇒ "staged".
+    if (command.command.includes("git add -A") && result.stdout === "")
+      return { ...result, stdout: "STAGED_CHANGES\n" };
     return result;
   }
 }

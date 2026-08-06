@@ -2,7 +2,8 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import type { Commit, WriterResult } from "./types.js";
+import { runCommitThroughProjectGate, stageWorkspaceChanges, writerExitReasonFor } from "./writerCommitGate.js";
+import type { Commit, CommitRejection, WriterResult } from "./types.js";
 
 export { postProcessPreservingJsonlFailure } from "./jsonlWriterPostProcessing.js";
 
@@ -39,8 +40,11 @@ export async function captureGitStateAfterWriter(
   workspace: string,
   baselineSha: string,
   commitMessage: string,
-): Promise<Pick<WriterResult, "diff" | "commits">> {
-  await commitWorkspaceChanges(ssh, target, workspace, commitMessage);
+): Promise<Pick<WriterResult, "diff" | "commits" | "commitRejection"> & { exitReason: WriterGitExitReason }> {
+  const commitRejection = await commitWorkspaceChanges(ssh, target, workspace, commitMessage);
+  // Captured even on a rejection — see the twin in codexGit.ts. Staging succeeded (it is
+  // its own command now) and only `git commit` was refused, so the work is still in the
+  // tree and the diff against the baseline still shows it (the convergence work signature).
   const diff = await runWorkspaceSshCommand(ssh, target, {
     label: "capture writer git diff",
     cwd: workspace,
@@ -53,27 +57,51 @@ export async function captureGitStateAfterWriter(
     command: `git log --format='%H%x09%s' --reverse ${baselineSha}..HEAD`,
     watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
   });
-  return { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
+  const exitReason = writerExitReasonFor({ commitRejection });
+  const state = { diff: diff.stdout, commits: parseGitLogCommits(log.stdout), exitReason };
+  return commitRejection === undefined ? state : { ...state, commitRejection };
 }
+
+/**
+ * The exit reason this capture DERIVES — computed here, next to the commit that produced
+ * the verdict, so no adapter has to import a commit-gate symbol from a Git module to
+ * restate the rule (#1420 review). The failure arms (`timeout` / `crashed` /
+ * `window_exhausted`) are the adapter's to decide and override it.
+ */
+type WriterGitExitReason = ReturnType<typeof writerExitReasonFor>;
 
 async function commitWorkspaceChanges(
   ssh: CommandSubstrate,
   target: RunnerHandle,
   workspace: string,
   commitMessage: string,
-): Promise<void> {
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "commit writer workspace changes",
-    cwd: workspace,
-    command: [
-      "set -eu",
-      "git add -A",
-      "if ! git diff --cached --quiet --exit-code; then",
-      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m ${shellSingleQuote(commitMessage)}`,
-      "fi",
-    ].join("\n"),
-    watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
-  });
+): Promise<CommitRejection | undefined> {
+  // STAGING (and the staged-change probe it carries) IS ITS OWN COMMAND, and that separation
+  // is load-bearing. Sharing one `set -eu` script with the commit made an `index.lock`
+  // conflict, a permission error, or a `git diff --cached` probe fault (exit > 1) exit nonzero
+  // the same way a hook NO vote does, so `classifyCommitRejection` re-told a substrate fault
+  // as "the project's gate REJECTED your work" and sent the writer to fix a defect that is
+  // not in its diff. Only the COMMIT's exit is eligible to be read as a verdict; staging and
+  // its probe throw, exactly as every other workspace command does.
+  const hasStagedChanges = await stageWorkspaceChanges(ssh, target, workspace, "stage writer workspace changes");
+  // Nothing staged → no commit to gate (a bare `git commit` would exit nonzero with
+  // "nothing to commit", which the classifier would misread as a hook NO vote).
+  if (!hasStagedChanges) return undefined;
+  // Hooks stay LIVE here (this commit carries the writer's content into the PR), and the
+  // hook's NO vote comes back as a VALUE (writerCommitGate.ts), not a throw, so the
+  // subtask loop can re-drive the writer with it. The gated command is the bare commit
+  // ALONE — no second fallible step — so only the hook's verdict can be read from its exit.
+  // Substrate faults still throw.
+  return await runCommitThroughProjectGate(async () =>
+    runWorkspaceSshCommand(ssh, target, {
+      label: "commit writer workspace changes",
+      cwd: workspace,
+      command:
+        `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' ` +
+        `git commit -m ${shellSingleQuote(commitMessage)}`,
+      watchdog: buildActivityWatchdog({ substrate: ssh, target, cls: "vcs", workspace }),
+    }),
+  );
 }
 
 function shellSingleQuote(value: string): string {
