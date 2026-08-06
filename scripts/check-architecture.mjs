@@ -4,6 +4,7 @@ import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 import { checkSingleEventWriter } from "./check-architecture-event-writer.mjs";
 import { checkNoFixtureModeBranching } from "./check-architecture-fixture-mode.mjs";
+import { describeSmokeCoverage, runJustfileChecks } from "./check-architecture-justfile.mjs";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
 import { checkNoArbitraryTimeouts } from "./check-architecture-timeouts.mjs";
@@ -429,6 +430,9 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkNoArbitraryTimeouts(projectFiles),
     // ENFORCED: fixture-specific process branching is not the normal product path.
     ...checkNoFixtureModeBranching(projectFiles),
+    // ENFORCED: every `smoke-*` recipe must actually run when the merge-queue gate
+    // runs `just smoke`, and no dependency list may carry an inline `#`.
+    ...runJustfileChecks(projectFiles),
     ...runStructureChecks(projectFiles),
   ];
 }
@@ -446,4 +450,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     exit(1);
   }
   console.log("architecture checks passed");
+  // Name what was verified, not only what failed: a gate that can silently skip a
+  // leaf reads exactly like one that ran it. This line puts the covered count in
+  // CI output, so the number moves when the aggregate loses a recipe.
+  const coverage = describeSmokeCoverage([
+    { file: "justfile", text: existsSync("justfile") ? await readFile("justfile", "utf8") : "" },
+  ]);
+  if (coverage !== null) {
+    console.log(coverage);
+  }
 }
