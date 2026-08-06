@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  MISE_LOCK_SLICE_SECONDS,
   MISE_LOCK_WAIT_SECONDS,
   MISE_SHARED_LOCK_FILE,
   miseProvisionCommand,
@@ -117,9 +118,19 @@ describe("miseProvisionCommand · workspace-prep provisions the declared toolcha
     // The repo's own mise.toml outranks Tanren's per-run config in mise's hierarchy, so
     // this branch is not exposed to the config race — but `mise install` still mutates
     // the ONE shared installs tree, which is the `ln -sf … File exists` failure.
-    expect(cmd).toContain(`flock -w ${String(MISE_LOCK_WAIT_SECONDS)} 9`);
+    expect(cmd).toContain(`flock -w ${String(MISE_LOCK_SLICE_SECONDS)} 9`);
     expect(cmd).toContain(`9>"${MISE_SHARED_LOCK_FILE}"`);
     expect(cmd.indexOf("flock")).toBeLessThan(cmd.indexOf("mise install"));
+    // The WAIT is sliced and announced (stderr), because the lock lives outside the
+    // workspace the activity watchdog probes: a single silent `flock -w 900` is read as a
+    // wedged command and the connection is destroyed roughly twenty times sooner than the
+    // declared budget. The heartbeat is what makes the budget real.
+    expect(cmd).toContain("waiting for the shared mise lock");
+    expect(cmd).toContain(`[ "$__tanren_mise_waited" -lt ${String(MISE_LOCK_WAIT_SECONDS)} ]`);
+    // A `mise install` that FAILS under the lock is re-raised, not overwritten by the
+    // lock-sentinel test that used to be the construct's last command.
+    expect(cmd).toContain("|| __tanren_mise_rc=$?");
+    expect(cmd).toContain('exit "$__tanren_mise_rc"');
     // Same run, same per-run config export as every other mise-touching command.
     expect(cmd).toContain('MISE_GLOBAL_CONFIG_FILE="/workspace/runs/run_alpha/tanren-mise-config.toml"');
   });

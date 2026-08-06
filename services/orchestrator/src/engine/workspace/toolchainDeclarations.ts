@@ -37,11 +37,24 @@ import { MISE_CONFIG_REL_PATH } from "../ssh/miseActivate.js";
 
 export { MISE_CONFIG_REL_PATH };
 
+// EVERY LOOKUP TABLE IN THIS MODULE IS PROTOTYPE-FREE, and the reason is that its KEYS
+// are repository bytes. A plain object literal inherits `Object.prototype`, so a repo that
+// commits `.tool-versions` with a line `constructor 1.2.3` — or `__proto__`, `toString`,
+// `hasOwnProperty` — makes an ordinary `TABLE[key]` return an inherited FUNCTION (or
+// `Object.prototype`) instead of `undefined`. The `=== undefined` guards downstream then
+// pass a non-string into `quoteSshShellArg`, and a gated repository's own content has
+// turned a legible "Tanren cannot map this tool" report into an orchestrator TypeError.
+// `Object.create(null)` removes the inheritance rather than adding an own-property check
+// at each of the three call sites, so a table added later cannot forget it.
+function lookupTable<T extends Record<string, string>>(entries: T): Readonly<Record<string, string>> {
+  return Object.freeze(Object.assign(Object.create(null) as Record<string, string>, entries));
+}
+
 // The mise tool name -> the BINARY the project's own shell will call. This is what the
 // post-provision verification probes: provisioning that "succeeded" while leaving the
 // binary unresolvable is exactly the silent-skip failure this whole module exists to
 // kill, so the tool is never considered provisioned until its binary resolves.
-const TOOL_BINARIES: Readonly<Record<string, string>> = {
+const TOOL_BINARIES: Readonly<Record<string, string>> = lookupTable({
   node: "node",
   pnpm: "pnpm",
   yarn: "yarn",
@@ -55,7 +68,7 @@ const TOOL_BINARIES: Readonly<Record<string, string>> = {
   ruby: "ruby",
   // The rust toolchain's user-facing entry point is cargo (rustc is a build detail).
   rust: "cargo",
-};
+});
 
 /** The binary a provisioned tool must expose, or `undefined` for a tool Tanren has no
  * binary mapping for (it is then reported, never silently assumed to be fine). */
@@ -100,7 +113,7 @@ export const TOOLCHAIN_PRESENCE_DECLARATION_PATHS: readonly string[] = [
 ];
 
 // Presence path -> the tool it declares.
-const PRESENCE_TOOLS: Readonly<Record<string, string>> = {
+const PRESENCE_TOOLS: Readonly<Record<string, string>> = lookupTable({
   "pnpm-lock.yaml": "pnpm",
   "yarn.lock": "yarn",
   "package-lock.json": "npm",
@@ -109,17 +122,22 @@ const PRESENCE_TOOLS: Readonly<Record<string, string>> = {
   "uv.lock": "uv",
   "poetry.lock": "poetry",
   "deno.lock": "deno",
-};
+});
 
 // `.tool-versions` (asdf) and `packageManager` use ecosystem names that differ from
 // mise's tool names. A literal rename, not a guess.
-const TOOL_ALIASES: Readonly<Record<string, string>> = { nodejs: "node", golang: "go" };
+const TOOL_ALIASES: Readonly<Record<string, string>> = lookupTable({ nodejs: "node", golang: "go" });
 
 export interface ToolchainDeclarationFile {
   /** Workspace-relative path, one of the two exported path lists. */
   readonly path: string;
   /** File contents for a content path; `""` for a presence path. */
   readonly contents: string;
+  /** True when the reader's byte bound cut this file short (./toolchainProvision.ts
+   * `TRUNCATION_FRAME`). It is the difference between "this repository's manifest is
+   * malformed" and "Tanren did not read all of it", and the two must not produce the same
+   * report: the first is the repository's to fix, the second is Tanren's. */
+  readonly truncated?: boolean;
 }
 
 export interface ToolchainRequirement {
@@ -185,16 +203,24 @@ export function detectToolchainRequirements(files: readonly ToolchainDeclaration
     if (file === undefined) continue;
     candidates.push(...readDeclaration(file, unresolved));
   }
+  // PRECEDENCE, PERFORMED RATHER THAN ASSUMED. The rule is "a pinned declaration outranks
+  // a lockfile's unconstrained one for the same tool; among equals the first in path order
+  // wins". It used to be written as an upgrade-in-place branch that REPLACED an already-
+  // held unconstrained requirement — and that branch was unreachable: the candidate list is
+  // built content-paths-then-presence-paths and only presence paths yield
+  // `versionDeclared: false`, so an unconstrained candidate can never be recorded before a
+  // pinned one for the same tool. The rule held only by accident of the two catalogues'
+  // order, the branch expressing it never executed, and the test that named it was in fact
+  // exercising "first wins".
+  //
+  // So the ordering is DONE here: a stable sort lifts every version-carrying candidate
+  // above every unconstrained one, leaving path order intact within each group (`Array#sort`
+  // is stable per spec). "First declaration wins" is then the entire rule, it is reachable,
+  // and it keeps holding if someone adds an unconstrained CONTENT path or reorders a list.
+  const ordered = [...candidates].sort((a, b) => Number(b.versionDeclared) - Number(a.versionDeclared));
   const requirements: ToolchainRequirement[] = [];
-  for (const candidate of candidates) {
-    const existing = requirements.findIndex((r) => r.tool === candidate.tool);
-    // A pinned declaration upgrades an already-recorded unconstrained one; otherwise
-    // the first declaration in path order stands.
-    if (existing !== -1) {
-      const held = requirements[existing];
-      if (held !== undefined && (held.versionDeclared || !candidate.versionDeclared)) continue;
-      requirements.splice(existing, 1);
-    }
+  for (const candidate of ordered) {
+    if (requirements.some((r) => r.tool === candidate.tool)) continue;
     const bin = toolBinary(candidate.tool);
     if (bin === undefined) {
       unresolved.push({
@@ -244,8 +270,28 @@ function readPackageManager(file: ToolchainDeclarationFile, unresolved: Unresolv
   try {
     parsed = JSON.parse(file.contents);
   } catch {
-    unresolved.push({ path: file.path, reason: "is not parseable JSON" });
-    return [];
+    // A TRUNCATED manifest is not a malformed one. The reader bounds each file, and a root
+    // `package.json` past that bound arrives cut mid-token, so `JSON.parse` fails on bytes
+    // the repository wrote correctly. Reporting that as "is not parseable JSON" and
+    // provisioning nothing reproduces the exact `pnpm: not found` this module removes —
+    // and with a lockfile present it is worse than nothing, because the pinned
+    // `packageManager` version silently degrades to the lockfile's unconstrained one.
+    //
+    // So the ONE field that matters is recovered from the bytes that did arrive, and the
+    // salvage is deliberately narrow: only on a file the reader SAID it truncated (never as
+    // a general tolerance for broken JSON), and only for `packageManager`.
+    const salvaged = file.truncated === true ? SALVAGE_PACKAGE_MANAGER.exec(file.contents)?.[1] : undefined;
+    if (salvaged === undefined) {
+      unresolved.push({
+        path: file.path,
+        reason:
+          file.truncated === true
+            ? `exceeds Tanren's declaration read bound and carries no recoverable "packageManager" field`
+            : "is not parseable JSON",
+      });
+      return [];
+    }
+    parsed = { packageManager: salvaged };
   }
   const field =
     typeof parsed === "object" && parsed !== null && "packageManager" in parsed
@@ -327,6 +373,10 @@ function pinned(tool: string, file: ToolchainDeclarationFile, unresolved: Unreso
   }
   return [{ tool, spec, declaredIn: file.path, versionDeclared: true }];
 }
+
+// The corepack `packageManager` field as it appears in raw bytes. Used ONLY to salvage a
+// manifest the reader truncated — never to parse a manifest that arrived whole.
+const SALVAGE_PACKAGE_MANAGER = /"packageManager"\s*:\s*"([^"]+)"/u;
 
 function significantLines(contents: string): string[] {
   return contents
