@@ -492,7 +492,7 @@ function bootstrapFailureMessage(
   return `workspace bootstrap (${command}) ${failureReason(exitCode, stalled)}${tail}`;
 }
 
-/** Chain a retraction ahead of an activation-wrapped command. Empty retraction ⇒ unchanged. */
+/** Gate the whole activation-wrapped command; grouping keeps its trailing `fi;` inside `&&`. */
 function withRetraction(retraction: string, activated: string): string {
-  return retraction === "" ? activated : `${retraction}; ${activated}`;
+  return retraction === "" ? activated : `${retraction} && { ${activated}; }`;
 }
