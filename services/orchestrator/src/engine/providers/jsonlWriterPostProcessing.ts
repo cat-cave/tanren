@@ -5,31 +5,29 @@ const log = createLogger("jsonl-writer-post-processing");
 type GitState = Pick<WriterResult, "diff" | "commits">;
 type WriterTelemetry = NonNullable<WriterResult["telemetry"]>;
 type JsonlWriterProvider = "claude" | "codex" | "opencode" | "reasonix";
-type PostProcessingResult =
-  | { gitState: GitState; failedResult?: never }
-  | { gitState?: never; failedResult: WriterResult };
+// Runs the writer's git-capture post-processing and returns the captured git
+// state. A JSONL decode failure is TERMINAL for a completed run, but the caller
+// classifies it AFTER the recoverable stall / usage-limit checks — so a transient
+// stall that left partial (truncated, hence malformed) stdout is reported as the
+// recoverable `timeout`/`window_exhausted` the recovery layer re-drives, NOT a
+// terminal `crashed`. When a decode failure is present we still capture git
+// evidence best-effort, tolerating a capture failure (returning empty git state)
+// so the decode-failure telemetry is never lost.
 export async function postProcessPreservingJsonlFailure(
   provider: JsonlWriterProvider,
   telemetry: WriterTelemetry,
   postProcess: () => Promise<GitState>,
-): Promise<PostProcessingResult> {
+): Promise<GitState> {
   if (telemetry.jsonlDecodeFailure === undefined) {
-    return { gitState: await postProcess() };
+    return await postProcess();
   }
-  const failedResult: WriterResult = {
-    diff: "",
-    commits: [],
-    exitReason: "crashed",
-    tokenUsage: telemetry.tokenUsage,
-    telemetry,
-  };
   try {
-    return { failedResult: { ...failedResult, ...(await postProcess()) } };
+    return await postProcess();
   } catch {
     log.error("writer post-processing failed after JSONL decode failure; returning uncaptured Git evidence", {
       provider,
     });
-    return { failedResult };
+    return { diff: "", commits: [] };
   }
 }
 export async function postProcessAnswererPreservingJsonlFailure(

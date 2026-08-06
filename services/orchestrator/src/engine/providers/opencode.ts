@@ -90,7 +90,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         }),
       });
       const telemetry = parseOpencodeStreamTelemetry(opencode.stdout);
-      const postProcessed = await postProcessPreservingJsonlFailure("opencode", telemetry, () =>
+      const gitState = await postProcessPreservingJsonlFailure("opencode", telemetry, () =>
         captureGitStateAfterWriter(
           dependencies.ssh,
           dependencies.target,
@@ -99,13 +99,15 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
           "opencode writer",
         ),
       );
-      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
-      const gitState = postProcessed.gitState;
+      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
       if (opencode.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (opencode.failure !== undefined || opencode.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);

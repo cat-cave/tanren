@@ -105,10 +105,18 @@ async function runPlannerStageBody(args: PlannerStageInput, startedAt: number): 
         workspace: args.workspacePath,
         rejectionHistory: args.rejectionHistory,
       }),
-    answererJsonlFailureCost(args, "planner", args.plannerTaskId, startedAt, {
-      role: "planner",
-      attempt: args.attempt,
-    }),
+    answererJsonlFailureCost(
+      args,
+      "planner",
+      args.plannerTaskId,
+      startedAt,
+      // Mirror the normal-path rawUsage: honor the caller's buildUsage metadata on
+      // the JSONL-failure cost path too, so provider metadata is not lost on failure.
+      args.buildUsage?.({ plannerTaskId: args.plannerTaskId, attempt: args.attempt }) ?? {
+        role: "planner",
+        attempt: args.attempt,
+      },
+    ),
   );
   const runtimeSeconds = secondsSince(startedAt);
   // stage-transition latency as a structured timing log (no schema).

@@ -42,8 +42,23 @@ describe("JSONL writer post-processing failures", () => {
     expect(JSON.stringify([result, errorSpy.mock.calls])).not.toContain(secrets);
     expect(errorSpy).toHaveBeenCalledOnce();
   });
+  it.each(providers)(
+    "%s: a transient stall wins over a JSONL decode failure (timeout, not crashed)",
+    async (provider) => {
+      const { adapter } = await buildCase(provider, { stalled: true });
+      const result = await adapter.runWriter({ prompt: "write", workspace: "/workspace/repo" });
+      // The killed run's truncated stdout is malformed, but the stall is recoverable:
+      // it must classify as `timeout` (re-driven), not the terminal `crashed`, while
+      // the decode-failure telemetry is still preserved for the failure signal.
+      expect(result.exitReason).toBe("timeout");
+      expect(result.telemetry?.jsonlDecodeFailure).toMatchObject({
+        kind: "jsonl_object_decode_failed",
+        failures: [{ lineNumber: 2, reason: "invalid_json" }],
+      });
+    },
+  );
 });
-async function buildCase(provider: Provider) {
+async function buildCase(provider: Provider, opts: { stalled?: boolean } = {}) {
   const store = new InMemorySecretStore();
   const authSecret = `${provider}-auth-secret`;
   const captureSecret = `${provider}-capture-secret`;
@@ -57,10 +72,13 @@ async function buildCase(provider: Provider) {
           ? JSON.stringify({ zai: { key: authSecret } })
           : authSecret;
   await store.put({ ref, value: auth });
+  // The writer run carries partial (malformed) stdout; `stalled` marks it as a
+  // transient watchdog stall so the decode failure must NOT win over `timeout`.
+  const writerRun = { ...ok(usageStream(provider)), ...(opts.stalled === true ? { stalled: true } : {}) };
   const results = [
     ...(provider === "reasonix" ? [] : [ok("")]),
     ok(`${"b".repeat(40)}\n`),
-    ok(usageStream(provider)),
+    writerRun,
     ...(provider === "codex" ? [ok(auth)] : []),
     { exitCode: 1, stdout: "", stderr: `git capture failed: ${captureSecret}` },
   ];

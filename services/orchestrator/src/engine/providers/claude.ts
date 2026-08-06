@@ -105,16 +105,20 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
-      const postProcessed = await postProcessPreservingJsonlFailure("claude", telemetry, () =>
+      const gitState = await postProcessPreservingJsonlFailure("claude", telemetry, () =>
         captureGitStateAfterWriter(dependencies.ssh, dependencies.target, opts.workspace, baselineSha, "claude writer"),
       );
-      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
-      const gitState = postProcessed.gitState;
+      // A transient stall / usage-limit takes PRECEDENCE over a JSONL decode
+      // failure: a killed run's truncated stdout is malformed, but the failure is
+      // recoverable, not the terminal `crashed` a completed-but-malformed run is.
       if (claude.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (claude.failure !== undefined || claude.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
@@ -176,15 +180,18 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         });
         const telemetry = parseClaudeStreamTelemetry(result.stdout);
         lastTokenUsage = telemetry.tokenUsage;
-        if (telemetry.jsonlDecodeFailure !== undefined) {
-          throw new JsonlObjectDecodeError("Claude", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
-        }
         // A TRANSIENT stall or SSH-connect failure → the typed transient (NOT deterministic),
         // so the loop-stage recovery RE-DRIVES this stage instead of discarding the spec loop.
+        // This takes PRECEDENCE over a JSONL decode failure: a killed run's truncated stdout
+        // is malformed, but the stall is recoverable, not the terminal decode failure a
+        // completed-but-malformed response is.
         if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
         throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
         if (telemetry.usageLimit !== undefined) {
           throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
+        }
+        if (telemetry.jsonlDecodeFailure !== undefined) {
+          throw new JsonlObjectDecodeError("Claude", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
         }
         if (result.failure !== undefined || result.exitCode !== 0) {
           throw new Error(

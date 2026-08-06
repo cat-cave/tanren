@@ -89,7 +89,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
         }),
       });
       const telemetry = parseReasonixStreamTelemetry(reasonix.stdout);
-      const postProcessed = await postProcessPreservingJsonlFailure("reasonix", telemetry, () =>
+      const gitState = await postProcessPreservingJsonlFailure("reasonix", telemetry, () =>
         captureGitStateAfterWriter(
           dependencies.ssh,
           dependencies.target,
@@ -98,13 +98,15 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
           "reasonix writer",
         ),
       );
-      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
-      const gitState = postProcessed.gitState;
+      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
       if (reasonix.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (reasonix.failure !== undefined || reasonix.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);

@@ -18,9 +18,11 @@
 
 import { Buffer } from "node:buffer";
 import type { JsonlObjectDecodeFailure, JsonlObjectParseFailure, TokenUsage } from "./types.js";
+import { MAX_JSONL_OBJECT_EVENTS } from "../contracts/jsonlDecodeFailure.js";
 import { createLogger } from "../observability/logger.js";
 
 export type { JsonlObjectDecodeFailure, JsonlObjectParseFailure } from "./types.js";
+export { MAX_JSONL_OBJECT_EVENTS } from "../contracts/jsonlDecodeFailure.js";
 const log = createLogger("provider-usage");
 
 // Generous caps: every real provider usage record sits within the first few
@@ -29,7 +31,6 @@ const log = createLogger("provider-usage");
 export const MAX_USAGE_PARSE_DEPTH = 64;
 export const MAX_USAGE_PARSE_NODES = 50_000;
 export const MAX_JSONL_OBJECT_LINE_BYTES = 1_048_576;
-export const MAX_JSONL_OBJECT_EVENTS = 50_000;
 interface JsonlObjectEventsBase {
   rawEventCount: number;
   events: Record<string, unknown>[];
@@ -59,10 +60,12 @@ export function decodeJsonlObjectEvents(stdout: string): JsonlObjectEvents {
     if (isEmptyStream || isTrailingLineTerminator) continue;
     rawEventCount += 1;
     if (rawEventCount > MAX_JSONL_OBJECT_EVENTS) {
-      if (rawEventCount === MAX_JSONL_OBJECT_EVENTS + 1) {
-        failures.push({ lineNumber: index + 1, reason: "event_limit_exceeded" });
-      }
-      continue;
+      // Stop at the FIRST overflow: record the single `event_limit_exceeded`
+      // marker and break, so a hostile/huge stream cannot drive unbounded
+      // per-line JSON.parse/byte-length work past the event cap. `rawEventCount`
+      // stays at the cap + 1 (the marker line).
+      failures.push({ lineNumber: index + 1, reason: "event_limit_exceeded" });
+      break;
     }
     if (Buffer.byteLength(line, "utf8") > MAX_JSONL_OBJECT_LINE_BYTES) {
       failures.push({ lineNumber: index + 1, reason: "line_too_large" });

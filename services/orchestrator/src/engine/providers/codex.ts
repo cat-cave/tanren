@@ -148,7 +148,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // run authenticates with a static key (no token rotation), and its env/config
       // is not a codex bundle, so there is nothing to write back — skip it
       // (storeCodexAuthBundle would reject the non-codex ref anyway).
-      const postProcessed = await postProcessPreservingJsonlFailure("codex", telemetry, async () => {
+      const gitState = await postProcessPreservingJsonlFailure("codex", telemetry, async () => {
         if (auth.bundleAuth) {
           await persistRefreshedCodexAuth({
             secrets: dependencies.secrets,
@@ -160,8 +160,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         }
         return await captureGitStateAfterCodex(dependencies.ssh, dependencies.target, opts.workspace, baselineSha);
       });
-      if (postProcessed.failedResult !== undefined) return postProcessed.failedResult;
-      const gitState = postProcessed.gitState;
+      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
       if (codex.stalled === true) {
         return failedResult("timeout", telemetry, gitState);
       }
@@ -170,6 +169,9 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       // pressure (PROJECT_BRIEF §4.3) instead of retrying a doomed call.
       if (telemetry.usageLimit !== undefined) {
         return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (telemetry.jsonlDecodeFailure !== undefined) {
+        return failedResult("crashed", telemetry, gitState);
       }
       if (codex.failure !== undefined || codex.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
@@ -253,7 +255,15 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
           telemetry.jsonlDecodeFailure === undefined
             ? undefined
             : new JsonlObjectDecodeError("Codex", telemetry.jsonlDecodeFailure, telemetry.tokenUsage);
-        // Only the BYOK bundle path has a rotating token — managed / BYOK api_key
+        // TRANSIENT stall / SSH-connect / usage-limit take PRECEDENCE over the fail-closed decode
+        // throw below, so a killed run's truncated (malformed) stdout is re-driven, not misreported
+        // as terminal. A completed-but-malformed response still fails closed via the helper.
+        if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
+        throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
+        if (telemetry.usageLimit !== undefined) {
+          throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
+        }
+        // Only the BYOK bundle path has a rotating token — refresh it, then fail closed on decode.
         await postProcessAnswererPreservingJsonlFailure(decodeError, async () => {
           if (auth.bundleAuth) {
             await persistRefreshedCodexAuth({
@@ -265,12 +275,6 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
             });
           }
         });
-        // A TRANSIENT stall or SSH-connect failure → the typed transient the loop-stage recovery RE-DRIVES (not terminal).
-        if (result.stalled === true) throw new AnswererStalledError(opts.outputSchema.name);
-        throwIfTransientSshFailure(result.failure, opts.outputSchema.name);
-        if (telemetry.usageLimit !== undefined) {
-          throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
-        }
         if (result.failure !== undefined || result.exitCode !== 0) {
           throw new Error(
             `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
