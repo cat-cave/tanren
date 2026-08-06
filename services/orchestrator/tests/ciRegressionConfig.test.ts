@@ -211,7 +211,11 @@ describe("regressionStepFor", () => {
 
   it("returns undefined for the built-in default config", () => {
     // The default must stay byte-identical in behaviour for every repo shipping no ci.yml.
-    expect(regressionStepFor(resolveCiConfig(), "per_iteration")).toBeUndefined();
+    // `resolveCiConfig` takes a REQUIRED `string | undefined`, so the absent-yaml case has to
+    // be passed, not omitted — named here because a bare `undefined` argument trips
+    // `unicorn/no-useless-undefined`, and because it says which case is under test.
+    const noCiYaml: string | undefined = undefined;
+    expect(regressionStepFor(resolveCiConfig(noCiYaml), "per_iteration")).toBeUndefined();
   });
 
   it("resolves deterministically if two declarations ever reach it — defence in depth", () => {
