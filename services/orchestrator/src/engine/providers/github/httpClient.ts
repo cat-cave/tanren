@@ -162,5 +162,13 @@ function githubNextPagePath(link: string | null, apiBaseUrl: string): string | u
   if (!URL.canParse(nextLinks[0]!, api)) throw new LinkHeaderError("GitHub Link header contained an invalid page URL");
   const url = new URL(nextLinks[0]!, api);
   if (url.origin !== api.origin) throw new LinkHeaderError("GitHub Link header next page was off-origin");
-  return `${url.pathname}${url.search}`;
+  // A path-prefixed base (e.g. `https://ghe.example/api/v3`) emits absolute next
+  // links under that prefix. `send()` re-concatenates `${apiBaseUrl}${path}` and the
+  // inbox scope check expects a base-relative `/repos/...`, so the returned path must
+  // be RELATIVE to the configured base prefix (and stay under it), never re-include it.
+  const basePath = api.pathname.replace(/\/+$/u, "");
+  if (basePath !== "" && url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+    throw new LinkHeaderError("GitHub Link header next page was outside the configured base path");
+  }
+  return `${url.pathname.slice(basePath.length)}${url.search}`;
 }

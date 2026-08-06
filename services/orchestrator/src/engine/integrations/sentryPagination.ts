@@ -61,8 +61,10 @@ export function sentryNextPage(input: SentryNextPageInput) {
   const prior = validatedRelation(input, previous[0]!, "previous");
   const next = validatedRelation(input, following[0]!, "next");
   const initialCursor = input.initialCursor ?? prior.cursor;
-  if (input.currentCursor !== undefined && prior.cursor !== input.initialCursor)
-    malformed("previous cursor did not match the initial page");
+  // Sentry's `previous` cursor is PAGE-LOCAL: as the window advances, each later page
+  // legitimately advertises a different predecessor cursor, so it must NOT be compared
+  // against the first page's cursor (that falsely rejects valid multi-page responses).
+  // Forward progress + replay protection are enforced on the `next` cursor below.
   if (!next.results) return null;
   if (next.cursor === prior.cursor || next.cursor === input.currentCursor || input.seenCursors.has(next.cursor))
     malformed("next cursor did not make progress");

@@ -86,13 +86,21 @@ describe("Sentry cursor pagination fail-closed", () => {
     await expectNoPersistence(connector, source, message);
     expect(calls).toHaveLength(1);
   });
-  it("rejects a wrong previous replay before a third request or persistence", async () => {
+  it("accepts a page-local previous cursor and reads every page", async () => {
+    // Sentry's `previous` cursor is page-local: page 2 legitimately advertises a
+    // predecessor cursor (`0:100:1`) different from page 1's (`0:0:1`). This is a
+    // NORMAL multi-page response and must NOT be rejected — every page is read.
+    const secondPage =
+      `<${issuesUrl}?${fixedQuery}&cursor=0:100:1>; rel="previous"; results="true"; cursor="0:100:1", ` +
+      `<${issuesUrl}?${fixedQuery}&cursor=0:200:0>; rel="next"; results="false"; cursor="0:200:0"`;
     const { connector, calls } = await harness([
       page([issue("issue-1")], nextLink("0:100:0", true)),
-      page([issue("issue-2")], nextLink("0:200:0", true).replaceAll("0:0:1", "0:100:0")),
+      page([issue("issue-2")], secondPage),
     ]);
-    await expectNoPersistence(connector, source, /previous cursor did not match/u);
+    const items = await connector.fetch(source);
+    expect(items.map((item) => item.externalId)).toEqual(["sentry-issue-1", "sentry-issue-2"]);
     expect(calls).toHaveLength(2);
+    expect(calls[1]?.path).toContain("cursor=0:100:0");
   });
   it("rejects an encoded-NUL structural query collision before another request or persistence", async () => {
     const configuredQuery = "query=is%3Aunresolved%00x&statsPeriod=14d";

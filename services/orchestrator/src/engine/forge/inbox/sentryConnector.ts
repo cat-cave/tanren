@@ -269,7 +269,13 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
           retryAfterMs(response.headers?.["retry-after"]),
         );
         if (!Array.isArray(response.body)) fetchError("200 body was not an issues array");
-        const page = z.array(SentryIssuePayload).parse(response.body);
+        // A malformed 200 body is a provider-read (shape) problem, NOT an invalid
+        // source config. Route it through `fetchError` (retriable IntakeSourceFetchError)
+        // so `classifyPermanentInboxSourceError` cannot terminalize a valid source on a
+        // transient provider response — a raw ZodError would be classified `invalid_config`.
+        const parsed = z.array(SentryIssuePayload).safeParse(response.body);
+        if (!parsed.success) fetchError(parsed.error.message);
+        const page = parsed.data;
         for (const issue of page) {
           if (issue.project.slug !== config.project) fetchError("issue project did not match the configured project");
           if (seenIssueIds.has(issue.id)) fetchError("provider repeated an issue id");

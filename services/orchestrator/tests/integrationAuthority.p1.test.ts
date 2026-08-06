@@ -15,12 +15,13 @@ function digest(parts: unknown[]): string {
 }
 
 describe("IN-1 P1 authority former-bug proofs", () => {
-  it("accepts legacy Sentry identity metadata and normalizes it to version 1", () => {
-    expect(requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example" })).toEqual({
-      sentryIdentityVersion: "1",
-      orgSlug: "o",
-      baseUrl: "https://sentry.example",
-    });
+  it("rejects legacy Sentry identity metadata and requires a relink", () => {
+    // Legacy `{ orgSlug, baseUrl }` metadata is NOT a verified v1 identity. It must be
+    // rejected (relink-required → 409 verified_provider_identity_required), never
+    // normalized to version 1 and continued into selection/discover/provision/rotation.
+    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example" })).toThrow(
+      /sentry_principal_relink_required/u,
+    );
     expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow(
       /sentry_principal_relink_required/u,
     );
@@ -30,6 +31,10 @@ describe("IN-1 P1 authority former-bug proofs", () => {
     expect(() =>
       requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", extra: "x" }),
     ).toThrow(/sentry_principal_relink_required/u);
+    // A well-formed v1 identity is still accepted unchanged.
+    expect(
+      requireSentryPrincipalIdentity({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" }),
+    ).toEqual({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" });
   });
   it("parses commas and semicolons inside quoted Link parameters", () => {
     const [link, next] = parseLinkHeader(
