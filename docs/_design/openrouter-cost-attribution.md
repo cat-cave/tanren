@@ -22,7 +22,7 @@ must find in codex's JSONL stream.
 
 **It is not there.** Verbatim, live, from `codex-cli 0.145.0`:
 
-```
+```sh
 $ printf 'Reply with exactly: ok' | codex exec --json --sandbox read-only \
     --skip-git-repo-check --cd <dir> -
 {"type":"thread.started","thread_id":"019fc5dc-a605-7431-8a92-ed7c0d147d64"}
@@ -235,7 +235,7 @@ latched, so a probe cannot rescue a route whose rows are NULL \_during* the run.
 This is the single place the limitation is written down, with its evidence, and
 the single thing to delete when codex fixes it.
 
-### 4.2 The preflight covers both failure modes
+### 4.2 The preflight covers every way a ceiling can fail
 
 `engine/workflow/budgetPreflight.ts` already implemented the _symmetric_ safety
 check (M6): a subscription/self-hosted credential with no usage probe means the
@@ -245,18 +245,31 @@ every call from the provider table (reachable)" — **that comment is stale**; t
 static rate table was removed, so `per_token` no longer prices anything without a
 captured fact.
 
-The check is generalized to `assertBudgetCeilingEnforceable`, covering both:
+The check is generalized to `assertBudgetCeilingEnforceable`, covering all three:
 
-|                        | credential                           | consequence                                                 | verdict              |
-| ---------------------- | ------------------------------------ | ----------------------------------------------------------- | -------------------- |
-| unreachable (existing) | subscription / self-hosted, no probe | ceiling never fires                                         | fail closed at setup |
-| **unmeterable (new)**  | `per_token` on an unmeterable route  | every row NULL → gate fails closed permanently, unclearable | fail closed at setup |
+|                          | credential                           | consequence                                                 | verdict              |
+| ------------------------ | ------------------------------------ | ----------------------------------------------------------- | -------------------- |
+| unreachable (existing)   | subscription / self-hosted, no probe | ceiling never fires                                         | fail closed at setup |
+| **unmeterable (new)**    | `per_token` on an unmeterable route  | every row NULL → gate fails closed permanently, unclearable | fail closed at setup |
+| **unattributable (new)** | an UNRECOGNIZED ref                  | every row NULL/`unattributed` → same permanent latch        | fail closed at setup |
+
+The third row was missed on the first pass and found in review. An unrecognized ref
+records `billing_mode='unattributed'` / `cost_usd` NULL, and `dag/budgetGate.ts`
+counts those NULLs as unpriced on **exactly the same footing** as `'per_token'`
+NULLs — the identical unclearable deadlock by a different road. A usage probe does
+not rescue it: `costs/reconciler.ts` back-fills `per_token` rows only, so the
+refusal precedes the probe check. It is refused but **not** called unmeterable —
+`costs/meterability.ts` declines to classify an unrecognized ref at all, because
+calling a misconfiguration a platform limitation launders a typo into "tanren cannot
+do this". `cost.ceiling_unenforceable.reason` therefore carries its own enum (the
+two metering limitations plus `unrecognized_credential_ref`) while
+`cost.route_unmeterable.reason` stays the closed two-value set — and unlike the
+other two, this remedy is one the operator can actually apply.
 
 New event `cost.ceiling_unenforceable` (payload: `refKind`, `cli`, `billingMode`,
-`ceilingUsd`, `reason`, `remedy`) and `UnenforceableBudgetCeilingError`, whose
-message names the route, says in as many words that **raising the ceiling will not
-help**, and points at the remedy that does work: set the spend limit on the
-OpenRouter key itself.
+`ceilingUsd`, `reason`, `detail`, `remedy`) and `UnenforceableBudgetCeilingError`,
+whose message names the route, says in as many words that **raising the ceiling will
+not help**, and points at the remedy that does work.
 
 Refusing at setup is strictly better than parking mid-run: no runner is burned and
 no uncounted money is spent. `UnreachableBudgetCeilingError` is retained as a
@@ -423,7 +436,7 @@ Postgres, real `CostRecorder`, real `PgBudgetGate`, real codex bytes.
 `assertBudgetCeilingEnforceable` did not exist yet — the module-load failure was
 itself the proof):
 
-```
+```text
 $ DATABASE_URL=postgres://tanren:tanren@localhost:5432/tanren TANREN_RLS_DB_TEST=1 \
     pnpm exec vitest run …/openRouterCostAttributionBefore.integration.test.ts
 
@@ -443,7 +456,7 @@ at every ceiling tried — \$50, \$500, \$50 000, \$1 000 000 000.
 
 **AFTER** (same file, part C restored):
 
-```
+```text
  ✓ A. … > OpenRouter DOES surface the id + the real cost upstream
  ✓ A. … > codex exec --json surfaces NO generation id — so per-call capture can never fire
  ✓ A. … > codex's re-emitted usage carries NO cost field — no fact is derivable from it
