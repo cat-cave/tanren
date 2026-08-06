@@ -5,9 +5,14 @@ import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engi
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   EagerIntegrationBeamPlanner,
+  stableFailureReason,
   shouldHoldEagerFailure,
 } from "../src/engine/merge/eagerIntegrationBeamPlanner.js";
-import { EagerBeamReadyCasLostError } from "../src/engine/merge/eagerBeamStore.js";
+import {
+  EagerBeamFrontierUnavailableError,
+  EagerBeamReadyCasLostError,
+  EagerBeamStampMissError,
+} from "../src/engine/merge/eagerBeamStore.js";
 
 const BASE_SHA = "a".repeat(40);
 const ANCESTOR_SHA = "b".repeat(40);
@@ -127,9 +132,18 @@ async function planner(
 }
 
 describe("EAGER planner local assembly failures", () => {
-  it("does not frontier-hold a ready-CAS loser that could invalidate the winner", () => {
+  it("suppresses cleanup only for a genuine ready-CAS loser", () => {
     expect(shouldHoldEagerFailure(new EagerBeamReadyCasLostError())).toBe(false);
-    expect(shouldHoldEagerFailure(new Error("real materialization failure"))).toBe(true);
+
+    const heldFailures = [
+      [new EagerBeamFrontierUnavailableError(), "frontier_unavailable"],
+      [new EagerBeamStampMissError(), "proof_stamp_target_missing"],
+      [new Error("real materialization failure"), "materialization_held"],
+    ] as const;
+    for (const [error, reason] of heldFailures) {
+      expect(shouldHoldEagerFailure(error)).toBe(true);
+      expect(stableFailureReason(error)).toBe(reason);
+    }
   });
 
   it("does not admit a speculative result when the project is absent or unreadable", async () => {
