@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 import { RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
+import { routeGithubPushIntentQuery, type GithubPushIntentRow } from "./helpers/githubPushIntentPool.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -44,7 +45,7 @@ const target: RunnerHandle = {
  */
 class DenyingEventsPool {
   readonly queries: string[] = [];
-  readonly pushIntents = new Map<string, Record<string, unknown>>();
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
 
   async query(sql: string, _params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     this.queries.push(sql);
@@ -59,37 +60,8 @@ class DenyingEventsPool {
     ) {
       return { rows: [], rowCount: 0 };
     }
-    if (text.includes("FROM github_push_intents") && text.includes("status = 'pending'")) {
-      const match = [...this.pushIntents.values()].find(
-        (row) => row.org_id === params[0] && row.spec_id === params[1] && row.branch === params[2],
-      );
-      return { rows: match === undefined ? [] : [match], rowCount: match === undefined ? 0 : 1 };
-    }
-    if (text.includes("FROM github_push_intents") && text.includes("intent_id = $2")) {
-      const row = this.pushIntents.get(String(params[1]));
-      return { rows: row === undefined ? [] : [row], rowCount: row === undefined ? 0 : 1 };
-    }
-    if (text.startsWith("INSERT INTO github_push_intents")) {
-      this.pushIntents.set(String(params[0]), {
-        intent_id: params[0],
-        org_id: params[1],
-        project_id: params[2],
-        run_id: params[3],
-        spec_id: params[4],
-        repo_url: params[5],
-        branch: params[6],
-        intended_sha: params[7],
-        source_ref: params[8],
-        lease_predecessor_sha: params[9],
-        status: "pending",
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    if (text.startsWith("UPDATE github_push_intents")) {
-      const row = this.pushIntents.get(String(params[1]));
-      if (row !== undefined) row.status = "completed";
-      return { rows: [], rowCount: 1 };
-    }
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, text, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     // Mirror `tanren_dataplane` REVOKE: any events write is 42501.
     if (/INSERT\s+INTO\s+events\b/iu.test(text) || (text.startsWith("INSERT INTO") && text.includes("event_type"))) {
       throw Object.assign(new Error("permission denied for table events"), { code: "42501" });

@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { routeGithubPushIntentQuery, single, type GithubPushIntentRow } from "./githubPushIntentPool.js";
 
 // Shared with runWorker.test.ts: the github credential ref the seeded run's
 // project config carries, echoed back from the CI-poll run⋈project read.
@@ -70,6 +71,7 @@ export class WorkerPool {
   // — e.g. that `run.failed.message` carries a safe code/summary, never a raw
   // arbitrary error string. The payload is the JSON-stringified `$6` bind param.
   readonly events: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
   private readonly projects = new Map<string, ProjectRow>();
   private readonly specs = new Map<string, SpecRow>();
   private readonly runs = new Map<string, RunRow>();
@@ -84,6 +86,8 @@ export class WorkerPool {
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, trimmed, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
       return { rows: [], rowCount: 0 };
     }
@@ -493,8 +497,4 @@ export class WorkerPool {
   asPgPool(): pg.Pool {
     return this as unknown as pg.Pool;
   }
-}
-
-export function single<T>(row: T | undefined): { rows: unknown[]; rowCount: number } {
-  return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
 }

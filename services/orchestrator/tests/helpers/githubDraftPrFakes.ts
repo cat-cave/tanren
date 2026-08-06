@@ -5,6 +5,7 @@
 import type { RunnerHandle } from "../../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
+import { routeGithubPushIntentQuery, type GithubPushIntentRow } from "./githubPushIntentPool.js";
 
 export class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
@@ -57,50 +58,11 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
 
 export class RecordingPool {
   readonly updates: Array<{ runId: string; prUrl: string }> = [];
-  readonly pushIntents = new Map<string, Record<string, unknown>>();
+  readonly pushIntents = new Map<string, GithubPushIntentRow>();
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.includes("FROM github_push_intents") && sql.includes("status = 'pending'")) {
-      const match = [...this.pushIntents.values()].find(
-        (row) =>
-          row.org_id === params[0] && row.spec_id === params[1] && row.branch === params[2] && row.status === "pending",
-      );
-      return { rows: match === undefined ? [] : [match], rowCount: match === undefined ? 0 : 1 };
-    }
-    if (sql.includes("FROM github_push_intents") && sql.includes("intent_id = $2")) {
-      const row = this.pushIntents.get(String(params[1]));
-      return { rows: row === undefined ? [] : [row], rowCount: row === undefined ? 0 : 1 };
-    }
-    if (sql.startsWith("INSERT INTO github_push_intents")) {
-      const intentId = String(params[0]);
-      const hasPending = [...this.pushIntents.values()].some(
-        (row) =>
-          row.org_id === params[1] && row.spec_id === params[4] && row.branch === params[6] && row.status === "pending",
-      );
-      if (!this.pushIntents.has(intentId) && !hasPending) {
-        this.pushIntents.set(intentId, {
-          intent_id: intentId,
-          org_id: params[1],
-          project_id: params[2],
-          run_id: params[3],
-          spec_id: params[4],
-          repo_url: params[5],
-          branch: params[6],
-          intended_sha: params[7],
-          source_ref: params[8],
-          lease_predecessor_sha: params[9],
-          status: "pending",
-        });
-      }
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("UPDATE github_push_intents")) {
-      const row = this.pushIntents.get(String(params[1]));
-      if (row !== undefined && row.status === "pending" && row.intended_sha === params[2]) {
-        row.status = "completed";
-      }
-      return { rows: [], rowCount: 1 };
-    }
+    const pushIntentResult = routeGithubPushIntentQuery(this.pushIntents, sql, params);
+    if (pushIntentResult !== undefined) return pushIntentResult;
     if (sql === "UPDATE runs SET pr_url = $2 WHERE run_id = $1") {
       this.updates.push({ runId: String(params[0]), prUrl: String(params[1]) });
     }
