@@ -52,8 +52,12 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
             plane: "control",
           },
           {
+            // `bind` links an EXISTING channel: it lists (`channels:read`/
+            // `groups:read`) then joins (`conversations.join` → `channels:join`)
+            // and never creates or renames one, so it does NOT need
+            // `channels:manage` (kept on `provision`, which creates the channel).
             id: "bind",
-            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:manage", "channels:join"],
+            requiredScopes: ["chat:write", "channels:read", "groups:read", "channels:join"],
             plane: "control",
           },
         ],

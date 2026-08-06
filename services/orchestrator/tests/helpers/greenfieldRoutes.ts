@@ -17,6 +17,7 @@ import { GithubAppTokenMinter } from "../../src/engine/providers/githubAppTokenM
 import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware/auth.js";
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../../src/routes/projects/index.js";
+import type { GreenfieldCreateDeps } from "../../src/routes/projects/greenfield.js";
 import { FakeRepoCreateHttp } from "../conformance/fakes/fakeRepoCreateHttp.js";
 import { completeCaptureExtras } from "../fixtures/forge/completeCapture.js";
 import { RoutesPool } from "./routesPool.js";
@@ -73,13 +74,16 @@ const stubMaterialize = (): MaterializeTemplate => async () => seededTemplate;
 export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
+  // The notify seams (`preflightNotify`/`prepareNotify`) route to the PROJECT
+  // create state machine, not onboarding, so they are NOT keys on
+  // `OnboardingRoutesOptions`; picking them there would violate the `keyof`
+  // constraint. They live in a separate override type with their real
+  // `GreenfieldCreateDeps` signatures, intersected with the onboarding pick.
   onboardingOverrides: Partial<
     Pick<
       OnboardingRoutesOptions,
       | "preflightDeploy"
-      | "preflightNotify"
       | "prepareDeploy"
-      | "prepareNotify"
       | "persistDeploySelection"
       | "materializeTemplate"
       | "runFragmentAuthoring"
@@ -87,7 +91,10 @@ export function appWithGreenfieldRoutes(
       | "designAgentFactory"
       | "composeDesignSystem"
     >
-  > = {},
+  > & {
+    preflightNotify?: OnboardingRoutesOptions["preflightDeploy"];
+    prepareNotify?: GreenfieldCreateDeps["prepareNotify"];
+  } = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
   // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution
   // INFRA failure (Vault outage / corrupt config) PROPAGATES as a 500, never mislabeled
