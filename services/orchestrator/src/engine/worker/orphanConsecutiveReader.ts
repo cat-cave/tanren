@@ -8,7 +8,7 @@ import type pg from "pg";
 import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
-import { EVENTS_AFTER_ATTENTION_RESOLVED_SQL } from "../workflow/attentionResolutionBoundary.js";
+import { eventsAfterAttentionResolvedSql } from "../workflow/attentionResolutionBoundary.js";
 
 const log = createLogger("run-finalize-orphan-reader");
 
@@ -53,7 +53,7 @@ export async function readOrphanConsecutive(
       // history, exactly as before.
       `SELECT payload FROM events
          WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
-           AND ${EVENTS_AFTER_ATTENTION_RESOLVED_SQL}
+           AND ${eventsAfterAttentionResolvedSql(1)}
          ORDER BY ts ASC, id ASC`,
       [specId],
     );

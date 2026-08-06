@@ -21,7 +21,7 @@ import { runWithOrgScope } from "@tanren/db";
 import { createLogger } from "../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
 import { assessWanderingHalt } from "./wanderingHaltDetector.js";
-import { EVENTS_AFTER_ATTENTION_RESOLVED_SQL } from "./attentionResolutionBoundary.js";
+import { eventsAfterAttentionResolvedSql } from "./attentionResolutionBoundary.js";
 import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
 
 const log = createLogger("run-redrive-reader");
@@ -52,7 +52,7 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           // the same `structuralRows`), so a requeued spec also gets a fresh wandering window.
           `SELECT payload, ts FROM events
              WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
-               AND ${EVENTS_AFTER_ATTENTION_RESOLVED_SQL}
+               AND ${eventsAfterAttentionResolvedSql(1)}
              ORDER BY ts ASC, id ASC`,
           [facts.specId],
         );

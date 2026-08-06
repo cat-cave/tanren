@@ -22,13 +22,22 @@
 // are read, never their order.
 
 /**
- * SQL predicate restricting an `events` scan to rows strictly AFTER the spec's most recent
- * `dag.spec.attention_resolved` event. Intended to be `AND`-ed into a query that already
- * binds the spec id as `$1`.
+ * Build the SQL predicate restricting an `events` scan to rows strictly AFTER the spec's
+ * most recent `dag.spec.attention_resolved` event, binding the spec id at `specIdParam`.
+ *
+ * The index is a PARAMETER and not baked in because getting it wrong fails SILENTLY: a
+ * consumer that binds the spec id at `$2` still produces valid SQL, the subquery just reads
+ * whatever value sits at `$1`. The boundary then blanks the history (no rows match a
+ * foreign spec's resolution id) or leaves it unbounded — with no query error to notice.
  *
  * `COALESCE(..., 0)` is the no-resolution case: `events.id` is a `bigserial` starting at 1,
  * so `id > 0` admits EVERY row — a spec that has never been operator-requeued reads its
  * full history exactly as it did before this boundary existed.
  */
-export const EVENTS_AFTER_ATTENTION_RESOLVED_SQL = `id > COALESCE(
-       (SELECT MAX(id) FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.attention_resolved'), 0)`;
+export function eventsAfterAttentionResolvedSql(specIdParam: number): string {
+  if (!Number.isInteger(specIdParam) || specIdParam < 1) {
+    throw new RangeError(`spec id placeholder must be a positive integer, got ${String(specIdParam)}`);
+  }
+  return `id > COALESCE(
+       (SELECT MAX(id) FROM events WHERE spec_id = $${specIdParam} AND event_type = 'dag.spec.attention_resolved'), 0)`;
+}
