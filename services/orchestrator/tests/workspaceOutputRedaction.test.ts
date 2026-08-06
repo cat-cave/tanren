@@ -150,6 +150,31 @@ describe("a failed bootstrap cannot print an injected app-env SECRET into the er
     expect(typed.outputTail).toContain("401 Unauthorized");
   });
 
+  it("redacts the FULL output BEFORE bounding — a value straddling the tail cutoff leaves no fragment", async () => {
+    // The ordering defect this catches: redacting the ALREADY-TRUNCATED tail. A value that
+    // starts before the last-4,000-char window and runs PAST the cutoff into the retained
+    // tail is present in that tail only as a SUFFIX, so the exact-value replacement cannot
+    // match and the secret fragment survives in `outputTail` / the events. Redacting the
+    // whole combined output first removes the value in full, then the bound is applied.
+    const secret = "sk-live-STRADDLES-THE-CUTOFF-9f2c4a8e1b7d";
+    // Trailing bytes of the secret that fall inside the retained tail window.
+    const suffixKept = 12;
+    // Secret at the very front, then padding so the 4,000-char tail window BEGINS in the
+    // middle of the secret: the retained window is exactly the secret's last `suffixKept`
+    // bytes followed by the pad. (Self-consistent for any secret longer than `suffixKept`.)
+    const pad = ".".repeat(4_000 - suffixKept);
+    const straddleSuffix = secret.slice(secret.length - suffixKept);
+    const ssh = new EchoingSsh(`${secret}${pad}`);
+    const typed = await failedBootstrap(ssh, { API_TOKEN: secret });
+
+    // The straddling suffix a redact-AFTER-tail ordering would have left behind is GONE.
+    expect(typed.outputTail).not.toContain(straddleSuffix);
+    expect(typed.outputTail).not.toContain(secret);
+    expect(typed.message).not.toContain(straddleSuffix);
+    // Proof the value really was in scope for the failing step (not a vacuous pass).
+    expect(ssh.commands[0]?.command).toContain(secret);
+  });
+
   it("NEGATIVE CONTROL: with no appEnv the tail passes through BYTE-IDENTICAL", async () => {
     // The redaction must not be a diagnostic tax on the (common) no-app-env run: with
     // nothing injected there is nothing Tanren knows to remove, and the operator's output

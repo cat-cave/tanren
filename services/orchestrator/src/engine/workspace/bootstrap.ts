@@ -127,8 +127,10 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
       command,
       result.exitCode,
       // The tail is the PROJECT's own stdout+stderr, captured under the app env — the one
-      // part of this error the prelude discipline never covered. See `redactAppEnv`.
-      redactAppEnv(tailOf(combinedOutput(result)), input.appEnv),
+      // part of this error the prelude discipline never covered. Redact the WHOLE combined
+      // output BEFORE bounding it, so a value straddling the tail cutoff is matched and
+      // removed in full rather than surviving as a partial suffix. See `redactAppEnv`.
+      tailOf(redactAppEnv(combinedOutput(result), input.appEnv)),
       result.stalled === true,
     );
   }
@@ -300,9 +302,10 @@ export async function ensureWorkspaceDepsInstalled(
 
   const succeeded = result.failure === undefined && result.stalled !== true && result.exitCode === 0;
   if (!succeeded) {
-    // Redacted at the source, so the infrastructure triage below and the typed error both
-    // see the same tail: the project's own output, minus the values Tanren injected.
-    const outputTail = redactAppEnv(tailOf(combinedOutput(result)), input.appEnv);
+    // Redacted at the source BEFORE bounding, so the infrastructure triage below and the
+    // typed error both see the same tail: the project's own output, minus the values Tanren
+    // injected — including any value that straddles the tail cutoff, matched in full.
+    const outputTail = tailOf(redactAppEnv(combinedOutput(result), input.appEnv));
     // INFRASTRUCTURE-FAULT TRIAGE (the second half of the fix). A deps-install that died
     // because a TOOLCHAIN BINARY is missing is not a scaffold defect: no source edit
     // installs a program. Routing it to the writer — which is what a
