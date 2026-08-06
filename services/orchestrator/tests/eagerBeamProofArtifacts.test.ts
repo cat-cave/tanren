@@ -124,6 +124,17 @@ describe("EAGER proof artifact bindings", () => {
       "behavior-manifest artifact is malformed",
     ));
 
+  it("NEGATIVE CONTROL — rejects an unknown top-level behavior-manifest key", async () => {
+    const manifest = JSON.stringify({
+      schemaVersion: "fragment_behavior_manifest.v1",
+      behaviors: ["invite"],
+      unexpectedTopLevelKey: "must not be stripped",
+    });
+    await expect(resolve(new ArtifactPool(), new ArtifactSubstrate(manifest))).rejects.toThrow(
+      "behavior-manifest artifact is malformed",
+    );
+  });
+
   it("accepts valid exact-head evidence and behavior JSON padded beyond 64 KiB", async () => {
     const behavior = new ArtifactSubstrate(`${" ".repeat(64 * 1024 + 1)}${new ArtifactSubstrate().manifest}`);
     const evidence = new ArtifactSubstrate();
