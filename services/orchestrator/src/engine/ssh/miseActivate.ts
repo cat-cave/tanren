@@ -355,10 +355,17 @@ function miseActivationPrelude(workspacePath: string): string {
   // project's command anyway would run it against whatever the image happens to carry. The
   // guard is still a pure skip for a repo that declared nothing: that path enters neither
   // branch and the `if … fi; ` chains straight into the command, exactly as before.
+  // `eval` reports the status of the EVALUATED code, not of the capture: `mise` can exit 0
+  // yet emit shell that this session cannot evaluate (a syntax error, a readonly-variable
+  // assignment), and then `eval` returns nonzero. Because the prelude ends with `fi; ` and
+  // enables no `set -e`, an unchecked `eval` failure would let the project's command run
+  // against the runner's PATH with the declared toolchain absent — the same fail-open this
+  // module exists to remove. So the eval result is CHECKED too and a failure HALTS.
   const activate = (source: string): string =>
     `__tanren_mise_activate="$(${source})" || ` +
     `{ printf '%s\\n' ${quoteSshShellArg(activationFailedMessage(source))} >&2; exit 1; }; ` +
-    `eval "$__tanren_mise_activate"`;
+    `eval "$__tanren_mise_activate" || ` +
+    `{ printf '%s\\n' ${quoteSshShellArg(evalFailedMessage(source))} >&2; exit 1; }`;
   return (
     `if [ -f ${quoteSshShellArg(MISE_CONFIG_REL_PATH)} ]; then ` +
     `${miseScopeExport(scope)}; ${activate("mise activate bash --shims")}; ` +
@@ -372,6 +379,14 @@ function activationFailedMessage(source: string): string {
     `tanren: toolchain activation FAILED - '${source}' exited nonzero, so the toolchain this run provisioned is ` +
     `not on PATH. Tanren halts rather than running the project's own command against whatever toolchain the ` +
     `runner image happens to carry.`
+  );
+}
+
+function evalFailedMessage(source: string): string {
+  return (
+    `tanren: toolchain activation FAILED - '${source}' exited 0 but emitted shell code that could not be evaluated, ` +
+    `so the toolchain this run provisioned is not on PATH. Tanren halts rather than running the project's own ` +
+    `command against whatever toolchain the runner image happens to carry.`
   );
 }
 

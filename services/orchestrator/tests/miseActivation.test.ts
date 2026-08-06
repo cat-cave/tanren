@@ -78,16 +78,22 @@ describe("withMiseActivation · the PROJECT-command path is mise-activated", () 
     // branch: fixing only the `mise.toml` branch would leave the marker branch — the one
     // that serves the far larger population of repos that never mentioned mise, and whose
     // toolchain Tanren itself provisioned — failing open exactly as before.
-    const evals = (prelude.match(/eval\s+[^;]+/gu) ?? []).map((e) => e.trim());
+    const evals = (prelude.match(/eval\s+"[^"]*"/gu) ?? []).map((e) => e.trim());
     expect(evals).toEqual(['eval "$__tanren_mise_activate"', 'eval "$__tanren_mise_activate"']);
     // Each capture is guarded by its OWN `||` branch, not left unchecked…
     expect(prelude).toContain('__tanren_mise_activate="$(mise activate bash --shims)" || {');
     expect(prelude).toContain('__tanren_mise_activate="$(mise env -s bash)" || {');
-    // …and there are TWO of those, one per branch — not one shared halt bolted onto the
-    // guard, which would leave whichever branch it is not inside still failing open. (WHAT
-    // each one SAYS is asserted against a real shell below: the source name is embedded
-    // single-quoted, so it only reads back as prose once the shell has unescaped it.)
-    expect(prelude.split("toolchain activation FAILED").length - 1).toBe(2);
+    // …and the EVAL's status is checked too, in both branches: `eval` reports the status of
+    // the evaluated code, so a `mise` that exits 0 yet emits shell this session cannot
+    // evaluate (a command-not-found, a trailing nonzero) would leave PATH unset and let the
+    // project command run anyway. Each eval halts on a nonzero result.
+    expect(prelude.split('eval "$__tanren_mise_activate" || {').length - 1).toBe(2);
+    // FOUR halt messages: the capture halt and the eval halt, one pair per guarded branch —
+    // not one shared halt bolted onto the guard, which would leave whichever branch/step it
+    // is not inside still failing open. (WHAT each one SAYS is asserted against a real shell
+    // below: the source name is embedded single-quoted, so it only reads back as prose once
+    // the shell has unescaped it.)
+    expect(prelude.split("toolchain activation FAILED").length - 1).toBe(4);
   });
 });
 
@@ -138,6 +144,28 @@ describe("a failed mise activation HALTS the command (it does not silently conti
     expect(shell.stdout).not.toContain(PROJECT_MARKER);
   });
 
+  it("mise.toml branch: mise exits 0 but emits un-evaluatable shell — the EVAL failure HALTS", () => {
+    // `eval` reports the status of the EVALUATED code, not of the capture. A `mise activate`
+    // that exits 0 yet emits shell that returns nonzero (a command-not-found, a trailing
+    // failure) leaves the toolchain off PATH; without checking the eval status the project
+    // command would run anyway. The check turns that into a halt.
+    const shell = runPrelude({ trigger: "mise.toml", activateFails: false, evalFails: true });
+    expect(shell.status).not.toBe(0);
+    expect(shell.stderr).toContain("tanren: toolchain activation FAILED");
+    expect(shell.stderr).toContain("could not be evaluated");
+    expect(shell.stderr).toContain("'mise activate bash --shims'");
+    expect(shell.stdout).not.toContain(PROJECT_MARKER);
+  });
+
+  it("MARKER branch: a `mise env` that emits un-evaluatable shell HALTS on the eval too", () => {
+    const shell = runPrelude({ trigger: "marker", activateFails: false, evalFails: true });
+    expect(shell.status).not.toBe(0);
+    expect(shell.stderr).toContain("tanren: toolchain activation FAILED");
+    expect(shell.stderr).toContain("could not be evaluated");
+    expect(shell.stderr).toContain("'mise env -s bash'");
+    expect(shell.stdout).not.toContain(PROJECT_MARKER);
+  });
+
   it("MARKER branch: a SUCCESSFUL activation applies the DECLARED tools and runs the command", () => {
     const shell = runPrelude({ trigger: "marker", activateFails: false });
     expect(shell.status).toBe(0);
@@ -184,7 +212,7 @@ type ActivationTrigger = "mise.toml" | "marker" | "none";
  * gets `$HOME`-scoped mise state ({@link miseRunScope}) — so the marker the `marker` trigger
  * writes lands inside the dir this reclaims, and never in the developer's real home.
  */
-function runPrelude(opts: { trigger: ActivationTrigger; activateFails: boolean }): {
+function runPrelude(opts: { trigger: ActivationTrigger; activateFails: boolean; evalFails?: boolean }): {
   status: number | null;
   stdout: string;
   stderr: string;
@@ -196,6 +224,20 @@ function runPrelude(opts: { trigger: ActivationTrigger; activateFails: boolean }
     // A `mise` that either emits the POSIX export each real subcommand emits — a DIFFERENT
     // one per subcommand, so the test can tell which branch actually ran — or dies.
     const failingStub = '#!/bin/sh\necho "mise: activation exploded" >&2\nexit 3\n';
+    // The eval-fail stub: the SUBCOMMAND exits 0 (so the capture succeeds), but the shell it
+    // EMITS returns nonzero when evaluated — here a trailing `false` after the export. This
+    // is the case `eval`'s status uniquely catches: without checking it, PATH is left unset
+    // and the project command runs anyway. (A pure syntax/readonly error aborts the shell on
+    // its own; this is the case that would otherwise CONTINUE.)
+    const evalFailingStub = [
+      "#!/bin/sh",
+      'case "$1" in',
+      `  activate) echo 'export PATH="${FAKE_SHIMS_DIR}:$PATH"; false' ;;`,
+      `  env) echo 'export PATH="${FAKE_ENV_DIR}:$PATH"; false' ;;`,
+      '  *) echo "mise: unexpected subcommand $*" >&2; exit 9 ;;',
+      "esac",
+      "",
+    ].join("\n");
     const workingStub = [
       "#!/bin/sh",
       'case "$1" in',
@@ -205,7 +247,8 @@ function runPrelude(opts: { trigger: ActivationTrigger; activateFails: boolean }
       "esac",
       "",
     ].join("\n");
-    writeFileSync(join(bin, "mise"), opts.activateFails ? failingStub : workingStub);
+    const stub = opts.activateFails ? failingStub : opts.evalFails === true ? evalFailingStub : workingStub;
+    writeFileSync(join(bin, "mise"), stub);
     chmodSync(join(bin, "mise"), 0o755);
     // Branch 1's trigger: the repo ships its own mise config, in the command's cwd.
     if (opts.trigger === "mise.toml") writeFileSync(join(dir, "mise.toml"), "[tools]\n");
