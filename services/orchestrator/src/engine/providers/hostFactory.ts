@@ -41,7 +41,11 @@ export interface ProjectHostSeams {
 function codeHostTokenSupplier(resolveVcsToken: HostVcsTokenSupplier): CodeHostTokenSupplier {
   return async (): Promise<CodeHostToken> => {
     const resolved = await resolveVcsToken();
-    return { token: resolved.token, refresh: resolved.refresh };
+    return {
+      token: resolved.token,
+      refresh: resolved.refresh,
+      ...(resolved.authorizationIdentity !== undefined && { authorizationIdentity: resolved.authorizationIdentity }),
+    };
   };
 }
 

@@ -38,12 +38,21 @@ export async function resolveVcsToken(http: GitHubHttpClient, creds: VcsCredenti
   const token: ResolvedVcsToken = {
     token: resolved.token,
     source: resolved.source,
+    authorizationIdentity: githubAuthorizationIdentity(creds),
     refresh: resolved.refresh,
     // MERGE-SAFETY: the lazy identity supplier closes over the SAME creds that resolved
     // the token (run git author + merge identity set can't disagree).
     identity: () => resolveGithubActorIdentity(http, token, creds),
   };
   return token;
+}
+
+function githubAuthorizationIdentity(creds: VcsCredentialContext): string {
+  const credential =
+    creds.installation === undefined
+      ? `static:${creds.staticRef ?? "missing"}`
+      : `app:${creds.installation.installationId}:${creds.installation.credentialRef}`;
+  return `org:${creds.orgId}:${credential}`;
 }
 
 /**

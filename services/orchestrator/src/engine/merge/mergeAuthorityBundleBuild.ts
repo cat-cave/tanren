@@ -166,7 +166,11 @@ function rawBudgetFrom(state: ProjectBudgetState): RawBudgetScope {
 function codeHostFor(githubHttp: GitHubHttpClient, resolveToken: () => Promise<ResolvedVcsToken>): CodeHost {
   return new GitHubCodeHost(githubHttp, async () => {
     const r = await resolveToken();
-    return { token: r.token, ...(r.refresh !== undefined && { refresh: r.refresh }) };
+    return {
+      token: r.token,
+      ...(r.authorizationIdentity === undefined ? {} : { authorizationIdentity: r.authorizationIdentity }),
+      ...(r.refresh !== undefined && { refresh: r.refresh }),
+    };
   });
 }
 

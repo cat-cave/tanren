@@ -391,6 +391,7 @@ export class PgBatchChecker implements BatchChecker {
     const http = this.deps.githubHttp;
     return new GitHubCodeHost(http, async () => ({
       token: token.token,
+      ...(token.authorizationIdentity === undefined ? {} : { authorizationIdentity: token.authorizationIdentity }),
       ...(token.refresh !== undefined && { refresh: token.refresh }),
     }));
   }
