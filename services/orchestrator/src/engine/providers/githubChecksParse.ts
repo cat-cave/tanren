@@ -11,30 +11,93 @@ export function parseRefObjectSha(value: unknown): string | undefined {
   return object !== undefined && typeof object.sha === "string" && object.sha !== "" ? object.sha : undefined;
 }
 
-export function parseRequiredContexts(value: unknown): string[] | undefined {
+export function parseRequiredContexts(value: unknown): string[] {
+  return parseRequiredCheckPayload(value).contexts;
+}
+
+/** Parse the exact required context → GitHub App identity bindings. */
+export function parseRequiredCheckAppIds(value: unknown): Record<string, number> {
+  return parseRequiredCheckPayload(value).appIds;
+}
+
+function parseRequiredCheckPayload(value: unknown): { contexts: string[]; appIds: Record<string, number> } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
+    throw new TypeError("GitHub required-status-checks response was not an object");
   }
   const object = value as Record<string, unknown>;
-  // GitHub returns required contexts in two shapes: a `checks` array carrying
-  // per-check `context`, or a flat `contexts` string list. Read the structured
-  // `checks` shape first, then the flat `contexts` list.
   const checks = object["checks"];
-  if (Array.isArray(checks)) {
-    const names = checks
-      .map((entry) =>
-        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined,
-      )
-      .filter((name): name is string => typeof name === "string");
-    if (names.length > 0) {
-      return names;
+  const contexts = object["contexts"];
+  if (checks !== undefined && !Array.isArray(checks)) {
+    throw new TypeError("GitHub required-status-checks response had a non-array checks field");
+  }
+  if (contexts !== undefined && !Array.isArray(contexts)) {
+    throw new TypeError("GitHub required-status-checks response had a non-array contexts field");
+  }
+  if (checks === undefined && contexts === undefined) {
+    throw new TypeError("GitHub required-status-checks response missing checks or contexts");
+  }
+
+  // Context names come from the forge, so this must not inherit object-prototype
+  // keys: a required `__proto__` check is still a real required check.
+  const appIds: Record<string, number> = Object.create(null) as Record<string, number>;
+  const appBindings = new Map<string, number | null | undefined>();
+  const checkNames = Array.isArray(checks)
+    ? checks.map((entry) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          throw new TypeError("GitHub required check was not an object");
+        }
+        const row = entry as Record<string, unknown>;
+        const context = row["context"];
+        if (typeof context !== "string" || context.trim() === "") {
+          throw new TypeError("GitHub required check missing context");
+        }
+        const appId = row["app_id"];
+        if (
+          appId !== undefined &&
+          appId !== null &&
+          (typeof appId !== "number" || !Number.isSafeInteger(appId) || appId < 0)
+        ) {
+          throw new TypeError(`GitHub required check ${context} had an invalid app_id`);
+        }
+        if (appBindings.has(context) && appBindings.get(context) !== appId) {
+          throw new Error(`GitHub required check ${context} had conflicting app_id bindings`);
+        }
+        appBindings.set(context, appId);
+        if (typeof appId === "number") appIds[context] = appId;
+        return { context, appId };
+      })
+    : undefined;
+  if (checkNames !== undefined) {
+    const names = checkNames.map((check) => check.context);
+    if (new Set(names).size !== names.length) {
+      throw new Error("GitHub required checks contained duplicate contexts");
     }
   }
-  const contexts = object["contexts"];
-  if (Array.isArray(contexts)) {
-    return contexts.filter((name): name is string => typeof name === "string");
+
+  const contextNames = Array.isArray(contexts)
+    ? contexts.map((context) => {
+        if (typeof context !== "string" || context.trim() === "") {
+          throw new TypeError("GitHub required contexts contained an invalid context");
+        }
+        return context;
+      })
+    : undefined;
+  if (contextNames !== undefined && new Set(contextNames).size !== contextNames.length) {
+    throw new Error("GitHub required contexts contained duplicate contexts");
   }
-  return [];
+
+  const namesFromChecks = checkNames?.map((check) => check.context);
+  if (namesFromChecks !== undefined && contextNames !== undefined && !sameContexts(namesFromChecks, contextNames)) {
+    throw new Error("GitHub required checks and contexts disagreed");
+  }
+  return { contexts: namesFromChecks ?? contextNames ?? [], appIds };
+}
+
+function sameContexts(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((context, index) => context === sortedRight[index]);
 }
 
 export function parseCheckRuns(value: unknown): GitHubCheckRun[] {
@@ -60,6 +123,12 @@ function parseCheckRun(value: unknown): GitHubCheckRun {
     name: object["name"],
     status: object["status"],
     conclusion: typeof object["conclusion"] === "string" ? object["conclusion"] : undefined,
+    appId:
+      typeof object["app"] === "object" &&
+      object["app"] !== null &&
+      typeof (object["app"] as Record<string, unknown>)["id"] === "number"
+        ? ((object["app"] as Record<string, unknown>)["id"] as number)
+        : undefined,
     url: typeof object["html_url"] === "string" ? object["html_url"] : undefined,
   };
 }

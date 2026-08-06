@@ -1,4 +1,10 @@
-import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
+import {
+  parseCheckRuns,
+  parseCommitStatuses,
+  parseRefObjectSha,
+  parseRequiredCheckAppIds,
+  parseRequiredContexts,
+} from "./githubChecksParse.js";
 import { parseBaseBranch, parsePullRequestHead, repoPath } from "./github/parse.js";
 // Re-export the `/contents` base64 decoder (it lives in the contract module) so the
 // GitHub provider sources every GitHub value-helper from `github.js` — one fewer dep there.
@@ -40,6 +46,8 @@ export interface GitHubCheckRun {
   name: string;
   status: string;
   conclusion?: string;
+  /** GitHub App installation id that authored this check, when supplied. */
+  appId?: number;
   url?: string;
 }
 
@@ -61,6 +69,8 @@ export interface GitHubPullRequestChecks {
    * back to "all observed checks green" (prior behavior).
    */
   requiredContexts?: string[];
+  /** Optional exact GitHub App identity for protected contexts. */
+  requiredCheckAppIds?: Record<string, number>;
 }
 
 export interface EnsureDraftPullRequestInput {
@@ -240,10 +250,10 @@ export class GitHubStatusService {
       throw new Error(`GitHub commit status fetch failed: HTTP ${statuses.status}`);
     }
 
-    const requiredContexts =
+    const requiredCheckMetadata =
       input.protectedBranch === undefined
         ? undefined
-        : await this.fetchRequiredContexts({
+        : await this.fetchRequiredCheckMetadata({
             repo: input.repo,
             token: input.token,
             baseBranch: input.protectedBranch,
@@ -254,7 +264,8 @@ export class GitHubStatusService {
       head: { sha: input.sha },
       checkRuns: parseCheckRuns(checkRuns.body),
       statuses: parseCommitStatuses(statuses.body),
-      requiredContexts,
+      requiredContexts: requiredCheckMetadata?.contexts,
+      requiredCheckAppIds: requiredCheckMetadata?.appIds,
     };
   }
 
@@ -290,5 +301,29 @@ export class GitHubStatusService {
       );
     }
     return parseRequiredContexts(response.body);
+  }
+
+  private async fetchRequiredCheckMetadata(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<{ contexts: string[] | undefined; appIds: Record<string, number> } | undefined> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status === 404) return undefined;
+    if (response.status !== 200) {
+      throw new Error(
+        withErrorDetail(
+          `GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`,
+          response,
+        ),
+      );
+    }
+    return { contexts: parseRequiredContexts(response.body), appIds: parseRequiredCheckAppIds(response.body) };
   }
 }

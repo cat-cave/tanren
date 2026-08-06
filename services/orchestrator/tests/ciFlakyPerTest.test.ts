@@ -129,7 +129,7 @@ describe("evaluateCiObservation — THE GATE READ (quarantine exclusion)", () =>
     expect(obs.failingChecks.map((f) => f.name)).toEqual(["build"]);
   });
 
-  it("a quarantined REQUIRED check is excluded so the run passes (Tanren's gate)", () => {
+  it("a quarantined REQUIRED check still fails the run (quarantine cannot satisfy protection)", () => {
     const obs = evaluateCiObservation(
       {
         head: { sha: "abc" },
@@ -142,6 +142,6 @@ describe("evaluateCiObservation — THE GATE READ (quarantine exclusion)", () =>
       },
       { quarantinedCheckNames: new Set(["flaky-e2e"]) },
     );
-    expect(obs.status).toBe("passed");
+    expect(obs.status).toBe("failed");
   });
 });

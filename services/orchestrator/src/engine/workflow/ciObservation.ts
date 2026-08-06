@@ -46,20 +46,39 @@ export function evaluateCiObservation(
   options: EvaluateCiObservationOptions = {},
 ): CiObservation {
   const quarantined = options.quarantinedCheckNames ?? new Set<string>();
+  // An app binding is itself an exact required-check declaration. Treat its
+  // context as gated even if a caller accidentally omits the parallel
+  // `requiredContexts` list; otherwise quarantine could suppress a wrong-app
+  // failure and turn the snapshot green.
+  const required = [...new Set([...(checks.requiredContexts ?? []), ...Object.keys(checks.requiredCheckAppIds ?? {})])];
+  const gated = required.length > 0;
+  const requiredSet = new Set(required);
   const allFailing = [
-    ...checks.checkRuns.filter(isFailedCheckRun).map((check) => ({
-      kind: "check_run" as const,
-      name: check.name,
-      state: check.conclusion ?? check.status,
-      url: check.url,
-    })),
+    ...checks.checkRuns
+      .filter(
+        (check) =>
+          isFailedCheckRun(check) ||
+          (checks.requiredCheckAppIds?.[check.name] !== undefined &&
+            check.appId !== checks.requiredCheckAppIds[check.name]),
+      )
+      .map((check) => ({
+        kind: "check_run" as const,
+        name: check.name,
+        state:
+          checks.requiredCheckAppIds?.[check.name] !== undefined &&
+          check.appId !== checks.requiredCheckAppIds[check.name]
+            ? "wrong_app_identity"
+            : (check.conclusion ?? check.status),
+        url: check.url,
+      }))
+      .filter((check) => !quarantined.has(check.name) || (gated && requiredSet.has(check.name))),
     ...checks.statuses.filter(isFailedStatus).map((status) => ({
       kind: "commit_status" as const,
       name: status.context,
       state: status.state,
       url: status.url,
     })),
-  ].filter((check) => !quarantined.has(check.name));
+  ].filter((check) => !quarantined.has(check.name) || (gated && requiredSet.has(check.name)));
   const allPending = [
     ...checks.checkRuns.filter(isPendingCheckRun).map((check) => ({
       kind: "check_run" as const,
@@ -78,8 +97,6 @@ export function evaluateCiObservation(
   // Required-check awareness. When branch protection declares required contexts, the
   // verdict is gated on THOSE only: an optional check failing/pending does not block,
   // and a required context that has not reported yet keeps the result pending.
-  const required = checks.requiredContexts;
-  const gated = required !== undefined && required.length > 0;
   const failingChecks = gated ? allFailing.filter((check) => required.includes(check.name)) : allFailing;
   const pendingChecks = gated ? allPending.filter((check) => required.includes(check.name)) : allPending;
   const missingRequired = gated ? missingRequiredContexts(required, checks) : [];
@@ -130,8 +147,16 @@ export function evaluateCiObservation(
 
 function missingRequiredContexts(required: string[], checks: GitHubPullRequestChecks): string[] {
   const present = new Set<string>([
-    ...checks.checkRuns.map((check) => check.name),
-    ...checks.statuses.map((status) => status.context),
+    ...checks.checkRuns
+      .filter(
+        (check) =>
+          checks.requiredCheckAppIds?.[check.name] === undefined ||
+          check.appId === checks.requiredCheckAppIds[check.name],
+      )
+      .map((check) => check.name),
+    ...checks.statuses
+      .filter((status) => checks.requiredCheckAppIds?.[status.context] === undefined)
+      .map((status) => status.context),
   ]);
   return required.filter((name) => !present.has(name));
 }
