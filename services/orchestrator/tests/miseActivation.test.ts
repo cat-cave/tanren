@@ -32,7 +32,12 @@ describe("withMiseActivation · the PROJECT-command path is mise-activated", () 
     // SHIMS / non-interactive activation: `--shims` emits a plain POSIX
     // `export PATH="…/shims:$PATH"` that IMMEDIATELY puts the toolchain on PATH for the
     // rest of the `bash -c`/`sh -c` command. This is the crux of the fix.
-    expect(wrapped).toContain('eval "$(mise activate bash --shims)"');
+    // The activation's STATUS is checked before its output is evaluated: `eval "$(…)"`
+    // reports eval's status, so a `mise activate` that died evaluated to an empty string
+    // and "succeeded", leaving the project's command to run without its declared toolchain.
+    expect(wrapped).toContain('__tanren_mise_activate="$(mise activate bash --shims)"');
+    expect(wrapped).toContain('eval "$__tanren_mise_activate"');
+    expect(wrapped).toContain("toolchain activation FAILED");
     // NOT the bare/hook mode: `mise activate bash` (no `--shims`) installs an INTERACTIVE
     // precmd/chpwd hook that never fires for a non-interactive `bash -c`, and its bash-only
     // syntax `eval`s to an error under a `sh`/dash project shell — so PATH is never set and
