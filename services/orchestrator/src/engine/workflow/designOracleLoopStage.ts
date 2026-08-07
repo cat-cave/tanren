@@ -82,7 +82,9 @@ export async function runDesignOracleLoopStage(
   await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
 
   return await guardDesignOracleTask(args, designOracleTaskId, async () => {
-    if (preAnswererFailure !== undefined) throw preAnswererFailure;
+    if (preAnswererFailure !== undefined) {
+      throw preAnswererFailure instanceof Error ? preAnswererFailure : new Error(String(preAnswererFailure));
+    }
     const result = await runAnswererStageWithRecovery(
       "designOracle",
       () =>
