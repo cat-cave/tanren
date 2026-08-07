@@ -58,7 +58,7 @@ import { PersonaStore } from "../../entities/personas.js";
 import type { ActorRef } from "../../state/actor.js";
 import type { SpecMode } from "../../state/spec.js";
 import type { AnswererAdapter } from "../../providers/types.js";
-import { DesignContractStore } from "../../repositories/designContracts.js";
+import { DesignContractStore, type DesignContractLookup } from "../../repositories/designContracts.js";
 import {
   buildDesignOraclePrompt,
   type ResolvedBehavior,
@@ -137,6 +137,8 @@ export interface DesignOracleStageInput {
   // checker/auditor lift. Absent / `from_scratch` ⇒ no block (byte-identical to the
   // legacy oracle prompt).
   specMode?: SpecMode;
+  /** A loop-stage preflight lookup, so terminal failures materialize before entry. */
+  contractLookup?: DesignContractLookup;
 }
 
 export interface DesignOracleStageResult {
@@ -193,7 +195,8 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
   // per-writer-prompt-mode split silently no-op'd for scaffold/build/deploy
   // specs — migration 0028 collapsed it. The oracle prompt's `specMode` tail
   // block (below) remains the v64-load-bearing writer-vs-oracle mode signal.
-  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, input.actorRef);
+  const lookup =
+    input.contractLookup ?? (await DesignContractStore.getLatestState(input.client, input.projectId, input.actorRef));
   if (lookup.kind === "corrupt") {
     // Never a silent skip — a corrupt persisted contract is a hard fault the
     // finalize guard closes the task row on and the operator sees on the
