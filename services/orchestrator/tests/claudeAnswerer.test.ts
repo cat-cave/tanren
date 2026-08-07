@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AnswererSchemaValidationError } from "../src/engine/providers/codex.js";
+import { AnswererSchemaValidationError, AnswererStalledError } from "../src/engine/providers/codex.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { checkAnswerSchema, type CheckAnswer } from "../src/engine/providers/answererSchemas.js";
+import { JsonlObjectDecodeError } from "../src/engine/providers/findTokenUsage.js";
 import type { PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import {
   buildAnswererPrompt,
@@ -79,6 +80,50 @@ describe("Claude Answerer adapter", () => {
     await expect(
       answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
     ).rejects.toBeInstanceOf(ClaudeUsageLimitError);
+  });
+
+  it("keeps stalled or transient SSH malformed stdout retryable and clean malformed stdout typed", async () => {
+    const malformed = '{"type":"assistant"}\n{partial\n';
+    const cases = [
+      { ...ok(malformed), exitCode: null, stalled: true },
+      {
+        ...ok(malformed),
+        exitCode: null,
+        failure: { kind: "ssh_failed" as const, target: "runner", message: "connection reset" },
+      },
+    ];
+
+    for (const [index, commandResult] of cases.entries()) {
+      const ssh = new ScriptedSsh([ok(""), ok(""), commandResult]);
+      const secrets = new InMemorySecretStore();
+      await secrets.put({ ref: "credential/claude/dev", value: authJson });
+      const answerer = createClaudeAnswerer<CheckAnswer>({
+        secrets,
+        ssh,
+        target,
+        credentialRef: "credential/claude/dev",
+        runId: `run_claude_transport_malformed_${index}`,
+      });
+
+      await expect(answerer.runAnswerer({ prompt: "judge", outputSchema: checkAnswerSchema })).rejects.toBeInstanceOf(
+        AnswererStalledError,
+      );
+    }
+
+    const cleanSsh = new ScriptedSsh([ok(""), ok(""), ok(malformed)]);
+    const cleanSecrets = new InMemorySecretStore();
+    await cleanSecrets.put({ ref: "credential/claude/dev", value: authJson });
+    const clean = createClaudeAnswerer<CheckAnswer>({
+      secrets: cleanSecrets,
+      ssh: cleanSsh,
+      target,
+      credentialRef: "credential/claude/dev",
+      runId: "run_claude_clean_malformed",
+    });
+
+    await expect(clean.runAnswerer({ prompt: "judge", outputSchema: checkAnswerSchema })).rejects.toBeInstanceOf(
+      JsonlObjectDecodeError,
+    );
   });
 
   it("terminalizes malformed JSONL through the real planner stage with its proven cost", async () => {

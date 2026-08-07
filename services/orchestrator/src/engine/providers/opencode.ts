@@ -9,6 +9,7 @@ import type { JsonlObjectDecodeFailure, TokenUsage, UsageLimitSignal, WriterAdap
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { decodeJsonlObjectEvents, findTokenUsageBounded } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
+import { writerExitReason } from "./jsonlWriterPostProcessing.js";
 
 // opencode CLI Writer adapter. opencode is a Writer-only provider in
 // this expansion and is pinned to the Zai GLM 5.1 model (`zai/glm-5.1`). It
@@ -90,6 +91,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         }),
       });
       const telemetry = parseOpencodeStreamTelemetry(opencode.stdout);
+      const exitReason = writerExitReason(opencode, telemetry);
       const gitState = await postProcessPreservingJsonlFailure("opencode", telemetry, () =>
         captureGitStateAfterWriter(
           dependencies.ssh,
@@ -99,19 +101,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
           "opencode writer",
         ),
       );
-      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
-      if (opencode.stalled === true) {
-        return failedResult("timeout", telemetry, gitState);
-      }
-      if (telemetry.usageLimit !== undefined) {
-        return failedResult("window_exhausted", telemetry, gitState);
-      }
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
-      if (opencode.failure !== undefined || opencode.exitCode !== 0) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      if (exitReason !== undefined) return failedResult(exitReason, telemetry, gitState);
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };

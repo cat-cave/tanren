@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import { MalformedAncestorStackError } from "../src/engine/dag/ancestorStack.js";
 import { DesignContractCorruptError } from "../src/engine/repositories/designContracts.js";
+import { JsonlObjectDecodeError } from "../src/engine/providers/findTokenUsage.js";
 import {
   DesignOracleActorConfigError,
   MalformedDesignOracleResultError,
@@ -45,6 +46,14 @@ describe("classifyStageFailureKind — typed-error arms (PR #740 + #745)", () =>
   it("maps MalformedDesignOracleResultError → malformed_design_oracle_result", () => {
     const error = new MalformedDesignOracleResultError("missing/empty field(s): contractVersion");
     expect(classifyStageFailureKind(error)).toBe("malformed_design_oracle_result");
+  });
+
+  it("maps a clean malformed provider JSONL stream to jsonl_object_decode_failed", () => {
+    const error = new JsonlObjectDecodeError("Codex", {
+      kind: "jsonl_object_decode_failed",
+      failures: [{ lineNumber: 2, reason: "invalid_json" }],
+    });
+    expect(classifyStageFailureKind(error)).toBe("jsonl_object_decode_failed");
   });
 
   it("falls through to `crashed` for an unrecognized throw (closed-vocabulary fallback)", () => {

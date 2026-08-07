@@ -82,30 +82,32 @@ describe("Codex writer adapter", () => {
 
   it("returns timeout and crashed results without treating stdout as completion", async () => {
     const timeout = await runWithCodexResult(
-      { exitCode: null, stdout: '{"type":"done"}\n', stderr: "", stalled: true },
+      {
+        exitCode: null,
+        stdout: '{"type":"partial"}\n{broken\n',
+        stderr: "runner disconnected",
+        failure: { kind: "ssh_failed", target: "runner", message: "connection reset" },
+      },
       {
         diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n",
         log: `${commitSha("d")}\tcodex writer\n`,
       },
     );
-    const nonzero = await runWithCodexResult({
-      exitCode: 2,
-      stdout: '{"type":"done"}\n',
-      stderr: "bad",
+    const clean = await runWithCodexResult({
+      exitCode: 0,
+      stdout: '{"type":"partial"}\n{broken\n',
+      stderr: "",
     });
 
     expect(timeout).toMatchObject({
       diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n",
       commits: [{ sha: commitSha("d"), message: "codex writer" }],
       exitReason: "timeout",
-      telemetry: { rawEventCount: 1 },
     });
-    expect(nonzero).toMatchObject({
-      diff: "",
-      commits: [],
-      exitReason: "crashed",
-      telemetry: { rawEventCount: 1 },
-    });
+    expect(timeout.telemetry?.jsonlDecodeFailure?.kind).toBe("jsonl_object_decode_failed");
+    expect(clean).toMatchObject({ diff: "", commits: [], exitReason: "crashed" });
+    expect(clean.telemetry?.jsonlDecodeFailure?.kind).toBe("jsonl_object_decode_failed");
+    expect(JSON.stringify(timeout)).not.toMatch(/secret-(?:access|refresh)-token/u);
   });
 
   it("judges successful completion from git state after Codex exits", async () => {
