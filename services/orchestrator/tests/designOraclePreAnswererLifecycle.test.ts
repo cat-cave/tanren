@@ -11,8 +11,8 @@ import { runDesignOracleLoopStage } from "../src/engine/workflow/designOracleLoo
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
-const ORG = "org_preanswerer";
-const PROJECT = "project_preanswerer";
+const ORG = "org_design_oracle";
+const PROJECT = "project_design_oracle";
 const contract = parseDesignContract({
   version: 1,
   domain: "saas-web",
@@ -190,7 +190,7 @@ describe("design-oracle pre-answerer lifecycle", () => {
     await expectOneFailedTask(harness("unresolved"), "crashed");
   });
 
-  it("keeps the intentional absent-contract path taskless", async () => {
+  it("keeps the intentional absent-contract path without a task", async () => {
     const h = harness("absent");
     await expect(h.run()).resolves.toEqual({ findings: [], designOracleTaskId: undefined });
     expect(h.events).toEqual([]);
