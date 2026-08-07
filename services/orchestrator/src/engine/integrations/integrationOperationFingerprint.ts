@@ -14,6 +14,8 @@ export type IntegrationRequestFingerprintInput = {
   credential: string;
 };
 
+export const SENTRY_SAAS_ENDPOINT = "https://sentry.io";
+
 /** The exact digest emitted before provider endpoints became part of the request. */
 export function legacyIntegrationRequestFingerprint(input: IntegrationRequestFingerprintInput): string {
   return sha256([

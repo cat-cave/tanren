@@ -8,6 +8,7 @@ import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAu
 import {
   integrationRequestFingerprint,
   legacyIntegrationRequestFingerprint,
+  SENTRY_SAAS_ENDPOINT,
 } from "../src/engine/integrations/integrationOperationFingerprint.js";
 import type { MemoryOperation } from "./helpers/integrationMemoryTables.js";
 import { IntegrationMemoryDb } from "./helpers/integrationMemoryDb.js";
@@ -76,6 +77,7 @@ function authorizationInput(
     ...input,
     idempotencyKey: input.operationKind === "rotate" ? "legacy-rotate" : "legacy-key",
     requestFingerprint: hashes.current,
+    ...(input.providerKind === "sentry" ? { providerEndpoint: SENTRY_SAAS_ENDPOINT } : {}),
     legacyRequestFingerprint: hashes.legacy,
     ...options,
     actor: { kind: "operator", id: ACTOR_ID },
@@ -155,6 +157,28 @@ describe("legacy integration operation authorization", () => {
     expect(db.operations[0]?.request_fingerprint).toBe(first.current);
   });
 
+  it("does not migrate a historical v1 row for a non-SaaS Sentry endpoint", async () => {
+    const db = new IntegrationMemoryDb();
+    const hashes = fingerprints({ providerKind: "sentry", operationKind: "link", credential: "token" });
+    const custom = integrationRequestFingerprint({
+      orgId: ORG_ID,
+      providerKind: "sentry",
+      operationKind: "link",
+      actorId: ACTOR_ID,
+      credential: "token",
+      providerEndpoint: "https://sentry.example",
+    });
+    db.operations.push(operation({ request_fingerprint: hashes.legacy }));
+
+    await expect(
+      new PgIntegrationAuthority().authorizePrincipalVerification(db.clientForOrg(ORG_ID), {
+        ...authorizationInput({ providerKind: "sentry", operationKind: "link" }, { ...hashes, current: custom }),
+        providerEndpoint: "https://sentry.example",
+      }),
+    ).rejects.toThrow(/restricted to Sentry SaaS/u);
+    expect(db.operations[0]?.request_fingerprint).toBe(hashes.legacy);
+  });
+
   it("does not create an operation for a missing endpoint legacy retry", async () => {
     const db = new IntegrationMemoryDb();
     const hashes = fingerprints({ providerKind: "sentry", operationKind: "link", credential: "token" });
@@ -162,25 +186,21 @@ describe("legacy integration operation authorization", () => {
     await expect(
       new PgIntegrationAuthority().authorizePrincipalVerification(db.clientForOrg(ORG_ID), {
         ...authorizationInput({ providerKind: "sentry", operationKind: "link" }, hashes),
-        requestFingerprint: hashes.legacy,
-        legacyRequestFingerprint: undefined,
         legacyRetryOnly: true,
       }),
     ).rejects.toBeInstanceOf(IntegrationLegacyOperationNotFoundError);
     expect(db.operations).toHaveLength(0);
   });
 
-  it("authorizes an endpoint-less legacy retry without upgrading its v1 row", async () => {
+  it("authorizes an endpoint-less legacy retry and upgrades its v1 row", async () => {
     const db = new IntegrationMemoryDb();
     const hashes = fingerprints({ providerKind: "sentry", operationKind: "link", credential: "token" });
     db.operations.push(operation({ request_fingerprint: hashes.legacy }));
     const permit = await new PgIntegrationAuthority().authorizePrincipalVerification(db.clientForOrg(ORG_ID), {
       ...authorizationInput({ providerKind: "sentry", operationKind: "link" }, hashes),
-      requestFingerprint: hashes.legacy,
-      legacyRequestFingerprint: undefined,
       legacyRetryOnly: true,
     });
     expect(permit.operationId).toBe("op-legacy");
-    expect(db.operations[0]?.request_fingerprint).toBe(hashes.legacy);
+    expect(db.operations[0]?.request_fingerprint).toBe(hashes.current);
   });
 });

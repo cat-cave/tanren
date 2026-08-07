@@ -128,16 +128,18 @@ export type AuthorizePrincipalVerificationInput = {
   idempotencyKey: string;
   connectionId?: string;
   /**
-   * Digest binding the idempotency key to actor, target, and credential bytes.
-   * Endpoint-less historical retries pass the exact pre-endpoint v1 digest here.
+   * Digest binding the idempotency key to the current actor, target, credential,
+   * and provider endpoint bytes.
    */
   requestFingerprint: string;
+  /** Canonical endpoint bound to the current request, when the provider uses one. */
+  providerEndpoint?: string;
   /**
    * Exact pre-endpoint v1 digest. Only the Sentry link/rotate route may use it
-   * to migrate a historically endpoint-less operation to the current digest.
+   * with the hosted SaaS endpoint to migrate a historically endpoint-less operation.
    */
   legacyRequestFingerprint?: string;
-  /** Do not create a new operation while replaying an endpoint-less legacy request. */
+  /** Do not create a new operation while replaying; migrate only a matching v1 row. */
   legacyRetryOnly?: boolean;
   actor: ActorRef;
 };

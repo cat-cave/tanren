@@ -18,6 +18,7 @@ import {
 } from "../contracts/integrationAuthority.js";
 import { integrationStagedSecretRef } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
+import { SENTRY_SAAS_ENDPOINT } from "./integrationOperationFingerprint.js";
 import {
   integrationOperationTargetsEqual,
   normalizeIntegrationOperationTarget,
@@ -239,19 +240,18 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     const legacyRetryWithoutEndpoint = input.legacyRetryOnly === true;
     const canMigrateLegacy =
       input.providerKind === "sentry" &&
-      !legacyRetryWithoutEndpoint &&
+      input.providerEndpoint === SENTRY_SAAS_ENDPOINT &&
       input.legacyRequestFingerprint !== undefined &&
       input.legacyRequestFingerprint !== input.requestFingerprint;
     if (legacyRetryWithoutEndpoint && input.providerKind !== "sentry") {
       throw new Error("legacy integration retry is restricted to Sentry");
     }
-    if (legacyRetryWithoutEndpoint && input.legacyRequestFingerprint !== undefined) {
-      throw new Error("endpoint-less legacy retry cannot include a migration fingerprint");
+    if (legacyRetryWithoutEndpoint && !canMigrateLegacy) {
+      throw new Error("endpoint-less legacy retry requires Sentry SaaS v2 compatibility");
     }
-    if (!legacyRetryWithoutEndpoint && input.legacyRequestFingerprint !== undefined && !canMigrateLegacy) {
-      throw new Error("legacy integration fingerprint migration is restricted to Sentry v2 requests");
+    if (input.legacyRequestFingerprint !== undefined && !canMigrateLegacy) {
+      throw new Error("legacy integration fingerprint migration is restricted to Sentry SaaS v2 requests");
     }
-    const operationId = randomUUID();
     if (!input.legacyRetryOnly) {
       await client.query(
         `INSERT INTO org_integration_connection_operations
@@ -261,7 +261,7 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
          ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
         [
           input.orgId,
-          operationId,
+          randomUUID(),
           input.providerKind,
           input.connectionId ?? null,
           input.operationKind,
@@ -309,9 +309,7 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
       );
     }
     const isLegacyRow = canMigrateLegacy && row.request_fingerprint === input.legacyRequestFingerprint;
-    const isLegacyRowWithoutEndpoint =
-      legacyRetryWithoutEndpoint && row.request_fingerprint === input.requestFingerprint;
-    if (row.request_fingerprint !== input.requestFingerprint && !isLegacyRow && !isLegacyRowWithoutEndpoint) {
+    if (row.request_fingerprint !== input.requestFingerprint && !isLegacyRow) {
       throw new IntegrationIdempotencyConflictError(
         "integration idempotency key is already bound to a different immutable request",
       );

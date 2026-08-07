@@ -13,6 +13,7 @@ import type { PgIntegrationAuthority } from "../../engine/integrations/integrati
 import {
   integrationRequestFingerprint,
   legacyIntegrationRequestFingerprint,
+  SENTRY_SAAS_ENDPOINT,
 } from "../../engine/integrations/integrationOperationFingerprint.js";
 import { hasPrincipalVerifier, principalVerifierFor } from "../../engine/integrations/principalVerifiers.js";
 import * as sentry from "../../engine/integrations/sentryPrincipalIdentity.js";
@@ -61,8 +62,6 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-const PRE_ENDPOINT_SENTRY_ENDPOINT = "https://sentry.io";
 
 function linkVerifierEndpoint(providerKind: string, value: string | undefined): string | undefined {
   if (providerKind !== "sentry") {
@@ -128,7 +127,7 @@ export function mountIntegrationAuthorityWrites(
       if (providerKind === "sentry" && parsed.data.baseUrl === undefined) {
         // The pre-endpoint route always used Sentry's hosted endpoint. This is
         // retry-only: the authority refuses to create a new operation here.
-        providerEndpoint = PRE_ENDPOINT_SENTRY_ENDPOINT;
+        providerEndpoint = SENTRY_SAAS_ENDPOINT;
         legacyRetryOnly = true;
       } else {
         providerEndpoint = linkVerifierEndpoint(providerKind, parsed.data.baseUrl);
@@ -146,11 +145,9 @@ export function mountIntegrationAuthorityWrites(
         actorId: actor.userId,
         credential: parsed.data.token,
       } as const;
-      const requestFingerprint = legacyRetryOnly
-        ? legacyIntegrationRequestFingerprint(fingerprintInput)
-        : integrationRequestFingerprint(fingerprintInput);
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
       const legacyRequestFingerprint =
-        !legacyRetryOnly && providerKind === "sentry" && providerEndpoint === PRE_ENDPOINT_SENTRY_ENDPOINT
+        providerKind === "sentry" && providerEndpoint === SENTRY_SAAS_ENDPOINT
           ? legacyIntegrationRequestFingerprint(fingerprintInput)
           : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
@@ -160,6 +157,7 @@ export function mountIntegrationAuthorityWrites(
           operationKind: "link",
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          providerEndpoint,
           ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
           ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
@@ -307,7 +305,7 @@ export function mountIntegrationAuthorityWrites(
         // Before endpoint binding, Sentry rotations used the hosted SaaS endpoint
         // implicitly. This fallback is strictly retry-only; the authority will
         // refuse to create an operation when no matching legacy row exists.
-        providerEndpoint = PRE_ENDPOINT_SENTRY_ENDPOINT;
+        providerEndpoint = SENTRY_SAAS_ENDPOINT;
         legacyRetryOnly = true;
       } else if (error instanceof sentry.SentryPrincipalRelinkRequiredError) {
         return c.json({ error: "verified_provider_identity_required" }, 409);
@@ -326,11 +324,9 @@ export function mountIntegrationAuthorityWrites(
         actorId: actor.userId,
         credential: parsed.data.token,
       } as const;
-      const requestFingerprint = legacyRetryOnly
-        ? legacyIntegrationRequestFingerprint(fingerprintInput)
-        : integrationRequestFingerprint(fingerprintInput);
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
       const legacyRequestFingerprint =
-        !legacyRetryOnly && providerKind === "sentry" && providerEndpoint === PRE_ENDPOINT_SENTRY_ENDPOINT
+        providerKind === "sentry" && providerEndpoint === SENTRY_SAAS_ENDPOINT
           ? legacyIntegrationRequestFingerprint(fingerprintInput)
           : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
@@ -341,6 +337,7 @@ export function mountIntegrationAuthorityWrites(
           connectionId,
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          providerEndpoint,
           ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
           ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
