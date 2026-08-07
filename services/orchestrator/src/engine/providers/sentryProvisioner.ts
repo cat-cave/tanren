@@ -110,14 +110,6 @@ export interface SentryProvisionerDeps {
 /** The capability the matrix names for an error-tracking source. */
 const CAPABILITY_ERRORS = "errors";
 
-type SentryGrantMetadata = Pick<
-  sentryIdentity.SentryPrincipalIdentity,
-  "sentryIdentityVersion" | "orgSlug" | "baseUrl"
-> & {
-  /** The Sentry team slug new projects are created under (provision/create path). */
-  team?: string;
-};
-
 /** A Sentry project as the org-projects list / create endpoints return it. */
 interface RawSentryProject {
   slug?: unknown;
@@ -189,9 +181,8 @@ function dsnSecretRef(orgId: string, projectSlug: string): string {
   return `org/${orgId}/sentry/${projectSlug}/dsn`;
 }
 
-function readGrantMetadata(grant: OrgGrant): SentryGrantMetadata {
-  const identity = sentryIdentity.requireSentryPrincipalIdentity(grant.metadata);
-  return { ...identity, team: asString(grant.metadata["team"]) };
+function readGrantMetadata(grant: OrgGrant): sentryIdentity.SentryGrantMetadata {
+  return sentryIdentity.requireSentryGrantMetadata(grant.metadata);
 }
 
 /**
@@ -297,7 +288,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: IntegrationPrivilegedOperation,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
   ): Promise<RawSentryProject[]> {
     const response = await this.request(grant, projectCtx, operation, target, {
       method: "GET",
@@ -315,7 +306,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: IntegrationPrivilegedOperation,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
   ): Promise<string | undefined> {
     const projects = await this.listOrgProjects(grant, projectCtx, operation, target, meta);
@@ -328,7 +319,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     grant: OrgGrant,
     projectCtx: ProjectContext,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
   ): Promise<string> {
     if (meta.team === undefined) {
@@ -363,7 +354,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: "provision" | "bind",
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
     allowCreate: boolean,
   ): Promise<string> {
@@ -409,7 +400,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: "provision" | "bind",
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
     allowKeyCreation: boolean,
   ): Promise<ProvisionedArtifact> {
@@ -438,7 +429,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     };
   }
 
-  private baseUrl(meta: SentryGrantMetadata): string {
+  private baseUrl(meta: sentryIdentity.SentryGrantMetadata): string {
     return meta.baseUrl;
   }
 }
