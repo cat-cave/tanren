@@ -10,7 +10,9 @@ import type { DesignOracleAnswer } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
+import { DesignContractStore, type DesignContractLookup } from "../repositories/designContracts.js";
 import {
+  DesignOracleActorConfigError,
   MalformedDesignOracleResultError,
   runDesignOracleStage,
   type DesignOracleStageResult,
@@ -55,11 +57,33 @@ export async function runDesignOracleLoopStage(
   args: DesignOracleLoopStageInput,
 ): Promise<{ findings: Finding[]; designOracleTaskId: string | undefined }> {
   const startedAt = Date.now();
+  let contractLookup: DesignContractLookup | undefined;
+  let preAnswererFailure: Error | undefined;
+  if (args.actor.orgId === null) {
+    preAnswererFailure = new DesignOracleActorConfigError(args.projectId, "actor.orgId is null");
+  } else {
+    contractLookup = await DesignContractStore.getLatestState(args.client, args.projectId, args.actorRef);
+    if (contractLookup.kind === "absent") {
+      // Intentional empty state: no contract means no task, answerer, cost, or
+      // terminal event.
+      return { findings: [], designOracleTaskId: undefined };
+    }
+    if (contractLookup.kind === "corrupt") {
+      preAnswererFailure = contractLookup.error;
+    }
+  }
+
+  // Materialize before actor/config or corrupt-contract failures are surfaced.
+  // Unresolved references are discovered by the oracle below, after this same
+  // task row exists and can be closed by the finalize guard.
   const designOracleTaskId = `task_${randomUUID()}`;
-  let taskMaterialized = false;
-  let result: DesignOracleStageResult;
-  try {
-    result = await runAnswererStageWithRecovery(
+  await materializeDesignOracleTask(args, designOracleTaskId);
+  await args.appendEvent("task.started", { taskKind: "designOracle" }, designOracleTaskId);
+  await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
+
+  return await guardDesignOracleTask(args, designOracleTaskId, async () => {
+    if (preAnswererFailure !== undefined) throw preAnswererFailure;
+    const result = await runAnswererStageWithRecovery(
       "designOracle",
       () =>
         runDesignOracleStage({
@@ -70,28 +94,14 @@ export async function runDesignOracleLoopStage(
           adapter: args.adapter,
           baselineSha: args.baselineSha,
           workspacePath: args.workspacePath,
-          beforeAnswerer: async () => {
-            if (taskMaterialized) return;
-            await materializeDesignOracleTask(args, designOracleTaskId);
-            taskMaterialized = true;
-            await args.appendEvent("task.started", { taskKind: "designOracle" }, designOracleTaskId);
-            await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
-          },
+          ...(contractLookup !== undefined && { contractLookup }),
           ...(args.specMode !== undefined && { specMode: args.specMode }),
         }),
       answererJsonlFailureCost(args, "designOracle", designOracleTaskId, startedAt),
     );
-  } catch (error) {
-    if (!taskMaterialized) throw error;
-    return await guardDesignOracleTask(args, designOracleTaskId, () => Promise.reject(error));
-  }
-  if (!result.hasContract) {
-    return { findings: [], designOracleTaskId: undefined };
-  }
-
-  return await guardDesignOracleTask(args, designOracleTaskId, () =>
-    runDesignOracleLoopStageBody(args, designOracleTaskId, result, startedAt),
-  );
+    if (!result.hasContract) throw new Error("design oracle contract preflight changed from found to absent");
+    return runDesignOracleLoopStageBody(args, designOracleTaskId, result, startedAt);
+  });
 }
 
 async function materializeDesignOracleTask(args: DesignOracleLoopStageInput, designOracleTaskId: string) {
