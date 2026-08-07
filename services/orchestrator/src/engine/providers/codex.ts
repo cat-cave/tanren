@@ -18,8 +18,8 @@ import {
   captureGitStateAfterCodex,
   postProcessAnswererPreservingJsonlFailure,
   postProcessPreservingJsonlFailure,
+  writerExitReason,
 } from "./codexGit.js";
-import { writerExitReason } from "./jsonlWriterPostProcessing.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
