@@ -18,6 +18,7 @@ import {
   captureGitStateAfterCodex,
   postProcessAnswererPreservingJsonlFailure,
   postProcessPreservingJsonlFailure,
+  writerExitReason,
 } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
@@ -142,6 +143,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         }),
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);
+      const exitReason = writerExitReason(codex, telemetry);
       // Auth write-back is a ChatGPT-bundle refresh: codex rotates its
       // access/refresh tokens during a run and we persist the new bundle. Only the
       // BYOK bundle path writes an auth.json codex rotates; a managed or BYOK api_key
@@ -160,22 +162,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         }
         return await captureGitStateAfterCodex(dependencies.ssh, dependencies.target, opts.workspace, baselineSha);
       });
-      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
-      if (codex.stalled === true) {
-        return failedResult("timeout", telemetry, gitState);
-      }
-      // Usage-limit exhaustion is an authenticated-but-out-of-quota state, not
-      // a crash. Surface it distinctly so the workflow escalates window
-      // pressure (PROJECT_BRIEF §4.3) instead of retrying a doomed call.
-      if (telemetry.usageLimit !== undefined) {
-        return failedResult("window_exhausted", telemetry, gitState);
-      }
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
-      if (codex.failure !== undefined || codex.exitCode !== 0) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      if (exitReason !== undefined) return failedResult(exitReason, telemetry, gitState);
 
       return {
         ...gitState,

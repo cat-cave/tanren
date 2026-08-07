@@ -16,6 +16,7 @@ import {
   type JsonlObjectDecodeFailure,
 } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
+import { writerExitReason } from "./jsonlWriterPostProcessing.js";
 
 // Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
 // contracts (same WriterAdapter/AnswererAdapter shapes, same SSH-execution +
@@ -105,24 +106,11 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         }),
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
+      const exitReason = writerExitReason(claude, telemetry);
       const gitState = await postProcessPreservingJsonlFailure("claude", telemetry, () =>
         captureGitStateAfterWriter(dependencies.ssh, dependencies.target, opts.workspace, baselineSha, "claude writer"),
       );
-      // A transient stall / usage-limit takes PRECEDENCE over a JSONL decode
-      // failure: a killed run's truncated stdout is malformed, but the failure is
-      // recoverable, not the terminal `crashed` a completed-but-malformed run is.
-      if (claude.stalled === true) {
-        return failedResult("timeout", telemetry, gitState);
-      }
-      if (telemetry.usageLimit !== undefined) {
-        return failedResult("window_exhausted", telemetry, gitState);
-      }
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
-      if (claude.failure !== undefined || claude.exitCode !== 0) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      if (exitReason !== undefined) return failedResult(exitReason, telemetry, gitState);
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };

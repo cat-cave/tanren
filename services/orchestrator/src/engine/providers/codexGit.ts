@@ -17,6 +17,7 @@ import type { Commit, WriterResult } from "./types.js";
 export {
   postProcessAnswererPreservingJsonlFailure,
   postProcessPreservingJsonlFailure,
+  writerExitReason,
 } from "./jsonlWriterPostProcessing.js";
 
 export async function captureBaselineSha(

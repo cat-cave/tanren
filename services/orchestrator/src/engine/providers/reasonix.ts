@@ -5,6 +5,7 @@ import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { JsonlObjectDecodeFailure, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter, postProcessPreservingJsonlFailure } from "./writerGit.js";
+import { writerExitReason } from "./jsonlWriterPostProcessing.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { decodeJsonlObjectEvents, findTokenUsageBounded } from "./findTokenUsage.js";
 
@@ -89,6 +90,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
         }),
       });
       const telemetry = parseReasonixStreamTelemetry(reasonix.stdout);
+      const exitReason = writerExitReason(reasonix, telemetry);
       const gitState = await postProcessPreservingJsonlFailure("reasonix", telemetry, () =>
         captureGitStateAfterWriter(
           dependencies.ssh,
@@ -98,19 +100,7 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
           "reasonix writer",
         ),
       );
-      // Stall / usage-limit precedence over a JSONL decode failure (see claude.ts).
-      if (reasonix.stalled === true) {
-        return failedResult("timeout", telemetry, gitState);
-      }
-      if (telemetry.usageLimit !== undefined) {
-        return failedResult("window_exhausted", telemetry, gitState);
-      }
-      if (telemetry.jsonlDecodeFailure !== undefined) {
-        return failedResult("crashed", telemetry, gitState);
-      }
-      if (reasonix.failure !== undefined || reasonix.exitCode !== 0) {
-        return failedResult("crashed", telemetry, gitState);
-      }
+      if (exitReason !== undefined) return failedResult(exitReason, telemetry, gitState);
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
     },
   };
