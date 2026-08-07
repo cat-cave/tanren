@@ -15,19 +15,33 @@ export interface SymptomProbeEvidence {
   readonly retentionClass?: string;
 }
 
+/** Identity that a multimodal probe must inherit from the locked run. */
+export interface SymptomProbeRuntimeBinding {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly contractId: string;
+  readonly verificationRunId: string;
+  readonly artifactDigest: Digest;
+  readonly planId: string;
+  readonly runtimeBehaviorContextHash: string;
+  readonly releaseInstanceId: string;
+}
+
 export interface SymptomProbeExecution {
   readonly observedObservation: SymptomObservation;
   readonly evidence: readonly SymptomProbeEvidence[];
   readonly timingMs: number;
-  readonly outcome?: "inconclusive";
+  readonly outcome?: "passed" | "failed" | "inconclusive";
 }
 
 export interface SymptomProbeDriver {
   execute(input: {
     readonly orgId: string;
     readonly projectId: string;
+    readonly contractId?: string;
     readonly contract: SymptomContractV1;
     readonly verificationRunId: string;
+    readonly runtimeBinding?: SymptomProbeRuntimeBinding;
   }): Promise<SymptomProbeExecution>;
 }
 
@@ -37,6 +51,7 @@ export interface SymptomBaselineInput {
   readonly contractId: string;
   readonly contract: SymptomContractV1;
   readonly verificationRunId: string;
+  readonly runtimeBinding?: SymptomProbeRuntimeBinding;
 }
 
 /** A stage-owned assertion target for running a locked symptom contract. */
@@ -79,6 +94,41 @@ export interface SymptomVerificationResult {
   readonly timingMs: number;
   readonly evidence: readonly SymptomEvidenceRef[];
   readonly assertionId: string;
+}
+
+/** Parse a canonical HTTP URL, optionally requiring one live origin. */
+export function canonicalHttpLocation(value: unknown, liveOrigin?: string): URL {
+  const absolute = typeof value === "string" && URL.canParse(value);
+  if (
+    typeof value !== "string" ||
+    value.includes("\\") ||
+    /[?#]$/u.test(value) ||
+    (!absolute && !value.startsWith("/")) ||
+    !URL.canParse(value, liveOrigin)
+  ) {
+    throw new Error("HTTP location is not canonical");
+  }
+  const location = new URL(value, liveOrigin);
+  const expectedOrigin = liveOrigin === undefined ? undefined : new URL(liveOrigin).origin;
+  const canonical =
+    liveOrigin === undefined
+      ? value === location.origin
+        ? location.origin
+        : location.toString()
+      : absolute
+        ? value === location.origin
+          ? location.origin
+          : location.toString()
+        : location.pathname + location.search;
+  if (
+    !/^https?:$/u.test(location.protocol) ||
+    [location.username, location.password, location.hash].some(Boolean) ||
+    (expectedOrigin !== undefined && location.origin !== expectedOrigin) ||
+    value !== canonical
+  ) {
+    throw new Error("HTTP location is not a canonical same-origin URL");
+  }
+  return location;
 }
 
 function toCanonicalObservation(value: unknown): CanonicalBody {
