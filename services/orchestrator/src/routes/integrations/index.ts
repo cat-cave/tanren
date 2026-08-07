@@ -27,6 +27,7 @@ import {
 } from "../../engine/integrations/manifest/index.js";
 import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../engine/integrations/integrationSecretStoreImpl.js";
+import { SentryPrincipalRelinkRequiredError } from "../../engine/integrations/sentryPrincipalIdentity.js";
 import {
   productionProvisionerDeps,
   provisionCapability,
@@ -224,6 +225,9 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       if (error instanceof SlackDeliveryAdapterUnavailableError) {
         return c.json({ error: "slack_bot_delivery_adapter_unavailable" }, 422);
       }
+      if (error instanceof SentryPrincipalRelinkRequiredError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      }
       return c.json({ error: "provision_failed" }, 500);
     }
   });
@@ -310,7 +314,10 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
         },
         200,
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof SentryPrincipalRelinkRequiredError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      }
       return c.json({ error: "discover_failed" }, 500);
     }
   });

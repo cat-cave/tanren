@@ -11,7 +11,7 @@
 //   • a >300-char title is truncated by the mapper (no decode crash).
 
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { getJobOrgId } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -234,15 +234,19 @@ function sign(body: string): string {
   return `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(body, "utf8").digest("hex")}`;
 }
 
-function issuesBody(number: number, title: string): string {
+function issuesBody(number: number, title: string, owner = "cat-cave"): string {
   return JSON.stringify({
     action: "opened",
     issue: { number, title, body: "details", labels: [] },
-    repository: { owner: { login: "cat-cave" }, name: "app" },
+    repository: { owner: { login: owner }, name: "app" },
   });
 }
 
-async function buildApp(answerer: TriageAnswerer, pool: pg.Pool) {
+async function buildApp(
+  answerer: TriageAnswerer,
+  pool: pg.Pool,
+  recordIssueObservation: WebhookProcessorDeps["recordIssueObservation"] = async () => {},
+) {
   const secrets = new FakeSecretStore();
   await secrets.put({ ref: "wh/src_gh", value: WEBHOOK_SECRET });
   return createIssueWebhookRoutes({
@@ -250,9 +254,7 @@ async function buildApp(answerer: TriageAnswerer, pool: pg.Pool) {
     secrets,
     answererFactory: () => answerer,
     autoRoute: intakeAutoRouteDeps(),
-    // This suite isolates bh-3's processor behavior; bh-7 has its own RLS
-    // integration proof through the same processor.
-    recordIssueObservation: async () => {},
+    recordIssueObservation,
   });
 }
 
@@ -352,6 +354,25 @@ describe("issues webhook receiver — persist-then-202 (§3.6)", () => {
     for (let i = 0; i < 5; i++) await sweepWebhookEvents(deps);
     expect(attempts).toBe(1);
   });
+  it.each([
+    ["whitespace-only title", issuesBody(1, " \t")],
+    ["different repository", issuesBody(2, "valid", "other")],
+  ])("dead-letters a signed %s once before observation, triage, or candidate write", async (_name, body) => {
+    const pool = stubPool();
+    const observation = vi.fn<NonNullable<WebhookProcessorDeps["recordIssueObservation"]>>(async () => {});
+    const answerer = fixedTriage("needs_call", null);
+    const triage = vi.spyOn(answerer, "triage");
+    const app = await buildApp(answerer, pool.pool, observation);
+    const response = await app.request(`/github/webhooks/issues/${source.id}`, {
+      method: "POST",
+      headers: { "x-github-event": "issues", "x-hub-signature-256": sign(body), "content-type": "application/json" },
+      body,
+    });
+    expect(response.status).toBe(202);
+    await expect.poll(() => [...pool.webhookEvents.values()][0]?.["status"]).toBe("dead_lettered");
+    expect([...pool.webhookEvents.values()][0]?.["attempts"]).toBe(1);
+    expect([observation.mock.calls.length, triage.mock.calls.length, pool.candidates.size]).toEqual([0, 0, 0]);
+  });
 
   it("auto-routes a routable delivery into the DAG (exactly one spec) via the processor", async () => {
     const pool = stubPool();
@@ -442,7 +463,7 @@ describe("webhook mapping — title truncation (§3.6)", () => {
       issue: { number: 9, title: longTitle, body: "b", labels: [] },
       repository: { owner: { login: "cat-cave" }, name: "app" },
     };
-    const mapped = mapGithubIssueWebhook(payload, "project_a");
+    const mapped = mapGithubIssueWebhook(payload, source);
     expect(mapped.kind).toBe("ingest");
     if (mapped.kind !== "ingest") throw new Error("expected ingest");
     expect(mapped.item.title.length).toBeLessThanOrEqual(300);
@@ -455,7 +476,7 @@ describe("webhook mapping — title truncation (§3.6)", () => {
       issue: { number: 10, title: "short", body: "b", labels: [] },
       repository: { owner: { login: "cat-cave" }, name: "app" },
     };
-    const mapped = mapGithubIssueWebhook(payload, "project_a");
+    const mapped = mapGithubIssueWebhook(payload, source);
     if (mapped.kind !== "ingest") throw new Error("expected ingest");
     expect(mapped.item.title).toBe("short");
   });

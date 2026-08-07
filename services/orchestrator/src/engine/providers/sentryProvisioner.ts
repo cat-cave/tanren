@@ -43,13 +43,13 @@ import {
   type IntegrationOperationTarget,
   type IntegrationPrivilegedOperation,
 } from "../contracts/integrationAuthority.js";
+import * as sentryIdentity from "../integrations/sentryPrincipalIdentity.js";
 
 /**
  * The injectable Sentry transport for provisioning. Mirrors the runtime
  * `sentryConnector`'s `SentryHttpClient` but adds the write verb (`POST`) the
  * provisioner needs to create projects + client keys. `path` is API-root-relative
- * (`/api/0/...`); `token` is the resolved org grant token; `baseUrl` defaults to
- * Sentry SaaS but is overridable for self-hosted. A scripted fake of this seam is
+ * (`/api/0/...`); token + provider-verified baseUrl come from the org grant. A scripted fake is
  * what the conformance suite drives — no live Sentry call in CI.
  */
 export interface SentryProvisionHttpRequest {
@@ -107,19 +107,8 @@ export interface SentryProvisionerDeps {
   secrets: SecretStore;
 }
 
-/** The default Sentry SaaS API root. Self-hosted overrides via the grant metadata. */
-const DEFAULT_SENTRY_BASE_URL = "https://sentry.io";
 /** The capability the matrix names for an error-tracking source. */
 const CAPABILITY_ERRORS = "errors";
-
-/** The non-secret org metadata a Sentry grant carries. `orgSlug` is mandatory. */
-interface SentryGrantMetadata {
-  orgSlug: string;
-  /** The Sentry team slug new projects are created under (provision/create path). */
-  team?: string;
-  /** Self-hosted API root override; defaults to Sentry SaaS. */
-  baseUrl?: string;
-}
 
 /** A Sentry project as the org-projects list / create endpoints return it. */
 interface RawSentryProject {
@@ -192,13 +181,8 @@ function dsnSecretRef(orgId: string, projectSlug: string): string {
   return `org/${orgId}/sentry/${projectSlug}/dsn`;
 }
 
-function readGrantMetadata(grant: OrgGrant): SentryGrantMetadata {
-  const metadata = grant.metadata as Partial<SentryGrantMetadata>;
-  const orgSlug = asString(metadata.orgSlug);
-  if (orgSlug === undefined) {
-    throw new Error("sentry provisioner: grant metadata is missing the required `orgSlug`");
-  }
-  return { orgSlug, team: asString(metadata.team), baseUrl: asString(metadata.baseUrl) };
+function readGrantMetadata(grant: OrgGrant): sentryIdentity.SentryGrantMetadata {
+  return sentryIdentity.requireSentryGrantMetadata(grant.metadata);
 }
 
 /**
@@ -304,7 +288,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: IntegrationPrivilegedOperation,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
   ): Promise<RawSentryProject[]> {
     const response = await this.request(grant, projectCtx, operation, target, {
       method: "GET",
@@ -322,7 +306,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: IntegrationPrivilegedOperation,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
   ): Promise<string | undefined> {
     const projects = await this.listOrgProjects(grant, projectCtx, operation, target, meta);
@@ -335,7 +319,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     grant: OrgGrant,
     projectCtx: ProjectContext,
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
   ): Promise<string> {
     if (meta.team === undefined) {
@@ -370,7 +354,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: "provision" | "bind",
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
     allowCreate: boolean,
   ): Promise<string> {
@@ -416,7 +400,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
     projectCtx: ProjectContext,
     operation: "provision" | "bind",
     target: IntegrationOperationTarget,
-    meta: SentryGrantMetadata,
+    meta: sentryIdentity.SentryGrantMetadata,
     slug: string,
     allowKeyCreation: boolean,
   ): Promise<ProvisionedArtifact> {
@@ -445,8 +429,8 @@ export class SentryProvisioner implements IntegrationProvisioner {
     };
   }
 
-  private baseUrl(meta: SentryGrantMetadata): string {
-    return meta.baseUrl ?? DEFAULT_SENTRY_BASE_URL;
+  private baseUrl(meta: sentryIdentity.SentryGrantMetadata): string {
+    return meta.baseUrl;
   }
 }
 

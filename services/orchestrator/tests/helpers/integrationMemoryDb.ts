@@ -54,15 +54,30 @@ export class IntegrationMemoryDb {
     if (operation !== null) return operation;
     if (
       sql.startsWith("SELECT id, current_auth_generation") ||
-      sql.startsWith("SELECT id, current_auth_generation, status")
+      sql.startsWith("SELECT id, current_auth_generation, status") ||
+      sql.startsWith("SELECT id, provider_principal_id, current_auth_generation")
     ) {
-      const [orgId, providerKind, principalId] = params as [string, string, string];
+      const [orgId, providerKind, principalOrConnectionId] = params as [string, string, string];
+      const byConnection = sql.includes("provider_principal_id, current_auth_generation");
+      const activeOnly = sql.includes("status = 'active'");
       const conn = this.connections.find(
         (row) =>
-          row.org_id === orgId && row.provider_kind === providerKind && row.provider_principal_id === principalId,
+          row.org_id === orgId &&
+          row.provider_kind === providerKind &&
+          (byConnection ? row.id : row.provider_principal_id) === principalOrConnectionId &&
+          (!activeOnly || row.status === "active"),
       );
       return rowsOf(
-        conn ? [{ id: conn.id, current_auth_generation: conn.current_auth_generation, status: conn.status }] : [],
+        conn
+          ? [
+              {
+                id: conn.id,
+                provider_principal_id: conn.provider_principal_id,
+                current_auth_generation: conn.current_auth_generation,
+                status: conn.status,
+              },
+            ]
+          : [],
       );
     }
     if (sql.startsWith("SELECT id FROM org_integration_connections")) {
@@ -92,6 +107,17 @@ export class IntegrationMemoryDb {
             ]
           : [],
       );
+    }
+    if (sql.startsWith("SELECT principal_metadata FROM org_integration_connections")) {
+      const [orgId, providerKind, connectionId] = params as [string, string, string];
+      const conn = this.connections.find(
+        (row) =>
+          row.org_id === orgId &&
+          row.provider_kind === providerKind &&
+          row.id === connectionId &&
+          row.status === "active",
+      );
+      return rowsOf(conn ? [{ principal_metadata: conn.principal_metadata }] : []);
     }
     if (sql.startsWith("INSERT INTO org_integration_connections")) {
       const [orgId, id, providerKind, principalId, principalKind, displayName, metadataJson, ownerId] = params as [
@@ -136,15 +162,17 @@ export class IntegrationMemoryDb {
       );
       return rowsOf(grant ? [{ current_generation: grant.current_generation, status: grant.status }] : []);
     }
-    if (sql.startsWith("SELECT id, current_generation, status FROM org_integration_grants")) {
+    if (sql.startsWith("SELECT id, current_generation")) {
       const [orgId, providerKind, connectionId] = params as [string, string, string];
+      const activeOnly = sql.includes("status = 'active'");
       const grant = this.grants.find(
         (row) =>
           row.org_id === orgId &&
           row.provider_kind === providerKind &&
           row.connection_id === connectionId &&
           row.plane === "control" &&
-          row.environment === "control",
+          row.environment === "control" &&
+          (!activeOnly || row.status === "active"),
       );
       return rowsOf(
         grant ? [{ id: grant.id, current_generation: grant.current_generation, status: grant.status }] : [],

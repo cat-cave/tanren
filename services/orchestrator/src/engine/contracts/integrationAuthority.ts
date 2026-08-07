@@ -127,8 +127,20 @@ export type AuthorizePrincipalVerificationInput = {
   operationKind: "link" | "rotate";
   idempotencyKey: string;
   connectionId?: string;
-  /** Digest binding the idempotency key to actor, target, and credential bytes. */
+  /**
+   * Digest binding the idempotency key to the current actor, target, credential,
+   * and provider endpoint bytes.
+   */
   requestFingerprint: string;
+  /** Canonical endpoint bound to the current request, when the provider uses one. */
+  providerEndpoint?: string;
+  /**
+   * Exact pre-endpoint v1 digest. Only the Sentry link/rotate route may use it
+   * with the hosted SaaS endpoint to migrate a historically endpoint-less operation.
+   */
+  legacyRequestFingerprint?: string;
+  /** Do not create a new operation while replaying; migrate only a matching v1 row. */
+  legacyRetryOnly?: boolean;
   actor: ActorRef;
 };
 
@@ -139,6 +151,10 @@ export type ResumePrincipalVerificationInput = {
 
 export class IntegrationIdempotencyConflictError extends Error {
   public override readonly name = "IntegrationIdempotencyConflictError";
+}
+
+export class IntegrationLegacyOperationNotFoundError extends Error {
+  public override readonly name = "IntegrationLegacyOperationNotFoundError";
 }
 
 export type AuthorizeOperationInput = EligibleOperationExpectation & {

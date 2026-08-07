@@ -14,10 +14,13 @@
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../integrations/integrationSecretStoreImpl.js";
+import { sentryNextPage, SentryPaginationError } from "../../integrations/sentryPagination.js";
+import { canonicalSentryEndpoint, requireSentryPrincipalIdentity } from "../../integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../repositories/integrationConnections.js";
 import { assertOrgGrantMatchesLease, secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
 import { systemActor } from "../../state/actor.js";
@@ -72,7 +75,10 @@ export class FetchSentryHttpClient implements SentryHttpClient {
     return {
       status: response.status,
       body,
-      headers: { "retry-after": response.headers.get("retry-after") ?? undefined },
+      headers: {
+        link: response.headers.get("link") ?? undefined,
+        "retry-after": response.headers.get("retry-after") ?? undefined,
+      },
     };
   }
 }
@@ -123,18 +129,20 @@ export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthori
     });
 }
 
-// A Sentry issue as the Issues API returns it (the fields we map). All optional
-// because we validate defensively rather than trusting the upstream shape.
-interface RawSentryIssue {
-  id?: unknown;
-  shortId?: unknown;
-  title?: unknown;
-  culprit?: unknown;
-  level?: unknown;
-  permalink?: unknown;
-  count?: unknown;
-  userCount?: unknown;
-  metadata?: { value?: unknown; type?: unknown } | undefined;
+const SentryIssuePayload = z.object({
+  id: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  project: z.object({ slug: z.string().trim().min(1) }).passthrough(),
+  culprit: z.string().min(1).optional(),
+  level: z.string().min(1).optional(),
+  permalink: z.string().min(1).optional(),
+  count: z.union([z.string(), z.number()]).optional(),
+  userCount: z.union([z.string(), z.number()]).optional(),
+  metadata: z.object({ value: z.string().min(1).optional(), type: z.string().min(1).optional() }).optional(),
+});
+type SentryIssuePayload = z.infer<typeof SentryIssuePayload>;
+function fetchError(detail: string): never {
+  throw new IntakeSourceFetchError("sentry", 200, detail);
 }
 
 // Map a Sentry `level` to the inbox severity. fatal/error → fail (a live
@@ -155,16 +163,10 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-// The candidate title prefers the issue title, then the human culprit, then the
-// metadata value — whichever first carries signal.
-function titleFor(issue: RawSentryIssue): string | undefined {
-  return asString(issue.title) ?? asString(issue.culprit) ?? asString(issue.metadata?.value) ?? asString(issue.shortId);
-}
-
 // The candidate body is the permalink plus the metadata Sentry already
 // computed (type/value/level + event/user counts) so the triage answerer and
 // the surface have the context without a second round-trip.
-function bodyFor(issue: RawSentryIssue): string {
+function bodyFor(issue: SentryIssuePayload): string {
   const lines: string[] = [];
   const permalink = asString(issue.permalink);
   if (permalink !== undefined) lines.push(permalink);
@@ -195,6 +197,33 @@ function buildPath(config: ActiveSentryConfig): string {
     `/issues/?${search.toString()}`
   );
 }
+function assertSentryAuthorityBinding(grant: OrgGrant, config: ActiveSentryConfig): string {
+  const lease = grant.eligibleOperation;
+  if (
+    grant.providerKind !== "sentry" ||
+    lease.capability !== "errors" ||
+    lease.operation !== "intake" ||
+    lease.target.resourceId !== config.project
+  )
+    throw new IntakeSourceAuthorityError("sentry", "the selected lease does not bind this project intake effect");
+  let identity;
+  try {
+    identity = requireSentryPrincipalIdentity(grant.metadata);
+  } catch {
+    throw new IntakeSourceAuthorityError("sentry", "the selected principal has no verified Sentry identity");
+  }
+  if (identity.orgSlug !== config.org)
+    throw new IntakeSourceAuthorityError("sentry", "the source organization does not match the selected principal");
+  let sourceBaseUrl: string;
+  try {
+    sourceBaseUrl = canonicalSentryEndpoint(config.baseUrl);
+  } catch {
+    throw new IntakeSourceAuthorityError("sentry", "the source endpoint is not a canonical HTTPS endpoint");
+  }
+  if (sourceBaseUrl !== identity.baseUrl)
+    throw new IntakeSourceAuthorityError("sentry", "the source endpoint does not match the selected principal");
+  return identity.baseUrl;
+}
 
 export function createSentryConnector(deps: SentryConnectorDeps): SourceConnector {
   return {
@@ -210,6 +239,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         resourceId: config.project,
       });
       assertOrgGrantMatchesLease(grant);
+      const baseUrl = assertSentryAuthorityBinding(grant, config);
       const token = await secretValueForLease(
         new GenerationAddressedIntegrationSecretStore(deps.secrets),
         grant.eligibleOperation,
@@ -223,43 +253,68 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         },
       );
 
-      const response = await deps.sentryHttp.request({
-        method: "GET",
-        path: buildPath(config),
-        token,
-        baseUrl: config.baseUrl,
-      });
-      // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
-      // transient), NEVER an empty list. Only a genuine 200-with-an-array is "no
-      // unresolved issues". A 200 whose body is not the expected array is a failed
-      // read (shape changed / error envelope) — also LOUD.
-      assertIntakeResponseOk(
-        "sentry",
-        response.status,
-        "provider response",
-        retryAfterMs(response.headers?.["retry-after"]),
-      );
-      if (!Array.isArray(response.body)) {
-        throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
+      const issuesPath = buildPath(config);
+      const issues: SentryIssuePayload[] = [];
+      const seenIssueIds = new Set<string>();
+      const seenCursors = new Set<string>();
+      let initialCursor: string | undefined;
+      let currentCursor: string | undefined;
+      let path: string | undefined = issuesPath;
+      while (path !== undefined) {
+        const response = await deps.sentryHttp.request({ method: "GET", path, token, baseUrl });
+        assertIntakeResponseOk(
+          "sentry",
+          response.status,
+          "provider response",
+          retryAfterMs(response.headers?.["retry-after"]),
+        );
+        if (!Array.isArray(response.body)) fetchError("200 body was not an issues array");
+        // A malformed 200 body is a provider-read (shape) problem, NOT an invalid
+        // source config. Route it through `fetchError` (retriable IntakeSourceFetchError)
+        // so `classifyPermanentInboxSourceError` cannot terminalize a valid source on a
+        // transient provider response — a raw ZodError would be classified `invalid_config`.
+        const parsed = z.array(SentryIssuePayload).safeParse(response.body);
+        if (!parsed.success) fetchError(parsed.error.message);
+        const page = parsed.data;
+        for (const issue of page) {
+          if (issue.project.slug !== config.project) fetchError("issue project did not match the configured project");
+          if (seenIssueIds.has(issue.id)) fetchError("provider repeated an issue id");
+          seenIssueIds.add(issue.id);
+          issues.push(issue);
+        }
+        let next;
+        try {
+          next = sentryNextPage({
+            link: response.headers?.["link"],
+            baseUrl,
+            resourcePath: issuesPath,
+            initialCursor,
+            currentCursor,
+            seenCursors,
+          });
+        } catch (error) {
+          if (error instanceof SentryPaginationError) fetchError(error.message);
+          throw error;
+        }
+        if (next === null) path = undefined;
+        else {
+          seenCursors.add(next.cursor);
+          initialCursor = next.initialCursor;
+          currentCursor = next.cursor;
+          path = next.path;
+        }
       }
 
-      const issues = response.body as RawSentryIssue[];
-      const items: IngestedItem[] = [];
-      for (const issue of issues) {
-        const id = asString(issue.id);
-        const title = titleFor(issue);
-        // Skip anything without a stable id or any title signal.
-        if (id === undefined || title === undefined) continue;
-        items.push({
+      return issues.map(
+        (issue): IngestedItem => ({
           // Idempotent external id = the Sentry issue id.
-          externalId: `sentry-${id}`,
-          title: title.slice(0, 300),
+          externalId: `sentry-${issue.id}`,
+          title: issue.title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFromLevel(asString(issue.level)),
           projectId: source.projectId,
-        });
-      }
-      return items;
+        }),
+      );
     },
   };
 }

@@ -5,24 +5,47 @@ function sha256(parts: readonly unknown[]): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(parts), "utf8").digest("hex")}`;
 }
 
-/**
- * Bind an idempotency key to the immutable request, including credential bytes.
- * Only the digest is persisted; tokens never cross the request/staging boundary.
- */
-export function integrationRequestFingerprint(input: {
+export type IntegrationRequestFingerprintInput = {
   orgId: string;
   providerKind: string;
   operationKind: "link" | "rotate";
   connectionId?: string;
   actorId: string;
   credential: string;
-}): string {
+};
+
+export const SENTRY_SAAS_ENDPOINT = "https://sentry.io";
+
+/** The exact digest emitted before provider endpoints became part of the request. */
+export function legacyIntegrationRequestFingerprint(input: IntegrationRequestFingerprintInput): string {
   return sha256([
     "tanren.integration-operation.v1",
     input.orgId,
     input.providerKind,
     input.operationKind,
     input.connectionId ?? null,
+    input.actorId,
+    input.credential,
+  ]);
+}
+
+/**
+ * Bind an idempotency key to the immutable request, including credential bytes.
+ * Only the digest is persisted; tokens never cross the request/staging boundary.
+ */
+export function integrationRequestFingerprint(
+  input: IntegrationRequestFingerprintInput & { providerEndpoint?: string },
+): string {
+  // Durable operations emitted before endpoint binding used this exact v1 tuple.
+  // Preserve it for endpoint-less providers so retries resume, not re-effect.
+  if (input.providerEndpoint === undefined) return legacyIntegrationRequestFingerprint(input);
+  return sha256([
+    "tanren.integration-operation.v2",
+    input.orgId,
+    input.providerKind,
+    input.operationKind,
+    input.connectionId ?? null,
+    input.providerEndpoint,
     input.actorId,
     input.credential,
   ]);

@@ -7,44 +7,50 @@
 // and exact integration authority; a mapper is never credential authority.
 
 import { z } from "zod";
-import type { IngestedItem } from "../inbox/types.js";
+import { ActiveGitHubIssuesConfig, GithubIssueTitle, type IngestedItem, type InboxSource } from "../inbox/types.js";
 
 /** A mapped event: the action GitHub reports + the raw item to ingest, or a skip. */
 export type WebhookMapResult = { kind: "ingest"; item: IngestedItem } | { kind: "skip"; reason: string };
 
-// §3.6 issue-loop hardening: the candidate `title` column caps at 300 chars
-// (inbox/types.ts `Candidate.title.max(300)`). A GitHub issue title can be longer;
-// left untruncated it WRITES into the candidate row fine but then CRASHES the
-// `Candidate` zod decode on read-back — AFTER the row landed, so the candidate is
-// stranded undecodable. Truncate at the source (the mapper) so the persisted title
-// always satisfies the schema. Kept just under the cap with an ellipsis marker.
-const TITLE_MAX = 300;
-function truncateTitle(title: string): string {
-  return title.length <= TITLE_MAX ? title : `${title.slice(0, TITLE_MAX - 1)}…`;
-}
-
 // The GitHub `issues` event payload fields we read. `action` distinguishes
 // opened/edited/reopened (we ingest) from closed/deleted (we skip).
-const GithubIssueEvent = z
+const Nonempty = z.string().trim().min(1);
+const GithubIssueEventSchema = z
   .object({
-    action: z.string(),
+    action: Nonempty,
     issue: z
       .object({
-        number: z.number(),
-        title: z.string(),
+        number: z.number().int().positive(),
+        title: GithubIssueTitle,
         body: z.string().nullable().optional(),
-        labels: z.array(z.union([z.string(), z.object({ name: z.string().optional() }).passthrough()])).optional(),
-        pull_request: z.unknown().optional(),
+        updated_at: z.string().nullable().optional(),
+        labels: z.array(z.union([Nonempty, z.object({ name: Nonempty }).passthrough()])).optional(),
+        pull_request: z.object({}).passthrough().optional(),
       })
       .passthrough(),
     repository: z
       .object({
-        owner: z.object({ login: z.string() }).passthrough(),
-        name: z.string(),
+        owner: z.object({ login: Nonempty }).passthrough(),
+        name: Nonempty,
       })
       .passthrough(),
   })
   .passthrough();
+export type GithubIssueEvent = z.infer<typeof GithubIssueEventSchema>;
+type GithubWebhookSource = Pick<InboxSource, "kind" | "config" | "projectId">;
+export const decodeGithubIssueEvent = (payload: unknown) => ({ data: GithubIssueEventSchema.parse(payload) });
+export class GithubWebhookScopeMismatchError extends Error {}
+export function githubWebhookExternalId(event: GithubIssueEvent, source: GithubWebhookSource): string {
+  if (source.kind !== "issues" || source.config === null)
+    throw new GithubWebhookScopeMismatchError("GitHub webhook source has no repository scope");
+  const config = ActiveGitHubIssuesConfig.parse(source.config);
+  if (
+    event.repository.owner.login.toLowerCase() !== config.owner ||
+    event.repository.name.toLowerCase() !== config.repo
+  )
+    throw new GithubWebhookScopeMismatchError("GitHub webhook repository does not match its configured source");
+  return `gh-${config.owner}/${config.repo}#${event.issue.number}`;
+}
 
 // Actions that represent a live, ingest-worthy issue. A closed/deleted issue is
 // a no-op (it never becomes new work); the upsert keeps any prior candidate.
@@ -64,26 +70,21 @@ function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severi
  * and a later poll of the same issue UPSERT the same candidate — push + poll are
  * idempotent against each other.
  */
-export function mapGithubIssueWebhook(payload: unknown, projectId: string | null): WebhookMapResult {
-  const parsed = GithubIssueEvent.safeParse(payload);
-  if (!parsed.success) return { kind: "skip", reason: "payload is not a github issues event" };
-  const event = parsed.data;
+export function mapGithubIssueWebhook(payload: unknown, source: GithubWebhookSource): WebhookMapResult {
+  const event = decodeGithubIssueEvent(payload).data;
+  const externalId = githubWebhookExternalId(event, source);
   if (event.issue.pull_request !== undefined) return { kind: "skip", reason: "pull request, not an issue" };
   if (!INGEST_ACTIONS.has(event.action)) return { kind: "skip", reason: `action not ingestable: ${event.action}` };
 
-  const labels = (event.issue.labels ?? [])
-    .map((l) => (typeof l === "string" ? l : (l.name ?? "")))
-    .filter((l): l is string => l.length > 0);
-  const owner = event.repository.owner.login;
-  const repo = event.repository.name;
+  const labels = (event.issue.labels ?? []).map((l) => (typeof l === "string" ? l : l.name));
   return {
     kind: "ingest",
     item: {
-      externalId: `gh-${owner}/${repo}#${event.issue.number}`,
-      title: truncateTitle(event.issue.title),
+      externalId,
+      title: event.issue.title,
       body: (event.issue.body ?? "").slice(0, 8000),
       severity: severityFromLabels(labels),
-      projectId,
+      projectId: source.projectId,
     },
   };
 }

@@ -26,7 +26,7 @@ import {
   type SentryHttpRequest,
   type SentryIntakeAuthority,
 } from "../src/engine/forge/inbox/index.js";
-import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
+import { terminalSentryLink, testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_static_token" });
@@ -63,10 +63,18 @@ function recordGitHub(body: unknown, status = 200): { client: GitHubHttpClient; 
     client: {
       async request(input) {
         calls.push(input);
-        return { status, body };
+        return { status, body: githubRows(body) };
       },
     },
   };
+}
+function githubRows(body: unknown): unknown {
+  if (!Array.isArray(body)) return body;
+  return body.map((row) =>
+    typeof row === "object" && row !== null && !Array.isArray(row)
+      ? { comments: 0, user: { login: "octocat" }, ...row }
+      : row,
+  );
 }
 
 function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; calls: SentryHttpRequest[] } {
@@ -76,14 +84,27 @@ function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; 
     client: {
       async request(input) {
         calls.push(input);
-        return { status, body };
+        const rows = Array.isArray(body)
+          ? body.map((row) => (typeof row === "object" && row !== null ? { project: { slug: "app" }, ...row } : row))
+          : body;
+        return { status, body: rows, headers: { link: terminalSentryLink(input) } };
       },
     },
   };
 }
 
-const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
-const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/missing/g/1");
+const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.io",
+});
+const customSentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.example",
+});
+const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/missing/g/1", {
+  orgSlug: "cat-cave",
+  baseUrl: "https://sentry.io",
+});
 
 const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAuthority = sentryAuthority) =>
   createSentryConnector({ secrets, sentryHttp, authority });
@@ -212,19 +233,54 @@ describe("github issues connector — normalization", () => {
     expect(items[1]!.severity).toBe("fail");
   });
 
-  it("drops pull requests and rows missing a numeric number or string title", async () => {
+  it("drops pull requests after decoding a fully valid provider response", async () => {
     const { client } = recordGitHub([
       { number: 1, title: "keep", labels: [] },
       { number: 2, title: "a PR", pull_request: { url: "x" }, labels: [] },
-      // no title
-      { number: 3, labels: [] },
-      // no number
-      { title: "no number", labels: [] },
-      // number not numeric
-      { number: "4", title: "string number", labels: [] },
     ]);
     const items = await githubConnector(client).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
+  });
+  it.each([null, "bad", 1])("rejects a malformed pull-request marker %#", async (pull_request) => {
+    const { client } = recordGitHub([
+      { number: 1, title: "valid" },
+      { number: 2, title: "invalid", pull_request },
+    ]);
+    await expect(githubConnector(client).fetch(githubSource)).rejects.toThrow(IntakeSourceFetchError);
+  });
+  it("rejects a structural NUL collision before another page request", async () => {
+    const nextPagePath = "/repos/cat-cave/app/issues?state=open&per_page=50&labels%00a=b&page=2";
+    const request = vi.fn<GitHubHttpClient["request"]>(async () => ({ status: 200, body: [], nextPagePath }));
+    await expect(
+      githubConnector({ request }).fetch({
+        ...githubSource,
+        config: { ...githubSource.config, labels: ["a\u0000b"] },
+      }),
+    ).rejects.toThrow(/configured issues resource scope/u);
+    expect(request).toHaveBeenCalledOnce();
+  });
+  it("follows every advertised issues page instead of treating per_page=50 as complete", async () => {
+    const calls: GitHubHttpRequest[] = [];
+    const client: GitHubHttpClient = {
+      async request(input) {
+        calls.push(input);
+        return calls.length === 1
+          ? {
+              status: 200,
+              body: githubRows([{ number: 1, title: "first" }]),
+              nextPagePath: "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate&page=2",
+            }
+          : { status: 200, body: githubRows([{ number: 2, title: "second" }]) };
+      },
+    };
+    await expect(githubConnector(client).fetch(githubSource)).resolves.toMatchObject([
+      { externalId: "gh-cat-cave/app#1" },
+      { externalId: "gh-cat-cave/app#2" },
+    ]);
+    expect(calls.map((call) => call.path)).toEqual([
+      "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate",
+      "/repos/cat-cave/app/issues?state=open&per_page=50&labels=spec-candidate&page=2",
+    ]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
@@ -272,7 +328,7 @@ describe("sentry connector — request wire shape", () => {
 
   it("accepts the canonical provisioner-owned config including lifecycle metadata", async () => {
     const { client, calls } = recordSentry([]);
-    await sentryConnector(client).fetch({
+    await sentryConnector(client, customSentryAuthority).fetch({
       ...sentrySource,
       config: {
         org: "cat-cave",
@@ -292,12 +348,18 @@ describe("sentry connector — request wire shape", () => {
     );
   });
 
-  it("rejects cloned authority before secret or Sentry HTTP I/O", async () => {
+  it("rejects endpoint drift or cloned authority before secret or Sentry HTTP I/O", async () => {
     const { client, calls } = recordSentry([]);
     const authentic = await sentryAuthority({ orgId: "org_a", projectId: "project_a", resourceId: "app" });
     const cloned = { ...authentic, metadata: { ...authentic.metadata } } as typeof authentic;
     const secretRead = vi.spyOn(secrets, "get");
     try {
+      await expect(
+        sentryConnector(client).fetch({
+          ...sentrySource,
+          config: { ...sentrySource.config, baseUrl: "https://attacker.example" },
+        }),
+      ).rejects.toThrow(/endpoint does not match/u);
       await expect(sentryConnector(client, async () => cloned).fetch(sentrySource)).rejects.toThrow(
         /org grant does not match/u,
       );
@@ -368,35 +430,6 @@ describe("sentry connector — normalization", () => {
     expect((await sentryConnector(present.client).fetch(sentrySource))[0]!.body).toBe("users affected: 12");
     const absent = recordSentry([{ id: "9", title: "t" }]);
     expect((await sentryConnector(absent.client).fetch(sentrySource))[0]!.body).toBe("");
-  });
-
-  it("falls back title to culprit then metadata value then shortId and maps fatal/warning levels", async () => {
-    const { client } = recordSentry([
-      { id: "1", culprit: "from culprit", level: "fatal" },
-      { id: "2", metadata: { value: "from metadata" }, level: "warning" },
-      { id: "3", shortId: "APP-3", level: "debug" },
-    ]);
-    const items = await sentryConnector(client).fetch(sentrySource);
-    expect(items[0]!.title).toBe("from culprit");
-    // fatal
-    expect(items[0]!.severity).toBe("fail");
-    expect(items[1]!.title).toBe("from metadata");
-    // warning
-    expect(items[1]!.severity).toBe("warn");
-    expect(items[2]!.title).toBe("APP-3");
-    // debug
-    expect(items[2]!.severity).toBe("info");
-  });
-
-  it("skips rows lacking a stable id or any title signal", async () => {
-    const { client } = recordSentry([
-      { title: "no id" },
-      // no title signal
-      { id: "5" },
-      { id: "6", title: "kept" },
-    ]);
-    const items = await sentryConnector(client).fetch(sentrySource);
-    expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {

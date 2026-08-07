@@ -1,8 +1,7 @@
-// the GitHub HTTP client honors rate-limit signals (Retry-After /
-// X-RateLimit-Reset) with bounded backoff instead of hammering, and the status
-// service reads branch-protection required contexts.
+// the GitHub HTTP client honors rate-limit signals (Retry-After / X-RateLimit-Reset) with bounded
+// backoff instead of hammering, and the status service reads branch-protection required contexts.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FetchGitHubHttpClient,
   GitHubStatusService,
@@ -89,11 +88,26 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect({ calls, slept }).toEqual({ calls: 1, slept: [] });
   });
 
+  it("fails malformed, ambiguous, and off-origin Link headers without retrying", async () => {
+    const path = "/repos/cat-cave/app/issues";
+    for (const link of [
+      "malformed",
+      `<${path}?page=2>; rel=next, <${path}?page=3>; rel=next`,
+      "<https://attacker.invalid/page>; rel=next",
+    ]) {
+      const slept: number[] = [];
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response("[]", { status: 200, headers: { Link: link } }));
+      const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+      await expect(client.request({ method: "GET", path, token: "t" })).rejects.toThrow(
+        /invalid|ambiguous|off-origin/u,
+      );
+      expect({ calls: fetchImpl.mock.calls.length, slept }).toEqual({ calls: 1, slept: [] });
+    }
+  });
+
   it("§4: honors a 429 Retry-After even AFTER a transient-503 burst", async () => {
-    // The rate-limit path keeps its OWN signature stream, independent of the transient-503
-    // stream, so a prior 503 burst never consumes the 429's honored Retry-After. The sequence
-    // 503,503,503 → 429 → 200 fully self-heals: each 503 retries on the transient cadence, and
-    // the 429 STILL gets its own Retry-After wait (no shared budget to pre-consume).
+    // The rate-limit path keeps its OWN signature stream independent of the transient-503 stream, so
+    // a 503 burst never consumes the 429's Retry-After (503,503,503 → 429 → 200 self-heals cleanly).
     const slept: number[] = [];
     let call = 0;
     const fetchImpl = (async () => {
@@ -115,8 +129,7 @@ describe("github rate-limit backoff (P3-0028)", () => {
     });
     const response = await client.request({ method: "GET", path: "/rate", token: "t" });
 
-    // The 429's 7s Retry-After WAS honored (the last sleep), proving the rate-limit
-    // stream was not pre-consumed by the three transient 503 retry waits before it.
+    // The 429's 7s Retry-After WAS honored (last sleep): not pre-consumed by the 503 retry waits.
     expect(slept).toContain(7_000);
     expect(call).toBe(5);
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
@@ -130,7 +143,6 @@ describe("github rate-limit backoff (P3-0028)", () => {
     };
     // The bug: this 403 carries NEITHER `Retry-After` NOR `X-RateLimit-Remaining: 0`, so the
     // header-only classifier returned `undefined` and the engine hot-looped on a raw HTTP 403.
-    // WITHOUT the body classifier this is undefined (the assertion that fails pre-fix):
     expect(rateLimitBackoffMs(403, get({}), now, secondaryBody)).toBe(MAX_RATE_LIMIT_BACKOFF_MS);
     expect(rateLimitBackoffMs(429, get({}), now, secondaryBody)).toBe(MAX_RATE_LIMIT_BACKOFF_MS);
     // The matcher is body-shape only; a non-secondary 403 body is still NOT rate-limited.
@@ -183,8 +195,7 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(minted).toBe(1);
     expect(ok).toMatchObject({ status: 200, body: { ok: true } });
 
-    // (b) a PERSISTENT genuine 403 (not rate-limit) re-mints ONCE then surfaces the 403 —
-    // never an infinite re-mint loop, and the body is preserved for diagnosis.
+    // (b) a PERSISTENT genuine 403 (not rate-limit) re-mints ONCE then surfaces the 403 (no loop).
     let mints2 = 0;
     let calls2 = 0;
     const fetchAlways403 = (async () => {
@@ -219,8 +230,7 @@ describe("github rate-limit backoff (P3-0028)", () => {
     const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
 
     // It honors the Retry-After cadence, retries PAST the old fixed ceiling, and surfaces a loud
-    // GitHubOutageError only once the identical rate-limit signal is a proven fixed point — never
-    // a 3-strikes give-up, and never an infinite silent loop.
+    // GitHubOutageError only once the signal is a proven fixed point (no give-up, no silent loop).
     await expect(client.request({ method: "GET", path: "/rate", token: "t" })).rejects.toBeInstanceOf(
       GitHubOutageError,
     );
@@ -422,8 +432,8 @@ describe("github required-context awareness (P3-0028)", () => {
   });
 
   it("THROWS loudly on a 403 (token lacks Administration:read) — never a silent 'no gating'", async () => {
-    // No-silent-fallback: a 403 silently degraded to `undefined` would DISABLE required-
-    // check gating and let a PR merge without its required checks. It must surface loudly.
+    // No-silent-fallback: a 403 silently degraded to `undefined` would DISABLE required-check
+    // gating and let a PR merge without its required checks. It must surface loudly.
     const http = new ScriptedHttp([{ status: 403, body: { message: "Resource not accessible by integration" } }]);
     await expect(
       new GitHubStatusService(http).fetchRequiredContexts({
@@ -440,8 +450,7 @@ describe("github required-context awareness (P3-0028)", () => {
     const fetchImpl = (async () => {
       call += 1;
       // A persistent 504 on the protection read is a sustained outage — the client retries it
-      // unbounded while it makes progress, then escalates LOUDLY on non-convergence (a fixed
-      // point), never silently degrading to "no required gating".
+      // unbounded while it makes progress, then escalates LOUDLY (never silent no-gating).
       return new Response("", { status: 504 });
     }) as unknown as typeof fetch;
     const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });

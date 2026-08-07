@@ -1,11 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import { integrationRequestFingerprint } from "../src/engine/integrations/integrationOperationFingerprint.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
-import { SlackPrincipalVerifier } from "../src/engine/integrations/principalVerifiers.js";
+import { SentryPrincipalVerifier, SlackPrincipalVerifier } from "../src/engine/integrations/principalVerifiers.js";
 import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
 import { testOrgGrant, testPrincipalVerificationPermit } from "./helpers/orgGrant.js";
+import { sentryOrganizationsResponse } from "./helpers/sentryIntakeAuthority.js";
+import { requireSentryPrincipalIdentity } from "../src/engine/integrations/sentryPrincipalIdentity.js";
+import { parseLinkHeader } from "../src/engine/integrations/linkHeader.js";
+
+function digest(parts: unknown[]): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(parts), "utf8").digest("hex")}`;
+}
 
 describe("IN-1 P1 authority former-bug proofs", () => {
+  it("rejects legacy Sentry identity metadata and requires a relink", () => {
+    // Legacy `{ orgSlug, baseUrl }` metadata is NOT a verified v1 identity. It must be
+    // rejected (relink-required → 409 verified_provider_identity_required), never
+    // normalized to version 1 and continued into selection/discover/provision/rotation.
+    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example" })).toThrow(
+      /sentry_principal_relink_required/u,
+    );
+    expect(() => requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "http://sentry.example" })).toThrow(
+      /sentry_principal_relink_required/u,
+    );
+    expect(() =>
+      requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", sentryIdentityVersion: "2" }),
+    ).toThrow(/sentry_principal_relink_required/u);
+    expect(() =>
+      requireSentryPrincipalIdentity({ orgSlug: "o", baseUrl: "https://sentry.example", extra: "x" }),
+    ).toThrow(/sentry_principal_relink_required/u);
+    // A well-formed v1 identity is still accepted unchanged.
+    expect(
+      requireSentryPrincipalIdentity({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" }),
+    ).toEqual({ sentryIdentityVersion: "1", orgSlug: "o", baseUrl: "https://sentry.example" });
+  });
+  it("rejects unknown Sentry identity metadata instead of carrying it forward", () => {
+    expect(() =>
+      requireSentryPrincipalIdentity({
+        sentryIdentityVersion: "1",
+        orgSlug: "o",
+        baseUrl: "https://sentry.example",
+        unverifiedExtension: "x",
+      }),
+    ).toThrow(/sentry_principal_relink_required/u);
+  });
+  it("parses commas and semicolons inside quoted Link parameters", () => {
+    const [link, next] = parseLinkHeader(
+      '<https://example.test/a>; title="a, b; c", <https://example.test/b>; rel="next"',
+    );
+    expect(link?.parameters.get("title")).toBe("a, b; c");
+    expect(next?.parameters.get("rel")).toBe("next");
+  });
   it("caller-labelled identity cannot be stored — provider response is authoritative", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-1", "xoxb-token");
@@ -49,26 +96,89 @@ describe("IN-1 P1 authority former-bug proofs", () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-multi", "token");
     const permit = await testPrincipalVerificationPermit({ providerKind: "sentry", operationId: "op-multi" });
-    const { SentryPrincipalVerifier } = await import("../src/engine/integrations/principalVerifiers.js");
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("/organizations/") && !url.includes("?") && url.endsWith("/")) {
         return Response.json({ access: ["project:read", "project:write"] });
       }
       if (url.includes("/projects/")) return Response.json([]);
-      return Response.json([
-        { id: "1", slug: "a", name: "A" },
-        { id: "2", slug: "b", name: "B" },
-      ]);
+      return sentryOrganizationsResponse(
+        [
+          { id: "1", slug: "a", name: "A" },
+          { id: "2", slug: "b", name: "B" },
+        ],
+        "https://sentry.example/root",
+      );
     });
-    const result = await new SentryPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(
-      permit,
-      staged,
-      secrets,
-    );
+    const result = await new SentryPrincipalVerifier(
+      fetchImpl as unknown as typeof fetch,
+      "https://sentry.example/root",
+    ).verify(permit, staged, secrets);
     expect(result.status).toBe("multi_principal");
     if (result.status !== "multi_principal") return;
     expect(result.candidates).toHaveLength(2);
+    expect(result.candidates[0]?.metadata).toEqual({
+      sentryIdentityVersion: "1",
+      orgSlug: "a",
+      baseUrl: "https://sentry.example/root",
+    });
+    const firstRequest = fetchImpl.mock.calls[0]?.[0];
+    const firstUrl =
+      typeof firstRequest === "string"
+        ? firstRequest
+        : firstRequest instanceof URL
+          ? firstRequest.href
+          : firstRequest?.url;
+    expect(firstUrl).toMatch(/^https:\/\/sentry\.example\/root\/api\//u);
+  });
+  it.each([
+    ["missing Link", undefined, false, "sentry_malformed_pagination"],
+    ["blank Link", " ", false, "sentry_malformed_pagination"],
+    ["ambiguous Link", "malformed", false, "sentry_malformed_pagination"],
+    ["malformed row", undefined, true, "sentry_malformed_organizations"],
+  ])("decodes every Sentry page before exposing identity: %s", async (_name, link, malformedRow, reason) => {
+    const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
+    const staged = await secrets.stage("op-page", "token");
+    const permit = await testPrincipalVerificationPermit({ providerKind: "sentry", operationId: "op-page" });
+    const later = malformedRow
+      ? sentryOrganizationsResponse([{ id: "2" }], "https://sentry.example")
+      : Response.json([{ id: "2", slug: "b" }], link === undefined ? {} : { headers: { link } });
+    let page = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      page++ === 0
+        ? sentryOrganizationsResponse([{ id: "1", slug: "a" }], "https://sentry.example", "0:100:0", true)
+        : later,
+    );
+    const result = await new SentryPrincipalVerifier(
+      fetchImpl as unknown as typeof fetch,
+      "https://sentry.example",
+    ).verify(permit, staged, secrets);
+    expect(result).toEqual({ status: "unavailable", reason });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+  it("preserves the legacy tuple without an endpoint and versions the bound tuple", () => {
+    const request = {
+      orgId: "o",
+      providerKind: "sentry",
+      operationKind: "link" as const,
+      actorId: "u",
+      credential: "token",
+    };
+    expect(integrationRequestFingerprint({ ...request, providerKind: "slack" })).toBe(
+      digest(["tanren.integration-operation.v1", "o", "slack", "link", null, "u", "token"]),
+    );
+    expect(integrationRequestFingerprint({ ...request, providerEndpoint: "https://sentry.example/a" })).toBe(
+      digest([
+        "tanren.integration-operation.v2",
+        "o",
+        "sentry",
+        "link",
+        null,
+        "https://sentry.example/a",
+        "u",
+        "token",
+      ]),
+    );
   });
 
   it("failed finalization leaves prior generation readable and new generation absent", async () => {

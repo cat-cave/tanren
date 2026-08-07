@@ -257,6 +257,7 @@ describe("inbox issues source boundary — removed providers never reach authori
   it.each([
     ["GitHub config missing repo", "issues", { owner: "cat-cave" }],
     ["Sentry config missing project", "errors", { org: "cat-cave" }],
+    ["Sentry config missing endpoint", "errors", { org: "cat-cave", project: "app" }],
   ])("rejects malformed %s at the route boundary", async (_label, kind, config) => {
     const { pool, sourceInserts } = stubPool();
     const res = await postSource(pool, { kind, name: "malformed", config });

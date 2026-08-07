@@ -1,4 +1,5 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
+import { LinkHeaderError, parseLinkHeader } from "../../integrations/linkHeader.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../github.js";
 import {
   buildErrorDetail,
@@ -50,6 +51,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       try {
         response = await this.send(input.path, input.method, token, input.body);
       } catch (error) {
+        if (error instanceof LinkHeaderError) throw error;
         // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is transient
         // by nature (no HTTP status) — retry on transient indefinitely while it makes progress,
         // surfacing the underlying throw LOUDLY only when the transport error is non-converging
@@ -120,6 +122,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     const text = await response.text();
     const responseBody = text === "" ? undefined : JSON.parse(text);
     const getHeader = headerGetter(response.headers);
+    const nextPagePath = githubNextPagePath(getHeader("link"), this.apiBaseUrl);
     const retryBackoffMs = rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody);
     const retryAfterHeader = getHeader("retry-after");
     const retryAfterSeconds =
@@ -135,7 +138,37 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       body: responseBody,
       retryAfterMs: exactRetryAfterMs,
       retryBackoffMs,
+      ...(nextPagePath === undefined ? {} : { nextPagePath }),
       ...(response.status >= 400 && { errorDetail: buildErrorDetail(response.status, responseBody, getHeader) }),
     };
   }
+}
+function githubNextPagePath(link: string | null, apiBaseUrl: string): string | undefined {
+  if (link === null || link.trim() === "") return undefined;
+  const nextLinks = parseLinkHeader(link)
+    .filter((value) => {
+      const rel = value.parameters.get("rel");
+      if (rel === undefined) return false;
+      const relations = rel.toLowerCase().split(/\s+/u).filter(Boolean);
+      if (relations.length === 0 || relations.some((relation) => !/^[a-z][a-z0-9.-]*$/u.test(relation))) {
+        throw new LinkHeaderError("GitHub Link header contained a malformed rel parameter");
+      }
+      return relations.includes("next");
+    })
+    .map((value) => value.target);
+  if (nextLinks.length === 0) return undefined;
+  if (nextLinks.length !== 1) throw new LinkHeaderError("GitHub Link header contained ambiguous next-page links");
+  const api = new URL(apiBaseUrl);
+  if (!URL.canParse(nextLinks[0]!, api)) throw new LinkHeaderError("GitHub Link header contained an invalid page URL");
+  const url = new URL(nextLinks[0]!, api);
+  if (url.origin !== api.origin) throw new LinkHeaderError("GitHub Link header next page was off-origin");
+  // A path-prefixed base (e.g. `https://ghe.example/api/v3`) emits absolute next
+  // links under that prefix. `send()` re-concatenates `${apiBaseUrl}${path}` and the
+  // inbox scope check expects a base-relative `/repos/...`, so the returned path must
+  // be RELATIVE to the configured base prefix (and stay under it), never re-include it.
+  const basePath = api.pathname.replace(/\/+$/u, "");
+  if (basePath !== "" && url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+    throw new LinkHeaderError("GitHub Link header next page was outside the configured base path");
+  }
+  return `${url.pathname.slice(basePath.length)}${url.search}`;
 }

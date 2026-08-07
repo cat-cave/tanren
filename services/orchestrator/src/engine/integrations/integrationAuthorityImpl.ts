@@ -10,6 +10,7 @@ import {
   type IntegrationPrivilegedOperation,
   type IntegrationResourceConstraints,
   IntegrationIdempotencyConflictError,
+  IntegrationLegacyOperationNotFoundError,
   type IntegrationAuthority,
   type PrincipalVerificationPermit,
   type ResumePrincipalVerificationInput,
@@ -17,6 +18,7 @@ import {
 } from "../contracts/integrationAuthority.js";
 import { integrationStagedSecretRef } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
+import { SENTRY_SAAS_ENDPOINT } from "./integrationOperationFingerprint.js";
 import {
   integrationOperationTargetsEqual,
   normalizeIntegrationOperationTarget,
@@ -229,24 +231,46 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     if (!/^sha256:[0-9a-f]{64}$/u.test(input.requestFingerprint)) {
       throw new TypeError("integration request fingerprint must be sha256");
     }
-    const operationId = randomUUID();
-    await client.query(
-      `INSERT INTO org_integration_connection_operations
-         (org_id, id, provider_kind, connection_id, operation_kind, stage, status,
-          idempotency_key, actor_id, request_fingerprint, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 'created', 'pending', $6, $7, $8, now())
-       ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
-      [
-        input.orgId,
-        operationId,
-        input.providerKind,
-        input.connectionId ?? null,
-        input.operationKind,
-        input.idempotencyKey,
-        actorId(input.actor),
-        input.requestFingerprint,
-      ],
-    );
+    if (
+      input.legacyRequestFingerprint !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(input.legacyRequestFingerprint)
+    ) {
+      throw new TypeError("legacy integration request fingerprint must be sha256");
+    }
+    const legacyRetryWithoutEndpoint = input.legacyRetryOnly === true;
+    const canMigrateLegacy =
+      input.providerKind === "sentry" &&
+      input.providerEndpoint === SENTRY_SAAS_ENDPOINT &&
+      input.legacyRequestFingerprint !== undefined &&
+      input.legacyRequestFingerprint !== input.requestFingerprint;
+    if (legacyRetryWithoutEndpoint && input.providerKind !== "sentry") {
+      throw new Error("legacy integration retry is restricted to Sentry");
+    }
+    if (legacyRetryWithoutEndpoint && !canMigrateLegacy) {
+      throw new Error("endpoint-less legacy retry requires Sentry SaaS v2 compatibility");
+    }
+    if (input.legacyRequestFingerprint !== undefined && !canMigrateLegacy) {
+      throw new Error("legacy integration fingerprint migration is restricted to Sentry SaaS v2 requests");
+    }
+    if (!input.legacyRetryOnly) {
+      await client.query(
+        `INSERT INTO org_integration_connection_operations
+           (org_id, id, provider_kind, connection_id, operation_kind, stage, status,
+            idempotency_key, actor_id, request_fingerprint, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'created', 'pending', $6, $7, $8, now())
+         ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
+        [
+          input.orgId,
+          randomUUID(),
+          input.providerKind,
+          input.connectionId ?? null,
+          input.operationKind,
+          input.idempotencyKey,
+          actorId(input.actor),
+          input.requestFingerprint,
+        ],
+      );
+    }
     const result = await client.query(
       `SELECT id, provider_kind, connection_id, operation_kind, stage, status,
               staged_secret_handle, actor_id, request_fingerprint
@@ -268,6 +292,9 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
         }
       | undefined;
     if (row === undefined) {
+      if (input.legacyRetryOnly) {
+        throw new IntegrationLegacyOperationNotFoundError("legacy integration operation not found");
+      }
       throw new Error("failed to create integration connection operation");
     }
     const expectedConnectionId = input.connectionId ?? null;
@@ -275,12 +302,42 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
       row.provider_kind !== input.providerKind ||
       row.operation_kind !== input.operationKind ||
       (input.operationKind === "rotate" && row.connection_id !== expectedConnectionId) ||
-      row.actor_id !== actorId(input.actor) ||
-      row.request_fingerprint !== input.requestFingerprint
+      row.actor_id !== actorId(input.actor)
     ) {
       throw new IntegrationIdempotencyConflictError(
         "integration idempotency key is already bound to a different immutable request",
       );
+    }
+    const isLegacyRow = canMigrateLegacy && row.request_fingerprint === input.legacyRequestFingerprint;
+    if (row.request_fingerprint !== input.requestFingerprint && !isLegacyRow) {
+      throw new IntegrationIdempotencyConflictError(
+        "integration idempotency key is already bound to a different immutable request",
+      );
+    }
+    if (isLegacyRow) {
+      const migrated = await client.query(
+        `UPDATE org_integration_connection_operations
+         SET request_fingerprint = $1, updated_at = now()
+         WHERE org_id = $2 AND id = $3 AND request_fingerprint = $4
+         RETURNING request_fingerprint`,
+        [input.requestFingerprint, input.orgId, row.id, input.legacyRequestFingerprint],
+      );
+      if ((migrated.rowCount ?? migrated.rows.length) === 0) {
+        const current = await client.query(
+          `SELECT request_fingerprint
+           FROM org_integration_connection_operations
+           WHERE org_id = $1 AND idempotency_key = $2`,
+          [input.orgId, input.idempotencyKey],
+        );
+        if (
+          (current.rows[0] as { request_fingerprint?: unknown } | undefined)?.request_fingerprint !==
+          input.requestFingerprint
+        ) {
+          throw new IntegrationIdempotencyConflictError(
+            "integration idempotency key is already bound to a different immutable request",
+          );
+        }
+      }
     }
     return issuePrincipalVerificationPermit({
       orgId: input.orgId,

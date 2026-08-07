@@ -5,6 +5,7 @@ import { ActiveGitHubIssuesConfig, type InboxSource } from "./inbox/index.js";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { decodeGithubIssueEvent, githubWebhookExternalId, type GithubIssueEvent } from "./intake/webhookMapping.js";
 import {
   ingestIssueObservation,
   type IssueObservation,
@@ -14,23 +15,6 @@ import {
   type SourceSyncReceipt,
   type SourceSyncRequest,
 } from "./issueSourceAdapter.js";
-
-const GithubIssue = z
-  .object({
-    action: z.string(),
-    issue: z
-      .object({
-        number: z.number().int().positive(),
-        title: z.string().min(1),
-        body: z.string().nullable().optional(),
-        updated_at: z.string().nullable().optional(),
-        labels: z.array(z.union([z.string(), z.object({ name: z.string().optional() }).passthrough()])).optional(),
-        pull_request: z.unknown().optional(),
-      })
-      .passthrough(),
-    repository: z.object({ owner: z.object({ login: z.string() }).passthrough(), name: z.string() }).passthrough(),
-  })
-  .passthrough();
 
 const SyncIssue = z
   .object({ number: z.number().int().positive(), state: z.enum(["open", "closed"]), updated_at: z.string().optional() })
@@ -47,10 +31,8 @@ export interface GitHubIssueSourceAdapterDeps {
   defaultStaticRef?: string;
 }
 
-function labels(issue: z.infer<typeof GithubIssue>["issue"]): string[] {
-  return (issue.labels ?? [])
-    .map((label) => (typeof label === "string" ? label : (label.name ?? "")))
-    .filter((label) => label.length > 0);
+function labels(issue: GithubIssueEvent["issue"]): string[] {
+  return (issue.labels ?? []).map((label) => (typeof label === "string" ? label : label.name));
 }
 
 function severity(labelNames: ReadonlyArray<string>): IssueObservation["severity"] {
@@ -99,21 +81,12 @@ function normalizeWebhook(
   source: InboxSource,
   deliveryId: string | null,
 ): IssueObservation | undefined {
-  const parsed = GithubIssue.safeParse(payload);
-  if (!parsed.success || parsed.data.issue.pull_request !== undefined) return undefined;
+  const parsed = decodeGithubIssueEvent(payload);
+  if (parsed.data.issue.pull_request !== undefined) return undefined;
   const status = actionStatus(parsed.data.action);
   if (status === undefined) return undefined;
   if (source.kind !== "issues" || source.config === null) return undefined;
-  const sourceConfig = ActiveGitHubIssuesConfig.parse(source.config);
-  const owner = parsed.data.repository.owner.login;
-  const repo = parsed.data.repository.name;
-  if (
-    owner.toLowerCase() !== sourceConfig.owner.toLowerCase() ||
-    repo.toLowerCase() !== sourceConfig.repo.toLowerCase()
-  ) {
-    throw new Error("GitHub webhook repository does not match its configured source");
-  }
-  const externalKey = `gh-${owner}/${repo}#${parsed.data.issue.number}`;
+  const externalKey = githubWebhookExternalId(parsed.data, source);
   return {
     orgId: source.orgId,
     sourceId: source.id,

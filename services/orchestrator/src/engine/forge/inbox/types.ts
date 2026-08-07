@@ -35,11 +35,14 @@ export const InboxSourceAttention = z
   .strict();
 export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
 
+const truncateTitle = (title: string) => (title.length <= 300 ? title : `${title.slice(0, 299)}…`);
+export const GithubIssueTitle = z.string().trim().min(1).transform(truncateTitle);
+
 /** The sole active persisted shape for a GitHub issues source. */
 export const ActiveGitHubIssuesConfig = z
   .object({
-    owner: z.string().trim().min(1),
-    repo: z.string().trim().min(1),
+    owner: z.string().trim().toLowerCase().min(1),
+    repo: z.string().trim().toLowerCase().min(1),
     labels: z.array(z.string().trim().min(1)),
     pollIntervalMs: z.number().int().positive().optional(),
   })
@@ -67,9 +70,7 @@ export const SystemSourceConfig = z.object({ ciInsights: z.literal(true) }).stri
 const CreateGitHubIssuesConfig = ActiveGitHubIssuesConfig.extend({
   labels: z.array(z.string().trim().min(1)).default([]),
 });
-const CreateSentryConfig = ActiveSentryConfig.omit({ managedBy: true }).extend({
-  baseUrl: z.string().url().default("https://sentry.io"),
-});
+const CreateSentryConfig = ActiveSentryConfig.omit({ managedBy: true });
 
 function schemaForSourceKind(kind: SourceKind, trusted: boolean): z.ZodType<Record<string, unknown>> {
   if (kind === "issues") return trusted ? ActiveGitHubIssuesConfig : CreateGitHubIssuesConfig;

@@ -9,7 +9,7 @@ import { createSentryConnector, InboxSource } from "../src/engine/forge/inbox/in
 import { persistProvisionedArtifact } from "../src/engine/integrations/provisioningPersistence.js";
 import type { IntegrationQueryClient } from "../src/engine/repositories/integrationQuery.js";
 import { InboxSourceProjectScopeError } from "../src/engine/repositories/inbox.js";
-import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
+import { terminalSentryLink, testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 describe("managed inbox source producer → persistence → connector", () => {
   it("persists one canonical authority-free Sentry config that the connector consumes", async () => {
@@ -75,11 +75,18 @@ describe("managed inbox source producer → persistence → connector", () => {
     const calls: Array<Record<string, unknown>> = [];
     const connector = createSentryConnector({
       secrets,
-      authority: testSentryIntakeAuthority("credential/sentry/acme/g/1"),
+      authority: testSentryIntakeAuthority("credential/sentry/acme/g/1", {
+        orgSlug: "acme",
+        baseUrl: "https://sentry.example",
+      }),
       sentryHttp: {
         async request(input) {
           calls.push(input);
-          return { status: 200, body: [{ id: "issue-1", title: "live defect" }] };
+          return {
+            status: 200,
+            body: [{ id: "issue-1", title: "live defect", project: { slug: "web" } }],
+            headers: { link: terminalSentryLink(input) },
+          };
         },
       },
     });

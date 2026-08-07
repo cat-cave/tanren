@@ -1,13 +1,22 @@
+/* oxlint-disable import/max-dependencies -- coherent serialized authority mount */
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { isKnownProviderKind } from "../../engine/contracts/integrationCatalog.js";
-import { IntegrationIdempotencyConflictError } from "../../engine/contracts/integrationAuthority.js";
+import {
+  IntegrationIdempotencyConflictError,
+  IntegrationLegacyOperationNotFoundError,
+} from "../../engine/contracts/integrationAuthority.js";
 import type { IntegrationSecretStore } from "../../engine/contracts/integrationSecretStore.js";
 import type { EventStore } from "../../engine/eventStore.js";
 import type { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
-import { integrationRequestFingerprint } from "../../engine/integrations/integrationOperationFingerprint.js";
+import {
+  integrationRequestFingerprint,
+  legacyIntegrationRequestFingerprint,
+  SENTRY_SAAS_ENDPOINT,
+} from "../../engine/integrations/integrationOperationFingerprint.js";
 import { hasPrincipalVerifier, principalVerifierFor } from "../../engine/integrations/principalVerifiers.js";
+import * as sentry from "../../engine/integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../../engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -33,8 +42,9 @@ export interface IntegrationAuthorityRouteDatabase {
   withOrgScope<T>(orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T>;
 }
 
-const LinkBody = z.object({ token: z.string().min(1).max(4096), idempotencyKey: z.string().min(1).max(200) }).strict();
-const RotateBody = LinkBody;
+const CredentialBody = z.object({ token: z.string().min(1).max(4096), idempotencyKey: z.string().min(1).max(200) });
+const LinkBody = CredentialBody.extend({ baseUrl: z.string().min(1).max(2048).optional() }).strict();
+const RotateBody = CredentialBody.strict();
 const SelectionBody = z
   .object({
     connectionId: z.string().min(1).max(200),
@@ -53,6 +63,28 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function linkVerifierEndpoint(providerKind: string, value: string | undefined): string | undefined {
+  if (providerKind !== "sentry") {
+    if (value !== undefined) throw new Error("provider endpoint is not accepted");
+    return undefined;
+  }
+  if (value === undefined) throw new Error("Sentry endpoint is required");
+  if (sentry.canonicalSentryEndpoint(value) !== value) throw new Error("Sentry endpoint must be canonical");
+  return value;
+}
+
+async function rotationVerifierEndpoint(
+  database: IntegrationAuthorityRouteDatabase,
+  orgId: string,
+  providerKind: string,
+  connectionId: string,
+): Promise<string | undefined> {
+  if (providerKind !== "sentry") return undefined;
+  const metadata = await database.withOrgScope(orgId, (client) =>
+    IntegrationConnectionsStore.getPrincipalMetadata(client, { orgId, providerKind, connectionId }),
+  );
+  return sentry.requireSentryPrincipalIdentity(metadata).baseUrl;
+}
 async function projectAccess(
   database: IntegrationAuthorityRouteDatabase,
   orgId: string,
@@ -89,15 +121,35 @@ export function mountIntegrationAuthorityWrites(
     }
     const parsed = LinkBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
+    let providerEndpoint: string | undefined;
+    let legacyRetryOnly = false;
+    try {
+      if (providerKind === "sentry" && parsed.data.baseUrl === undefined) {
+        // The pre-endpoint route always used Sentry's hosted endpoint. This is
+        // retry-only: the authority refuses to create a new operation here.
+        providerEndpoint = SENTRY_SAAS_ENDPOINT;
+        legacyRetryOnly = true;
+      } else {
+        providerEndpoint = linkVerifierEndpoint(providerKind, parsed.data.baseUrl);
+      }
+    } catch {
+      return c.json({ error: "invalid_provider_endpoint" }, 400);
+    }
 
     try {
-      const requestFingerprint = integrationRequestFingerprint({
+      const fingerprintInput = {
         orgId,
         providerKind,
         operationKind: "link",
+        providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
-      });
+      } as const;
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const legacyRequestFingerprint =
+        providerKind === "sentry" && providerEndpoint === SENTRY_SAAS_ENDPOINT
+          ? legacyIntegrationRequestFingerprint(fingerprintInput)
+          : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
         authority.authorizePrincipalVerification(client, {
           orgId,
@@ -105,6 +157,9 @@ export function mountIntegrationAuthorityWrites(
           operationKind: "link",
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          providerEndpoint,
+          ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
+          ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
         }),
       );
@@ -158,7 +213,8 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
+      const verifier = principalVerifierFor(providerKind, fetchImpl, providerEndpoint);
+      const verified = await verifier.verify(permit, staged, integrationSecrets);
       if (verified.status === "invalid") {
         const terminal = await terminalizeVerifierFailure(transitionContext, verified.reason);
         if (terminal.status === "completed") {
@@ -211,6 +267,9 @@ export function mountIntegrationAuthorityWrites(
       }
       return c.json(linkCompletedPayload(orgId, permit.operationId, providerKind, outcome.result), 202);
     } catch (error) {
+      if (error instanceof IntegrationLegacyOperationNotFoundError) {
+        return c.json({ error: "invalid_provider_endpoint" }, 400);
+      }
       if (error instanceof IntegrationIdempotencyConflictError) {
         return c.json({ error: "idempotency_conflict" }, 409);
       }
@@ -237,16 +296,39 @@ export function mountIntegrationAuthorityWrites(
     }
     const parsed = RotateBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_rotate", issues: parsed.error.issues }, 400);
+    let providerEndpoint: string | undefined;
+    let legacyRetryOnly = false;
+    try {
+      providerEndpoint = await rotationVerifierEndpoint(database, orgId, providerKind, connectionId);
+    } catch (error) {
+      if (error instanceof sentry.SentryPrincipalRelinkRequiredError && providerKind === "sentry") {
+        // Before endpoint binding, Sentry rotations used the hosted SaaS endpoint
+        // implicitly. This fallback is strictly retry-only; the authority will
+        // refuse to create an operation when no matching legacy row exists.
+        providerEndpoint = SENTRY_SAAS_ENDPOINT;
+        legacyRetryOnly = true;
+      } else if (error instanceof sentry.SentryPrincipalRelinkRequiredError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      } else {
+        throw error;
+      }
+    }
 
     try {
-      const requestFingerprint = integrationRequestFingerprint({
+      const fingerprintInput = {
         orgId,
         providerKind,
         operationKind: "rotate",
         connectionId,
+        providerEndpoint,
         actorId: actor.userId,
         credential: parsed.data.token,
-      });
+      } as const;
+      const requestFingerprint = integrationRequestFingerprint(fingerprintInput);
+      const legacyRequestFingerprint =
+        providerKind === "sentry" && providerEndpoint === SENTRY_SAAS_ENDPOINT
+          ? legacyIntegrationRequestFingerprint(fingerprintInput)
+          : undefined;
       const permit = await database.withOrgScope(orgId, (client) =>
         authority.authorizePrincipalVerification(client, {
           orgId,
@@ -255,6 +337,9 @@ export function mountIntegrationAuthorityWrites(
           connectionId,
           idempotencyKey: parsed.data.idempotencyKey,
           requestFingerprint,
+          providerEndpoint,
+          ...(legacyRequestFingerprint === undefined ? {} : { legacyRequestFingerprint }),
+          ...(legacyRetryOnly ? { legacyRetryOnly: true } : {}),
           actor: { kind: "operator", id: actor.userId },
         }),
       );
@@ -295,7 +380,8 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
+      const verifier = principalVerifierFor(providerKind, fetchImpl, providerEndpoint);
+      const verified = await verifier.verify(permit, staged, integrationSecrets);
       if (verified.status === "unavailable") {
         const unavailable = await recordVerifierUnavailable(transitionContext, verified.reason, verified.retryAfter);
         if (unavailable.status === "completed") {
@@ -327,6 +413,9 @@ export function mountIntegrationAuthorityWrites(
       }
       return c.json(rotationCompletedPayload(orgId, permit.operationId, outcome.result), 202);
     } catch (error) {
+      if (error instanceof IntegrationLegacyOperationNotFoundError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
+      }
       if (error instanceof IntegrationIdempotencyConflictError) return c.json({ error: "idempotency_conflict" }, 409);
       if (messageOf(error).includes("principal_reservation_in_progress")) {
         return c.json({ error: "connection_rotation_in_progress" }, 409);

@@ -1,41 +1,42 @@
-// GitHub Issues source connector.
-//
-// Reads open issues for a repo through the SAME GitHub plumbing as the rest of
-// The `resolveGithubToken` (App installation token, static
-// fallback) + the injectable `GitHubHttpClient`. It maps each issue to a raw
-// `IngestedItem` the engine persists as a candidate. Pull requests (which the
-// Issues API also returns) are filtered out.
-//
-// Everything the connector needs to hit GitHub is injected, so tests drive it
-// with a fake `GitHubHttpClient` (no network) — see candidateInbox.test.ts.
-
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
+import { sameQueryMultiset } from "../../integrations/pageScope.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
+import { z } from "zod";
 import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
-import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
+import { ActiveGitHubIssuesConfig, GithubIssueTitle } from "./types.js";
+import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 export interface GitHubConnectorDeps {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // Optional org App installation; when present the resolver mints an App token.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
-  // The organization-bound static credential ref, resolved from the source's
-  // org by the intake seam. Source JSON can never override this coordinate.
   defaultStaticRef?: string;
 }
 
-// A GitHub issue as the Issues API returns it (the fields we map). `pull_request`
-// is present only on PRs, which we drop.
-interface RawIssue {
-  number?: unknown;
-  title?: unknown;
-  body?: unknown;
-  labels?: Array<{ name?: unknown } | string> | undefined;
-  pull_request?: unknown;
+const GithubIssuePayload = z
+  .object({
+    number: z.number().int().positive(),
+    title: GithubIssueTitle,
+    body: z.string().nullable().optional(),
+    comments: z.number().int().nonnegative(),
+    // GitHub can legitimately return a redacted/deleted author as null (or
+    // omit it); a present non-object is still rejected by the discriminator.
+    user: z
+      .object({ login: z.string().min(1) })
+      .passthrough()
+      .nullable()
+      .optional(),
+    labels: z.array(z.union([z.string(), z.object({ name: z.string() })])).optional(),
+    pull_request: z.object({}).passthrough().optional(),
+  })
+  .passthrough();
+type GithubIssuePayload = z.infer<typeof GithubIssuePayload>;
+function paginationError(detail: string): never {
+  throw new IntakeSourceFetchError("github", 200, detail);
 }
 
 function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severity"] {
@@ -49,7 +50,7 @@ function severityFromLabels(labels: ReadonlyArray<string>): IngestedItem["severi
   return "info";
 }
 
-function labelNames(issue: RawIssue): string[] {
+function labelNames(issue: GithubIssuePayload): string[] {
   const raw = issue.labels ?? [];
   return raw
     .map((l) => (typeof l === "string" ? l : typeof l?.name === "string" ? l.name : ""))
@@ -60,14 +61,8 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
   return {
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
-      // The clean-replaced Linear/Jira connectors must fail as unsupported at
-      // the authority boundary, before config parsing can look like a generic
-      // GitHub failure and before any credential/provider I/O occurs.
       assertSupportedIssuesProvider(source.config);
       const config = ActiveGitHubIssuesConfig.parse(source.config);
-      // Credential authority is bound to the source organization: an App
-      // installation or the org-default ref selected by the intake seam. The
-      // source config has no credential coordinate and cannot become a deputy.
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
         orgId: source.orgId,
@@ -77,40 +72,48 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       });
 
       const labelQuery = config.labels.length > 0 ? `&labels=${encodeURIComponent(config.labels.join(","))}` : "";
-      const path =
+      const issuesPath =
         `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}` +
         `/issues?state=open&per_page=50${labelQuery}`;
-
-      const response = await deps.githubHttp.request({
-        method: "GET",
-        path,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-        // The durable intake scheduler owns rate-limit delays. Surface the raw
-        // classified response so this source never sleeps ahead of its peers.
-        retryRateLimit: false,
-      });
-      // No-silent-fallbacks: a non-200 is a LOUD throw (a 401/403 ⇒ auth error
-      // the poller re-throws; any other non-200 ⇒ a transient fetch error), NEVER
-      // an empty list masking a failed fetch. Only a genuine 200-with-an-array is
-      // an empty result. A 200 whose body is not the expected array is itself a
-      // failed read (the API shape changed / an error envelope) — also LOUD.
-      assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
-      if (!Array.isArray(response.body)) {
-        throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
+      const seenPaths = new Set<string>();
+      const issues: GithubIssuePayload[] = [];
+      let path: string | undefined = issuesPath;
+      let page = 1;
+      while (path !== undefined) {
+        if (seenPaths.has(path)) paginationError("issues pagination repeated a page path");
+        seenPaths.add(path);
+        const response = await deps.githubHttp.request({
+          method: "GET",
+          path,
+          token: resolved.token,
+          refreshToken: resolved.refresh,
+          retryRateLimit: false,
+        });
+        assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
+        if (!Array.isArray(response.body)) paginationError("200 body was not an issues array");
+        const decoded = z.array(GithubIssuePayload).safeParse(response.body);
+        if (!decoded.success) paginationError("issues page failed strict decode");
+        issues.push(...decoded.data);
+        if (response.nextPagePath !== undefined) {
+          const nextPage = configuredIssuesPage(response.nextPagePath, issuesPath);
+          if (nextPage === undefined) paginationError("next page changed the configured issues resource scope");
+          if (nextPage !== page + 1) paginationError("issues pagination cursor did not advance contiguously");
+          page = nextPage;
+        }
+        path = response.nextPagePath;
       }
-
-      const issues = response.body as RawIssue[];
       const items: IngestedItem[] = [];
+      const seenIssueNumbers = new Set<number>();
       for (const issue of issues) {
         // The Issues API also returns PRs; drop them.
         if (issue.pull_request !== undefined) continue;
-        if (typeof issue.number !== "number" || typeof issue.title !== "string") continue;
+        if (seenIssueNumbers.has(issue.number)) paginationError("provider repeated an issue number");
+        seenIssueNumbers.add(issue.number);
         const labels = labelNames(issue);
         items.push({
           externalId: `gh-${config.owner}/${config.repo}#${issue.number}`,
           title: issue.title,
-          body: typeof issue.body === "string" ? issue.body.slice(0, 8000) : "",
+          body: issue.body?.slice(0, 8000) ?? "",
           severity: severityFromLabels(labels),
           projectId: source.projectId,
         });
@@ -118,4 +121,20 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       return items;
     },
   };
+}
+function configuredIssuesPage(nextPath: string, issuesPath: string): number | undefined {
+  if (!nextPath.startsWith("/") || nextPath.startsWith("//")) return undefined;
+  let next: URL;
+  let configured: URL;
+  try {
+    next = new URL(nextPath, "https://github.invalid");
+    configured = new URL(issuesPath, "https://github.invalid");
+  } catch {
+    return undefined;
+  }
+  if (next.pathname !== configured.pathname || next.hash !== "") return undefined;
+  const pages = next.searchParams.getAll("page");
+  if (pages.length !== 1 || !/^[1-9][0-9]*$/u.test(pages[0]!)) return undefined;
+  if (!sameQueryMultiset(configured, next, "page")) return undefined;
+  return Number(pages[0]);
 }

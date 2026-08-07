@@ -7,6 +7,7 @@ import {
 } from "../../engine/contracts/integrationSecretStore.js";
 import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { PrincipalProviderUnavailableError } from "../../engine/integrations/principalVerifierSupport.js";
+import { SentryPrincipalRelinkRequiredError } from "../../engine/integrations/sentryPrincipalIdentity.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorIsOrgAdmin } from "../orgs/access.js";
@@ -106,6 +107,9 @@ export function mountPrincipalSelectionRoute(
       if (error instanceof PrincipalProviderUnavailableError) {
         const unavailable = await recordVerifierUnavailable(context, error.reason, error.retryAfter);
         return c.json(transitionPendingPayload(unavailable, orgId, operationId), 202);
+      }
+      if (error instanceof SentryPrincipalRelinkRequiredError) {
+        return c.json({ error: "verified_provider_identity_required" }, 409);
       }
       if (messageOf(error).includes("selected_principal_scopes_unproven")) {
         return c.json({ error: "selected_principal_scopes_unproven" }, 409);
